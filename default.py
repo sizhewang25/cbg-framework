@@ -1,6 +1,11 @@
 """All the reference paths to storing files settings and constants"""
 
+import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Default path
 DEFAULT_DIR: Path = Path(__file__).resolve().parent
@@ -67,10 +72,10 @@ USER_HITLIST_FILE: Path = USER_GENERATED_PATH / "user_parsed_hitlist.json"
 # CLICKHOUSE SETTINGS                                                                            #
 ##################################################################################################
 CLICKHOUSE_CLIENT = DEFAULT_DIR / "clickhouse_files/clickhouse"
-CLICKHOUSE_HOST = "localhost"
-CLICKHOUSE_DB = "geolocation_replication"
-CLICKHOUSE_USER = "default"
-CLICKHOUSE_PASSWORD = ""
+CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "localhost")
+CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DB", "geolocation_replication")
+CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
+CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
 
 # tables to store reproduction results
 ANCHORS_MESHED_PING_TABLE = "anchors_meshed_pings"
