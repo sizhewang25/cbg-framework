@@ -178,3 +178,5 @@ cython_debug/
 clickhouse_files/users.d/password_local.xml
 *.tar.gz
 *.tar
+outputs/
+.DS_Store
