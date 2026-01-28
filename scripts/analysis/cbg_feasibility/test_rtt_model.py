@@ -236,20 +236,20 @@ class TestFitBestlineLP(unittest.TestCase):
         self.assertIn('infeasible', result['message'].lower())
 
     def test_filter_faster_than_light_violations(self):
-        """Test that violations are filtered by the three-stage filter."""
+        """Test that violations are filtered by the baseline filter (Stage 4)."""
         # Data that would require slope below physical limit
         # Min RTT for d=100 is 1.0ms (0.01*100), for d=200 is 2.0ms, etc.
         distances = np.array([100, 200, 300, 400, 500])
         # RTTs = [1.5, 2.0, 2.5, 3.0, 3.5]
-        # After mean±1σ filtering per bin (all in one bin since bin_size=100km default is now 100):
-        # All 5 points are in bins 1,2,3,4,5 respectively (each its own bin)
+        # All 5 points are in separate bins (1 point per bin)
         # Then baseline filter: Valid if RTT >= 0.01*distance:
         #   1.5>=1.0 (yes), 2.0>=2.0 (yes), 2.5>=3.0 (no), 3.0>=4.0 (no), 3.5>=5.0 (no)
         # So 3 points are violations, leaving only 2 valid points
         rtts = np.array([1.5, 2.0, 2.5, 3.0, 3.5])
 
-        # With filtering enabled (default), speed-of-light violations are filtered
-        result = fit_bestline_lp(distances, rtts, filter_outliers=True, bin_size_km=100.0)
+        # Disable percentile filter (bin_percentile=1.0) and global filter to test baseline filter specifically
+        result = fit_bestline_lp(distances, rtts, filter_outliers=True, bin_size_km=100.0,
+                                  bin_percentile=1.0, global_n_std=float('inf'))
 
         # Should fail because only 2 valid points remain (need at least 3)
         self.assertFalse(result['success'])

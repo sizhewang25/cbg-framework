@@ -61,12 +61,13 @@ def filter_rtt_data(
     baseline_slope: Optional[float] = None,
     bin_size_km: float = 100.0,
     n_std: float = 1.0,
-    global_n_std: float = 1.0
+    global_n_std: float = 1.0,
+    bin_percentile: float = 0.05
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     """
     Filter RTT data to remove invalid and outlier measurements.
 
-    Four-stage filtering (revised approach for robust LP bestline fitting):
+    Five-stage filtering (revised approach for robust LP bestline fitting):
 
     Stage 1: Remove invalid values (zero, negative, inf)
 
@@ -75,21 +76,26 @@ def filter_rtt_data(
              - Low outliers are likely due to mislabeled coordinates or measurement errors
              - High outliers are due to congestion, queuing delays
 
-    Stage 3: Remove RTTs below speed-of-light baseline (physical sanity check)
-             min_valid_rtt = baseline_slope * distance
-             Keep only: rtt >= min_valid_rtt
+    Stage 2b: For each distance bin, keep only RTTs at or below the bin_percentile (e.g., 5th percentile)
+              - This forms the "true lower bound" for LP fitting
+              - After removing outliers in Stage 2, this keeps only the fastest valid RTTs
 
-    Stage 4: Global filter on binned min RTTs
+    Stage 3: Global filter on binned min RTTs (applied to Stage 2b output)
              - Compute min RTT per distance bin
              - Calculate global mean and std of these bin minimums
              - Remove ALL points in bins where min_rtt is outside [mean - global_n_std*σ, mean + global_n_std*σ]
              - This catches bins with mislabeled coordinates where even the best RTT is anomalous
 
+    Stage 4: Remove RTTs below speed-of-light baseline (physical sanity check)
+             min_valid_rtt = baseline_slope * distance
+             Keep only: rtt >= min_valid_rtt
+
     Key design decisions:
     - Larger bins (100km default) = more points per bin = more robust mean/std estimates
     - Symmetric mean ± 1σ filtering removes suspiciously low RTTs that would skew LP
-    - Baseline filter applied AFTER statistical filtering as final sanity check
+    - 5th percentile per bin creates robust lower envelope for LP
     - Global filter on bin minimums catches entire mislabeled distance ranges
+    - Baseline filter applied LAST as final physical sanity check
 
     Args:
         distances: Array of distances in km
@@ -97,7 +103,8 @@ def filter_rtt_data(
         baseline_slope: Minimum RTT/distance ratio (default: 2/3 speed of light)
         bin_size_km: Size of distance bins for outlier filtering (default 100km)
         n_std: Number of standard deviations for per-bin filtering (default 1.0)
-        global_n_std: Number of standard deviations for global bin-min filter (default 2.0)
+        global_n_std: Number of standard deviations for global bin-min filter (default 1.0)
+        bin_percentile: Percentile threshold per bin (default 0.05 = 5th percentile)
 
     Returns:
         Tuple of (filtered_distances, filtered_rtts, stats_dict)
@@ -114,8 +121,9 @@ def filter_rtt_data(
         'removed_invalid': 0,
         'removed_low_outliers': 0,
         'removed_high_outliers': 0,
-        'removed_below_baseline': 0,
+        'removed_above_percentile': 0,
         'removed_global_bin_outliers': 0,
+        'removed_below_baseline': 0,
         'final_count': 0
     }
 
@@ -169,19 +177,39 @@ def filter_rtt_data(
         stats['final_count'] = 0
         return np.array([]), np.array([]), stats
 
-    # Stage 3: Filter RTTs below baseline (speed-of-light constraint)
-    # Applied AFTER statistical filtering as final sanity check
-    min_valid_rtt = baseline_slope * distances
-    physics_mask = rtts >= min_valid_rtt
-    stats['removed_below_baseline'] = int(np.sum(~physics_mask))
-    distances = distances[physics_mask]
-    rtts = rtts[physics_mask]
+    # Stage 2b: Per-bin percentile filter - keep only RTTs at or below the percentile threshold
+    # This creates the "true lower bound" for LP fitting
+    bin_indices = (distances // bin_size_km).astype(int)
+    unique_bins = np.unique(bin_indices)
+
+    keep_mask = np.ones(len(distances), dtype=bool)
+    above_percentile_count = 0
+
+    for bin_idx in unique_bins:
+        in_bin = bin_indices == bin_idx
+        bin_rtts = rtts[in_bin]
+
+        if len(bin_rtts) >= 2:  # Need at least 2 points for percentile
+            # Calculate percentile threshold for this bin
+            percentile_threshold = np.percentile(bin_rtts, bin_percentile * 100)
+
+            # Mark points above percentile for removal
+            above_percentile = bin_rtts > percentile_threshold
+
+            bin_positions = np.where(in_bin)[0]
+            keep_mask[bin_positions[above_percentile]] = False
+
+            above_percentile_count += np.sum(above_percentile)
+
+    stats['removed_above_percentile'] = int(above_percentile_count)
+    distances = distances[keep_mask]
+    rtts = rtts[keep_mask]
 
     if len(distances) == 0:
         stats['final_count'] = 0
         return np.array([]), np.array([]), stats
 
-    # Stage 4: Global filter on binned min RTTs
+    # Stage 3: Global filter on binned min RTTs
     # This catches entire bins with mislabeled coordinates where even the best RTT is anomalous
     bin_indices = (distances // bin_size_km).astype(int)
     unique_bins = np.unique(bin_indices)
@@ -214,6 +242,18 @@ def filter_rtt_data(
             distances = distances[keep_mask]
             rtts = rtts[keep_mask]
 
+    if len(distances) == 0:
+        stats['final_count'] = 0
+        return np.array([]), np.array([]), stats
+
+    # Stage 4: Filter RTTs below baseline (speed-of-light constraint)
+    # Applied LAST as final physical sanity check
+    min_valid_rtt = baseline_slope * distances
+    physics_mask = rtts >= min_valid_rtt
+    stats['removed_below_baseline'] = int(np.sum(~physics_mask))
+    distances = distances[physics_mask]
+    rtts = rtts[physics_mask]
+
     stats['final_count'] = len(distances)
 
     return distances, rtts, stats
@@ -226,7 +266,8 @@ def fit_bestline_lp(
     filter_outliers: bool = True,
     bin_size_km: float = 100.0,
     n_std: float = 1.0,
-    global_n_std: float = 1.0
+    global_n_std: float = 1.0,
+    bin_percentile: float = 0.05
 ) -> Dict[str, Any]:
     """
     Fit lower envelope bestline using Linear Programming (original CBG paper method).
@@ -257,20 +298,22 @@ def fit_bestline_lp(
         Maximize: Σ (m * g_ij + b) = m * Σg_ij + n * b
         Or: Minimize: -m * Σg_ij - n * b
 
-    Data Filtering (Four-Stage):
+    Data Filtering (Five-Stage):
         Stage 1: Remove invalid values (zero, negative, inf)
         Stage 2: For each distance bin, keep RTTs within [mean - n_std*σ, mean + n_std*σ]
-        Stage 3: Remove RTTs below speed-of-light baseline
-        Stage 4: Remove entire bins where min RTT is outside global mean ± global_n_std*σ
+        Stage 2b: For each bin, keep only RTTs at or below bin_percentile (5th percentile)
+        Stage 3: Remove entire bins where min RTT is outside global mean ± global_n_std*σ
+        Stage 4: Remove RTTs below speed-of-light baseline
 
     Args:
         distances: Array of geographic distances in km (x-axis)
         rtts: Array of RTT/delay values in ms (y-axis)
         baseline_slope: Minimum allowed slope (default: 2/3 speed of light ≈ 0.01 ms/km)
-        filter_outliers: If True, apply four-stage filtering. Default True.
+        filter_outliers: If True, apply five-stage filtering. Default True.
         bin_size_km: Size of distance bins for outlier filtering (default 100km)
         n_std: Number of standard deviations for per-bin filtering (default 1.0)
-        global_n_std: Number of standard deviations for global bin-min filter (default 2.0)
+        global_n_std: Number of standard deviations for global bin-min filter (default 1.0)
+        bin_percentile: Percentile threshold per bin (default 0.05 = 5th percentile)
 
     Returns:
         Dictionary containing:
@@ -333,8 +376,8 @@ def fit_bestline_lp(
     # Apply comprehensive data filtering if enabled
     filter_stats = {'initial_count': n_points, 'removed_invalid': 0,
                     'removed_low_outliers': 0, 'removed_high_outliers': 0,
-                    'removed_below_baseline': 0, 'removed_global_bin_outliers': 0,
-                    'final_count': n_points}
+                    'removed_above_percentile': 0, 'removed_global_bin_outliers': 0,
+                    'removed_below_baseline': 0, 'final_count': n_points}
     n_filtered = 0
 
     if filter_outliers:
@@ -343,7 +386,8 @@ def fit_bestline_lp(
             baseline_slope=baseline_slope,
             bin_size_km=bin_size_km,
             n_std=n_std,
-            global_n_std=global_n_std
+            global_n_std=global_n_std,
+            bin_percentile=bin_percentile
         )
         n_points = len(distances)
         n_filtered = filter_stats['initial_count'] - filter_stats['final_count']
@@ -356,7 +400,7 @@ def fit_bestline_lp(
                 'n_filtered': n_filtered,
                 'filter_stats': filter_stats,
                 'success': False,
-                'message': f'Only {n_points} valid points after filtering {n_filtered} (low: {filter_stats["removed_low_outliers"]}, high: {filter_stats["removed_high_outliers"]}, baseline: {filter_stats["removed_below_baseline"]}, global_bin: {filter_stats["removed_global_bin_outliers"]})'
+                'message': f'Only {n_points} valid points after filtering {n_filtered} (low: {filter_stats["removed_low_outliers"]}, high: {filter_stats["removed_high_outliers"]}, pct: {filter_stats["removed_above_percentile"]}, global: {filter_stats["removed_global_bin_outliers"]}, baseline: {filter_stats["removed_below_baseline"]})'
             }
 
     # =========================================================================
@@ -663,7 +707,8 @@ class RTTDistanceModel:
         baseline_slope: Optional[float] = None,
         filter_outliers: bool = True,
         n_std: float = 1.0,
-        global_n_std: float = 1.0
+        global_n_std: float = 1.0,
+        bin_percentile: float = 0.05
     ) -> bool:
         """
         Fit the model to RTT-distance data.
@@ -675,9 +720,10 @@ class RTTDistanceModel:
             bin_size_km: Override default bin size (default 100km for LP, 50km for percentile)
             percentile: Override default percentile (percentile method only)
             baseline_slope: Minimum slope constraint (LP method only)
-            filter_outliers: Filter outliers by four-stage filtering (LP method)
+            filter_outliers: Filter outliers by five-stage filtering (LP method)
             n_std: Number of standard deviations for per-bin filtering (default 1.0)
-            global_n_std: Number of standard deviations for global bin-min filter (default 2.0)
+            global_n_std: Number of standard deviations for global bin-min filter (default 1.0)
+            bin_percentile: Percentile threshold per bin in Stage 2b (default 0.05 = 5th percentile)
 
         Returns:
             True if fitting succeeded, False otherwise
@@ -700,7 +746,8 @@ class RTTDistanceModel:
                 filter_outliers=filter_outliers,
                 bin_size_km=self.bin_size_km,
                 n_std=n_std,
-                global_n_std=global_n_std
+                global_n_std=global_n_std,
+                bin_percentile=bin_percentile
             )
             # LP doesn't produce bins, but we can compute them for visualization
             self.slope = result['slope']

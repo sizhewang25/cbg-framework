@@ -11,8 +11,8 @@
       "anchor_ip": "45.77.211.82",
       "anchor_lat": 47.6095,
       "anchor_lon": -122.3415,
-      "slope": 0.01711355688344039,
-      "intercept": 6.690647847528758,
+      "slope": 0.017065770702264657,
+      "intercept": 6.835764508170613,
       "r_squared": 0.7591776515877335,
       "n_bins": 29,
       "n_measurements": 264,
@@ -81,15 +81,15 @@
         80.7637516
       ],
       "fitted": true,
-      "fit_message": "LP converged: 96 points, 168 filtered",
+      "fit_message": "LP converged: 17 points, 247 filtered",
       "fit_method": "lp"
     },
     {
       "anchor_ip": "66.42.119.57",
       "anchor_lat": 41.9905,
       "anchor_lon": -87.9585,
-      "slope": 0.013246577072197622,
-      "intercept": 12.100077613760272,
+      "slope": 0.013103709237601376,
+      "intercept": 12.319408165296844,
       "r_squared": 0.8950975583215397,
       "n_bins": 25,
       "n_measurements": 266,
@@ -150,7 +150,7 @@
         56.627783
       ],
       "fitted": true,
-      "fit_message": "LP converged: 112 points, 154 filtered",
+      "fit_message": "LP converged: 17 points, 249 filtered",
       "fit_method": "lp"
     },
     {
@@ -217,7 +217,7 @@
         66.3805464
       ],
       "fitted": true,
-      "fit_message": "LP converged: 96 points, 168 filtered",
+      "fit_message": "LP converged: 15 points, 249 filtered",
       "fit_method": "lp"
     },
     {
@@ -300,7 +300,7 @@
         81.46644125
       ],
       "fitted": true,
-      "fit_message": "LP converged: 76 points, 190 filtered",
+      "fit_message": "LP converged: 18 points, 248 filtered",
       "fit_method": "lp"
     },
     {
@@ -389,7 +389,7 @@
         77.3544209
       ],
       "fitted": true,
-      "fit_message": "LP converged: 113 points, 153 filtered",
+      "fit_message": "LP converged: 23 points, 243 filtered",
       "fit_method": "lp"
     },
     {
@@ -456,7 +456,7 @@
         47.3041506
       ],
       "fitted": true,
-      "fit_message": "LP converged: 157 points, 107 filtered",
+      "fit_message": "LP converged: 17 points, 247 filtered",
       "fit_method": "lp"
     },
     {
@@ -464,7 +464,7 @@
       "anchor_lat": 25.7985,
       "anchor_lon": -80.2305,
       "slope": 0.01,
-      "intercept": 20.368443427907206,
+      "intercept": 20.36844342790721,
       "r_squared": 0.9127207893013005,
       "n_bins": 30,
       "n_measurements": 264,
@@ -535,7 +535,7 @@
         79.6213943
       ],
       "fitted": true,
-      "fit_message": "LP converged: 119 points, 145 filtered",
+      "fit_message": "LP converged: 16 points, 248 filtered",
       "fit_method": "lp"
     }
   ]
