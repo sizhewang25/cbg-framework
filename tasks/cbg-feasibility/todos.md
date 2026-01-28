@@ -1,39 +1,34 @@
 # Todos
 
 ## In Progress
-- [ ] Understand current CBG implementation gaps
+- [ ] Create rtt_model.py with core functions (haversine, fit_bestline, RTTDistanceModel)
 
 ## Pending
 
-### Phase 1: Data Preparation
-- [ ] Reverse data perspective: Vultr anchors as VPs, probes as targets
-- [ ] Group target probes by ASN
-- [ ] Prepare calibration dataset (known-location pairs)
+### Phase 1: RTT Modeling Module
+- [ ] Write unit tests in test_rtt_model.py
+- [ ] Validate haversine distance calculation
+- [ ] Validate bestline fitting with synthetic data
 
-### Phase 2: Bestline Calibration
-- [ ] Implement lower envelope fitting (quantile regression)
-- [ ] Compute per-anchor calibration parameters (slope, intercept)
-- [ ] Visualize calibration: scatter plot with bestline for each anchor
-- [ ] Validate calibration makes physical sense
+### Phase 2: Per-Anchor-ASN Model Fitting (AS7922 Comcast)
+- [ ] Create fit_models.py script
+- [ ] Fit models for all 7 Vultr anchors
+- [ ] Generate RTT-distance scatter plots with bestline overlay
+- [ ] Save model parameters as pkl files
 
-### Phase 3: CBG Implementation
-- [ ] Modify `rtt_to_km()` to use calibrated parameters
-- [ ] Update CBG pipeline for reversed VP/target roles
-- [ ] Test on single ASN first
+### Phase 3: CBG Multilateration Visualization
+- [ ] Create visualize_cbg.py script
+- [ ] Test CBG on random Comcast probes
+- [ ] Generate interactive Folium maps with circles
+- [ ] Verify circle intersection contains true location
 
-### Phase 4: Evaluation
-- [ ] Run CBG on all target ASNs
-- [ ] Compare accuracy: calibrated vs. fixed 2/3
-- [ ] Analyze errors by ASN, distance, VP count
-- [ ] Generate maps and visualizations
-
-### Phase 5: Documentation
-- [ ] Document methodology
-- [ ] Create summary figures
-- [ ] Write findings report
+### Phase 4: Evaluation & Documentation
+- [ ] Compare calibrated vs. fixed 2/3 accuracy
+- [ ] Document methodology and findings
 
 ## Completed
 - [x] Created CBG tutorial notebook (`analysis/cbg_tutorial.ipynb`)
 - [x] Identified 3 key gaps between implementation and original CBG
 - [x] Documented initial analysis in notes
 - [x] Located ASN analysis script with map visualization
+- [x] Created implementation plan with design decisions

@@ -64,12 +64,46 @@ For each VP:
 2. **Group probes by ASN as targets**: Simulates geolocating hypergiant IPs
 3. **Implement quantile regression**: For lower envelope fitting (5th percentile)
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. How many measurements per anchor are needed for reliable calibration?
-2. Should calibration be per-anchor or per-region?
-3. What percentile to use for lower envelope? (5th? 10th?)
-4. How to handle anchors with few measurements?
+1. ~~How many measurements per anchor are needed for reliable calibration?~~
+   → **≥3 distinct distance bins** (geographic spread matters more than count)
+2. ~~Should calibration be per-anchor or per-region?~~
+   → **Per-anchor** (each anchor has unique network characteristics)
+3. ~~What percentile to use for lower envelope? (5th? 10th?)~~
+   → **5th percentile** per distance bin
+4. ~~How to handle anchors with few measurements?~~
+   → Skip if < 3 distance bins with data
+
+## Implementation Plan
+
+### Files to Create in `scripts/analysis/cbg_feasibility/`
+```
+rtt_model.py          # Core module
+test_rtt_model.py     # Unit tests
+fit_models.py         # Fit anchor-ASN models
+visualize_cbg.py      # Multilateration maps
+outputs/              # Generated artifacts
+└── vultr-7922-rtt-models/
+    ├── *.pkl         # Model parameters
+    ├── *.png         # Scatter plots
+    └── *.html        # CBG maps
+```
+
+### Core Algorithm: Binned 5th Percentile Bestline
+```python
+def fit_bestline(distances, rtts, bin_size_km=50.0, percentile=0.05):
+    # 1. Bin by distance (50km default)
+    # 2. Take 5th percentile RTT per bin
+    # 3. Linear regression through (bin_center, percentile_rtt) points
+    # 4. Require ≥3 bins for valid fit
+    return {'slope': m, 'intercept': b, 'n_bins': n, 'success': bool}
+```
+
+### Validation Criteria
+- Bestline slope ≈ 0.01 ms/km (theoretical: 2 / (2/3 × 300) = 0.01)
+- Circle intersection should contain true probe location
+- R² should be reasonably high for valid models
 
 ## Constants
 

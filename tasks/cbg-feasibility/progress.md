@@ -33,3 +33,34 @@
 - Output maps in `scripts/processing/outputs/us_vultr_pings_AS*.html`
 
 ---
+
+## 2026-01-28 16:00 - Implementation Plan Finalized
+
+### What was done
+1. Explored `scripts/analysis/cbg_feasibility/` folder structure
+2. Found reference implementation in `references/scripts/get_rtt_dist_model_for_up.py`
+3. Analyzed dataset composition and anchor locations
+4. Created detailed implementation plan with design decisions
+
+### Dataset Summary
+- **7 Vultr anchors**: Seattle, Chicago, Atlanta, San Jose, LA, Dallas, Miami
+- **335 unique ASNs**, 1,423 probes, 9,866 measurements
+- **Top ASN**: 7922 (Comcast) with 266 probes → starting point for testing
+
+### Design Decisions Made
+1. **Bestline method**: 5th percentile quantile regression per distance bin (50km bins)
+2. **Minimum threshold**: ≥3 distinct distance bins for valid model
+3. **Starting ASN**: AS7922 (Comcast)
+4. **Output formats**: Matplotlib PNG (scatter) + Folium HTML (maps)
+
+### Implementation Plan (4 files)
+1. `rtt_model.py` - Core module (haversine, fit_bestline, RTTDistanceModel class)
+2. `test_rtt_model.py` - Unit tests
+3. `fit_models.py` - Fit all anchor-ASN models, generate scatter plots
+4. `visualize_cbg.py` - CBG multilateration maps
+
+### Reference Code Found
+- `references/scripts/get_rtt_dist_model_for_up.py` - Uses `cbg_mvp.bestline.calculate_bestline()`
+- `references/scripts/geometry_utils.py` - Shapely-based circle intersection
+
+---
