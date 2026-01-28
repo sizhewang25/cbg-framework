@@ -192,17 +192,21 @@ class TestFitBestlineLP(unittest.TestCase):
     def test_line_below_all_points(self):
         """Test that LP bestline lies below all data points."""
         np.random.seed(42)
-        distances = np.array([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000])
+        # Use more points per bin to avoid global filter removing sparse bins
+        distances = np.concatenate([
+            np.full(5, 150), np.full(5, 250), np.full(5, 350), np.full(5, 450),
+            np.full(5, 550), np.full(5, 650), np.full(5, 750), np.full(5, 850),
+        ])
         # RTTs with noise ABOVE baseline
         baseline = 0.012 * distances + 8.0
         rtts = baseline + np.random.uniform(0, 20, len(distances))
 
-        result = fit_bestline_lp(distances, rtts)
+        # Disable global filter to test core LP behavior
+        result = fit_bestline_lp(distances, rtts, global_n_std=float('inf'))
 
         self.assertTrue(result['success'])
-        # Verify all points are on or above the line
-        predicted = result['slope'] * distances + result['intercept']
-        self.assertTrue(np.all(rtts >= predicted - 0.001))
+        # Verify all points are on or above the line (using filtered data)
+        # Note: some points may be filtered by per-bin filter
         self.assertEqual(result['violations'], 0)
 
     def test_slope_above_baseline(self):
@@ -270,7 +274,8 @@ class TestFitBestlineLP(unittest.TestCase):
         ])
 
         # With filtering enabled, baseline violations are filtered at Stage 3
-        result = fit_bestline_lp(distances, rtts, filter_outliers=True, bin_size_km=100.0)
+        # Disable global filter to test baseline filter specifically
+        result = fit_bestline_lp(distances, rtts, filter_outliers=True, bin_size_km=100.0, global_n_std=float('inf'))
 
         self.assertTrue(result['success'])
         self.assertEqual(result['n_filtered'], 1)  # Only the first point filtered
@@ -301,6 +306,46 @@ class TestFitBestlineLP(unittest.TestCase):
         self.assertGreater(total_outliers, 0)
         # Slope should be reasonable (not pulled up by outliers)
         self.assertLess(result['slope'], 0.05)  # Would be much higher without filtering
+
+    def test_global_bin_min_filter(self):
+        """Test Stage 4: global filter removes entire bins with anomalous min RTTs."""
+        np.random.seed(42)
+        # Generate data with one bin having anomalously low min RTTs (mislabeled coordinates)
+        # Normal bins: RTT roughly follows 0.015*distance + 10 (high intercept)
+        # The anomalous bin has low RTTs that pass speed-of-light but are statistically outliers
+        # Bin mins will be: ~15, ~18, ~4 (anomalous), ~22, ~25
+        # Mean ~17, std ~8, so 4 is ~1.6σ below mean
+        # We need more extreme: make other bins have higher min RTTs
+        distances = np.concatenate([
+            np.full(10, 150),   # Bin 1 (100-200km): normal data
+            np.full(10, 250),   # Bin 2 (200-300km): normal data
+            np.full(10, 350),   # Bin 3 (300-400km): ANOMALOUS - very low RTTs
+            np.full(10, 450),   # Bin 4 (400-500km): normal data
+            np.full(10, 550),   # Bin 5 (500-600km): normal data
+            np.full(10, 650),   # Bin 6 (600-700km): normal data
+            np.full(10, 750),   # Bin 7 (700-800km): normal data
+        ])
+        rtts = np.concatenate([
+            0.02 * 150 + 10 + np.random.uniform(0, 3, 10),  # Bin 1: ~13-16 ms, min ~13
+            0.02 * 250 + 10 + np.random.uniform(0, 3, 10),  # Bin 2: ~15-18 ms, min ~15
+            4.0 + np.random.uniform(0, 0.5, 10),             # Bin 3: ~4-4.5 ms (ANOMALOUS)
+            0.02 * 450 + 10 + np.random.uniform(0, 3, 10),  # Bin 4: ~19-22 ms, min ~19
+            0.02 * 550 + 10 + np.random.uniform(0, 3, 10),  # Bin 5: ~21-24 ms, min ~21
+            0.02 * 650 + 10 + np.random.uniform(0, 3, 10),  # Bin 6: ~23-26 ms, min ~23
+            0.02 * 750 + 10 + np.random.uniform(0, 3, 10),  # Bin 7: ~25-28 ms, min ~25
+        ])
+        # Bin mins: ~13, ~15, ~4, ~19, ~21, ~23, ~25 => mean ~17, std ~7.4
+        # 4 is at (4-17)/7.4 = -1.76σ, outside 1σ range
+        # With global_n_std=1.0 (default), bin 3 should be filtered
+
+        # With global bin filter enabled (default global_n_std=1.0)
+        result = fit_bestline_lp(distances, rtts, filter_outliers=True, n_std=2.0, bin_size_km=100.0)
+
+        self.assertTrue(result['success'])
+        # The anomalous bin should be filtered (all 10 points in bin 3)
+        self.assertGreater(result['filter_stats']['removed_global_bin_outliers'], 0)
+        # Slope should be reasonable (not pulled down by the anomalous bin)
+        self.assertGreater(result['slope'], 0.015)  # Would be much lower without filtering
 
     def test_non_negative_intercept(self):
         """Test that LP intercept is non-negative."""
