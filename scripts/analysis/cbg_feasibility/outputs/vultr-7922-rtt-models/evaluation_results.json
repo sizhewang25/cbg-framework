@@ -1,0 +1,2687 @@
+{
+  "asn": 7922,
+  "total_probes": 266,
+  "successful_probes": 266,
+  "method_intersection": 245,
+  "method_fallback": 21,
+  "statistics": {
+    "median_km": 401.9872191377505,
+    "mean_km": 626.5128813319891,
+    "std_km": 567.6025526129158,
+    "min_km": 6.556794626192557,
+    "max_km": 3980.633564270353,
+    "p25_km": 133.19075147263533,
+    "p75_km": 1047.964930839194,
+    "p90_km": 1402.1078132067312,
+    "p95_km": 1484.308396310756
+  },
+  "accuracy_thresholds": {
+    "within_50km": 9.398496240601503,
+    "within_100km": 18.421052631578945,
+    "within_250km": 34.21052631578947,
+    "within_500km": 54.51127819548872,
+    "within_1000km": 70.30075187969925
+  },
+  "probes": [
+    {
+      "probe_ip": "24.2.105.126",
+      "true_lat": 41.0415,
+      "true_lon": -111.9415,
+      "estimated_lat": 36.57372627326263,
+      "estimated_lon": -108.89332290798689,
+      "error_km": 562.5424861848379,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.3.155.178",
+      "true_lat": 40.4405,
+      "true_lon": -80.0025,
+      "estimated_lat": 40.39205435204695,
+      "estimated_lon": -86.78428571565375,
+      "error_km": 574.0215312948197,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.4.229.167",
+      "true_lat": 36.9805,
+      "true_lon": -122.0285,
+      "estimated_lat": 37.37965189091893,
+      "estimated_lon": -121.88980713832008,
+      "error_km": 46.05307052298339,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.5.42.211",
+      "true_lat": 37.2785,
+      "true_lon": -121.8605,
+      "estimated_lat": 38.251621725927286,
+      "estimated_lon": -121.9170849896332,
+      "error_km": 108.32045177227162,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.5.245.181",
+      "true_lat": 37.3885,
+      "true_lon": -121.8415,
+      "estimated_lat": 38.40334469765989,
+      "estimated_lon": -121.92100679226542,
+      "error_km": 113.06101468009608,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.6.50.21",
+      "true_lat": 37.3375,
+      "true_lon": -121.8895,
+      "estimated_lat": 38.50374330036742,
+      "estimated_lon": -121.92450282661046,
+      "error_km": 129.71667715355312,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.6.89.180",
+      "true_lat": 36.9815,
+      "true_lon": -121.9005,
+      "estimated_lat": 38.46683595786184,
+      "estimated_lon": -121.92309338011702,
+      "error_km": 165.17377442300352,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.7.20.200",
+      "true_lat": 37.5715,
+      "true_lon": -122.3295,
+      "estimated_lat": 37.87650138191091,
+      "estimated_lon": -121.90476763485029,
+      "error_km": 50.45443447735449,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.10.162.10",
+      "true_lat": 40.2315,
+      "true_lon": -111.6625,
+      "estimated_lat": 36.65752068284471,
+      "estimated_lon": -107.41232297344774,
+      "error_km": 542.943068701194,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.12.102.19",
+      "true_lat": 42.0475,
+      "true_lon": -87.6895,
+      "estimated_lat": 33.56510541728968,
+      "estimated_lon": -94.7532566953173,
+      "error_km": 1128.087440222706,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.13.236.147",
+      "true_lat": 42.0985,
+      "true_lon": -87.7285,
+      "estimated_lat": 33.89932376500485,
+      "estimated_lon": -93.88541800003637,
+      "error_km": 1058.6544661674852,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.14.5.241",
+      "true_lat": 41.6705,
+      "true_lon": -85.9005,
+      "estimated_lat": 41.9905,
+      "estimated_lon": -87.95850000000006,
+      "error_km": 174.18122941290497,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.15.8.248",
+      "true_lat": 41.9005,
+      "true_lon": -87.9385,
+      "estimated_lat": 33.50254830869077,
+      "estimated_lon": -94.02488798930038,
+      "error_km": 1075.7285983912,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.17.49.173",
+      "true_lat": 47.4915,
+      "true_lon": -122.1905,
+      "estimated_lat": 46.65315184915729,
+      "estimated_lon": -121.14195041117397,
+      "error_km": 122.45464666897173,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.17.149.239",
+      "true_lat": 47.6385,
+      "true_lon": -122.2205,
+      "estimated_lat": 47.31097330309514,
+      "estimated_lon": -121.64921553625864,
+      "error_km": 56.301891773600516,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.18.184.15",
+      "true_lat": 27.8795,
+      "true_lon": -82.5295,
+      "estimated_lat": 46.12807603451296,
+      "estimated_lon": -121.84166100949919,
+      "error_km": 3980.633564270353,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.18.205.189",
+      "true_lat": 33.0005,
+      "true_lon": -117.0685,
+      "estimated_lat": 47.21915487016315,
+      "estimated_lon": -122.31289867997155,
+      "error_km": 1641.7510911200427,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.21.150.236",
+      "true_lat": 44.0395,
+      "true_lon": -123.0515,
+      "estimated_lat": 45.293934398988384,
+      "estimated_lon": -121.01485946101678,
+      "error_km": 213.0550128490071,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.22.249.162",
+      "true_lat": 33.2605,
+      "true_lon": -111.8285,
+      "estimated_lat": 45.65993663124515,
+      "estimated_lon": -120.88923973359411,
+      "error_km": 1580.6143014688857,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.23.254.66",
+      "true_lat": 36.9905,
+      "true_lon": -122.0615,
+      "estimated_lat": 38.015344071430384,
+      "estimated_lon": -121.90890012219393,
+      "error_km": 114.74971764891791,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.30.26.52",
+      "true_lat": 33.9005,
+      "true_lon": -84.7215,
+      "estimated_lat": 30.147826654996972,
+      "estimated_lon": -83.3444190493328,
+      "error_km": 436.9916673119744,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.60.138.174",
+      "true_lat": 42.3615,
+      "true_lon": -71.1025,
+      "estimated_lat": 38.240931762407286,
+      "estimated_lon": -86.10540719596693,
+      "error_km": 1350.0324031336322,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.61.252.212",
+      "true_lat": 42.0315,
+      "true_lon": -70.0715,
+      "estimated_lat": 37.996877881778396,
+      "estimated_lon": -87.76479547080218,
+      "error_km": 1568.8590926038023,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.62.170.218",
+      "true_lat": 43.0175,
+      "true_lon": -71.4105,
+      "estimated_lat": 38.348904939301555,
+      "estimated_lon": -86.7814427772825,
+      "error_km": 1393.5922019541727,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.62.223.16",
+      "true_lat": 42.8975,
+      "true_lon": -71.5585,
+      "estimated_lat": 37.761721608244194,
+      "estimated_lon": -86.74644001599928,
+      "error_km": 1405.7213375810031,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.118.188.159",
+      "true_lat": 44.7185,
+      "true_lon": -93.2895,
+      "estimated_lat": 42.43657705236397,
+      "estimated_lon": -91.4135931913393,
+      "error_km": 295.3063751869042,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.127.202.66",
+      "true_lat": 42.8515,
+      "true_lon": -84.5715,
+      "estimated_lat": 41.97209223158617,
+      "estimated_lon": -88.11350215803638,
+      "error_km": 306.7598234656031,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.130.17.164",
+      "true_lat": 37.3415,
+      "true_lon": -121.8895,
+      "estimated_lat": 37.91802624583731,
+      "estimated_lon": -121.90681906482483,
+      "error_km": 64.12493345360188,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.131.190.10",
+      "true_lat": 44.9485,
+      "true_lon": -93.4285,
+      "estimated_lat": 42.16806372102332,
+      "estimated_lon": -91.81687117669188,
+      "error_km": 335.31846927357776,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.147.5.203",
+      "true_lat": 42.8075,
+      "true_lon": -70.8905,
+      "estimated_lat": 42.786020915153784,
+      "estimated_lon": -92.91532868179611,
+      "error_km": 1791.892635921589,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.147.123.196",
+      "true_lat": 44.2615,
+      "true_lon": -72.5805,
+      "estimated_lat": 37.44271669418648,
+      "estimated_lon": -87.63403116683858,
+      "error_km": 1472.3624150858004,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "24.147.191.178",
+      "true_lat": 41.3175,
+      "true_lon": -72.8685,
+      "estimated_lat": 38.21266963898902,
+      "estimated_lon": -87.22613726962369,
+      "error_km": 1273.108508211023,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "50.188.3.201",
+      "true_lat": 40.4385,
+      "true_lon": -80.0025,
+      "estimated_lat": 41.9905,
+      "estimated_lon": -87.9585,
+      "error_km": 687.211048114938,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "50.198.23.177",
+      "true_lat": 40.1195,
+      "true_lon": -88.2615,
+      "estimated_lat": 41.99050000000003,
+      "estimated_lon": -87.95850000000006,
+      "error_km": 209.59083428464535,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "50.202.194.198",
+      "true_lat": 42.4475,
+      "true_lon": -71.2185,
+      "estimated_lat": 37.49806806691264,
+      "estimated_lon": -85.39513608859791,
+      "error_km": 1325.2810300602298,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "50.225.148.86",
+      "true_lat": 39.3315,
+      "true_lon": -76.3925,
+      "estimated_lat": 36.751208157466756,
+      "estimated_lon": -85.11248569054789,
+      "error_km": 815.3260662450016,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "50.238.206.106",
+      "true_lat": 37.2205,
+      "true_lon": -121.8515,
+      "estimated_lat": 38.600514501390876,
+      "estimated_lon": -111.40127713431794,
+      "error_km": 929.0117117342827,
+      "n_anchors_used": 6,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "50.242.55.226",
+      "true_lat": 37.0495,
+      "true_lon": -80.7785,
+      "estimated_lat": 34.9814161456946,
+      "estimated_lon": -87.50394906909179,
+      "error_km": 646.9386204343028,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "50.244.229.105",
+      "true_lat": 40.7915,
+      "true_lon": -77.9005,
+      "estimated_lat": 41.84410421453317,
+      "estimated_lon": -87.80504883303104,
+      "error_km": 834.9244291292995,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "66.30.218.246",
+      "true_lat": 41.8015,
+      "true_lon": -71.3185,
+      "estimated_lat": 38.73035692034843,
+      "estimated_lon": -87.34870416788397,
+      "error_km": 1400.036513204768,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.161.160.12",
+      "true_lat": 38.6815,
+      "true_lon": -121.2585,
+      "estimated_lat": 38.60107669014797,
+      "estimated_lon": -121.9258215761451,
+      "error_km": 58.64332512765306,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.164.57.5",
+      "true_lat": 37.7715,
+      "true_lon": -122.4125,
+      "estimated_lat": 37.60915404471678,
+      "estimated_lon": -121.89729009511227,
+      "error_km": 48.79598650079334,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.169.76.107",
+      "true_lat": 37.7985,
+      "true_lon": -122.4105,
+      "estimated_lat": 37.62003482049204,
+      "estimated_lon": -121.89743970821237,
+      "error_km": 49.30331908220785,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.169.135.131",
+      "true_lat": 37.2075,
+      "true_lon": -121.8725,
+      "estimated_lat": 38.80313698635505,
+      "estimated_lon": -121.02415810292992,
+      "error_km": 192.36411638325387,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.170.139.247",
+      "true_lat": 45.5005,
+      "true_lon": -122.6995,
+      "estimated_lat": 46.30610446577318,
+      "estimated_lon": -122.19975570521511,
+      "error_km": 97.56841683293919,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.170.164.119",
+      "true_lat": 44.0575,
+      "true_lon": -123.1095,
+      "estimated_lat": 45.32262498837121,
+      "estimated_lon": -120.83223939310875,
+      "error_km": 228.44974490675847,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.171.37.108",
+      "true_lat": 47.7595,
+      "true_lon": -122.3025,
+      "estimated_lat": 47.42690816358311,
+      "estimated_lon": -121.85035394373718,
+      "error_km": 50.17266895417695,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.173.133.181",
+      "true_lat": 42.2415,
+      "true_lon": -88.3295,
+      "estimated_lat": 41.97221966063621,
+      "estimated_lon": -88.11489201887538,
+      "error_km": 34.78494516094903,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.175.182.127",
+      "true_lat": 42.0595,
+      "true_lon": -88.0125,
+      "estimated_lat": 33.379684277463184,
+      "estimated_lon": -93.81577910589176,
+      "error_km": 1091.1398484726035,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.177.130.203",
+      "true_lat": 42.8895,
+      "true_lon": -85.7805,
+      "estimated_lat": 41.82155824070462,
+      "estimated_lon": -89.39171759713676,
+      "error_km": 319.5804802007522,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.180.218.211",
+      "true_lat": 37.6585,
+      "true_lon": -122.4125,
+      "estimated_lat": 37.721621182193196,
+      "estimated_lon": -121.90056986525154,
+      "error_km": 45.589143249536384,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.182.27.102",
+      "true_lat": 37.9705,
+      "true_lon": -120.3285,
+      "estimated_lat": 37.82389606072009,
+      "estimated_lon": -121.90309138366734,
+      "error_km": 139.11992722607945,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.185.36.38",
+      "true_lat": 47.7285,
+      "true_lon": -117.3905,
+      "estimated_lat": 46.03649253109493,
+      "estimated_lon": -121.70594233564287,
+      "error_km": 378.02986695430064,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.187.169.200",
+      "true_lat": 38.6885,
+      "true_lon": -121.0795,
+      "estimated_lat": 39.50340309683013,
+      "estimated_lon": -119.59115710030383,
+      "error_km": 157.1826676302184,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.188.201.180",
+      "true_lat": 37.9415,
+      "true_lon": -122.5315,
+      "estimated_lat": 38.183247559585574,
+      "estimated_lon": -121.91502574687979,
+      "error_km": 60.294806493839324,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.188.208.243",
+      "true_lat": 37.7705,
+      "true_lon": -122.4205,
+      "estimated_lat": 37.880129562558054,
+      "estimated_lon": -121.90458244916479,
+      "error_km": 46.92460484316097,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.189.176.48",
+      "true_lat": 41.6205,
+      "true_lon": -73.7085,
+      "estimated_lat": 37.842702438216506,
+      "estimated_lon": -87.13432721147953,
+      "error_km": 1220.9223635738183,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.189.192.72",
+      "true_lat": 41.6685,
+      "true_lon": -73.7415,
+      "estimated_lat": 38.190826814186906,
+      "estimated_lon": -87.46719670648778,
+      "error_km": 1230.9642191708704,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "67.191.150.253",
+      "true_lat": 34.1695,
+      "true_lon": -84.8005,
+      "estimated_lat": 32.75744394238773,
+      "estimated_lon": -87.20274838654171,
+      "error_km": 272.58531025110614,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "68.35.222.223",
+      "true_lat": 30.4405,
+      "true_lon": -84.2805,
+      "estimated_lat": 31.72443566243022,
+      "estimated_lon": -90.19692356121014,
+      "error_km": 581.1398553209302,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "68.36.27.245",
+      "true_lat": 42.5295,
+      "true_lon": -83.7815,
+      "estimated_lat": 41.990499999999976,
+      "estimated_lon": -87.95849999999997,
+      "error_km": 348.8956046817619,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "68.45.4.39",
+      "true_lat": 39.9305,
+      "true_lon": -85.8825,
+      "estimated_lat": 41.990499999999976,
+      "estimated_lon": -87.9585,
+      "error_km": 287.82852457630037,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "68.45.52.117",
+      "true_lat": 39.0305,
+      "true_lon": -87.1685,
+      "estimated_lat": 41.91010078927288,
+      "estimated_lon": -88.64950911398611,
+      "error_km": 343.81711740469234,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "68.48.119.119",
+      "true_lat": 42.6975,
+      "true_lon": -84.5505,
+      "estimated_lat": 41.9622772520296,
+      "estimated_lon": -88.19404007918357,
+      "error_km": 310.4421283044601,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "68.53.178.165",
+      "true_lat": 39.1015,
+      "true_lon": -84.8605,
+      "estimated_lat": 41.95826198347269,
+      "estimated_lon": -88.23259524681544,
+      "error_km": 426.6902702476393,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "68.54.121.134",
+      "true_lat": 39.1575,
+      "true_lon": -86.5415,
+      "estimated_lat": 41.94465186553094,
+      "estimated_lon": -88.34863953481252,
+      "error_km": 345.4638645518111,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "68.55.30.51",
+      "true_lat": 42.3815,
+      "true_lon": -83.4915,
+      "estimated_lat": 41.960519649952964,
+      "estimated_lon": -88.20843587599397,
+      "error_km": 391.48593182019306,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "68.80.117.192",
+      "true_lat": 39.9205,
+      "true_lon": -75.4195,
+      "estimated_lat": 36.328778300681954,
+      "estimated_lon": -86.3467817035386,
+      "error_km": 1035.0090163169782,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "68.80.249.155",
+      "true_lat": 40.0715,
+      "true_lon": -75.2125,
+      "estimated_lat": 36.34187421570254,
+      "estimated_lon": -85.72229032557938,
+      "error_km": 1006.7266546889255,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "69.180.50.168",
+      "true_lat": 33.8295,
+      "true_lon": -84.3785,
+      "estimated_lat": 30.666399155572556,
+      "estimated_lon": -89.12563201569155,
+      "error_km": 568.2136356736653,
+      "n_anchors_used": 6,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "69.181.217.78",
+      "true_lat": 37.3405,
+      "true_lon": -121.8925,
+      "estimated_lat": 37.940352250279176,
+      "estimated_lon": -121.90685468552799,
+      "error_km": 66.71250108937139,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "69.251.164.207",
+      "true_lat": 39.3695,
+      "true_lon": -76.7125,
+      "estimated_lat": 37.028299564177374,
+      "estimated_lon": -86.3521878430677,
+      "error_km": 881.1466941128476,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "69.255.45.153",
+      "true_lat": 38.9405,
+      "true_lon": -77.3615,
+      "estimated_lat": 37.69721234326965,
+      "estimated_lon": -87.15979892771311,
+      "error_km": 865.4717227531191,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "70.88.254.62",
+      "true_lat": 42.3685,
+      "true_lon": -71.1105,
+      "estimated_lat": 39.15781824445136,
+      "estimated_lon": -86.91730205308282,
+      "error_km": 1376.0104704187395,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.26.205.214",
+      "true_lat": 42.7615,
+      "true_lon": -71.0685,
+      "estimated_lat": 37.90196358056274,
+      "estimated_lon": -87.3420007301357,
+      "error_km": 1478.4473612440652,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.59.18.21",
+      "true_lat": 34.0485,
+      "true_lon": -84.2405,
+      "estimated_lat": 32.61483446634279,
+      "estimated_lon": -86.98766473001724,
+      "error_km": 300.89908065260545,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "71.63.144.93",
+      "true_lat": 45.4275,
+      "true_lon": -122.7115,
+      "estimated_lat": 45.60957202299274,
+      "estimated_lon": -121.36625441499675,
+      "error_km": 106.74667560014353,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.193.34.249",
+      "true_lat": 38.7085,
+      "true_lon": -121.2805,
+      "estimated_lat": 36.840276155929125,
+      "estimated_lon": -121.2181357883171,
+      "error_km": 207.80929679836333,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.195.91.0",
+      "true_lat": 40.6305,
+      "true_lon": -80.0485,
+      "estimated_lat": 40.511744094244406,
+      "estimated_lon": -87.00072258089997,
+      "error_km": 587.2052582940023,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.198.170.107",
+      "true_lat": 37.9185,
+      "true_lon": -122.3125,
+      "estimated_lat": 37.70342359651223,
+      "estimated_lon": -121.90001567032111,
+      "error_km": 43.416447383931704,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.200.34.88",
+      "true_lat": 39.3005,
+      "true_lon": -75.6005,
+      "estimated_lat": 37.42146148694313,
+      "estimated_lon": -86.91806305567734,
+      "error_km": 1007.92289853653,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.202.222.212",
+      "true_lat": 37.3195,
+      "true_lon": -122.0315,
+      "estimated_lat": 38.59249759574445,
+      "estimated_lon": -121.92853198459736,
+      "error_km": 141.83843242353808,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.226.214.37",
+      "true_lat": 39.9815,
+      "true_lon": -74.9995,
+      "estimated_lat": 36.639858837356925,
+      "estimated_lon": -85.66313498954092,
+      "error_km": 1001.026494866173,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.227.18.214",
+      "true_lat": 42.6405,
+      "true_lon": -83.4825,
+      "estimated_lat": 41.98668553070971,
+      "estimated_lon": -87.99553294863766,
+      "error_km": 378.0911761380352,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.232.24.207",
+      "true_lat": 42.3795,
+      "true_lon": -71.1185,
+      "estimated_lat": 37.892251458620585,
+      "estimated_lon": -87.02350021963852,
+      "error_km": 1438.5028283374404,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.234.58.55",
+      "true_lat": 42.9295,
+      "true_lon": -71.1915,
+      "estimated_lat": 38.61191862600918,
+      "estimated_lon": -87.03283837471685,
+      "error_km": 1415.1039766275949,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.235.173.0",
+      "true_lat": 44.3775,
+      "true_lon": -73.2285,
+      "estimated_lat": 37.65730084532053,
+      "estimated_lon": -88.56751913135433,
+      "error_km": 1484.5985915859073,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.235.232.100",
+      "true_lat": 41.6915,
+      "true_lon": -70.9425,
+      "estimated_lat": 38.02541770077175,
+      "estimated_lon": -87.21018300409959,
+      "error_km": 1444.6056198248452,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.237.106.240",
+      "true_lat": 40.1215,
+      "true_lon": -104.9315,
+      "estimated_lat": 36.9087065662948,
+      "estimated_lon": -102.98529471160866,
+      "error_km": 395.31481493338754,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "71.239.115.204",
+      "true_lat": 41.8775,
+      "true_lon": -87.6585,
+      "estimated_lat": 33.87926678813705,
+      "estimated_lon": -96.79455517613991,
+      "error_km": 1196.0252221727835,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.4.180.35",
+      "true_lat": 41.2915,
+      "true_lon": -73.1305,
+      "estimated_lat": 38.285503774871025,
+      "estimated_lon": -87.0810698160753,
+      "error_km": 1236.3927794844074,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.7.133.112",
+      "true_lat": 33.4285,
+      "true_lon": -83.9905,
+      "estimated_lat": 30.046019056066765,
+      "estimated_lon": -82.27365253153579,
+      "error_km": 409.64082414224333,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.12.32.149",
+      "true_lat": 38.2995,
+      "true_lon": -77.4605,
+      "estimated_lat": 34.58021333819798,
+      "estimated_lon": -86.48028260219023,
+      "error_km": 906.0781693045275,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.14.202.47",
+      "true_lat": 39.8905,
+      "true_lon": -104.8795,
+      "estimated_lat": 36.84446916150504,
+      "estimated_lon": -103.62679033741566,
+      "error_km": 355.86399490046233,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "73.16.158.169",
+      "true_lat": 41.3585,
+      "true_lon": -73.4305,
+      "estimated_lat": 38.46511169510747,
+      "estimated_lon": -87.57952851993072,
+      "error_km": 1247.3159986993664,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.17.97.243",
+      "true_lat": 43.5685,
+      "true_lon": -72.9685,
+      "estimated_lat": 39.21809060862134,
+      "estimated_lon": -87.59320527343147,
+      "error_km": 1310.1007705321122,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.33.73.238",
+      "true_lat": 39.4175,
+      "true_lon": -75.1825,
+      "estimated_lat": 37.30367019592808,
+      "estimated_lon": -86.83396508505275,
+      "error_km": 1041.910684344305,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.37.53.86",
+      "true_lat": 45.5075,
+      "true_lon": -122.6095,
+      "estimated_lat": 45.98983890945776,
+      "estimated_lon": -121.29816809748874,
+      "error_km": 115.01771583510883,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.40.138.156",
+      "true_lat": 40.5475,
+      "true_lon": -79.7985,
+      "estimated_lat": 41.04306486469106,
+      "estimated_lon": -87.37520279029329,
+      "error_km": 639.9785323711893,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.41.44.199",
+      "true_lat": 38.7595,
+      "true_lon": -120.5785,
+      "estimated_lat": 37.663946409693175,
+      "estimated_lon": -120.74549363658875,
+      "error_km": 122.69052626472399,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.42.144.51",
+      "true_lat": 33.1105,
+      "true_lon": -96.9225,
+      "estimated_lat": 46.89291020527038,
+      "estimated_lon": -122.29314938988915,
+      "error_km": 2629.9279874995377,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.42.215.135",
+      "true_lat": 47.6785,
+      "true_lon": -122.3115,
+      "estimated_lat": 46.56534118332802,
+      "estimated_lon": -121.0913962335193,
+      "error_km": 154.4071551556356,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "73.43.115.127",
+      "true_lat": 33.7185,
+      "true_lon": -84.3395,
+      "estimated_lat": 33.56930142730749,
+      "estimated_lon": -84.9327063418806,
+      "error_km": 57.36404205861545,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "73.44.62.193",
+      "true_lat": 43.0985,
+      "true_lon": -89.3395,
+      "estimated_lat": 33.52117470947626,
+      "estimated_lon": -94.38548610849598,
+      "error_km": 1151.7848630862347,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.45.83.45",
+      "true_lat": 42.0375,
+      "true_lon": -88.2795,
+      "estimated_lat": 41.99049999999996,
+      "estimated_lon": -87.95849999999997,
+      "error_km": 27.02968688332397,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.45.88.211",
+      "true_lat": 41.8915,
+      "true_lon": -87.6525,
+      "estimated_lat": 34.189042378288256,
+      "estimated_lon": -93.75098844606097,
+      "error_km": 1008.6921724603783,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.52.80.84",
+      "true_lat": 40.3805,
+      "true_lon": -77.8805,
+      "estimated_lat": 40.80790809581197,
+      "estimated_lon": -89.7450928543255,
+      "error_km": 1002.140787813401,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.57.150.91",
+      "true_lat": 25.7795,
+      "true_lon": -80.3285,
+      "estimated_lat": 34.43616034633247,
+      "estimated_lon": -90.17361564466701,
+      "error_km": 1348.8624062947601,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.61.78.239",
+      "true_lat": 41.5495,
+      "true_lon": -70.6125,
+      "estimated_lat": 38.48187644948798,
+      "estimated_lon": -86.88232311589483,
+      "error_km": 1424.541070665965,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.65.178.98",
+      "true_lat": 40.6185,
+      "true_lon": -111.8305,
+      "estimated_lat": 35.85632139052376,
+      "estimated_lon": -108.98195056572467,
+      "error_km": 584.970523904772,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.68.94.5",
+      "true_lat": 42.5695,
+      "true_lon": -70.8495,
+      "estimated_lat": 36.87877383650295,
+      "estimated_lon": -89.1786672622232,
+      "error_km": 1686.0859081424478,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.70.215.77",
+      "true_lat": 37.8615,
+      "true_lon": -122.1005,
+      "estimated_lat": 37.4878936848354,
+      "estimated_lon": -121.89324219119409,
+      "error_km": 45.37128785459574,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.71.10.115",
+      "true_lat": 37.7995,
+      "true_lon": -122.4125,
+      "estimated_lat": 38.17604263441903,
+      "estimated_lon": -121.91390936742349,
+      "error_km": 60.51703568805303,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.71.178.97",
+      "true_lat": 37.2595,
+      "true_lon": -122.0385,
+      "estimated_lat": 38.35357710807825,
+      "estimated_lon": -121.91927517222396,
+      "error_km": 122.10586108960167,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.73.44.208",
+      "true_lat": 41.8785,
+      "true_lon": -87.8005,
+      "estimated_lat": 33.05491633075943,
+      "estimated_lon": -94.30637873204027,
+      "error_km": 1135.95113570202,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.78.55.186",
+      "true_lat": 39.6395,
+      "true_lon": -106.2985,
+      "estimated_lat": 37.30806286855404,
+      "estimated_lon": -104.6479348554179,
+      "error_km": 296.3862976690329,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.83.184.205",
+      "true_lat": 47.6115,
+      "true_lon": -122.5685,
+      "estimated_lat": 46.35331678024119,
+      "estimated_lon": -121.15273645525956,
+      "error_km": 176.36688418165704,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.89.113.1",
+      "true_lat": 42.5815,
+      "true_lon": -71.7985,
+      "estimated_lat": 39.20326834221282,
+      "estimated_lon": -87.62063957435011,
+      "error_km": 1379.636097155972,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.93.104.122",
+      "true_lat": 37.2985,
+      "true_lon": -121.8615,
+      "estimated_lat": 40.010493764845336,
+      "estimated_lon": -121.42586386385726,
+      "error_km": 303.9220540732333,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.94.26.42",
+      "true_lat": 45.0785,
+      "true_lon": -93.2025,
+      "estimated_lat": 42.22016193747336,
+      "estimated_lon": -91.45144853864036,
+      "error_km": 347.63559980872617,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.94.179.8",
+      "true_lat": 45.1415,
+      "true_lon": -93.5505,
+      "estimated_lat": 42.679458670093,
+      "estimated_lon": -91.46880149058335,
+      "error_km": 320.52964405737083,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.97.185.71",
+      "true_lat": 47.7475,
+      "true_lon": -122.1625,
+      "estimated_lat": 46.79790430386631,
+      "estimated_lon": -122.28698459098386,
+      "error_km": 106.0070530700621,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.99.198.243",
+      "true_lat": 37.2315,
+      "true_lon": -80.4115,
+      "estimated_lat": 36.36590798303934,
+      "estimated_lon": -86.60813293538757,
+      "error_km": 559.9639196023343,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.103.51.47",
+      "true_lat": 39.1605,
+      "true_lon": -86.5295,
+      "estimated_lat": 41.96102991632945,
+      "estimated_lon": -88.20725122337655,
+      "error_km": 342.1215013056093,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.104.147.240",
+      "true_lat": 30.1475,
+      "true_lon": -81.6405,
+      "estimated_lat": 33.80568381947376,
+      "estimated_lon": -87.53170222102096,
+      "error_km": 688.4278130771469,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.112.148.172",
+      "true_lat": 39.7815,
+      "true_lon": -74.7425,
+      "estimated_lat": 36.886167997890965,
+      "estimated_lon": -87.02504483308248,
+      "error_km": 1117.5709387899137,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.112.227.218",
+      "true_lat": 39.4315,
+      "true_lon": -74.6025,
+      "estimated_lat": 35.7065640758495,
+      "estimated_lon": -85.98435246694017,
+      "error_km": 1084.2667890009675,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.114.40.3",
+      "true_lat": 42.2795,
+      "true_lon": -71.2395,
+      "estimated_lat": 37.017545229206284,
+      "estimated_lon": -85.63421133356826,
+      "error_km": 1361.8760023959799,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.114.169.195",
+      "true_lat": 42.7715,
+      "true_lon": -71.4725,
+      "estimated_lat": 38.65559171814335,
+      "estimated_lon": -86.6516471947339,
+      "error_km": 1356.410277298006,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.116.28.150",
+      "true_lat": 38.6285,
+      "true_lon": -121.5195,
+      "estimated_lat": 39.50733252933118,
+      "estimated_lon": -121.01758044993272,
+      "error_km": 106.89735177216778,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.116.148.181",
+      "true_lat": 37.7415,
+      "true_lon": -121.4285,
+      "estimated_lat": 37.474029029781036,
+      "estimated_lon": -121.89285720529827,
+      "error_km": 50.57424647944585,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.120.168.93",
+      "true_lat": 28.7985,
+      "true_lon": -81.7305,
+      "estimated_lat": 25.798500000000004,
+      "estimated_lon": -80.23050000000003,
+      "error_km": 365.0173552804677,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.127.6.141",
+      "true_lat": 40.4915,
+      "true_lon": -112.0225,
+      "estimated_lat": 36.01011253968204,
+      "estimated_lon": -108.86055879448185,
+      "error_km": 569.5851325236307,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.130.6.121",
+      "true_lat": 40.7915,
+      "true_lon": -78.0185,
+      "estimated_lat": 40.959242266588724,
+      "estimated_lon": -87.87431781263295,
+      "error_km": 828.4318155250302,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.134.16.229",
+      "true_lat": 39.0615,
+      "true_lon": -76.6495,
+      "estimated_lat": 38.047525724325716,
+      "estimated_lon": -86.95580983551513,
+      "error_km": 902.7613649050251,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.140.12.76",
+      "true_lat": 47.6595,
+      "true_lon": -117.1495,
+      "estimated_lat": 46.21008781666483,
+      "estimated_lon": -122.24172489306922,
+      "error_km": 418.7797500747073,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.142.139.31",
+      "true_lat": 41.7695,
+      "true_lon": -72.9605,
+      "estimated_lat": 38.014495721905725,
+      "estimated_lon": -87.10417922178699,
+      "error_km": 1275.0355433584853,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.143.90.142",
+      "true_lat": 42.0385,
+      "true_lon": -71.0615,
+      "estimated_lat": 36.6984557833546,
+      "estimated_lon": -87.47794756277732,
+      "error_km": 1527.816122116614,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.147.121.185",
+      "true_lat": 38.2075,
+      "true_lon": -77.6125,
+      "estimated_lat": 34.69238378378982,
+      "estimated_lon": -85.5495215718318,
+      "error_km": 809.9635298851159,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.147.244.111",
+      "true_lat": 39.0505,
+      "true_lon": -77.4805,
+      "estimated_lat": 35.7191233626916,
+      "estimated_lon": -86.53396956175379,
+      "error_km": 880.9489610776537,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.150.138.74",
+      "true_lat": 40.3195,
+      "true_lon": -74.4285,
+      "estimated_lat": 36.13067481843867,
+      "estimated_lon": -86.04994832710652,
+      "error_km": 1115.7280460376953,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.153.52.211",
+      "true_lat": 39.8795,
+      "true_lon": -105.1195,
+      "estimated_lat": 36.60938511481687,
+      "estimated_lon": -103.07528912927363,
+      "error_km": 405.0472084835148,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "73.155.45.31",
+      "true_lat": 29.7615,
+      "true_lon": -95.3695,
+      "estimated_lat": 30.868511962916205,
+      "estimated_lon": -94.88992127790401,
+      "error_km": 131.42011236287604,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.158.47.32",
+      "true_lat": 37.3515,
+      "true_lon": -121.9485,
+      "estimated_lat": 38.22865056246203,
+      "estimated_lon": -121.38828299897273,
+      "error_km": 109.25323331038244,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.159.93.204",
+      "true_lat": 42.3705,
+      "true_lon": -71.1085,
+      "estimated_lat": 38.788852838196945,
+      "estimated_lon": -88.36766023643818,
+      "error_km": 1508.0196115621493,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.160.107.181",
+      "true_lat": 39.9295,
+      "true_lon": -74.8905,
+      "estimated_lat": 34.753438679598446,
+      "estimated_lon": -85.51943630081016,
+      "error_km": 1100.7257025793733,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.162.2.255",
+      "true_lat": 37.0505,
+      "true_lon": -122.0715,
+      "estimated_lat": 37.33149999999999,
+      "estimated_lon": -121.88850000000005,
+      "error_km": 35.200417100042486,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.162.122.227",
+      "true_lat": 37.4005,
+      "true_lon": -122.1015,
+      "estimated_lat": 37.28964349998504,
+      "estimated_lon": -121.63442847402185,
+      "error_km": 43.08964647211086,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.162.160.224",
+      "true_lat": 37.2385,
+      "true_lon": -121.9605,
+      "estimated_lat": 38.70221315275572,
+      "estimated_lon": -121.81781539638172,
+      "error_km": 163.2372784644923,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.162.188.172",
+      "true_lat": 37.3405,
+      "true_lon": -121.9605,
+      "estimated_lat": 37.42116087636052,
+      "estimated_lon": -120.74969576895474,
+      "error_km": 107.35814665956813,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "73.163.41.82",
+      "true_lat": 39.1985,
+      "true_lon": -76.7495,
+      "estimated_lat": 37.353304288984944,
+      "estimated_lon": -86.58409865919597,
+      "error_km": 882.1635138658837,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.164.194.90",
+      "true_lat": 45.5205,
+      "true_lon": -122.6805,
+      "estimated_lat": 46.762857531421055,
+      "estimated_lon": -121.73753537660308,
+      "error_km": 156.07958159677946,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.167.204.220",
+      "true_lat": 41.5595,
+      "true_lon": -72.6495,
+      "estimated_lat": 38.200558169472956,
+      "estimated_lon": -86.90891055767958,
+      "error_km": 1271.0318321123054,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.170.234.145",
+      "true_lat": 38.4395,
+      "true_lon": -122.6725,
+      "estimated_lat": 37.35795386474031,
+      "estimated_lon": -121.88948218764233,
+      "error_km": 138.50266880191322,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.171.40.16",
+      "true_lat": 37.2105,
+      "true_lon": -80.4015,
+      "estimated_lat": 35.69368245877024,
+      "estimated_lon": -86.53780486990848,
+      "error_km": 574.033995925936,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.173.249.96",
+      "true_lat": 39.1075,
+      "true_lon": -77.0005,
+      "estimated_lat": 37.990282368964884,
+      "estimated_lon": -88.68292516227375,
+      "error_km": 1022.778993739171,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.175.78.240",
+      "true_lat": 41.3495,
+      "true_lon": -76.0485,
+      "estimated_lat": 41.45203125831856,
+      "estimated_lon": -87.92384796217421,
+      "error_km": 989.7819806123844,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.178.234.198",
+      "true_lat": 39.7495,
+      "true_lon": -75.3085,
+      "estimated_lat": 36.02860236507049,
+      "estimated_lon": -86.1746409379215,
+      "error_km": 1038.5239320832948,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.180.4.136",
+      "true_lat": 45.4485,
+      "true_lon": -122.7915,
+      "estimated_lat": 46.08683874709222,
+      "estimated_lon": -121.88463099374106,
+      "error_km": 99.92971682174692,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.181.167.72",
+      "true_lat": 47.6505,
+      "true_lon": -117.1695,
+      "estimated_lat": 45.910217859752414,
+      "estimated_lon": -122.10649424375114,
+      "error_km": 422.7020890286523,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.183.90.160",
+      "true_lat": 40.9715,
+      "true_lon": -80.4885,
+      "estimated_lat": 35.18886948308124,
+      "estimated_lon": -91.60341247908795,
+      "error_km": 1164.6787466923047,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.185.80.5",
+      "true_lat": 37.7385,
+      "true_lon": -121.4315,
+      "estimated_lat": 38.52814690927672,
+      "estimated_lon": -120.0608029502835,
+      "error_km": 148.59786972274725,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.186.25.229",
+      "true_lat": 43.2695,
+      "true_lon": -70.8625,
+      "estimated_lat": 37.98320419468282,
+      "estimated_lon": -86.95037612835145,
+      "error_km": 1476.3355525329944,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.186.173.145",
+      "true_lat": 44.5285,
+      "true_lon": -73.1295,
+      "estimated_lat": 39.01120764232596,
+      "estimated_lon": -87.98303815351484,
+      "error_km": 1373.3291455662686,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.187.210.181",
+      "true_lat": 39.7285,
+      "true_lon": -77.4685,
+      "estimated_lat": 41.22177110032868,
+      "estimated_lon": -87.24531695684576,
+      "error_km": 842.9851105548853,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.189.18.0",
+      "true_lat": 37.3375,
+      "true_lon": -121.8905,
+      "estimated_lat": 38.07918929917746,
+      "estimated_lon": -121.91254705612057,
+      "error_km": 82.49488842069353,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.193.62.250",
+      "true_lat": 47.0895,
+      "true_lon": -122.2005,
+      "estimated_lat": 45.803283901607585,
+      "estimated_lon": -121.85242596000542,
+      "error_km": 145.48537459716914,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.198.153.237",
+      "true_lat": 39.9885,
+      "true_lon": -74.5725,
+      "estimated_lat": 36.12628441478975,
+      "estimated_lon": -88.60497424849532,
+      "error_km": 1299.7684159957278,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.202.204.100",
+      "true_lat": 38.2305,
+      "true_lon": -122.1515,
+      "estimated_lat": 37.78225219051763,
+      "estimated_lon": -121.90278337876526,
+      "error_km": 54.39824229902291,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.203.70.239",
+      "true_lat": 39.6015,
+      "true_lon": -105.0115,
+      "estimated_lat": 36.55951417784117,
+      "estimated_lon": -102.76200043032793,
+      "error_km": 391.3484284290194,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "73.204.169.185",
+      "true_lat": 26.8595,
+      "true_lon": -80.1195,
+      "estimated_lat": 34.217597179734994,
+      "estimated_lon": -89.7783283622139,
+      "error_km": 1233.7664581366166,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.209.64.24",
+      "true_lat": 39.8685,
+      "true_lon": -88.9505,
+      "estimated_lat": 41.99049999999999,
+      "estimated_lon": -87.95849999999994,
+      "error_km": 250.23497110529945,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.216.227.119",
+      "true_lat": 37.6775,
+      "true_lon": -77.3805,
+      "estimated_lat": 33.11256576053174,
+      "estimated_lon": -86.03333274978037,
+      "error_km": 933.5997885163638,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.218.15.241",
+      "true_lat": 43.1715,
+      "true_lon": -70.8705,
+      "estimated_lat": 37.50445463227561,
+      "estimated_lon": -87.18221098894554,
+      "error_km": 1515.956646859741,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.222.219.183",
+      "true_lat": 38.0475,
+      "true_lon": -122.1625,
+      "estimated_lat": 38.25142476340595,
+      "estimated_lon": -121.91578928822331,
+      "error_km": 31.298267369845778,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.225.2.122",
+      "true_lat": 47.8105,
+      "true_lon": -122.2285,
+      "estimated_lat": 47.164355081494726,
+      "estimated_lon": -121.17078124777818,
+      "error_km": 107.13711115534825,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.225.113.167",
+      "true_lat": 47.4385,
+      "true_lon": -122.2025,
+      "estimated_lat": 46.4556968133972,
+      "estimated_lon": -121.04550327759735,
+      "error_km": 140.1976753720035,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.226.136.146",
+      "true_lat": 40.1315,
+      "true_lon": -74.6425,
+      "estimated_lat": 37.04490568808238,
+      "estimated_lon": -86.07081753749368,
+      "error_km": 1049.9830130041569,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.227.32.251",
+      "true_lat": 42.4215,
+      "true_lon": -71.2395,
+      "estimated_lat": 38.38443686955432,
+      "estimated_lon": -86.79973628458433,
+      "error_km": 1389.5057489101866,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.229.247.116",
+      "true_lat": 39.5295,
+      "true_lon": -104.7615,
+      "estimated_lat": 36.30556879330952,
+      "estimated_lon": -102.23820023343215,
+      "error_km": 421.26758405748865,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "73.230.235.230",
+      "true_lat": 39.7475,
+      "true_lon": -77.4395,
+      "estimated_lat": 41.099709223635315,
+      "estimated_lon": -87.9237258229314,
+      "error_km": 899.5526020882319,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.231.142.2",
+      "true_lat": 37.3685,
+      "true_lon": -122.0025,
+      "estimated_lat": 38.11677685085312,
+      "estimated_lon": -121.91206927713252,
+      "error_km": 83.5836579767985,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.242.253.70",
+      "true_lat": 35.6185,
+      "true_lon": -105.8505,
+      "estimated_lat": 39.00578108948738,
+      "estimated_lon": -104.26310580094353,
+      "error_km": 401.9405827145034,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.243.56.36",
+      "true_lat": 39.5385,
+      "true_lon": -104.9295,
+      "estimated_lat": 36.693191686468246,
+      "estimated_lon": -103.17802459991526,
+      "error_km": 351.51478716334924,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "73.245.19.177",
+      "true_lat": 26.5705,
+      "true_lon": -80.1495,
+      "estimated_lat": 33.84569406389582,
+      "estimated_lon": -88.45334434299328,
+      "error_km": 1135.4081170187435,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.249.55.5",
+      "true_lat": 41.8395,
+      "true_lon": -72.8305,
+      "estimated_lat": 37.858816687986796,
+      "estimated_lon": -86.60675351639998,
+      "error_km": 1254.8150734824037,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.251.12.65",
+      "true_lat": 37.2575,
+      "true_lon": -77.3185,
+      "estimated_lat": 34.64141502452984,
+      "estimated_lon": -86.71814860140121,
+      "error_km": 894.2401361691187,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "73.251.198.1",
+      "true_lat": 38.9875,
+      "true_lon": -77.5195,
+      "estimated_lat": 34.91291866232963,
+      "estimated_lon": -86.54426656007354,
+      "error_km": 920.4374870427404,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "75.69.213.220",
+      "true_lat": 43.1675,
+      "true_lon": -70.9885,
+      "estimated_lat": 38.11040657855221,
+      "estimated_lon": -86.99555142410166,
+      "error_km": 1459.9951853937284,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "75.70.86.223",
+      "true_lat": 39.4885,
+      "true_lon": -104.8385,
+      "estimated_lat": 37.26478497033859,
+      "estimated_lon": -102.94289061144634,
+      "error_km": 297.37931260308847,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "75.70.225.108",
+      "true_lat": 39.9805,
+      "true_lon": -105.1585,
+      "estimated_lat": 36.5424170735387,
+      "estimated_lon": -102.53126450192231,
+      "error_km": 445.7789416659448,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "75.72.178.239",
+      "true_lat": 44.9605,
+      "true_lon": -92.9015,
+      "estimated_lat": 42.69475100797951,
+      "estimated_lon": -91.60561544923989,
+      "error_km": 272.5338084489869,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "75.150.193.178",
+      "true_lat": 41.8795,
+      "true_lon": -87.9985,
+      "estimated_lat": 41.99049999999998,
+      "estimated_lon": -87.95849999999999,
+      "error_km": 12.778434075304993,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.19.24.6",
+      "true_lat": 41.6915,
+      "true_lon": -70.9125,
+      "estimated_lat": 38.132652127668564,
+      "estimated_lon": -87.45075148594506,
+      "error_km": 1462.376156728094,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.22.62.222",
+      "true_lat": 48.2905,
+      "true_lon": -122.6385,
+      "estimated_lat": 47.060359996579265,
+      "estimated_lon": -120.93236389598681,
+      "error_km": 187.1473736199478,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.23.198.76",
+      "true_lat": 43.8575,
+      "true_lon": -70.0985,
+      "estimated_lat": 37.01160316349033,
+      "estimated_lon": -87.80397230098353,
+      "error_km": 1675.9984054743377,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.24.32.177",
+      "true_lat": 42.5285,
+      "true_lon": -70.8925,
+      "estimated_lat": 37.9897766588243,
+      "estimated_lon": -87.4242909980126,
+      "error_km": 1487.8345055000311,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.27.220.213",
+      "true_lat": 45.5275,
+      "true_lon": -123.1205,
+      "estimated_lat": 45.589839467302056,
+      "estimated_lon": -122.20342316810476,
+      "error_km": 71.73550591733564,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.28.152.19",
+      "true_lat": 47.4775,
+      "true_lon": -122.1215,
+      "estimated_lat": 46.90311314558648,
+      "estimated_lon": -121.60193038459107,
+      "error_km": 74.97059184236743,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.102.30.231",
+      "true_lat": 37.3885,
+      "true_lon": -121.8695,
+      "estimated_lat": 37.3315,
+      "estimated_lon": -121.88849999999996,
+      "error_km": 6.556794626192557,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.104.43.89",
+      "true_lat": 38.9675,
+      "true_lon": -77.5025,
+      "estimated_lat": 34.58079449038566,
+      "estimated_lon": -86.76958556705337,
+      "error_km": 958.0087040793262,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.110.27.24",
+      "true_lat": 25.5815,
+      "true_lon": -80.3525,
+      "estimated_lat": 33.915593549004825,
+      "estimated_lon": -88.51292965768381,
+      "error_km": 1215.323593701598,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.112.192.248",
+      "true_lat": 42.9285,
+      "true_lon": -85.6505,
+      "estimated_lat": 41.942113947714034,
+      "estimated_lon": -88.37839895850361,
+      "error_km": 249.27574324248036,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.113.57.146",
+      "true_lat": 35.8205,
+      "true_lon": -106.2195,
+      "estimated_lat": 39.41754161576769,
+      "estimated_lon": -106.57304375032156,
+      "error_km": 401.1819507354338,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.118.65.148",
+      "true_lat": 41.3895,
+      "true_lon": -73.3905,
+      "estimated_lat": 38.31936610415989,
+      "estimated_lon": -86.88409973461977,
+      "error_km": 1199.9000511178467,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.118.144.201",
+      "true_lat": 42.2005,
+      "true_lon": -71.4195,
+      "estimated_lat": 38.857535356788446,
+      "estimated_lon": -88.44582926145557,
+      "error_km": 1483.4378104853017,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.118.155.162",
+      "true_lat": 42.8775,
+      "true_lon": -71.5505,
+      "estimated_lat": 36.38427369812064,
+      "estimated_lon": -86.26468233402433,
+      "error_km": 1449.2795449078772,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.118.249.28",
+      "true_lat": 42.9395,
+      "true_lon": -71.3705,
+      "estimated_lat": 38.60689856606803,
+      "estimated_lon": -87.06659992799203,
+      "error_km": 1404.1791132086944,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.122.196.148",
+      "true_lat": 36.0575,
+      "true_lon": -86.9385,
+      "estimated_lat": 32.211653473629255,
+      "estimated_lon": -85.60512514330547,
+      "error_km": 444.8839835081971,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.123.28.218",
+      "true_lat": 39.0815,
+      "true_lon": -77.5015,
+      "estimated_lat": 35.111189880652105,
+      "estimated_lon": -84.40042078308068,
+      "error_km": 754.1377938712374,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.125.106.77",
+      "true_lat": 34.7375,
+      "true_lon": -92.1185,
+      "estimated_lat": 33.83891728466631,
+      "estimated_lon": -88.58871528820814,
+      "error_km": 339.30537360527853,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.126.63.251",
+      "true_lat": 37.7685,
+      "true_lon": -122.4215,
+      "estimated_lat": 37.38533498217634,
+      "estimated_lon": -121.88991245536133,
+      "error_km": 63.32338200300176,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.132.247.210",
+      "true_lat": 37.5495,
+      "true_lon": -121.9425,
+      "estimated_lat": 38.912435977376205,
+      "estimated_lon": -121.64536236994836,
+      "error_km": 153.75755725276676,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.133.71.157",
+      "true_lat": 37.8815,
+      "true_lon": -122.1825,
+      "estimated_lat": 37.773883189115544,
+      "estimated_lon": -121.90155490746487,
+      "error_km": 27.423469690466813,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.133.131.57",
+      "true_lat": 37.6575,
+      "true_lon": -121.8815,
+      "estimated_lat": 37.529539735659,
+      "estimated_lon": -121.89411423941304,
+      "error_km": 14.271871733949322,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.133.254.96",
+      "true_lat": 38.2485,
+      "true_lon": -122.0395,
+      "estimated_lat": 37.73506832035407,
+      "estimated_lon": -121.90043127539931,
+      "error_km": 58.377230995494926,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.135.96.166",
+      "true_lat": 47.6775,
+      "true_lon": -122.3205,
+      "estimated_lat": 46.88077685625394,
+      "estimated_lon": -121.26041635430857,
+      "error_km": 119.3446302465649,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.139.53.232",
+      "true_lat": 39.1695,
+      "true_lon": -86.4915,
+      "estimated_lat": 41.88135877500884,
+      "estimated_lon": -88.88941188112504,
+      "error_km": 363.2895098981127,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.141.207.82",
+      "true_lat": 41.9615,
+      "true_lon": -87.7285,
+      "estimated_lat": 41.990500000000004,
+      "estimated_lon": -87.95850000000002,
+      "error_km": 19.284481498990786,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.142.123.119",
+      "true_lat": 29.6975,
+      "true_lon": -95.5215,
+      "estimated_lat": 32.280313651093316,
+      "estimated_lon": -95.40260792635489,
+      "error_km": 287.4192231500824,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.146.183.17",
+      "true_lat": 47.6385,
+      "true_lon": -122.2205,
+      "estimated_lat": 45.71715752042288,
+      "estimated_lon": -120.35746946174987,
+      "error_km": 256.58504747738124,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.147.31.39",
+      "true_lat": 47.7885,
+      "true_lon": -122.3505,
+      "estimated_lat": 47.05952895456534,
+      "estimated_lon": -121.8576155816655,
+      "error_km": 89.13599948589425,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.147.137.99",
+      "true_lat": 47.6115,
+      "true_lon": -122.3285,
+      "estimated_lat": 46.56323435675277,
+      "estimated_lon": -122.27593775604566,
+      "error_km": 116.6297252374534,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.149.162.47",
+      "true_lat": 40.4975,
+      "true_lon": -112.0105,
+      "estimated_lat": 36.13096189894689,
+      "estimated_lon": -109.27577289449901,
+      "error_km": 540.9157603962061,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.151.129.87",
+      "true_lat": 39.2695,
+      "true_lon": -76.6085,
+      "estimated_lat": 36.95497673241923,
+      "estimated_lon": -86.27258162674461,
+      "error_km": 883.2759909431683,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.154.155.85",
+      "true_lat": 39.7985,
+      "true_lon": -105.0825,
+      "estimated_lat": 36.65166202217941,
+      "estimated_lon": -102.8431848249697,
+      "error_km": 400.84049295894346,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "76.155.122.173",
+      "true_lat": 39.7305,
+      "true_lon": -105.0625,
+      "estimated_lat": 38.369685123857046,
+      "estimated_lon": -103.92015376498854,
+      "error_km": 180.62642016922314,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.155.135.175",
+      "true_lat": 39.7295,
+      "true_lon": -104.8285,
+      "estimated_lat": 36.65138823242718,
+      "estimated_lon": -103.07126437027435,
+      "error_km": 375.12244592764284,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "76.157.58.100",
+      "true_lat": 41.9675,
+      "true_lon": -87.7025,
+      "estimated_lat": 41.985522660054244,
+      "estimated_lon": -88.0068038385971,
+      "error_km": 25.23479079095658,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.157.152.247",
+      "true_lat": 42.0915,
+      "true_lon": -87.9825,
+      "estimated_lat": 34.11032367354611,
+      "estimated_lon": -93.73796851916217,
+      "error_km": 1019.7920375059418,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "96.77.234.81",
+      "true_lat": 39.7285,
+      "true_lon": -121.8415,
+      "estimated_lat": 39.215285038573185,
+      "estimated_lon": -121.8050492015286,
+      "error_km": 57.152603406119134,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.37.110.78",
+      "true_lat": 37.6575,
+      "true_lon": -121.8515,
+      "estimated_lat": 37.480031731053955,
+      "estimated_lon": -121.89267871481742,
+      "error_km": 20.06453800733561,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.43.156.51",
+      "true_lat": 39.6505,
+      "true_lon": -104.7785,
+      "estimated_lat": 36.744964870172204,
+      "estimated_lon": -103.11644721855613,
+      "error_km": 354.2067272337651,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "98.46.144.88",
+      "true_lat": 41.3885,
+      "true_lon": -87.7405,
+      "estimated_lat": 41.99050000000001,
+      "estimated_lon": -87.95850000000002,
+      "error_km": 69.3436516557909,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.51.94.70",
+      "true_lat": 37.3475,
+      "true_lon": -121.9585,
+      "estimated_lat": 37.39779813209158,
+      "estimated_lon": -121.89170640117578,
+      "error_km": 8.131316515697419,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.51.131.164",
+      "true_lat": 37.4105,
+      "true_lon": -121.8995,
+      "estimated_lat": 40.742659256605116,
+      "estimated_lon": -118.8687633759888,
+      "error_km": 453.50176527118373,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.52.36.185",
+      "true_lat": 41.8095,
+      "true_lon": -88.3305,
+      "estimated_lat": 41.984029313600196,
+      "estimated_lon": -88.02127690697309,
+      "error_km": 32.11945928430588,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.53.18.235",
+      "true_lat": 26.6095,
+      "true_lon": -80.1425,
+      "estimated_lat": 33.81873912620659,
+      "estimated_lon": -89.07204965214144,
+      "error_km": 1173.240399297569,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.59.29.7",
+      "true_lat": 45.0685,
+      "true_lon": -93.4625,
+      "estimated_lat": 42.36180144682604,
+      "estimated_lon": -91.78709640368973,
+      "error_km": 329.69923744398756,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.60.207.182",
+      "true_lat": 35.6875,
+      "true_lon": -105.9585,
+      "estimated_lat": 39.99299074524205,
+      "estimated_lon": -103.25186887672744,
+      "error_km": 534.4273922489001,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.61.35.37",
+      "true_lat": 45.0895,
+      "true_lon": -93.0115,
+      "estimated_lat": 42.502706899378595,
+      "estimated_lon": -91.78321010770341,
+      "error_km": 304.0529991386171,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.61.219.146",
+      "true_lat": 45.0685,
+      "true_lon": -93.1305,
+      "estimated_lat": 42.34152475602841,
+      "estimated_lon": -90.96724105138904,
+      "error_km": 349.5149676850571,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.200.4.79",
+      "true_lat": 29.7615,
+      "true_lon": -95.3715,
+      "estimated_lat": 35.14415070661252,
+      "estimated_lon": -97.21745235608807,
+      "error_km": 623.0416855021107,
+      "n_anchors_used": 6,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "98.207.102.68",
+      "true_lat": 37.3105,
+      "true_lon": -121.8805,
+      "estimated_lat": 37.4643596205809,
+      "estimated_lon": -121.89227903454318,
+      "error_km": 17.140031122305995,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.208.234.225",
+      "true_lat": 26.2385,
+      "true_lon": -81.7585,
+      "estimated_lat": 34.0196169491512,
+      "estimated_lon": -89.86726198803883,
+      "error_km": 1163.8793927553434,
+      "n_anchors_used": 6,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.210.52.75",
+      "true_lat": 37.2695,
+      "true_lon": -121.9585,
+      "estimated_lat": 37.5853495931065,
+      "estimated_lon": -121.89599863409137,
+      "error_km": 35.55186554794076,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.210.233.112",
+      "true_lat": 37.9315,
+      "true_lon": -122.3005,
+      "estimated_lat": 38.054224101598905,
+      "estimated_lon": -121.91225443478318,
+      "error_km": 36.65715778056624,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.211.64.26",
+      "true_lat": 38.6885,
+      "true_lon": -75.0685,
+      "estimated_lat": 37.56933989993042,
+      "estimated_lon": -86.69639130152416,
+      "error_km": 1023.9518876002132,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.225.179.126",
+      "true_lat": 40.2175,
+      "true_lon": -75.4015,
+      "estimated_lat": 36.662061524352694,
+      "estimated_lon": -85.90175484723373,
+      "error_km": 995.4690496693546,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.225.186.183",
+      "true_lat": 39.9475,
+      "true_lon": -75.1585,
+      "estimated_lat": 37.28332129966898,
+      "estimated_lon": -86.05631778945016,
+      "error_km": 991.3223773975723,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.233.226.42",
+      "true_lat": 38.8105,
+      "true_lon": -77.5995,
+      "estimated_lat": 36.85868651603564,
+      "estimated_lon": -86.21072713988453,
+      "error_km": 786.4086660044854,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "98.247.45.227",
+      "true_lat": 47.6115,
+      "true_lon": -122.3325,
+      "estimated_lat": 44.59786181326622,
+      "estimated_lon": -118.67652707305581,
+      "error_km": 437.775283129643,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "98.253.227.36",
+      "true_lat": 42.0075,
+      "true_lon": -88.1105,
+      "estimated_lat": 41.99049999999995,
+      "estimated_lon": -87.95849999999992,
+      "error_km": 12.701999559136908,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "107.4.111.119",
+      "true_lat": 42.3205,
+      "true_lon": -83.7885,
+      "estimated_lat": 41.989136690509184,
+      "estimated_lon": -87.97174442475716,
+      "error_km": 346.76261248422725,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "107.4.223.192",
+      "true_lat": 45.1815,
+      "true_lon": -93.4095,
+      "estimated_lat": 41.995369840568905,
+      "estimated_lon": -91.78415536033329,
+      "error_km": 377.66980715929986,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "173.8.207.225",
+      "true_lat": 45.5285,
+      "true_lon": -122.6515,
+      "estimated_lat": 45.54488832274534,
+      "estimated_lon": -121.86093011900022,
+      "error_km": 61.60162498436575,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "173.164.121.54",
+      "true_lat": 45.4875,
+      "true_lon": -122.7305,
+      "estimated_lat": 45.461529494394746,
+      "estimated_lon": -121.44610697440493,
+      "error_km": 100.18830841520713,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "174.49.255.125",
+      "true_lat": 40.3495,
+      "true_lon": -75.9185,
+      "estimated_lat": 41.43426132741925,
+      "estimated_lon": -87.96479723252837,
+      "error_km": 1018.8948862542939,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "174.51.101.67",
+      "true_lat": 39.5005,
+      "true_lon": -104.7295,
+      "estimated_lat": 38.105484374064375,
+      "estimated_lon": -103.63430958587247,
+      "error_km": 181.84349378382765,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "174.51.106.202",
+      "true_lat": 30.5505,
+      "true_lon": -97.5915,
+      "estimated_lat": 36.488502517587776,
+      "estimated_lon": -102.3604753073743,
+      "error_km": 794.3393512192733,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "174.54.59.47",
+      "true_lat": 40.0115,
+      "true_lon": -76.3305,
+      "estimated_lat": 41.587699216154526,
+      "estimated_lon": -87.59087041660433,
+      "error_km": 963.1674495677848,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "174.62.70.109",
+      "true_lat": 36.9775,
+      "true_lon": -121.9685,
+      "estimated_lat": 38.23811981870245,
+      "estimated_lon": -121.91657822172184,
+      "error_km": 140.24911858785958,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "174.62.77.249",
+      "true_lat": 37.7585,
+      "true_lon": -122.4515,
+      "estimated_lat": 37.62956190380994,
+      "estimated_lon": -121.89792463773234,
+      "error_km": 50.77369856328145,
+      "n_anchors_used": 7,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "174.63.7.173",
+      "true_lat": 39.5995,
+      "true_lon": -104.7295,
+      "estimated_lat": 36.45590074843476,
+      "estimated_lon": -102.70729849882864,
+      "error_km": 391.8369097463081,
+      "n_anchors_used": 7,
+      "method": "fallback"
+    },
+    {
+      "probe_ip": "73.217.208.3",
+      "true_lat": 38.7215,
+      "true_lon": -94.4415,
+      "estimated_lat": 41.562355402813765,
+      "estimated_lon": -91.51479228753217,
+      "error_km": 402.0338555609976,
+      "n_anchors_used": 3,
+      "method": "intersection"
+    },
+    {
+      "probe_ip": "76.30.213.99",
+      "true_lat": 29.8995,
+      "true_lon": -95.6005,
+      "estimated_lat": 34.21031713903092,
+      "estimated_lon": -118.31833153268046,
+      "error_km": 2189.006449778186,
+      "n_anchors_used": 3,
+      "method": "intersection"
+    }
+  ]
+}

@@ -62,7 +62,11 @@ def filter_rtt_data(
     bin_size_km: float = 100.0,
     n_std: float = 1.0,
     global_n_std: float = 1.0,
-    bin_percentile: float = 0.05
+    bin_percentile: float = 0.05,
+    enable_bin_filter: bool = True,
+    enable_percentile_filter: bool = True,
+    enable_global_filter: bool = True,
+    enable_baseline_filter: bool = True
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     """
     Filter RTT data to remove invalid and outlier measurements.
@@ -105,6 +109,10 @@ def filter_rtt_data(
         n_std: Number of standard deviations for per-bin filtering (default 1.0)
         global_n_std: Number of standard deviations for global bin-min filter (default 1.0)
         bin_percentile: Percentile threshold per bin (default 0.05 = 5th percentile)
+        enable_bin_filter: Enable Stage 2 per-bin mean±σ filter (default True)
+        enable_percentile_filter: Enable Stage 2b per-bin percentile filter (default True)
+        enable_global_filter: Enable Stage 3 global bin-min filter (default True)
+        enable_baseline_filter: Enable Stage 4 speed-of-light baseline filter (default True)
 
     Returns:
         Tuple of (filtered_distances, filtered_rtts, stats_dict)
@@ -139,120 +147,124 @@ def filter_rtt_data(
 
     # Stage 2: Distance-binned mean ± n_std filtering (SYMMETRIC)
     # This removes both low AND high outliers per bin
-    bin_indices = (distances // bin_size_km).astype(int)
-    unique_bins = np.unique(bin_indices)
+    if enable_bin_filter:
+        bin_indices = (distances // bin_size_km).astype(int)
+        unique_bins = np.unique(bin_indices)
 
-    keep_mask = np.ones(len(distances), dtype=bool)
-    low_outlier_count = 0
-    high_outlier_count = 0
+        keep_mask = np.ones(len(distances), dtype=bool)
+        low_outlier_count = 0
+        high_outlier_count = 0
 
-    for bin_idx in unique_bins:
-        in_bin = bin_indices == bin_idx
-        bin_rtts = rtts[in_bin]
+        for bin_idx in unique_bins:
+            in_bin = bin_indices == bin_idx
+            bin_rtts = rtts[in_bin]
 
-        if len(bin_rtts) >= 3:  # Need enough points for meaningful mean/std
-            mean_rtt = np.mean(bin_rtts)
-            std_rtt = np.std(bin_rtts)
+            if len(bin_rtts) >= 3:  # Need enough points for meaningful mean/std
+                mean_rtt = np.mean(bin_rtts)
+                std_rtt = np.std(bin_rtts)
 
-            lower_bound = mean_rtt - n_std * std_rtt
-            upper_bound = mean_rtt + n_std * std_rtt
+                lower_bound = mean_rtt - n_std * std_rtt
+                upper_bound = mean_rtt + n_std * std_rtt
 
-            # Mark outliers for removal
-            low_outliers = bin_rtts < lower_bound
-            high_outliers = bin_rtts > upper_bound
+                # Mark outliers for removal
+                low_outliers = bin_rtts < lower_bound
+                high_outliers = bin_rtts > upper_bound
 
-            bin_positions = np.where(in_bin)[0]
-            keep_mask[bin_positions[low_outliers]] = False
-            keep_mask[bin_positions[high_outliers]] = False
+                bin_positions = np.where(in_bin)[0]
+                keep_mask[bin_positions[low_outliers]] = False
+                keep_mask[bin_positions[high_outliers]] = False
 
-            low_outlier_count += np.sum(low_outliers)
-            high_outlier_count += np.sum(high_outliers)
+                low_outlier_count += np.sum(low_outliers)
+                high_outlier_count += np.sum(high_outliers)
 
-    stats['removed_low_outliers'] = int(low_outlier_count)
-    stats['removed_high_outliers'] = int(high_outlier_count)
-    distances = distances[keep_mask]
-    rtts = rtts[keep_mask]
+        stats['removed_low_outliers'] = int(low_outlier_count)
+        stats['removed_high_outliers'] = int(high_outlier_count)
+        distances = distances[keep_mask]
+        rtts = rtts[keep_mask]
 
-    if len(distances) == 0:
-        stats['final_count'] = 0
-        return np.array([]), np.array([]), stats
+        if len(distances) == 0:
+            stats['final_count'] = 0
+            return np.array([]), np.array([]), stats
 
     # Stage 2b: Per-bin percentile filter - keep only RTTs at or below the percentile threshold
     # This creates the "true lower bound" for LP fitting
-    bin_indices = (distances // bin_size_km).astype(int)
-    unique_bins = np.unique(bin_indices)
+    if enable_percentile_filter:
+        bin_indices = (distances // bin_size_km).astype(int)
+        unique_bins = np.unique(bin_indices)
 
-    keep_mask = np.ones(len(distances), dtype=bool)
-    above_percentile_count = 0
+        keep_mask = np.ones(len(distances), dtype=bool)
+        above_percentile_count = 0
 
-    for bin_idx in unique_bins:
-        in_bin = bin_indices == bin_idx
-        bin_rtts = rtts[in_bin]
+        for bin_idx in unique_bins:
+            in_bin = bin_indices == bin_idx
+            bin_rtts = rtts[in_bin]
 
-        if len(bin_rtts) >= 2:  # Need at least 2 points for percentile
-            # Calculate percentile threshold for this bin
-            percentile_threshold = np.percentile(bin_rtts, bin_percentile * 100)
+            if len(bin_rtts) >= 2:  # Need at least 2 points for percentile
+                # Calculate percentile threshold for this bin
+                percentile_threshold = np.percentile(bin_rtts, bin_percentile * 100)
 
-            # Mark points above percentile for removal
-            above_percentile = bin_rtts > percentile_threshold
+                # Mark points above percentile for removal
+                above_percentile = bin_rtts > percentile_threshold
 
-            bin_positions = np.where(in_bin)[0]
-            keep_mask[bin_positions[above_percentile]] = False
+                bin_positions = np.where(in_bin)[0]
+                keep_mask[bin_positions[above_percentile]] = False
 
-            above_percentile_count += np.sum(above_percentile)
+                above_percentile_count += np.sum(above_percentile)
 
-    stats['removed_above_percentile'] = int(above_percentile_count)
-    distances = distances[keep_mask]
-    rtts = rtts[keep_mask]
+        stats['removed_above_percentile'] = int(above_percentile_count)
+        distances = distances[keep_mask]
+        rtts = rtts[keep_mask]
 
-    if len(distances) == 0:
-        stats['final_count'] = 0
-        return np.array([]), np.array([]), stats
+        if len(distances) == 0:
+            stats['final_count'] = 0
+            return np.array([]), np.array([]), stats
 
     # Stage 3: Global filter on binned min RTTs
     # This catches entire bins with mislabeled coordinates where even the best RTT is anomalous
-    bin_indices = (distances // bin_size_km).astype(int)
-    unique_bins = np.unique(bin_indices)
+    if enable_global_filter:
+        bin_indices = (distances // bin_size_km).astype(int)
+        unique_bins = np.unique(bin_indices)
 
-    if len(unique_bins) >= 3:  # Need enough bins for meaningful global statistics
-        # Compute min RTT for each bin
-        bin_min_rtts = {}
-        for bin_idx in unique_bins:
-            in_bin = bin_indices == bin_idx
-            bin_min_rtts[bin_idx] = np.min(rtts[in_bin])
+        if len(unique_bins) >= 3:  # Need enough bins for meaningful global statistics
+            # Compute min RTT for each bin
+            bin_min_rtts = {}
+            for bin_idx in unique_bins:
+                in_bin = bin_indices == bin_idx
+                bin_min_rtts[bin_idx] = np.min(rtts[in_bin])
 
-        # Calculate global mean and std of bin minimums
-        min_rtt_values = np.array(list(bin_min_rtts.values()))
-        global_mean = np.mean(min_rtt_values)
-        global_std = np.std(min_rtt_values)
+            # Calculate global mean and std of bin minimums
+            min_rtt_values = np.array(list(bin_min_rtts.values()))
+            global_mean = np.mean(min_rtt_values)
+            global_std = np.std(min_rtt_values)
 
-        # Identify outlier bins (where min RTT is outside global mean ± global_n_std*σ)
-        lower_bound = global_mean - global_n_std * global_std
-        upper_bound = global_mean + global_n_std * global_std
+            # Identify outlier bins (where min RTT is outside global mean ± global_n_std*σ)
+            lower_bound = global_mean - global_n_std * global_std
+            upper_bound = global_mean + global_n_std * global_std
 
-        outlier_bins = set()
-        for bin_idx, min_rtt in bin_min_rtts.items():
-            if min_rtt < lower_bound or min_rtt > upper_bound:
-                outlier_bins.add(bin_idx)
+            outlier_bins = set()
+            for bin_idx, min_rtt in bin_min_rtts.items():
+                if min_rtt < lower_bound or min_rtt > upper_bound:
+                    outlier_bins.add(bin_idx)
 
-        # Remove ALL points in outlier bins
-        if outlier_bins:
-            keep_mask = np.array([bin_idx not in outlier_bins for bin_idx in bin_indices])
-            stats['removed_global_bin_outliers'] = int(np.sum(~keep_mask))
-            distances = distances[keep_mask]
-            rtts = rtts[keep_mask]
+            # Remove ALL points in outlier bins
+            if outlier_bins:
+                keep_mask = np.array([bin_idx not in outlier_bins for bin_idx in bin_indices])
+                stats['removed_global_bin_outliers'] = int(np.sum(~keep_mask))
+                distances = distances[keep_mask]
+                rtts = rtts[keep_mask]
 
-    if len(distances) == 0:
-        stats['final_count'] = 0
-        return np.array([]), np.array([]), stats
+        if len(distances) == 0:
+            stats['final_count'] = 0
+            return np.array([]), np.array([]), stats
 
     # Stage 4: Filter RTTs below baseline (speed-of-light constraint)
     # Applied LAST as final physical sanity check
-    min_valid_rtt = baseline_slope * distances
-    physics_mask = rtts >= min_valid_rtt
-    stats['removed_below_baseline'] = int(np.sum(~physics_mask))
-    distances = distances[physics_mask]
-    rtts = rtts[physics_mask]
+    if enable_baseline_filter:
+        min_valid_rtt = baseline_slope * distances
+        physics_mask = rtts >= min_valid_rtt
+        stats['removed_below_baseline'] = int(np.sum(~physics_mask))
+        distances = distances[physics_mask]
+        rtts = rtts[physics_mask]
 
     stats['final_count'] = len(distances)
 
@@ -267,7 +279,11 @@ def fit_bestline_lp(
     bin_size_km: float = 100.0,
     n_std: float = 1.0,
     global_n_std: float = 1.0,
-    bin_percentile: float = 0.05
+    bin_percentile: float = 0.05,
+    enable_bin_filter: bool = True,
+    enable_percentile_filter: bool = True,
+    enable_global_filter: bool = True,
+    enable_baseline_filter: bool = True
 ) -> Dict[str, Any]:
     """
     Fit lower envelope bestline using Linear Programming (original CBG paper method).
@@ -387,7 +403,11 @@ def fit_bestline_lp(
             bin_size_km=bin_size_km,
             n_std=n_std,
             global_n_std=global_n_std,
-            bin_percentile=bin_percentile
+            bin_percentile=bin_percentile,
+            enable_bin_filter=enable_bin_filter,
+            enable_percentile_filter=enable_percentile_filter,
+            enable_global_filter=enable_global_filter,
+            enable_baseline_filter=enable_baseline_filter
         )
         n_points = len(distances)
         n_filtered = filter_stats['initial_count'] - filter_stats['final_count']
@@ -708,7 +728,11 @@ class RTTDistanceModel:
         filter_outliers: bool = True,
         n_std: float = 1.0,
         global_n_std: float = 1.0,
-        bin_percentile: float = 0.05
+        bin_percentile: float = 0.05,
+        enable_bin_filter: bool = True,
+        enable_percentile_filter: bool = True,
+        enable_global_filter: bool = True,
+        enable_baseline_filter: bool = True
     ) -> bool:
         """
         Fit the model to RTT-distance data.
@@ -724,6 +748,10 @@ class RTTDistanceModel:
             n_std: Number of standard deviations for per-bin filtering (default 1.0)
             global_n_std: Number of standard deviations for global bin-min filter (default 1.0)
             bin_percentile: Percentile threshold per bin in Stage 2b (default 0.05 = 5th percentile)
+            enable_bin_filter: Enable Stage 2 per-bin mean±σ filter (default True)
+            enable_percentile_filter: Enable Stage 2b per-bin percentile filter (default True)
+            enable_global_filter: Enable Stage 3 global bin-min filter (default True)
+            enable_baseline_filter: Enable Stage 4 speed-of-light baseline filter (default True)
 
         Returns:
             True if fitting succeeded, False otherwise
@@ -747,7 +775,11 @@ class RTTDistanceModel:
                 bin_size_km=self.bin_size_km,
                 n_std=n_std,
                 global_n_std=global_n_std,
-                bin_percentile=bin_percentile
+                bin_percentile=bin_percentile,
+                enable_bin_filter=enable_bin_filter,
+                enable_percentile_filter=enable_percentile_filter,
+                enable_global_filter=enable_global_filter,
+                enable_baseline_filter=enable_baseline_filter
             )
             # LP doesn't produce bins, but we can compute them for visualization
             self.slope = result['slope']
