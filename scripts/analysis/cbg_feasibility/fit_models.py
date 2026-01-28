@@ -345,8 +345,8 @@ def main():
                         help='Output directory (default: outputs/vultr-{ASN}-rtt-models)')
     parser.add_argument('--method', type=str, default='lp', choices=['lp', 'percentile'],
                         help='Fitting method: lp (Linear Programming, original CBG) or percentile (default: lp)')
-    parser.add_argument('--bin-size', type=float, default=50.0,
-                        help='Distance bin size in km (default: 50)')
+    parser.add_argument('--bin-size', type=float, default=100.0,
+                        help='Distance bin size in km (default: 100)')
     parser.add_argument('--percentile', type=float, default=0.05,
                         help='Percentile for lower envelope (default: 0.05)')
 

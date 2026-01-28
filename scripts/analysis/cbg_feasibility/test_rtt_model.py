@@ -226,23 +226,26 @@ class TestFitBestlineLP(unittest.TestCase):
         rtts = np.array([1.5, 2.0, 2.5, 3.0, 3.5])
 
         # With filtering disabled, LP should fail - no valid bestline exists
-        result = fit_bestline_lp(distances, rtts, filter_violations=False)
+        result = fit_bestline_lp(distances, rtts, filter_outliers=False)
 
         self.assertFalse(result['success'])
         self.assertIn('infeasible', result['message'].lower())
 
     def test_filter_faster_than_light_violations(self):
-        """Test that violations are filtered when filter_violations=True."""
+        """Test that violations are filtered by the three-stage filter."""
         # Data that would require slope below physical limit
         # Min RTT for d=100 is 1.0ms (0.01*100), for d=200 is 2.0ms, etc.
         distances = np.array([100, 200, 300, 400, 500])
         # RTTs = [1.5, 2.0, 2.5, 3.0, 3.5]
-        # Valid:   1.5>=1.0 (yes), 2.0>=2.0 (yes), 2.5>=3.0 (no), 3.0>=4.0 (no), 3.5>=5.0 (no)
+        # After mean±1σ filtering per bin (all in one bin since bin_size=100km default is now 100):
+        # All 5 points are in bins 1,2,3,4,5 respectively (each its own bin)
+        # Then baseline filter: Valid if RTT >= 0.01*distance:
+        #   1.5>=1.0 (yes), 2.0>=2.0 (yes), 2.5>=3.0 (no), 3.0>=4.0 (no), 3.5>=5.0 (no)
         # So 3 points are violations, leaving only 2 valid points
         rtts = np.array([1.5, 2.0, 2.5, 3.0, 3.5])
 
-        # With filtering enabled (default), 3 violations are filtered
-        result = fit_bestline_lp(distances, rtts, filter_violations=True, filter_outliers=False)
+        # With filtering enabled (default), speed-of-light violations are filtered
+        result = fit_bestline_lp(distances, rtts, filter_outliers=True, bin_size_km=100.0)
 
         # Should fail because only 2 valid points remain (need at least 3)
         self.assertFalse(result['success'])
@@ -253,7 +256,7 @@ class TestFitBestlineLP(unittest.TestCase):
 
     def test_filter_partial_violations(self):
         """Test filtering of some speed-of-light violations while keeping valid data."""
-        # Mix of valid and invalid data
+        # Mix of valid and invalid data - each at different distances (different bins)
         distances = np.array([100, 200, 300, 400, 500, 600, 700, 800])
         rtts = np.array([
             0.5,   # Invalid: too fast for 100km (needs ~1.0 ms min)
@@ -266,7 +269,8 @@ class TestFitBestlineLP(unittest.TestCase):
             12.0,  # Valid for 800km
         ])
 
-        result = fit_bestline_lp(distances, rtts, filter_violations=True, filter_outliers=False)
+        # With filtering enabled, baseline violations are filtered at Stage 3
+        result = fit_bestline_lp(distances, rtts, filter_outliers=True, bin_size_km=100.0)
 
         self.assertTrue(result['success'])
         self.assertEqual(result['n_filtered'], 1)  # Only the first point filtered
@@ -275,25 +279,26 @@ class TestFitBestlineLP(unittest.TestCase):
     def test_filter_outliers(self):
         """Test that outliers beyond n_std are filtered."""
         np.random.seed(42)
-        # Generate data with clear outliers
+        # Generate data with clear outliers - all points at distances that fall in 100km bins
         distances = np.concatenate([
-            np.full(20, 100),   # Bin 1: 20 points at 100km
-            np.full(20, 200),   # Bin 2: 20 points at 200km
-            np.full(20, 300),   # Bin 3: 20 points at 300km
+            np.full(20, 50),    # Bin 0 (0-100km): 20 points at 50km
+            np.full(20, 150),   # Bin 1 (100-200km): 20 points at 150km
+            np.full(20, 250),   # Bin 2 (200-300km): 20 points at 250km
         ])
         # RTTs with some extreme outliers
         rtts = np.concatenate([
-            np.array([2.0] * 18 + [100.0, 150.0]),  # Two extreme outliers at 100km bin
-            np.array([4.0] * 18 + [200.0, 250.0]),  # Two extreme outliers at 200km bin
-            np.array([6.0] * 20),                    # No outliers at 300km bin
+            np.array([2.0] * 18 + [100.0, 150.0]),  # Two extreme outliers at bin 0
+            np.array([4.0] * 18 + [200.0, 250.0]),  # Two extreme outliers at bin 1
+            np.array([6.0] * 20),                    # No outliers at bin 2
         ])
 
-        # With outlier filtering enabled
-        result = fit_bestline_lp(distances, rtts, filter_violations=False, filter_outliers=True, n_std=2.0)
+        # With outlier filtering enabled (n_std=2.0 to catch extreme outliers)
+        result = fit_bestline_lp(distances, rtts, filter_outliers=True, n_std=2.0, bin_size_km=100.0)
 
         self.assertTrue(result['success'])
-        # The extreme outliers should be filtered
-        self.assertGreater(result['filter_stats']['removed_outliers'], 0)
+        # The extreme high outliers should be filtered
+        total_outliers = result['filter_stats']['removed_low_outliers'] + result['filter_stats']['removed_high_outliers']
+        self.assertGreater(total_outliers, 0)
         # Slope should be reasonable (not pulled up by outliers)
         self.assertLess(result['slope'], 0.05)  # Would be much higher without filtering
 
