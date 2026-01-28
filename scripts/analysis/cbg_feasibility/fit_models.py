@@ -117,16 +117,20 @@ def plot_scatter_with_bestline(
     model: RTTDistanceModel,
     output_path: Path,
     asn: int,
-    show_theoretical: bool = True
+    show_theoretical: bool = True,
+    max_rtt_ms: float = 200.0
 ) -> None:
     """
     Create scatter plot of RTT vs distance with bestline overlay.
 
     Shows:
-    - All data points as scatter
+    - All data points as scatter (filtered by max_rtt_ms)
     - Binned percentile points used for fitting
     - Fitted bestline
     - Theoretical 2/3c baseline for comparison
+
+    Args:
+        max_rtt_ms: Maximum RTT to display (default 200ms). Points above this are excluded.
     """
     # Filter to this anchor
     anchor_data = df[df['dst_ip'] == model.anchor_ip].copy()
@@ -138,11 +142,17 @@ def plot_scatter_with_bestline(
     distances = anchor_data['distance_km'].values
     rtts = anchor_data['min_rtt'].values
 
+    # Filter out RTTs larger than max_rtt_ms for plotting
+    plot_mask = rtts <= max_rtt_ms
+    plot_distances = distances[plot_mask]
+    plot_rtts = rtts[plot_mask]
+    n_excluded = len(rtts) - len(plot_rtts)
+
     # Create figure
     fig, ax = plt.subplots(figsize=(12, 8))
 
-    # Plot all data points
-    ax.scatter(distances, rtts, alpha=0.4, s=20, c='blue', label='Measurements', edgecolors='none')
+    # Plot filtered data points
+    ax.scatter(plot_distances, plot_rtts, alpha=0.4, s=20, c='blue', label='Measurements', edgecolors='none')
 
     # Plot range for lines
     dist_min, dist_max = distances.min(), distances.max()
@@ -155,8 +165,11 @@ def plot_scatter_with_bestline(
                 label=f'Theoretical (2/3c): {THEORETICAL_SLOPE:.4f} ms/km')
 
     if model.fitted:
-        # Plot bin centers and percentile RTTs
-        ax.scatter(model.bin_centers, model.bin_rtts, s=100, c='red', marker='s',
+        # Plot bin centers and percentile RTTs (only those within range)
+        bin_mask = np.array(model.bin_rtts) <= max_rtt_ms
+        bin_centers_plot = np.array(model.bin_centers)[bin_mask]
+        bin_rtts_plot = np.array(model.bin_rtts)[bin_mask]
+        ax.scatter(bin_centers_plot, bin_rtts_plot, s=100, c='red', marker='s',
                    edgecolors='darkred', linewidth=1.5, zorder=5,
                    label=f'5th percentile per bin (n={model.n_bins})')
 
@@ -178,7 +191,7 @@ def plot_scatter_with_bestline(
 
     # Set axis limits with some padding
     ax.set_xlim(0, dist_max * 1.05)
-    ax.set_ylim(0, rtts.max() * 1.1)
+    ax.set_ylim(0, min(max_rtt_ms, plot_rtts.max() * 1.1) if len(plot_rtts) > 0 else max_rtt_ms)
 
     # Add statistics text box
     stats_text = (
@@ -186,6 +199,8 @@ def plot_scatter_with_bestline(
         f"Distance range: {dist_min:.0f} - {dist_max:.0f} km\n"
         f"RTT range: {rtts.min():.1f} - {rtts.max():.1f} ms"
     )
+    if n_excluded > 0:
+        stats_text += f"\n(Excluded {n_excluded} points > {max_rtt_ms:.0f} ms)"
     ax.text(0.98, 0.02, stats_text, transform=ax.transAxes,
             fontsize=9, verticalalignment='bottom', horizontalalignment='right',
             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
@@ -202,7 +217,8 @@ def fit_all_anchors(
     output_dir: Path,
     method: str = 'lp',
     bin_size_km: float = 50.0,
-    percentile: float = 0.05
+    percentile: float = 0.05,
+    max_rtt_ms: float = 200.0
 ) -> Dict[str, RTTDistanceModel]:
     """
     Fit models for all anchors and save results.
@@ -214,6 +230,7 @@ def fit_all_anchors(
         method: 'lp' (Linear Programming, original CBG) or 'percentile' (binned percentile)
         bin_size_km: Size of distance bins
         percentile: Percentile for percentile method
+        max_rtt_ms: Maximum RTT to display in plots
 
     Returns:
         dict of anchor_ip -> RTTDistanceModel
@@ -273,7 +290,7 @@ def fit_all_anchors(
 
         # Generate scatter plot
         plot_path = output_dir / f"scatter_{anchor_ip.replace('.', '_')}.png"
-        plot_scatter_with_bestline(asn_df, model, plot_path, asn)
+        plot_scatter_with_bestline(asn_df, model, plot_path, asn, max_rtt_ms=max_rtt_ms)
 
         # Add to summary
         summary.append(model.to_dict())
@@ -349,6 +366,8 @@ def main():
                         help='Distance bin size in km (default: 100)')
     parser.add_argument('--percentile', type=float, default=0.05,
                         help='Percentile for lower envelope (default: 0.05)')
+    parser.add_argument('--max-rtt', type=float, default=200.0,
+                        help='Maximum RTT to display in plots (default: 200 ms)')
 
     args = parser.parse_args()
 
@@ -370,6 +389,7 @@ def main():
     print(f"Method: {args.method}")
     print(f"Bin size: {args.bin_size} km")
     print(f"Percentile: {args.percentile}")
+    print(f"Max RTT for plots: {args.max_rtt} ms")
     print("=" * 60)
 
     # Load data
@@ -382,7 +402,8 @@ def main():
         output_dir=output_dir,
         method=args.method,
         bin_size_km=args.bin_size,
-        percentile=args.percentile
+        percentile=args.percentile,
+        max_rtt_ms=args.max_rtt
     )
 
     # Print summary
