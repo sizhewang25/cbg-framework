@@ -64,3 +64,78 @@
 - `references/scripts/geometry_utils.py` - Shapely-based circle intersection
 
 ---
+
+## 2026-01-28 18:30 - Implementation Complete
+
+### What was done
+1. Created `rtt_model.py` with core functions (29 unit tests, all passing)
+2. Created `fit_models.py` - fitted models for all 7 Vultr anchors with AS7922
+3. Created `visualize_cbg.py` - CBG multilateration with Shapely circle intersection
+4. Generated scatter plots and interactive maps
+
+### Model Fitting Results (AS7922 Comcast, 266 probes)
+
+| Anchor IP | Location | Slope (ms/km) | Intercept (ms) | R² | Bins |
+|-----------|----------|---------------|----------------|-----|------|
+| 45.77.211.82 | Seattle | 0.0156 | 11.6 | 0.73 | 48 |
+| 66.42.119.57 | Chicago | 0.0171 | 12.5 | 0.85 | 44 |
+| 144.202.18.114 | Atlanta | 0.0152 | 17.8 | 0.74 | 40 |
+| 149.28.210.233 | San Jose | 0.0161 | 14.2 | 0.89 | 52 |
+| 149.248.18.65 | LA | 0.0137 | 19.8 | 0.79 | 53 |
+| 207.148.2.169 | Dallas | 0.0087 | 26.9 | 0.35 | 42 |
+| 207.246.74.246 | Miami | 0.0138 | 18.1 | 0.76 | 48 |
+
+**Summary Statistics:**
+- Mean slope: 0.0143 ms/km (theoretical: 0.01 ms/km, ~43% slower)
+- Mean intercept: 17.3 ms (processing/queuing delays)
+- Mean R²: 0.73
+
+### CBG Multilateration Results (10 test probes)
+
+| Metric | Value |
+|--------|-------|
+| Mean error | 784 km |
+| Median error | 788 km |
+| Min error | 202 km |
+| Max error | 1362 km |
+| ≤250 km accuracy | 10% |
+| ≤500 km accuracy | 30% |
+| ≤1000 km accuracy | 70% |
+
+### Key Observations
+
+1. **Slopes are ~43% higher than theoretical (0.01 ms/km)**
+   - Network inefficiency (routing detours, backbone latency)
+   - This is expected for residential ISP traffic
+
+2. **High intercepts (12-27 ms)**
+   - Processing delays at endpoints
+   - Dallas anchor has worst fit (R²=0.35, intercept=27ms)
+
+3. **Accuracy limited by anchor diversity**
+   - Only 7 anchors across continental US
+   - Circles don't always intersect well
+   - Edge probes (West Coast) harder to geolocate
+
+### Files Created
+
+```
+scripts/analysis/cbg_feasibility/
+├── rtt_model.py              # Core RTT modeling module
+├── test_rtt_model.py         # 29 unit tests
+├── fit_models.py             # Model fitting script
+├── visualize_cbg.py          # CBG visualization script
+└── outputs/vultr-7922-rtt-models/
+    ├── *.pkl                 # 7 anchor models
+    ├── scatter_*.png         # 7 RTT-distance plots
+    ├── cbg_test_*.html       # 10 interactive maps
+    ├── summary.json          # Model parameters
+    └── cbg_results.json      # CBG test results
+```
+
+### Commits
+- `c9f982d` - feat(cbg): add RTT-distance modeling module with unit tests
+- `c60169b` - feat(cbg): add model fitting script and AS7922 results
+- `e5092b1` - feat(cbg): add CBG multilateration visualization with Shapely
+
+---
