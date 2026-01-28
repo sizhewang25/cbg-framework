@@ -139,3 +139,81 @@ scripts/analysis/cbg_feasibility/
 - `e5092b1` - feat(cbg): add CBG multilateration visualization with Shapely
 
 ---
+
+## 2026-01-28 20:00 - LP-Based Bestline Implementation (Original CBG Method)
+
+### What was done
+1. Implemented `fit_bestline_lp()` using Linear Programming (scipy.optimize.linprog)
+2. Added comprehensive data filtering before LP fitting
+3. Updated unit tests (40 tests, all passing)
+4. Successfully re-fitted all 7 anchors with LP method
+
+### Original CBG Paper Method (Gueye et al. Section 3.2)
+
+The original CBG paper describes bestline fitting as a **Linear Programming** problem:
+
+**LP Formulation:**
+- **Objective**: Minimize total slack `Σ[d_ij - (m * g_ij + b)]`
+- **Constraints**:
+  - `m * g_j + b <= d_j` for all j (line must be below ALL points)
+  - `m >= baseline_slope` (~0.01 ms/km for 2/3 speed of light)
+  - `b >= 0` (non-negative intercept)
+
+This differs from the binned percentile approach:
+- LP: **Exact lower bound** - line touches lowest points
+- Percentile: **Approximation** - may not touch any points
+
+### Data Filtering (Two-Stage)
+
+1. **Speed-of-light violations**: Filter RTTs where `RTT < baseline_slope × distance`
+   - These are physically impossible (suggest location errors or timing issues)
+
+2. **Distance-binned outlier removal**: For each 50km bin, remove points beyond 2σ
+   - Removes extreme outliers that would skew the LP solution
+
+### LP Model Results (AS7922 Comcast)
+
+| Anchor IP | Location | Slope (ms/km) | Intercept (ms) | R² | Bins |
+|-----------|----------|---------------|----------------|-----|------|
+| 45.77.211.82 | Seattle | **0.0100** | 5.95 | 0.73 | 48 |
+| 66.42.119.57 | Chicago | 0.0153 | 7.68 | 0.85 | 44 |
+| 144.202.18.114 | Atlanta | 0.0168 | 0.00 | 0.74 | 40 |
+| 149.28.210.233 | San Jose | 0.0135 | 0.00 | 0.89 | 52 |
+| 149.248.18.65 | LA | **0.0100** | 6.58 | 0.79 | 53 |
+| 207.148.2.169 | Dallas | 0.0141 | 8.54 | 0.35 | 42 |
+| 207.246.74.246 | Miami | 0.0141 | 9.05 | 0.76 | 48 |
+
+**LP vs Percentile Comparison:**
+| Metric | LP Method | Percentile Method |
+|--------|-----------|-------------------|
+| Mean slope | 0.0134 ms/km | 0.0143 ms/km |
+| Mean intercept | 5.4 ms | 17.3 ms |
+| Anchors at baseline | 2 (Seattle, LA) | 0 |
+
+**Key Improvements with LP:**
+1. **Lower intercepts** (5.4 vs 17.3 ms) - LP finds true minimum delays
+2. **Some slopes at theoretical limit** (0.01 ms/km) - optimal paths exist
+3. **All 7 anchors successful** - filtering handles data quality issues
+
+### Files Modified
+- `rtt_model.py`: Added `filter_rtt_data()`, `fit_bestline_lp()`, updated `RTTDistanceModel.fit()`
+- `test_rtt_model.py`: Added `TestFitBestlineLP` class (11 new tests, 40 total)
+- `fit_models.py`: Added `--method` argument for LP/percentile selection
+
+### Technical Details
+
+**New function: `filter_rtt_data()`**
+```python
+def filter_rtt_data(distances, rtts, baseline_slope, bin_size_km=50.0, n_std=2.0):
+    """Two-stage filtering: speed-of-light + binned outlier removal"""
+```
+
+**New function: `fit_bestline_lp()`**
+```python
+def fit_bestline_lp(distances, rtts, baseline_slope=None,
+                    filter_violations=True, filter_outliers=True,
+                    bin_size_km=50.0, n_std=2.0):
+    """LP-based bestline fitting (original CBG paper method)"""
+```
+
+---

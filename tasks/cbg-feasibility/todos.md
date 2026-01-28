@@ -8,6 +8,13 @@
 
 ## Completed
 
+### Phase 5: LP-Based Bestline (Original CBG Method)
+- [x] Implement `fit_bestline_lp()` using scipy.optimize.linprog
+- [x] Add data filtering: speed-of-light violations + binned outliers
+- [x] Add unit tests for LP method (11 new tests, 40 total)
+- [x] Re-fit all 7 anchors successfully with LP method
+- [x] Update progress.md with LP results and comparison
+
 ### Phase 1: RTT Modeling Module
 - [x] Create rtt_model.py with core functions (haversine, fit_bestline, RTTDistanceModel)
 - [x] Write unit tests in test_rtt_model.py (29 tests, all passing)

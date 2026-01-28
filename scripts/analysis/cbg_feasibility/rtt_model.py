@@ -6,7 +6,8 @@ using calibrated RTT-distance relationships instead of fixed speed thresholds.
 
 Key Components:
 - Haversine distance calculation
-- Binned 5th percentile bestline fitting
+- LP-based bestline fitting (original CBG paper method)
+- Binned percentile bestline fitting (simplified approximation)
 - RTTDistanceModel class for per-anchor calibration
 """
 
@@ -15,6 +16,12 @@ import pickle
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, List, Dict, Any
+
+try:
+    from scipy.optimize import linprog
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
 
 
 # Constants
@@ -46,6 +53,310 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     c = 2 * np.arcsin(np.sqrt(a))
 
     return EARTH_RADIUS_KM * c
+
+
+def filter_rtt_data(
+    distances: np.ndarray,
+    rtts: np.ndarray,
+    baseline_slope: Optional[float] = None,
+    bin_size_km: float = 50.0,
+    n_std: float = 2.0
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+    """
+    Filter RTT data to remove invalid and outlier measurements.
+
+    Two-stage filtering:
+    1. Remove RTTs below baseline (speed-of-light constraint)
+    2. For each distance bin, remove outliers beyond n_std standard deviations
+
+    Args:
+        distances: Array of distances in km
+        rtts: Array of RTT values in ms
+        baseline_slope: Minimum RTT/distance ratio (default: 2/3 speed of light)
+        bin_size_km: Size of distance bins for outlier filtering
+        n_std: Number of standard deviations for outlier removal
+
+    Returns:
+        Tuple of (filtered_distances, filtered_rtts, stats_dict)
+    """
+    distances = np.asarray(distances, dtype=float)
+    rtts = np.asarray(rtts, dtype=float)
+
+    if baseline_slope is None:
+        baseline_slope = THEORETICAL_SLOPE
+
+    initial_count = len(distances)
+    stats = {
+        'initial_count': initial_count,
+        'removed_invalid': 0,
+        'removed_below_baseline': 0,
+        'removed_outliers': 0,
+        'final_count': 0
+    }
+
+    # Filter invalid values (zero, negative, inf)
+    valid_mask = (distances > 0) & (rtts > 0) & np.isfinite(distances) & np.isfinite(rtts)
+    stats['removed_invalid'] = np.sum(~valid_mask)
+    distances = distances[valid_mask]
+    rtts = rtts[valid_mask]
+
+    if len(distances) == 0:
+        stats['final_count'] = 0
+        return np.array([]), np.array([]), stats
+
+    # Stage 1: Filter RTTs below baseline (speed-of-light constraint)
+    min_valid_rtt = baseline_slope * distances
+    physics_mask = rtts >= min_valid_rtt
+    stats['removed_below_baseline'] = np.sum(~physics_mask)
+    distances = distances[physics_mask]
+    rtts = rtts[physics_mask]
+
+    if len(distances) == 0:
+        stats['final_count'] = 0
+        return np.array([]), np.array([]), stats
+
+    # Stage 2: Distance-binned outlier filtering
+    # For each bin, remove points outside mean ± n_std * std
+    bin_indices = (distances // bin_size_km).astype(int)
+    unique_bins = np.unique(bin_indices)
+
+    keep_mask = np.ones(len(distances), dtype=bool)
+
+    for bin_idx in unique_bins:
+        in_bin = bin_indices == bin_idx
+        bin_rtts = rtts[in_bin]
+
+        if len(bin_rtts) >= 5:  # Need enough points for meaningful stats
+            mean_rtt = np.mean(bin_rtts)
+            std_rtt = np.std(bin_rtts)
+
+            if std_rtt > 0:
+                lower_bound = mean_rtt - n_std * std_rtt
+                upper_bound = mean_rtt + n_std * std_rtt
+
+                # Mark outliers for removal
+                bin_outliers = (bin_rtts < lower_bound) | (bin_rtts > upper_bound)
+                # Update the global mask
+                bin_positions = np.where(in_bin)[0]
+                keep_mask[bin_positions[bin_outliers]] = False
+
+    stats['removed_outliers'] = np.sum(~keep_mask)
+    distances = distances[keep_mask]
+    rtts = rtts[keep_mask]
+    stats['final_count'] = len(distances)
+
+    return distances, rtts, stats
+
+
+def fit_bestline_lp(
+    distances: np.ndarray,
+    rtts: np.ndarray,
+    baseline_slope: Optional[float] = None,
+    filter_violations: bool = True,
+    filter_outliers: bool = True,
+    bin_size_km: float = 50.0,
+    n_std: float = 2.0
+) -> Dict[str, Any]:
+    """
+    Fit lower envelope bestline using Linear Programming (original CBG paper method).
+
+    From Gueye et al. "Constraint-Based Geolocation of Internet Hosts" (IMC 2004):
+
+    The bestline y = m*x + b is defined as the line that is:
+    1. Closest to, but BELOW, all data points (g_ij, d_ij)
+    2. Has non-negative intercept (b >= 0)
+    3. Has slope >= baseline slope (m >= m_baseline)
+
+    Where:
+    - g_ij = geographic distance (km) - plotted on x-axis
+    - d_ij = network delay/RTT (ms) - plotted on y-axis
+    - m = slope (ms/km)
+    - b = intercept (ms) - represents fixed processing delays
+
+    LP Formulation (from Section 3.2, Equations 1-2):
+
+        Minimize: Σ [d_ij - (m * g_ij + b)]   (total slack above the line)
+
+        Subject to:
+            m * g_ij + b <= d_ij  for all j   (line below all points)
+            m >= m_baseline                    (slope >= 2/3 speed of light)
+            b >= 0                             (non-negative intercept)
+
+    Since Σ d_ij is constant, minimizing total slack is equivalent to:
+        Maximize: Σ (m * g_ij + b) = m * Σg_ij + n * b
+        Or: Minimize: -m * Σg_ij - n * b
+
+    Args:
+        distances: Array of geographic distances in km (x-axis)
+        rtts: Array of RTT/delay values in ms (y-axis)
+        baseline_slope: Minimum allowed slope (default: 2/3 speed of light ≈ 0.01 ms/km)
+        filter_violations: If True, pre-filter points that violate speed-of-light constraint
+                          (RTT < baseline_slope * distance). Default True.
+        filter_outliers: If True, apply distance-binned outlier filtering. Default True.
+        bin_size_km: Size of distance bins for outlier filtering (default 50km)
+        n_std: Number of standard deviations for outlier removal (default 2.0)
+
+    Returns:
+        Dictionary containing:
+        - slope: float (ms/km)
+        - intercept: float (ms)
+        - n_points: int
+        - n_filtered: int (total number of points filtered)
+        - filter_stats: dict (detailed filtering statistics)
+        - success: bool
+        - message: str
+    """
+    if not SCIPY_AVAILABLE:
+        return {
+            'slope': None,
+            'intercept': None,
+            'n_points': 0,
+            'n_filtered': 0,
+            'filter_stats': {},
+            'success': False,
+            'message': 'scipy not available, cannot use LP method'
+        }
+
+    distances = np.asarray(distances, dtype=float)
+    rtts = np.asarray(rtts, dtype=float)
+
+    # Validate inputs
+    if len(distances) != len(rtts):
+        return {
+            'slope': None,
+            'intercept': None,
+            'n_points': 0,
+            'n_filtered': 0,
+            'filter_stats': {},
+            'success': False,
+            'message': 'Distance and RTT arrays must have same length'
+        }
+
+    # Filter out invalid values
+    valid_mask = (distances > 0) & (rtts > 0) & np.isfinite(distances) & np.isfinite(rtts)
+    distances = distances[valid_mask]
+    rtts = rtts[valid_mask]
+    n_points = len(distances)
+
+    if n_points < 3:
+        return {
+            'slope': None,
+            'intercept': None,
+            'n_points': n_points,
+            'n_filtered': 0,
+            'filter_stats': {},
+            'success': False,
+            'message': f'Need at least 3 valid points, got {n_points}'
+        }
+
+    # Default baseline slope: theoretical minimum at 2/3 speed of light
+    # RTT = 2 * distance / (2/3 * c) = distance * (2 / 200) = distance * 0.01 ms/km
+    if baseline_slope is None:
+        baseline_slope = THEORETICAL_SLOPE  # ~0.01 ms/km
+
+    # Apply comprehensive data filtering if enabled
+    filter_stats = {'initial_count': n_points, 'removed_invalid': 0,
+                    'removed_below_baseline': 0, 'removed_outliers': 0, 'final_count': n_points}
+    n_filtered = 0
+
+    if filter_violations or filter_outliers:
+        distances, rtts, filter_stats = filter_rtt_data(
+            distances, rtts,
+            baseline_slope=baseline_slope if filter_violations else 0.0,
+            bin_size_km=bin_size_km if filter_outliers else float('inf'),
+            n_std=n_std
+        )
+        n_points = len(distances)
+        n_filtered = filter_stats['initial_count'] - filter_stats['final_count']
+
+        if n_points < 3:
+            return {
+                'slope': None,
+                'intercept': None,
+                'n_points': n_points,
+                'n_filtered': n_filtered,
+                'filter_stats': filter_stats,
+                'success': False,
+                'message': f'Only {n_points} valid points after filtering {n_filtered} (baseline: {filter_stats["removed_below_baseline"]}, outliers: {filter_stats["removed_outliers"]})'
+            }
+
+    # =========================================================================
+    # LP Formulation (following CBG paper exactly)
+    # =========================================================================
+    # Variables: x = [m, b] where m = slope (ms/km), b = intercept (ms)
+    #
+    # Objective: Minimize -Σg_j * m - n * b  (push line up toward data)
+    #
+    # Constraints:
+    #   (1) m * g_j + b <= d_j  for all j   (line must be below all points)
+    #   (2) m >= baseline_slope              (physical speed limit)
+    #   (3) b >= 0                           (non-negative intercept)
+    # =========================================================================
+
+    # Objective: minimize c @ x where x = [m, b]
+    # We want to maximize m*Σg + n*b, so minimize -Σg*m - n*b
+    c = np.array([-np.sum(distances), -float(n_points)])
+
+    # Inequality constraints: A_ub @ x <= b_ub
+    # Constraint (1): m * g_j + b <= d_j  =>  g_j * m + 1 * b <= d_j
+    A_ub = np.zeros((n_points, 2))
+    A_ub[:, 0] = distances   # coefficient for m (the g_j values)
+    A_ub[:, 1] = 1.0         # coefficient for b
+    b_ub = rtts              # RHS: d_j (the RTT values)
+
+    # Bounds:
+    # - m >= baseline_slope (no upper bound - let LP find optimal)
+    # - b >= 0 (non-negative intercept per paper)
+    bounds = [(baseline_slope, None), (0.0, None)]
+
+    try:
+        result = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
+
+        if result.success:
+            slope = result.x[0]
+            intercept = result.x[1]
+
+            # Verify constraint satisfaction (all points on or above line)
+            predicted = slope * distances + intercept
+            violations = np.sum(rtts < predicted - 0.001)  # small tolerance for numerics
+
+            msg = f'LP converged: {n_points} points'
+            if n_filtered > 0:
+                msg += f', {n_filtered} filtered'
+            if violations > 0:
+                msg += f', {violations} violations'
+
+            return {
+                'slope': float(slope),
+                'intercept': float(intercept),
+                'n_points': n_points,
+                'n_filtered': n_filtered,
+                'filter_stats': filter_stats,
+                'success': True,
+                'violations': int(violations),
+                'message': msg
+            }
+        else:
+            return {
+                'slope': None,
+                'intercept': None,
+                'n_points': n_points,
+                'n_filtered': n_filtered,
+                'filter_stats': filter_stats,
+                'success': False,
+                'message': f'LP did not converge: {result.message}'
+            }
+
+    except Exception as e:
+        return {
+            'slope': None,
+            'intercept': None,
+            'n_points': n_points,
+            'n_filtered': n_filtered,
+            'filter_stats': filter_stats,
+            'success': False,
+            'message': f'LP error: {str(e)}'
+        }
 
 
 def fit_bestline(
@@ -242,6 +553,10 @@ class RTTDistanceModel:
 
     Stores the calibrated parameters for converting RTT to distance
     for a specific anchor (vantage point).
+
+    Supports two fitting methods:
+    - 'lp': Linear Programming (original CBG paper method) - true lower bound
+    - 'percentile': Binned percentile approach (approximation)
     """
     anchor_ip: str
     anchor_lat: float
@@ -257,13 +572,19 @@ class RTTDistanceModel:
     bin_rtts: List[float] = field(default_factory=list)
     fitted: bool = False
     fit_message: str = ''
+    fit_method: str = 'lp'  # 'lp' or 'percentile'
 
     def fit(
         self,
         distances: np.ndarray,
         rtts: np.ndarray,
+        method: str = 'lp',
         bin_size_km: Optional[float] = None,
-        percentile: Optional[float] = None
+        percentile: Optional[float] = None,
+        baseline_slope: Optional[float] = None,
+        filter_violations: bool = True,
+        filter_outliers: bool = True,
+        n_std: float = 2.0
     ) -> bool:
         """
         Fit the model to RTT-distance data.
@@ -271,8 +592,13 @@ class RTTDistanceModel:
         Args:
             distances: Array of distances in km
             rtts: Array of RTT values in ms
+            method: 'lp' (Linear Programming) or 'percentile' (binned percentile)
             bin_size_km: Override default bin size
-            percentile: Override default percentile
+            percentile: Override default percentile (percentile method only)
+            baseline_slope: Minimum slope constraint (LP method only)
+            filter_violations: Filter RTTs below speed-of-light limit (LP method)
+            filter_outliers: Filter outliers beyond n_std per distance bin (LP method)
+            n_std: Number of standard deviations for outlier removal
 
         Returns:
             True if fitting succeeded, False otherwise
@@ -283,22 +609,57 @@ class RTTDistanceModel:
             self.percentile = percentile
 
         self.n_measurements = len(distances)
+        self.fit_method = method
 
-        result = fit_bestline(
-            distances=distances,
-            rtts=rtts,
-            bin_size_km=self.bin_size_km,
-            percentile=self.percentile
-        )
+        if method == 'lp':
+            result = fit_bestline_lp(
+                distances=distances,
+                rtts=rtts,
+                baseline_slope=baseline_slope,
+                filter_violations=filter_violations,
+                filter_outliers=filter_outliers,
+                bin_size_km=self.bin_size_km,
+                n_std=n_std
+            )
+            # LP doesn't produce bins, but we can compute them for visualization
+            self.slope = result['slope']
+            self.intercept = result['intercept']
+            self.r_squared = None  # LP doesn't have R² in traditional sense
+            self.n_bins = 0
+            self.bin_centers = []
+            self.bin_rtts = []
+            self.fitted = result['success']
+            self.fit_message = result['message']
 
-        self.slope = result['slope']
-        self.intercept = result['intercept']
-        self.r_squared = result['r_squared']
-        self.n_bins = result['n_bins']
-        self.bin_centers = result['bin_centers']
-        self.bin_rtts = result['bin_rtts']
-        self.fitted = result['success']
-        self.fit_message = result['message']
+            # Optionally compute bins for visualization
+            if self.fitted:
+                bin_result = fit_bestline(
+                    distances=distances,
+                    rtts=rtts,
+                    bin_size_km=self.bin_size_km,
+                    percentile=self.percentile
+                )
+                self.n_bins = bin_result['n_bins']
+                self.bin_centers = bin_result['bin_centers']
+                self.bin_rtts = bin_result['bin_rtts']
+                # Note: R² from binned fit, not LP
+                self.r_squared = bin_result.get('r_squared')
+
+        else:  # percentile method
+            result = fit_bestline(
+                distances=distances,
+                rtts=rtts,
+                bin_size_km=self.bin_size_km,
+                percentile=self.percentile
+            )
+            self.slope = result['slope']
+            self.intercept = result['intercept']
+            self.r_squared = result['r_squared']
+            self.n_bins = result['n_bins']
+            self.bin_centers = result['bin_centers']
+            self.bin_rtts = result['bin_rtts']
+            self.fitted = result['success']
+            self.fit_message = result['message']
 
         return self.fitted
 
@@ -359,7 +720,8 @@ class RTTDistanceModel:
             'bin_centers': self.bin_centers,
             'bin_rtts': self.bin_rtts,
             'fitted': self.fitted,
-            'fit_message': self.fit_message
+            'fit_message': self.fit_message,
+            'fit_method': self.fit_method
         }
 
     def __repr__(self) -> str:

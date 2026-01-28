@@ -2,6 +2,7 @@
   "asn": 7922,
   "total_measurements": 1854,
   "unique_probes": 266,
+  "fit_method": "lp",
   "bin_size_km": 50.0,
   "percentile": 0.05,
   "theoretical_slope": 0.01,
@@ -10,8 +11,8 @@
       "anchor_ip": "45.77.211.82",
       "anchor_lat": 47.6095,
       "anchor_lon": -122.3415,
-      "slope": 0.01559959149643285,
-      "intercept": 11.571946361696686,
+      "slope": 0.01,
+      "intercept": 5.94840766009693,
       "r_squared": 0.7293533314784544,
       "n_bins": 48,
       "n_measurements": 264,
@@ -118,14 +119,15 @@
         82.7782112
       ],
       "fitted": true,
-      "fit_message": "Successfully fitted bestline with 48 bins"
+      "fit_message": "LP converged: 250 points, 14 filtered",
+      "fit_method": "lp"
     },
     {
       "anchor_ip": "66.42.119.57",
       "anchor_lat": 41.9905,
       "anchor_lon": -87.9585,
-      "slope": 0.017093108591876915,
-      "intercept": 12.527269243846856,
+      "slope": 0.015347656717692488,
+      "intercept": 7.678238401195499,
       "r_squared": 0.8497329416808682,
       "n_bins": 44,
       "n_measurements": 266,
@@ -224,15 +226,16 @@
         56.6758248
       ],
       "fitted": true,
-      "fit_message": "Successfully fitted bestline with 44 bins"
+      "fit_message": "LP converged: 257 points, 9 filtered",
+      "fit_method": "lp"
     },
     {
       "anchor_ip": "144.202.18.114",
       "anchor_lat": 33.7795,
       "anchor_lon": -84.4205,
-      "slope": 0.015157031464047255,
-      "intercept": 17.80084818171543,
-      "r_squared": 0.7437752483961164,
+      "slope": 0.016768850832967756,
+      "intercept": 0.0,
+      "r_squared": 0.7437752483961163,
       "n_bins": 40,
       "n_measurements": 264,
       "bin_size_km": 50.0,
@@ -322,14 +325,15 @@
         66.3805464
       ],
       "fitted": true,
-      "fit_message": "Successfully fitted bestline with 40 bins"
+      "fit_message": "LP converged: 253 points, 11 filtered",
+      "fit_method": "lp"
     },
     {
       "anchor_ip": "149.28.210.233",
       "anchor_lat": 37.3315,
       "anchor_lon": -121.8885,
-      "slope": 0.016116219145426297,
-      "intercept": 14.164307303393125,
+      "slope": 0.013545314099697807,
+      "intercept": 0.0,
       "r_squared": 0.8937930871333672,
       "n_bins": 52,
       "n_measurements": 266,
@@ -407,7 +411,7 @@
         39.009032,
         48.6862686,
         34.389706000000004,
-        34.4245176,
+        34.424517599999994,
         31.273,
         36.339625,
         56.957042,
@@ -444,15 +448,16 @@
         86.30997119999999
       ],
       "fitted": true,
-      "fit_message": "Successfully fitted bestline with 52 bins"
+      "fit_message": "LP converged: 258 points, 8 filtered",
+      "fit_method": "lp"
     },
     {
       "anchor_ip": "149.248.18.65",
       "anchor_lat": 34.0615,
       "anchor_lon": -118.2385,
-      "slope": 0.013660384341355592,
-      "intercept": 19.807685060301598,
-      "r_squared": 0.7894896303584692,
+      "slope": 0.01,
+      "intercept": 6.582809278916919,
+      "r_squared": 0.7894896303584693,
       "n_bins": 53,
       "n_measurements": 266,
       "bin_size_km": 50.0,
@@ -568,14 +573,15 @@
         78.385622
       ],
       "fitted": true,
-      "fit_message": "Successfully fitted bestline with 53 bins"
+      "fit_message": "LP converged: 263 points, 3 filtered",
+      "fit_method": "lp"
     },
     {
       "anchor_ip": "207.148.2.169",
       "anchor_lat": 32.7905,
       "anchor_lon": -96.7915,
-      "slope": 0.0087127013768886,
-      "intercept": 26.87941274459095,
+      "slope": 0.014076800058503739,
+      "intercept": 8.537639690704069,
       "r_squared": 0.35045826911471945,
       "n_bins": 42,
       "n_measurements": 264,
@@ -670,14 +676,15 @@
         53.836727
       ],
       "fitted": true,
-      "fit_message": "Successfully fitted bestline with 42 bins"
+      "fit_message": "LP converged: 252 points, 12 filtered",
+      "fit_method": "lp"
     },
     {
       "anchor_ip": "207.246.74.246",
       "anchor_lat": 25.7985,
       "anchor_lon": -80.2305,
-      "slope": 0.013775190225155767,
-      "intercept": 18.053938480815503,
+      "slope": 0.014146227101350554,
+      "intercept": 9.045596069438153,
       "r_squared": 0.761649024801874,
       "n_bins": 48,
       "n_measurements": 264,
@@ -784,7 +791,8 @@
         79.6213943
       ],
       "fitted": true,
-      "fit_message": "Successfully fitted bestline with 48 bins"
+      "fit_message": "LP converged: 256 points, 8 filtered",
+      "fit_method": "lp"
     }
   ]
 }

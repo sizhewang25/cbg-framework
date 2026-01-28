@@ -69,10 +69,22 @@ def fit_anchor_model(
     anchor_ip: str,
     anchor_lat: float,
     anchor_lon: float,
+    method: str = 'lp',
     bin_size_km: float = 50.0,
     percentile: float = 0.05
 ) -> RTTDistanceModel:
-    """Fit RTT-distance model for a single anchor."""
+    """
+    Fit RTT-distance model for a single anchor.
+
+    Args:
+        df: DataFrame with measurements
+        anchor_ip: IP address of the anchor
+        anchor_lat: Latitude of anchor
+        anchor_lon: Longitude of anchor
+        method: 'lp' (Linear Programming, original CBG) or 'percentile' (binned percentile)
+        bin_size_km: Size of distance bins for percentile method
+        percentile: Percentile to use for percentile method
+    """
     # Filter to this anchor
     anchor_data = df[df['dst_ip'] == anchor_ip].copy()
 
@@ -95,7 +107,7 @@ def fit_anchor_model(
         anchor_lat=anchor_lat,
         anchor_lon=anchor_lon
     )
-    model.fit(distances, rtts, bin_size_km=bin_size_km, percentile=percentile)
+    model.fit(distances, rtts, method=method, bin_size_km=bin_size_km, percentile=percentile)
 
     return model
 
@@ -188,13 +200,23 @@ def fit_all_anchors(
     df: pd.DataFrame,
     asn: int,
     output_dir: Path,
+    method: str = 'lp',
     bin_size_km: float = 50.0,
     percentile: float = 0.05
 ) -> Dict[str, RTTDistanceModel]:
     """
     Fit models for all anchors and save results.
 
-    Returns dict of anchor_ip -> RTTDistanceModel
+    Args:
+        df: DataFrame with measurements
+        asn: Target ASN to filter probes
+        output_dir: Directory for output files
+        method: 'lp' (Linear Programming, original CBG) or 'percentile' (binned percentile)
+        bin_size_km: Size of distance bins
+        percentile: Percentile for percentile method
+
+    Returns:
+        dict of anchor_ip -> RTTDistanceModel
     """
     # Filter by ASN
     asn_df = filter_by_asn(df, asn)
@@ -209,6 +231,7 @@ def fit_all_anchors(
     # Get anchor info
     anchors = get_anchor_info(asn_df)
     print(f"\nAnchors to process: {len(anchors)}")
+    print(f"Fitting method: {method}")
 
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -227,6 +250,7 @@ def fit_all_anchors(
             anchor_ip=anchor_ip,
             anchor_lat=anchor['lat'],
             anchor_lon=anchor['lon'],
+            method=method,
             bin_size_km=bin_size_km,
             percentile=percentile
         )
@@ -261,6 +285,7 @@ def fit_all_anchors(
             'asn': asn,
             'total_measurements': len(asn_df),
             'unique_probes': asn_df['src_ip'].nunique(),
+            'fit_method': method,
             'bin_size_km': bin_size_km,
             'percentile': percentile,
             'theoretical_slope': THEORETICAL_SLOPE,
@@ -318,6 +343,8 @@ def main():
                         help='Target ASN (default: 7922 Comcast)')
     parser.add_argument('--output', type=str, default=None,
                         help='Output directory (default: outputs/vultr-{ASN}-rtt-models)')
+    parser.add_argument('--method', type=str, default='lp', choices=['lp', 'percentile'],
+                        help='Fitting method: lp (Linear Programming, original CBG) or percentile (default: lp)')
     parser.add_argument('--bin-size', type=float, default=50.0,
                         help='Distance bin size in km (default: 50)')
     parser.add_argument('--percentile', type=float, default=0.05,
@@ -340,6 +367,7 @@ def main():
     print(f"Data: {data_path}")
     print(f"Target ASN: {args.asn}")
     print(f"Output: {output_dir}")
+    print(f"Method: {args.method}")
     print(f"Bin size: {args.bin_size} km")
     print(f"Percentile: {args.percentile}")
     print("=" * 60)
@@ -352,6 +380,7 @@ def main():
         df,
         asn=args.asn,
         output_dir=output_dir,
+        method=args.method,
         bin_size_km=args.bin_size,
         percentile=args.percentile
     )

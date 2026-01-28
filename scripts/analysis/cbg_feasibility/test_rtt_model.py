@@ -16,11 +16,13 @@ from pathlib import Path
 from rtt_model import (
     haversine_distance,
     fit_bestline,
+    fit_bestline_lp,
     rtt_to_distance,
     rtt_to_distance_fixed,
     RTTDistanceModel,
     EARTH_RADIUS_KM,
-    THEORETICAL_SLOPE
+    THEORETICAL_SLOPE,
+    SCIPY_AVAILABLE
 )
 
 
@@ -168,6 +170,187 @@ class TestFitBestline(unittest.TestCase):
 
         # 5th percentile should give lower intercept than 50th
         self.assertLess(result_5['intercept'], result_50['intercept'])
+
+
+@unittest.skipUnless(SCIPY_AVAILABLE, "scipy not available")
+class TestFitBestlineLP(unittest.TestCase):
+    """Test LP-based bestline fitting (original CBG paper method)."""
+
+    def test_perfect_linear_data(self):
+        """Test LP with data exactly on a line."""
+        # Data on line: RTT = 0.01 * distance + 5
+        distances = np.array([100, 200, 300, 400, 500, 600, 700, 800])
+        rtts = 0.01 * distances + 5.0
+
+        result = fit_bestline_lp(distances, rtts)
+
+        self.assertTrue(result['success'])
+        self.assertAlmostEqual(result['slope'], 0.01, places=4)
+        self.assertAlmostEqual(result['intercept'], 5.0, places=2)
+        self.assertEqual(result['violations'], 0)
+
+    def test_line_below_all_points(self):
+        """Test that LP bestline lies below all data points."""
+        np.random.seed(42)
+        distances = np.array([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000])
+        # RTTs with noise ABOVE baseline
+        baseline = 0.012 * distances + 8.0
+        rtts = baseline + np.random.uniform(0, 20, len(distances))
+
+        result = fit_bestline_lp(distances, rtts)
+
+        self.assertTrue(result['success'])
+        # Verify all points are on or above the line
+        predicted = result['slope'] * distances + result['intercept']
+        self.assertTrue(np.all(rtts >= predicted - 0.001))
+        self.assertEqual(result['violations'], 0)
+
+    def test_slope_above_baseline(self):
+        """Test that LP slope is at least the baseline (2/3 speed of light)."""
+        # Data where true relationship is at baseline (slope = 0.01)
+        distances = np.array([100, 200, 300, 400, 500, 600, 700, 800])
+        # RTTs on the baseline with small positive offset
+        rtts = THEORETICAL_SLOPE * distances + 2.0  # intercept = 2ms
+
+        result = fit_bestline_lp(distances, rtts)
+
+        self.assertTrue(result['success'])
+        # Slope should be at least THEORETICAL_SLOPE
+        self.assertGreaterEqual(result['slope'], THEORETICAL_SLOPE - 0.0001)
+
+    def test_infeasible_faster_than_light_no_filter(self):
+        """Test that LP fails when data suggests faster-than-light transmission (without filtering)."""
+        # Data that would require slope below physical limit
+        distances = np.array([100, 200, 300, 400, 500])
+        # These RTTs suggest slope ~0.005 ms/km (faster than 2/3 c)
+        rtts = np.array([1.5, 2.0, 2.5, 3.0, 3.5])
+
+        # With filtering disabled, LP should fail - no valid bestline exists
+        result = fit_bestline_lp(distances, rtts, filter_violations=False)
+
+        self.assertFalse(result['success'])
+        self.assertIn('infeasible', result['message'].lower())
+
+    def test_filter_faster_than_light_violations(self):
+        """Test that violations are filtered when filter_violations=True."""
+        # Data that would require slope below physical limit
+        # Min RTT for d=100 is 1.0ms (0.01*100), for d=200 is 2.0ms, etc.
+        distances = np.array([100, 200, 300, 400, 500])
+        # RTTs = [1.5, 2.0, 2.5, 3.0, 3.5]
+        # Valid:   1.5>=1.0 (yes), 2.0>=2.0 (yes), 2.5>=3.0 (no), 3.0>=4.0 (no), 3.5>=5.0 (no)
+        # So 3 points are violations, leaving only 2 valid points
+        rtts = np.array([1.5, 2.0, 2.5, 3.0, 3.5])
+
+        # With filtering enabled (default), 3 violations are filtered
+        result = fit_bestline_lp(distances, rtts, filter_violations=True, filter_outliers=False)
+
+        # Should fail because only 2 valid points remain (need at least 3)
+        self.assertFalse(result['success'])
+        self.assertEqual(result['n_filtered'], 3)
+        self.assertIn('baseline: 3', result['message'].lower())
+        # Check filter_stats for detailed breakdown
+        self.assertEqual(result['filter_stats']['removed_below_baseline'], 3)
+
+    def test_filter_partial_violations(self):
+        """Test filtering of some speed-of-light violations while keeping valid data."""
+        # Mix of valid and invalid data
+        distances = np.array([100, 200, 300, 400, 500, 600, 700, 800])
+        rtts = np.array([
+            0.5,   # Invalid: too fast for 100km (needs ~1.0 ms min)
+            2.5,   # Valid for 200km
+            4.0,   # Valid for 300km
+            5.0,   # Valid for 400km
+            6.5,   # Valid for 500km
+            8.0,   # Valid for 600km
+            10.0,  # Valid for 700km
+            12.0,  # Valid for 800km
+        ])
+
+        result = fit_bestline_lp(distances, rtts, filter_violations=True, filter_outliers=False)
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['n_filtered'], 1)  # Only the first point filtered
+        self.assertIn('filtered', result['message'].lower())
+
+    def test_filter_outliers(self):
+        """Test that outliers beyond n_std are filtered."""
+        np.random.seed(42)
+        # Generate data with clear outliers
+        distances = np.concatenate([
+            np.full(20, 100),   # Bin 1: 20 points at 100km
+            np.full(20, 200),   # Bin 2: 20 points at 200km
+            np.full(20, 300),   # Bin 3: 20 points at 300km
+        ])
+        # RTTs with some extreme outliers
+        rtts = np.concatenate([
+            np.array([2.0] * 18 + [100.0, 150.0]),  # Two extreme outliers at 100km bin
+            np.array([4.0] * 18 + [200.0, 250.0]),  # Two extreme outliers at 200km bin
+            np.array([6.0] * 20),                    # No outliers at 300km bin
+        ])
+
+        # With outlier filtering enabled
+        result = fit_bestline_lp(distances, rtts, filter_violations=False, filter_outliers=True, n_std=2.0)
+
+        self.assertTrue(result['success'])
+        # The extreme outliers should be filtered
+        self.assertGreater(result['filter_stats']['removed_outliers'], 0)
+        # Slope should be reasonable (not pulled up by outliers)
+        self.assertLess(result['slope'], 0.05)  # Would be much higher without filtering
+
+    def test_non_negative_intercept(self):
+        """Test that LP intercept is non-negative."""
+        distances = np.array([100, 200, 300, 400, 500, 600])
+        # RTTs that might suggest negative intercept
+        rtts = 0.015 * distances  # No intercept in true relationship
+
+        result = fit_bestline_lp(distances, rtts)
+
+        self.assertTrue(result['success'])
+        # Intercept should be >= 0 per CBG paper
+        self.assertGreaterEqual(result['intercept'], -0.001)
+
+    def test_insufficient_points(self):
+        """Test LP failure with fewer than 3 points."""
+        distances = np.array([100, 200])
+        rtts = np.array([5, 10])
+
+        result = fit_bestline_lp(distances, rtts)
+
+        self.assertFalse(result['success'])
+        self.assertIn('at least 3', result['message'].lower())
+
+    def test_empty_input(self):
+        """Test LP with empty arrays."""
+        result = fit_bestline_lp(np.array([]), np.array([]))
+
+        self.assertFalse(result['success'])
+
+    def test_realistic_network_data(self):
+        """Test LP with realistic network measurement data."""
+        # Simulate real measurements: some near physical limit, some delayed
+        distances = np.array([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000])
+        rtts = np.array([
+            2.5,   # near optimal for 100km
+            4.0,   # near optimal for 200km
+            8.0,   # delayed
+            6.0,   # near optimal for 400km
+            12.0,  # delayed
+            9.0,   # near optimal for 600km
+            15.0,  # delayed
+            11.0,  # near optimal for 800km
+            18.0,  # delayed
+            14.0,  # near optimal for 1000km
+        ])
+
+        result = fit_bestline_lp(distances, rtts)
+
+        self.assertTrue(result['success'])
+        # All points should be on or above the line
+        predicted = result['slope'] * distances + result['intercept']
+        self.assertTrue(np.all(rtts >= predicted - 0.001))
+        # Slope should be reasonable (between 0.01 and 0.03 ms/km)
+        self.assertGreater(result['slope'], 0.005)
+        self.assertLess(result['slope'], 0.05)
 
 
 class TestRttToDistance(unittest.TestCase):
