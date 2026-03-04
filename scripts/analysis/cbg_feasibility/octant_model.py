@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple, List, Dict, Any
 
 from scipy.spatial import ConvexHull
+from scipy.optimize import lsq_linear
 
 # Constants (shared with rtt_model.py)
 EARTH_RADIUS_KM = 6371.0
@@ -299,7 +300,8 @@ def hull_rtt_to_distance(
 def fit_rtt_distance_polynomial(
     rtts: np.ndarray,
     distances: np.ndarray,
-    degree: int = 2
+    degree: int = 2,
+    constrain_monotonic: bool = True
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
     Fit polynomial minimizing squared error to data.
@@ -308,6 +310,9 @@ def fit_rtt_distance_polynomial(
         rtts: RTT values in ms (x-axis)
         distances: Geographic distances in km (y-axis)
         degree: Polynomial degree (default 2 = quadratic)
+        constrain_monotonic: If True, constrain slope coefficients >= 0 to ensure
+                            monotonically increasing curve, while allowing intercept
+                            to be negative (accounts for processing delay). (default True)
 
     Returns:
         (coefficients, metadata_dict) where coefficients are for np.polyval
@@ -315,6 +320,11 @@ def fit_rtt_distance_polynomial(
 
     Raises:
         PolynomialFitError: If fitting fails (e.g., insufficient data)
+
+    Note:
+        The intercept (c_0) is allowed to be negative because at RTT=0, distance
+        should be 0, but real measurements have processing/queuing delay. A negative
+        intercept means "distance = 0 when RTT = processing_delay".
     """
     rtts = np.asarray(rtts, dtype=float)
     distances = np.asarray(distances, dtype=float)
@@ -331,8 +341,34 @@ def fit_rtt_distance_polynomial(
         )
 
     try:
-        # Fit polynomial: distance = poly(rtt)
-        coefficients = np.polyfit(rtts, distances, degree)
+        if constrain_monotonic:
+            # Constrain slope coefficients >= 0, but allow intercept to be any value
+            # For degree=2: distance = c2*rtt^2 + c1*rtt + c0
+            # Constraints: c2 >= 0, c1 >= 0, c0 can be negative (processing delay)
+
+            # Build Vandermonde matrix: [rtt^2, rtt^1, rtt^0]
+            A = np.vander(rtts, degree + 1)
+
+            # Bounds: [0, 0, ..., 0, -inf] for lower, [inf, inf, ..., inf] for upper
+            # All coefficients >= 0 except intercept (last one) which can be negative
+            lower_bounds = np.zeros(degree + 1)
+            lower_bounds[-1] = -np.inf  # Intercept can be negative
+            upper_bounds = np.full(degree + 1, np.inf)
+
+            result = lsq_linear(
+                A, distances,
+                bounds=(lower_bounds, upper_bounds),
+                method='bvls'
+            )
+
+            if result.success:
+                coefficients = result.x
+            else:
+                # Fall back to unconstrained
+                coefficients = np.polyfit(rtts, distances, degree)
+        else:
+            # Unconstrained fit
+            coefficients = np.polyfit(rtts, distances, degree)
 
         # Calculate R-squared
         predicted = np.polyval(coefficients, rtts)
@@ -340,11 +376,17 @@ def fit_rtt_distance_polynomial(
         ss_tot = np.sum((distances - np.mean(distances)) ** 2)
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
+        # Check if slope coefficients are non-negative (all except intercept)
+        slope_coeffs_positive = all(c >= 0 for c in coefficients[:-1]) if len(coefficients) > 1 else True
+
         metadata = {
             'degree': degree,
             'n_points': len(rtts),
             'r_squared': r_squared,
-            'residual_std': np.std(distances - predicted)
+            'residual_std': np.std(distances - predicted),
+            'constrained': constrain_monotonic,
+            'slope_coeffs_positive': slope_coeffs_positive,
+            'intercept': coefficients[-1] if len(coefficients) > 0 else 0.0
         }
 
         return coefficients, metadata
@@ -568,7 +610,10 @@ class OctantRTTModel:
         if fit_polynomial:
             try:
                 self.poly_coefficients, poly_meta = fit_rtt_distance_polynomial(
-                    rtts, distances, degree=poly_degree
+                    rtts,
+                    distances,
+                    degree=poly_degree,
+                    constrain_monotonic=True,
                 )
                 self.fit_message = (
                     f"Hull: {len(self.hull_upper_rtts)} upper, {len(self.hull_lower_rtts)} lower vertices. "
