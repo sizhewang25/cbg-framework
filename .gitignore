@@ -178,11 +178,6 @@ cython_debug/
 clickhouse_files/users.d/password_local.xml
 *.tar.gz
 *.tar
-outputs/
+**/outputs/*
 .DS_Store
 **/references/*
-
-# CBG feasibility outputs (track these)
-!scripts/analysis/cbg_feasibility/outputs/
-!scripts/analysis/cbg_feasibility/outputs/**
-!scripts/analysis/cbg_feasibility/data/
