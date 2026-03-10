@@ -18,3 +18,5 @@
 - [x] Implement OctantRTTModel class
 - [x] Run tests and iterate, document lessons (12/12 tests pass)
 - [x] Write final report
+- [x] Move octant code from cbg_feasibility/ to scripts/analysis/octant/
+- [x] Add constrain_monotonic polynomial fitting (slope coeffs >= 0, intercept free)

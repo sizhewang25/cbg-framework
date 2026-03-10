@@ -85,13 +85,15 @@ All 12 tests pass:
 3. **Optimization**: Consider spline fitting for smoother bounds
 4. **Validation**: Test on real RIPE Atlas measurement data
 
-### Files Created
+### Files
 
 ```
-scripts/analysis/cbg_feasibility/octant_model.py    # Main implementation
-scripts/analysis/cbg_feasibility/test_octant_model.py  # Unit tests
-tasks/octant-rtt-model/README.md                    # Task context
-tasks/octant-rtt-model/todos.md                     # Progress tracking
-tasks/octant-rtt-model/lessons.md                   # Intermediate findings
-tasks/octant-rtt-model/report.md                    # This report
+scripts/analysis/octant/octant_model.py              # Main implementation
+scripts/analysis/octant/test_octant_model.py         # Unit tests
+scripts/analysis/octant/references/                  # Octant paper & notes
+scripts/analysis/octant/outputs/vultr-7922-octant/   # Model outputs (.pkl, .png)
+tasks/octant-rtt-model/README.md                     # Task context
+tasks/octant-rtt-model/todos.md                      # Progress tracking
+tasks/octant-rtt-model/lessons.md                    # Intermediate findings
+tasks/octant-rtt-model/report.md                     # This report
 ```
