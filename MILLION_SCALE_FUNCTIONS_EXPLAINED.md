@@ -273,6 +273,7 @@ def select_best_guess_centroid(
 #### Step 1: Create Circles from RTT Measurements
 ```python
 probe_circles = {}
+min_rtt_per_vp_ip = {}
 for vp_ip, rtts in rtt_per_vp_to_target.items():
     if target_ip == vp_ip:
         continue  # Skip self-measurement
@@ -286,8 +287,13 @@ for vp_ip, rtts in rtt_per_vp_to_target.items():
     if min_rtt > 100:
         continue  # Filter inflated RTTs (likely routing anomalies)
 
-    probe_circles[vp_ip] = (lat, lon, min_rtt, None, None)
+    min_rtt_per_vp_ip[vp_ip] = min_rtt
+
+    if isinstance(min_rtt, float):  # Only create circle if RTT is a float
+        probe_circles[vp_ip] = (lat, lon, min_rtt, None, None)
 ```
+
+**Note:** The `isinstance(min_rtt, float)` guard means integer RTT values (which can occur from certain measurement sources) will be tracked in `min_rtt_per_vp_ip` for the closest-VP fallback but will **not** generate a circle. This can silently reduce the number of circles used in multilateration.
 
 **Circle representation:** `(lat, lon, rtt, distance, radius)`
 - `distance` and `radius` are computed later
@@ -298,10 +304,11 @@ intersections, circles = circle_intersections(circles, speed_threshold=2/3)
 ```
 
 This performs **spherical geometry** to find all intersection points:
-1. Converts lat/lon to 3D Cartesian coordinates
-2. For each pair of circles, computes 2 intersection points
-3. Filters points that lie within ALL circles
-4. Returns valid intersection points
+1. First calls `circle_preprocessing()` to remove redundant circles
+2. **Single circle case**: If only 1 circle remains after preprocessing, generates 4 evenly-spaced points on the circle's circumference using `get_points_on_circle()` (which uses WGS84 equatorial radius 6378.137 km) and returns those as the "intersection" points
+3. **Multiple circles**: For each pair of circles, computes 2 intersection points using 3D Cartesian vector math on the unit sphere
+4. Filters points that lie within ALL circles using `is_within_cirle()`
+5. Returns valid intersection points
 
 **Mathematical Details:** See [circle_intersections() in helpers.py:107-166]
 
@@ -423,28 +430,52 @@ if is_multiprocess:
 
 #### Step 3: Per-Target Processing (compute_geolocation_features_per_ip_impl)
 
+**Location:** `scripts/analysis/analysis.py:73-148`
+
 For each target, test multiple threshold configurations:
 
 ```python
 for threshold_distance in threshold_distances:  # [0, 40, 100, 500, 1000]
     # Filter VPs based on distance threshold
+    # NOTE: Builds a dict of {vp: (lat, lon)}, not just a set of VP IPs.
+    # The target (dst) is ALWAYS included regardless of threshold (via `or vp == dst`),
+    # ensuring its ground-truth coordinates are available for error computation.
     if distance_operator == ">":
         # Only use VPs farther than threshold (test global coverage)
-        vp_filter = {vp for vp in vps
-                     if vp_distance_matrix[dst][vp] > threshold_distance}
+        vp_coordinates_per_ip_filter = {
+            vp: vp_coordinates_per_ip[vp]
+            for vp in vp_coordinates_per_ip
+            if (vp_distance_matrix_dst[vp] > threshold_distance
+                and vp in vp_per_target_allowed)
+            or vp == dst
+        }
     elif distance_operator == "<=":
         # Only use VPs closer than threshold (test local accuracy)
-        vp_filter = {vp for vp in vps
-                     if vp_distance_matrix[dst][vp] <= threshold_distance}
+        vp_coordinates_per_ip_filter = {
+            vp: vp_coordinates_per_ip[vp]
+            for vp in vp_coordinates_per_ip
+            if (vp_distance_matrix_dst[vp] <= threshold_distance
+                and vp in vp_per_target_allowed)
+            or vp == dst
+        }
 
     # Limit to max_vps (randomly sample if too many)
-    if len(vp_filter) > max_vps:
-        vp_filter = random.sample(vp_filter, max_vps)
+    # NOTE: dst is excluded from sampling then re-added, so the target
+    # is never accidentally dropped during random subsampling.
+    if len(vp_coordinates_per_ip_filter) > max_vps:
+        vp_coordinates_per_ip_filter_no_dst = dict(vp_coordinates_per_ip_filter)
+        del vp_coordinates_per_ip_filter_no_dst[dst]
+        vp_coordinates_per_ip_filter_sample = dict(
+            random.sample(list(vp_coordinates_per_ip_filter_no_dst.items()), max_vps)
+        )
+        vp_coordinates_per_ip_filter_sample[dst] = vp_coordinates_per_ip_filter[dst]
+    else:
+        vp_coordinates_per_ip_filter_sample = vp_coordinates_per_ip_filter
 
     # Compute geolocation error for this configuration
-    error, circles = compute_error(dst, vp_filter, rtt_per_src)
+    error, circles = compute_error(dst, vp_coordinates_per_ip_filter_sample, rtt_per_src)
 
-    features[threshold_distance].append((dst, error, len(circles)))
+    features.setdefault(threshold_distance, []).append((dst, error, len(circles)))
 ```
 
 #### Step 4: Aggregate Results
@@ -583,13 +614,28 @@ Where `d()` is haversine distance.
 **Formula:**
 ```
 a = sin²(Δlat/2) + cos(lat1) × cos(lat2) × sin²(Δlon/2)
-c = 2 × atan2(√a, √(1−a))
+c = 2 × arcsin(√a)
 distance = R × c
 ```
 
-Where `R = 6371 km` (Earth's radius).
-
 **Implementation:** `helpers.py:182-196`
+
+**Note on Earth radius inconsistency:** The codebase uses three different Earth radius values in different functions:
+
+| Function | Earth Radius | Location |
+|----------|-------------|----------|
+| `haversine()` | **6367 km** | `helpers.py:196` |
+| `distance()` | **6371 km** | `helpers.py:212` |
+| `circle_preprocessing()` | **6371 km** (for km→radians conversion) | `helpers.py:67` |
+| `get_points_on_circle()` | **6378.137 km** (WGS84 equatorial radius, used in meters) | `helpers.py:99-100` |
+
+The `haversine()` function (R=6367) is used for error measurement and `is_within_cirle()` checks, while `circle_preprocessing()` (R=6371) converts distance to angular radius for intersection math. This creates a minor inconsistency: the radius used for "is this point inside the circle?" differs slightly from the radius used for circle intersection geometry. In practice the difference is negligible (~0.06%).
+
+Also note the two haversine implementations differ in formula:
+- `haversine()` (line 196): uses `2 × arcsin(√a)` with R=6367
+- `distance()` (line 210): uses `2 × arcsin(√a)` with R=6371
+
+Both are functionally equivalent aside from the Earth radius constant.
 
 ### Circle Intersection (Spherical Geometry)
 
