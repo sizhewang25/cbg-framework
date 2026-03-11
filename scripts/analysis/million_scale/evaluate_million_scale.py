@@ -571,6 +571,7 @@ def plot_circles_on_map(probe_result, circles_data, intersections, method_label,
                 label=f'VP ({clat:.1f}, {clon:.1f}) r={radius_km:.0f}km')
 
     # Intersection polygon via Shapely
+    shapely_centroid = None
     if len(circles_data) >= 2:
         try:
             shapely_circles = [
@@ -581,6 +582,8 @@ def plot_circles_on_map(probe_result, circles_data, intersections, method_label,
             if shapely_circles:
                 intersection_poly = reduce(lambda a, b: a.intersection(b), shapely_circles)
                 if not intersection_poly.is_empty:
+                    c = intersection_poly.centroid
+                    shapely_centroid = (c.y, c.x)  # (lat, lon)
                     polys = (list(intersection_poly.geoms)
                              if isinstance(intersection_poly, MultiPolygon)
                              else [intersection_poly])
@@ -638,13 +641,20 @@ def plot_circles_on_map(probe_result, circles_data, intersections, method_label,
             markeredgecolor='black', markeredgewidth=1,
             transform=ccrs.PlateCarree(), zorder=10, label='True location')
 
-    # Estimated location
+    # Estimated location (arithmetic mean centroid)
     est_lat = probe_result['estimated_lat']
     est_lon = probe_result['estimated_lon']
     if est_lat is not None:
         ax.plot(est_lon, est_lat, 'X', color='red', markersize=14,
                 markeredgecolor='black', markeredgewidth=1,
-                transform=ccrs.PlateCarree(), zorder=10, label='Estimated location')
+                transform=ccrs.PlateCarree(), zorder=10, label='Arith Centroid')
+
+    # Shapely geometric centroid for comparison
+    if shapely_centroid is not None:
+        sc_lat, sc_lon = shapely_centroid
+        ax.plot(sc_lon, sc_lat, 'X', color='gray', markersize=14,
+                markeredgecolor='black', markeredgewidth=1,
+                transform=ccrs.PlateCarree(), zorder=10, label='Geometric Centroid')
 
     error_km = probe_result['error_km']
     area_km2 = probe_result.get('intersection_area_km2', 0)
