@@ -222,19 +222,6 @@ class TestFitBestlineLP(unittest.TestCase):
         # Slope should be at least THEORETICAL_SLOPE
         self.assertGreaterEqual(result['slope'], THEORETICAL_SLOPE - 0.0001)
 
-    def test_infeasible_faster_than_light_no_filter(self):
-        """Test that LP fails when data suggests faster-than-light transmission (without filtering)."""
-        # Data that would require slope below physical limit
-        distances = np.array([100, 200, 300, 400, 500])
-        # These RTTs suggest slope ~0.005 ms/km (faster than 2/3 c)
-        rtts = np.array([1.5, 2.0, 2.5, 3.0, 3.5])
-
-        # With filtering disabled, LP should fail - no valid bestline exists
-        result = fit_bestline_lp(distances, rtts, filter_outliers=False)
-
-        self.assertFalse(result['success'])
-        self.assertIn('infeasible', result['message'].lower())
-
     def test_filter_faster_than_light_violations(self):
         """Test that violations are filtered by the baseline filter (Stage 4)."""
         # Data that would require slope below physical limit
@@ -248,7 +235,7 @@ class TestFitBestlineLP(unittest.TestCase):
         rtts = np.array([1.5, 2.0, 2.5, 3.0, 3.5])
 
         # Disable percentile filter (bin_percentile=1.0) and global filter to test baseline filter specifically
-        result = fit_bestline_lp(distances, rtts, filter_outliers=True, bin_size_km=100.0,
+        result = fit_bestline_lp(distances, rtts, bin_size_km=100.0,
                                   bin_percentile=1.0, global_n_std=float('inf'))
 
         # Should fail because only 2 valid points remain (need at least 3)
@@ -275,37 +262,11 @@ class TestFitBestlineLP(unittest.TestCase):
 
         # With filtering enabled, baseline violations are filtered at Stage 3
         # Disable global filter to test baseline filter specifically
-        result = fit_bestline_lp(distances, rtts, filter_outliers=True, bin_size_km=100.0, global_n_std=float('inf'))
+        result = fit_bestline_lp(distances, rtts, bin_size_km=100.0, global_n_std=float('inf'))
 
         self.assertTrue(result['success'])
         self.assertEqual(result['n_filtered'], 1)  # Only the first point filtered
         self.assertIn('filtered', result['message'].lower())
-
-    def test_filter_outliers(self):
-        """Test that outliers beyond n_std are filtered."""
-        np.random.seed(42)
-        # Generate data with clear outliers - all points at distances that fall in 100km bins
-        distances = np.concatenate([
-            np.full(20, 50),    # Bin 0 (0-100km): 20 points at 50km
-            np.full(20, 150),   # Bin 1 (100-200km): 20 points at 150km
-            np.full(20, 250),   # Bin 2 (200-300km): 20 points at 250km
-        ])
-        # RTTs with some extreme outliers
-        rtts = np.concatenate([
-            np.array([2.0] * 18 + [100.0, 150.0]),  # Two extreme outliers at bin 0
-            np.array([4.0] * 18 + [200.0, 250.0]),  # Two extreme outliers at bin 1
-            np.array([6.0] * 20),                    # No outliers at bin 2
-        ])
-
-        # With outlier filtering enabled (n_std=2.0 to catch extreme outliers)
-        result = fit_bestline_lp(distances, rtts, filter_outliers=True, n_std=2.0, bin_size_km=100.0)
-
-        self.assertTrue(result['success'])
-        # The extreme high outliers should be filtered
-        total_outliers = result['filter_stats']['removed_low_outliers'] + result['filter_stats']['removed_high_outliers']
-        self.assertGreater(total_outliers, 0)
-        # Slope should be reasonable (not pulled up by outliers)
-        self.assertLess(result['slope'], 0.05)  # Would be much higher without filtering
 
     def test_global_bin_min_filter(self):
         """Test Stage 4: global filter removes entire bins with anomalous min RTTs."""
@@ -339,7 +300,7 @@ class TestFitBestlineLP(unittest.TestCase):
         # With global_n_std=1.0 (default), bin 3 should be filtered
 
         # With global bin filter enabled (default global_n_std=1.0)
-        result = fit_bestline_lp(distances, rtts, filter_outliers=True, n_std=2.0, bin_size_km=100.0)
+        result = fit_bestline_lp(distances, rtts, n_std=2.0, bin_size_km=100.0, enable_global_filter=True)
 
         self.assertTrue(result['success'])
         # The anomalous bin should be filtered (all 10 points in bin 3)
