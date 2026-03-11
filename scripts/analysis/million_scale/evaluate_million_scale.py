@@ -26,7 +26,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(CBG_DIR))
 
 from scripts.utils.helpers import (
-    select_best_guess_centroid,
     haversine,
     circle_intersections,
     polygon_centroid,
@@ -81,71 +80,84 @@ def load_data():
 
 def run_million_scale_cbg(df_asn):
     """
-    Run Million-Scale CBG using select_best_guess_centroid().
+    Run Million-Scale CBG (inlined from select_best_guess_centroid).
 
-    This uses the original code path:
     - RTT → distance via rtt_to_km(rtt, speed_threshold=2/3)
     - Spherical circle intersection
     - Polygon centroid or closest-VP fallback
     """
     # Build anchor coordinate lookup
     anchors = df_asn[['dst_ip', 'anchor_latitude', 'anchor_longitude']].drop_duplicates()
-    vp_coordinates_per_ip = {}
+    anchor_coords = {}
     for _, row in anchors.iterrows():
-        vp_coordinates_per_ip[row['dst_ip']] = (row['anchor_latitude'], row['anchor_longitude'])
-
-    # Also add probe coordinates (needed for error computation — the target must be
-    # in vp_coordinates_per_ip for compute_error, but select_best_guess_centroid
-    # skips self-measurement via target_ip == vp_ip check)
-    probes = df_asn[['src_ip', 'probe_latitude', 'probe_longitude']].drop_duplicates('src_ip')
-    for _, row in probes.iterrows():
-        vp_coordinates_per_ip[row['src_ip']] = (row['probe_latitude'], row['probe_longitude'])
+        anchor_coords[row['dst_ip']] = (row['anchor_latitude'], row['anchor_longitude'])
 
     probe_ips = df_asn['src_ip'].unique()
     results = []
+    all_radii = []
 
     for probe_ip in probe_ips:
         probe_data = df_asn[df_asn['src_ip'] == probe_ip]
         true_lat = probe_data['probe_latitude'].iloc[0]
         true_lon = probe_data['probe_longitude'].iloc[0]
 
-        # Build RTT dict: {anchor_ip: [min_rtt]}
-        rtt_per_vp_to_target = {}
+        circles = []
+        min_rtt_per_vp_ip = {}
         for _, row in probe_data.iterrows():
             anchor_ip = row['dst_ip']
-            rtt_per_vp_to_target[anchor_ip] = [row['min_rtt']]
+            rtt = row['min_rtt']
+            if rtt > 100:
+                continue
+            if anchor_ip not in anchor_coords:
+                continue
+            lat, lon = anchor_coords[anchor_ip]
+            min_rtt_per_vp_ip[anchor_ip] = rtt
+            circles.append((lat, lon, rtt, None, None))
 
-        # Run million-scale CBG
-        result = select_best_guess_centroid(
-            probe_ip, vp_coordinates_per_ip, rtt_per_vp_to_target
-        )
+        # Compute radii: d = (2/3) * rtt * 300 / 2 = 100 * rtt
+        radii_km = [100.0 * rtt for _, _, rtt, _, _ in circles]
+        all_radii.extend(radii_km)
 
-        if result is not None:
-            (est_lat, est_lon), circles = result
-            error_km = haversine((est_lat, est_lon), (true_lat, true_lon))
+        if not circles:
             results.append({
-                'probe_ip': probe_ip,
-                'true_lat': true_lat,
-                'true_lon': true_lon,
-                'estimated_lat': float(est_lat),
-                'estimated_lon': float(est_lon),
-                'error_km': float(error_km),
-                'n_anchors': len(circles),
-                'method': 'million_scale_cbg'
+                'probe_ip': probe_ip, 'true_lat': true_lat, 'true_lon': true_lon,
+                'estimated_lat': None, 'estimated_lon': None,
+                'error_km': None, 'n_anchors': 0,
+                'method': 'million_scale_cbg', 'intersection': False,
+                'avg_radius_km': None
             })
+            continue
+
+        intersections, circles_out = circle_intersections(circles, speed_threshold=2/3)
+
+        if len(intersections) > 2:
+            centroid = polygon_centroid(intersections)
+            did_intersect = True
+        elif len(intersections) == 2:
+            centroid = get_middle_intersection(intersections)
+            did_intersect = True
         else:
-            results.append({
-                'probe_ip': probe_ip,
-                'true_lat': true_lat,
-                'true_lon': true_lon,
-                'estimated_lat': None,
-                'estimated_lon': None,
-                'error_km': None,
-                'n_anchors': 0,
-                'method': 'million_scale_cbg'
-            })
+            closest_vp, _ = min(min_rtt_per_vp_ip.items(), key=lambda x: x[1])
+            centroid = anchor_coords[closest_vp]
+            did_intersect = False
 
-    return results
+        est_lat, est_lon = centroid
+        error_km = haversine((est_lat, est_lon), (true_lat, true_lon))
+
+        results.append({
+            'probe_ip': probe_ip,
+            'true_lat': true_lat,
+            'true_lon': true_lon,
+            'estimated_lat': float(est_lat),
+            'estimated_lon': float(est_lon),
+            'error_km': float(error_km),
+            'n_anchors': len(circles_out),
+            'method': 'million_scale_cbg',
+            'intersection': did_intersect,
+            'avg_radius_km': float(np.mean(radii_km))
+        })
+
+    return results, np.array(all_radii)
 
 
 # =============================================================================
@@ -209,6 +221,7 @@ def run_vanilla_cbg(df_asn, lp_models):
     """
     probe_ips = df_asn['src_ip'].unique()
     results = []
+    all_radii = []
 
     for probe_ip in probe_ips:
         probe_data = df_asn[df_asn['src_ip'] == probe_ip]
@@ -236,11 +249,16 @@ def run_vanilla_cbg(df_asn, lp_models):
             r = d / 6371  # radians
             circles.append((model.anchor_lat, model.anchor_lon, rtt, d, r))
 
+        # Radii from LP model (d is already in km)
+        radii_km = [d for _, _, _, d, _ in circles]
+        all_radii.extend(radii_km)
+
         if not circles:
             results.append({
                 'probe_ip': probe_ip, 'true_lat': true_lat, 'true_lon': true_lon,
                 'estimated_lat': None, 'estimated_lon': None,
-                'error_km': None, 'n_anchors': 0, 'method': 'vanilla_cbg'
+                'error_km': None, 'n_anchors': 0, 'method': 'vanilla_cbg',
+                'intersection': False, 'avg_radius_km': None
             })
             continue
 
@@ -249,13 +267,16 @@ def run_vanilla_cbg(df_asn, lp_models):
 
         if len(intersections) > 2:
             centroid = polygon_centroid(intersections)
+            did_intersect = True
         elif len(intersections) == 2:
             centroid = get_middle_intersection(intersections)
+            did_intersect = True
         else:
             # Fallback: closest anchor by min RTT
             closest_vp, _ = min(min_rtt_per_vp_ip.items(), key=lambda x: x[1])
             model = lp_models[closest_vp]
             centroid = (model.anchor_lat, model.anchor_lon)
+            did_intersect = False
 
         est_lat, est_lon = centroid
         error_km = haversine((est_lat, est_lon), (true_lat, true_lon))
@@ -268,10 +289,12 @@ def run_vanilla_cbg(df_asn, lp_models):
             'estimated_lon': float(est_lon),
             'error_km': float(error_km),
             'n_anchors': len(circles_out),
-            'method': 'vanilla_cbg'
+            'method': 'vanilla_cbg',
+            'intersection': did_intersect,
+            'avg_radius_km': float(np.mean(radii_km))
         })
 
-    return results
+    return results, np.array(all_radii)
 
 
 # =============================================================================
@@ -333,6 +356,37 @@ def plot_error_cdf_comparison(ms_errors, vanilla_errors, output_path=None):
     ax.text(0.98, 0.02, stats, transform=ax.transAxes,
             fontsize=9, verticalalignment='bottom', horizontalalignment='right',
             bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        print(f"Saved: {output_path}")
+
+    return fig
+
+
+def plot_radius_cdf(ms_radii, van_radii, output_path=None):
+    """Plot CDF of all individual circle radii for both methods."""
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    for radii, label, color in [
+        (van_radii, 'Vanilla CBG (LP)', 'black'),
+        (ms_radii, 'Million-Scale CBG (2/3c)', 'blue'),
+    ]:
+        sorted_r = np.sort(radii)
+        cdf = np.arange(1, len(sorted_r) + 1) / len(sorted_r)
+        median = np.median(radii)
+        ax.plot(sorted_r, cdf, color=color, linewidth=2,
+                label=f'{label}\n  Median: {median:.0f} km, N={len(radii)}')
+
+    ax.hlines(y=0.5, xmin=0, xmax=ax.get_xlim()[1], color='gray', linestyle='--', alpha=0.5)
+    ax.set_xlabel('Circle Radius (km)', fontsize=12)
+    ax.set_ylabel('CDF', fontsize=12)
+    ax.set_title(f'CBG Circle Radius CDF — AS{ASN}', fontsize=14, fontweight='bold')
+    ax.legend(loc='lower right', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(0, 1)
 
     plt.tight_layout()
 
@@ -453,21 +507,27 @@ def main():
     print("\n" + "=" * 60)
     print("RUNNING VANILLA CBG")
     print("=" * 60)
-    van_results = run_vanilla_cbg(df_asn, lp_models)
+    van_results, van_all_radii = run_vanilla_cbg(df_asn, lp_models)
     van_success = [r for r in van_results if r['error_km'] is not None]
     van_errors = np.array([r['error_km'] for r in van_success])
+    van_intersected = sum(1 for r in van_results if r['intersection'])
     print(f"  Successful: {len(van_success)}/{len(van_results)} probes")
+    print(f"  Intersection succeeded: {van_intersected}/{len(van_results)} probes")
     print(f"  Median error: {np.median(van_errors):.1f} km")
+    print(f"  Circle radii: N={len(van_all_radii)}, mean={np.mean(van_all_radii):.1f} km, median={np.median(van_all_radii):.1f} km")
 
     # Run Million-Scale CBG (2/3c + Spherical)
     print("\n" + "=" * 60)
     print("RUNNING MILLION-SCALE CBG")
     print("=" * 60)
-    ms_results = run_million_scale_cbg(df_asn)
+    ms_results, ms_all_radii = run_million_scale_cbg(df_asn)
     ms_success = [r for r in ms_results if r['error_km'] is not None]
     ms_errors = np.array([r['error_km'] for r in ms_success])
+    ms_intersected = sum(1 for r in ms_results if r['intersection'])
     print(f"  Successful: {len(ms_success)}/{len(ms_results)} probes")
+    print(f"  Intersection succeeded: {ms_intersected}/{len(ms_results)} probes")
     print(f"  Median error: {np.median(ms_errors):.1f} km")
+    print(f"  Circle radii: N={len(ms_all_radii)}, mean={np.mean(ms_all_radii):.1f} km, median={np.median(ms_all_radii):.1f} km")
 
     # Per-anchor RTT-distance scatter
     print("\n" + "=" * 60)
@@ -487,6 +547,11 @@ def main():
     print("=" * 60)
     cdf_path = OUTPUT_DIR / 'error_cdf_comparison.png'
     fig = plot_error_cdf_comparison(ms_errors, van_errors, output_path=cdf_path)
+    plt.close(fig)
+
+    # Circle Radius CDF
+    radius_cdf_path = OUTPUT_DIR / 'radius_cdf_comparison.png'
+    fig = plot_radius_cdf(ms_all_radii, van_all_radii, output_path=radius_cdf_path)
     plt.close(fig)
 
     # Statistics
