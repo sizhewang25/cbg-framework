@@ -596,6 +596,41 @@ def plot_circles_on_map(probe_result, circles_data, intersections, method_label,
         except Exception:
             pass
 
+    # Pairwise circle-boundary crossing points (planar), filtered to inside intersection
+    if len(circles_data) >= 2:
+        from itertools import combinations
+        from shapely.geometry import MultiPoint, Point as ShapelyPoint
+        planar_circles = [
+            _circle_to_shapely_polygon(clat, clon, radius_km)
+            for clat, clon, radius_km in circles_data
+        ]
+        # Compute intersection region for filtering
+        valid_polys = [p for p in planar_circles if p.is_valid and not p.is_empty]
+        region = reduce(lambda a, b: a.intersection(b), valid_polys) if valid_polys else None
+        cross_lons, cross_lats = [], []
+        for ca, cb in combinations(planar_circles, 2):
+            try:
+                pts = ca.exterior.intersection(cb.exterior)
+                if pts.is_empty:
+                    continue
+                candidates = []
+                if isinstance(pts, MultiPoint):
+                    candidates = list(pts.geoms)
+                elif pts.geom_type == 'Point':
+                    candidates = [pts]
+                for pt in candidates:
+                    # Use buffer to include points on boundary
+                    if region and region.buffer(0.1).contains(ShapelyPoint(pt.x, pt.y)):
+                        cross_lons.append(pt.x)
+                        cross_lats.append(pt.y)
+            except Exception:
+                continue
+        if cross_lons:
+            ax.scatter(cross_lons, cross_lats, c='gray', s=30, marker='o',
+                       alpha=0.8, edgecolors='black', linewidths=0.5,
+                       transform=ccrs.PlateCarree(), zorder=6,
+                       label=f'Circle crossings (n={len(cross_lons)})')
+
     # True location
     true_lat = probe_result['true_lat']
     true_lon = probe_result['true_lon']
