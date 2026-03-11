@@ -427,7 +427,7 @@ def plot_area_cdf(ms_areas, van_areas, output_path=None):
     """Plot CDF of intersection areas (km²) for both methods, with zoomed inset."""
     from matplotlib.ticker import FuncFormatter
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(6, 4))
 
     # Convert to million km² for readability (US ≈ 9.8 million km²)
     scale = 1e6
@@ -460,7 +460,7 @@ def plot_area_cdf(ms_areas, van_areas, output_path=None):
     inset_limit = 20.0  # 20 million km²
 
     # Inset position in axes fraction: [left, bottom, width, height]
-    inset_pos = [0.42, 0.35, 0.35, 0.35]
+    inset_pos = [0.42, 0.25, 0.35, 0.35]
     ax_inset = ax.inset_axes(inset_pos)
     for sorted_a, cdf, color in series_data:
         mask = sorted_a <= inset_limit
@@ -500,6 +500,197 @@ def plot_area_cdf(ms_areas, van_areas, output_path=None):
         print(f"Saved: {output_path}")
 
     return fig
+
+
+def plot_circles_on_map(probe_result, circles_data, intersections, method_label,
+                        output_path=None):
+    """
+    Plot CBG circles on a US map for one probe.
+
+    Parameters:
+        probe_result: dict with probe_ip, true_lat/lon, estimated_lat/lon, error_km, etc.
+        circles_data: list of (lat, lon, radius_km) for each anchor circle
+        intersections: list of (lat, lon) intersection points
+        method_label: str for the title
+        output_path: Path to save
+    """
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+
+    proj = ccrs.LambertConformal(central_longitude=-96, central_latitude=39)
+    fig, ax = plt.subplots(figsize=(14, 10), subplot_kw={'projection': proj})
+
+    # US extent
+    ax.set_extent([-125, -66, 24, 50], crs=ccrs.PlateCarree())
+    ax.add_feature(cfeature.LAND, facecolor='#f0f0f0')
+    ax.add_feature(cfeature.OCEAN, facecolor='#e6f2ff')
+    ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
+    ax.add_feature(cfeature.BORDERS, linewidth=0.8)
+    ax.coastlines(resolution='50m', linewidth=0.8)
+
+    colors = plt.cm.tab10(np.linspace(0, 1, max(len(circles_data), 10)))
+
+    # Draw circles
+    for i, (clat, clon, radius_km) in enumerate(circles_data):
+        # Approximate circle as polygon: radius_km → degrees
+        n_pts = 100
+        angles = np.linspace(0, 2 * np.pi, n_pts)
+        r_deg_lat = radius_km / 111.0
+        r_deg_lon = radius_km / (111.0 * math.cos(math.radians(clat)))
+        circle_lons = clon + r_deg_lon * np.cos(angles)
+        circle_lats = clat + r_deg_lat * np.sin(angles)
+        ax.plot(circle_lons, circle_lats, color=colors[i], linewidth=1.5,
+                alpha=0.7, transform=ccrs.PlateCarree())
+        ax.fill(circle_lons, circle_lats, color=colors[i], alpha=0.05,
+                transform=ccrs.PlateCarree())
+        # Anchor marker
+        ax.plot(clon, clat, 's', color=colors[i], markersize=8,
+                transform=ccrs.PlateCarree(), zorder=5,
+                label=f'VP ({clat:.1f}, {clon:.1f}) r={radius_km:.0f}km')
+
+    # Intersection polygon
+    if len(intersections) >= 3:
+        pts = np.array(intersections)
+        try:
+            hull = ConvexHull(pts)
+            hull_pts = pts[hull.vertices]
+            hull_pts = np.vstack([hull_pts, hull_pts[0]])  # close polygon
+            ax.fill(hull_pts[:, 1], hull_pts[:, 0], color='yellow', alpha=0.4,
+                    transform=ccrs.PlateCarree(), zorder=3, label='Intersection region')
+            ax.plot(hull_pts[:, 1], hull_pts[:, 0], color='orange', linewidth=2,
+                    transform=ccrs.PlateCarree(), zorder=4)
+        except Exception:
+            pass
+
+    # True location
+    true_lat = probe_result['true_lat']
+    true_lon = probe_result['true_lon']
+    ax.plot(true_lon, true_lat, '*', color='green', markersize=18,
+            markeredgecolor='black', markeredgewidth=1,
+            transform=ccrs.PlateCarree(), zorder=10, label='True location')
+
+    # Estimated location
+    est_lat = probe_result['estimated_lat']
+    est_lon = probe_result['estimated_lon']
+    if est_lat is not None:
+        ax.plot(est_lon, est_lat, 'X', color='red', markersize=14,
+                markeredgecolor='black', markeredgewidth=1,
+                transform=ccrs.PlateCarree(), zorder=10, label='Estimated location')
+
+    error_km = probe_result['error_km']
+    area_km2 = probe_result.get('intersection_area_km2', 0)
+    ax.set_title(f'{method_label} — Error: {error_km:.0f} km, '
+                 f'Area: {area_km2 / 1e6:.1f} million km²\n'
+                 f'Probe: {probe_result["probe_ip"]}',
+                 fontsize=13, fontweight='bold')
+    ax.legend(loc='lower left', fontsize=8, ncol=2)
+
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        print(f"Saved: {output_path}")
+
+    return fig
+
+
+def plot_percentile_maps(ms_results, van_results, df_asn, lp_models,
+                         percentiles=(5, 50, 75), anchor_method='vanilla'):
+    """Generate circle-on-map plots at error percentiles of the anchor method.
+
+    Selects probes based on the anchor method's error distribution, then plots
+    both methods for the same probe to enable direct comparison.
+
+    Args:
+        anchor_method: 'vanilla' or 'million_scale' — which method's error
+                       distribution to use for selecting percentile probes.
+    """
+    anchor_info = df_asn[['dst_ip', 'anchor_latitude', 'anchor_longitude']].drop_duplicates()
+    anchor_coords = {}
+    for _, row in anchor_info.iterrows():
+        anchor_coords[row['dst_ip']] = (row['anchor_latitude'], row['anchor_longitude'])
+
+    # Index both results by probe_ip
+    ms_by_ip = {r['probe_ip']: r for r in ms_results}
+    van_by_ip = {r['probe_ip']: r for r in van_results}
+
+    # Select anchor results for percentile selection
+    if anchor_method == 'vanilla':
+        anchor_success = [r for r in van_results if r['error_km'] is not None]
+        anchor_label = 'Vanilla'
+        prefix = 'van'
+    else:
+        anchor_success = [r for r in ms_results if r['error_km'] is not None]
+        anchor_label = 'MS'
+        prefix = 'ms'
+
+    anchor_errors = [r['error_km'] for r in anchor_success]
+
+    for pct in percentiles:
+        target_err = np.percentile(anchor_errors, pct)
+        anchor_probe = min(anchor_success, key=lambda r: abs(r['error_km'] - target_err))
+        probe_ip = anchor_probe['probe_ip']
+        probe_data = df_asn[df_asn['src_ip'] == probe_ip]
+
+        # Plot both methods for this probe
+        for method_name, probe_result, build_fn in [
+            ('Vanilla CBG (LP)', van_by_ip.get(probe_ip),
+             lambda pd: _build_lp_circles(pd, lp_models)),
+            ('Million-Scale (2/3c)', ms_by_ip.get(probe_ip),
+             lambda pd: _build_ms_circles(pd, anchor_coords)),
+        ]:
+            if probe_result is None or probe_result['error_km'] is None:
+                continue
+
+            circles_data, circle_tuples = build_fn(probe_data)
+            if circle_tuples:
+                intersections, _ = circle_intersections(circle_tuples, speed_threshold=2/3)
+            else:
+                intersections = []
+
+            tag = method_name.split('(')[0].strip().lower().replace(' ', '_').replace('-', '_')
+            out_path = OUTPUT_DIR / f'map_{prefix}_p{pct}_{tag}.png'
+            fig = plot_circles_on_map(probe_result, circles_data, intersections,
+                                      f'{method_name} — {anchor_label} P{pct}',
+                                      output_path=out_path)
+            plt.close(fig)
+
+
+def _build_ms_circles(probe_data, anchor_coords):
+    """Build circle data for Million-Scale method."""
+    circles_data = []  # (lat, lon, radius_km) for plotting
+    circle_tuples = []  # (lat, lon, rtt, None, None) for intersection
+    for _, row in probe_data.iterrows():
+        anchor_ip = row['dst_ip']
+        rtt = row['min_rtt']
+        if rtt > 100 or anchor_ip not in anchor_coords:
+            continue
+        lat, lon = anchor_coords[anchor_ip]
+        radius_km = 100.0 * rtt
+        circles_data.append((lat, lon, radius_km))
+        circle_tuples.append((lat, lon, rtt, None, None))
+    return circles_data, circle_tuples
+
+
+def _build_lp_circles(probe_data, lp_models):
+    """Build circle data for Vanilla CBG (LP) method."""
+    circles_data = []
+    circle_tuples = []
+    for _, row in probe_data.iterrows():
+        anchor_ip = row['dst_ip']
+        rtt = row['min_rtt']
+        if anchor_ip not in lp_models:
+            continue
+        model = lp_models[anchor_ip]
+        if not model.fitted:
+            continue
+        d = model.predict_distance(rtt)
+        if d is None or d <= 0:
+            continue
+        r = d / 6371
+        circles_data.append((model.anchor_lat, model.anchor_lon, d))
+        circle_tuples.append((model.anchor_lat, model.anchor_lon, rtt, d, r))
+    return circles_data, circle_tuples
 
 
 def plot_rtt_distance_scatter(anchor_ip, df_anchor, lp_model, max_rtt_ms=150, output_path=None):
@@ -667,6 +858,20 @@ def main():
     area_cdf_path = OUTPUT_DIR / 'intersection_area_cdf.png'
     fig = plot_area_cdf(ms_all_areas, van_all_areas, output_path=area_cdf_path)
     plt.close(fig)
+
+    # Circle maps at P5, P50, P75 — anchored on Vanilla CBG percentiles
+    print("\n" + "=" * 60)
+    print("GENERATING CIRCLE MAP PLOTS (Vanilla P5, P50, P75)")
+    print("=" * 60)
+    plot_percentile_maps(ms_results, van_results, df_asn, lp_models,
+                         percentiles=(5, 50, 75), anchor_method='vanilla')
+
+    # Circle maps at P5, P50, P75 — anchored on Million-Scale percentiles
+    print("\n" + "=" * 60)
+    print("GENERATING CIRCLE MAP PLOTS (MS P5, P50, P75)")
+    print("=" * 60)
+    plot_percentile_maps(ms_results, van_results, df_asn, lp_models,
+                         percentiles=(5, 50, 75), anchor_method='million_scale')
 
     # Statistics
     print_statistics(ms_errors, van_errors)
