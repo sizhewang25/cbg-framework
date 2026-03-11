@@ -14,10 +14,12 @@ Produces:
 
 import sys
 import json
+import math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
+from scipy.spatial import ConvexHull
 
 # Add project root and cbg_feasibility to path (filter_demonstration.py uses relative imports)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -45,6 +47,21 @@ plt.rcParams['font.size'] = 11
 
 ASN = 7922
 OUTPUT_DIR = Path(__file__).resolve().parent / 'outputs' / 'comparison'
+
+
+def compute_intersection_area(points):
+    """Compute area (km²) of the convex hull of intersection points [(lat, lon), ...]."""
+    if len(points) < 3:
+        return 0.0
+    pts = np.array(points)  # shape (N, 2): lat, lon
+    try:
+        hull = ConvexHull(pts)
+    except Exception:
+        return 0.0
+    area_deg2 = hull.volume  # 2D ConvexHull: .volume = area
+    mid_lat = pts[:, 0].mean()
+    area_km2 = area_deg2 * 111.0 * (111.0 * math.cos(math.radians(mid_lat)))
+    return area_km2
 
 
 # =============================================================================
@@ -95,6 +112,7 @@ def run_million_scale_cbg(df_asn):
     probe_ips = df_asn['src_ip'].unique()
     results = []
     all_radii = []
+    all_areas = []
 
     for probe_ip in probe_ips:
         probe_data = df_asn[df_asn['src_ip'] == probe_ip]
@@ -124,11 +142,13 @@ def run_million_scale_cbg(df_asn):
                 'estimated_lat': None, 'estimated_lon': None,
                 'error_km': None, 'n_anchors': 0,
                 'method': 'million_scale_cbg', 'intersection': False,
-                'avg_radius_km': None
+                'avg_radius_km': None, 'intersection_area_km2': 0.0
             })
             continue
 
         intersections, circles_out = circle_intersections(circles, speed_threshold=2/3)
+        area_km2 = compute_intersection_area(intersections)
+        all_areas.append(area_km2)
 
         if len(intersections) > 2:
             centroid = polygon_centroid(intersections)
@@ -154,10 +174,11 @@ def run_million_scale_cbg(df_asn):
             'n_anchors': len(circles_out),
             'method': 'million_scale_cbg',
             'intersection': did_intersect,
-            'avg_radius_km': float(np.mean(radii_km))
+            'avg_radius_km': float(np.mean(radii_km)),
+            'intersection_area_km2': area_km2
         })
 
-    return results, np.array(all_radii)
+    return results, np.array(all_radii), np.array(all_areas)
 
 
 # =============================================================================
@@ -222,6 +243,7 @@ def run_vanilla_cbg(df_asn, lp_models):
     probe_ips = df_asn['src_ip'].unique()
     results = []
     all_radii = []
+    all_areas = []
 
     for probe_ip in probe_ips:
         probe_data = df_asn[df_asn['src_ip'] == probe_ip]
@@ -258,12 +280,15 @@ def run_vanilla_cbg(df_asn, lp_models):
                 'probe_ip': probe_ip, 'true_lat': true_lat, 'true_lon': true_lon,
                 'estimated_lat': None, 'estimated_lon': None,
                 'error_km': None, 'n_anchors': 0, 'method': 'vanilla_cbg',
-                'intersection': False, 'avg_radius_km': None
+                'intersection': False, 'avg_radius_km': None,
+                'intersection_area_km2': 0.0
             })
             continue
 
         # Use Million-Scale spherical intersection pipeline
         intersections, circles_out = circle_intersections(circles, speed_threshold=2/3)
+        area_km2 = compute_intersection_area(intersections)
+        all_areas.append(area_km2)
 
         if len(intersections) > 2:
             centroid = polygon_centroid(intersections)
@@ -291,10 +316,11 @@ def run_vanilla_cbg(df_asn, lp_models):
             'n_anchors': len(circles_out),
             'method': 'vanilla_cbg',
             'intersection': did_intersect,
-            'avg_radius_km': float(np.mean(radii_km))
+            'avg_radius_km': float(np.mean(radii_km)),
+            'intersection_area_km2': area_km2
         })
 
-    return results, np.array(all_radii)
+    return results, np.array(all_radii), np.array(all_areas)
 
 
 # =============================================================================
@@ -387,6 +413,85 @@ def plot_radius_cdf(ms_radii, van_radii, output_path=None):
     ax.legend(loc='lower right', fontsize=10)
     ax.grid(True, alpha=0.3)
     ax.set_ylim(0, 1)
+
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        print(f"Saved: {output_path}")
+
+    return fig
+
+
+def plot_area_cdf(ms_areas, van_areas, output_path=None):
+    """Plot CDF of intersection areas (km²) for both methods, with zoomed inset."""
+    from matplotlib.ticker import FuncFormatter
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    # Convert to million km² for readability (US ≈ 9.8 million km²)
+    scale = 1e6
+    unit = 'million km²'
+
+    series_data = []
+    # Only include probes with area > 0 (successful polygon intersection)
+    for areas, label, color in [
+        (van_areas, 'Vanilla CBG (LP)', 'black'),
+        (ms_areas, 'Million-Scale CBG (2/3c)', 'blue'),
+    ]:
+        valid = areas[areas > 0]
+        sorted_a = np.sort(valid) / scale
+        cdf = np.arange(1, len(sorted_a) + 1) / len(sorted_a)
+        median = np.median(valid) / scale
+        ax.plot(sorted_a, cdf, color=color, linewidth=2,
+                label=f'{label}\n  Median: {median:,.1f} {unit}, N={len(valid)}')
+        series_data.append((sorted_a, cdf, color))
+
+    ax.hlines(y=0.5, xmin=0, xmax=ax.get_xlim()[1], color='gray', linestyle='--', alpha=0.5)
+    ax.set_xlabel(f'Intersection Area ({unit})', fontsize=12)
+    ax.set_ylabel('CDF', fontsize=12)
+    ax.set_title(f'CBG Intersection Area CDF — AS{ASN}', fontsize=14, fontweight='bold')
+    ax.legend(loc='upper right', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(0)
+    ax.set_ylim(0, 1)
+
+    # Inset: zoom into area <= 20 million km²
+    inset_limit = 20.0  # 20 million km²
+
+    # Inset position in axes fraction: [left, bottom, width, height]
+    inset_pos = [0.42, 0.35, 0.35, 0.35]
+    ax_inset = ax.inset_axes(inset_pos)
+    for sorted_a, cdf, color in series_data:
+        mask = sorted_a <= inset_limit
+        if mask.any():
+            ax_inset.plot(sorted_a[mask], cdf[mask], color=color, linewidth=2)
+    ax_inset.set_xlim(0, inset_limit)
+    ax_inset.set_ylim(0, 1)
+    ax_inset.set_xlabel(f'Area ({unit})', fontsize=8)
+    ax_inset.set_ylabel('CDF', fontsize=8)
+    ax_inset.set_title(f'Area ≤ {inset_limit:.0f} {unit}', fontsize=9)
+    ax_inset.tick_params(labelsize=8)
+    ax_inset.grid(True, alpha=0.3)
+
+    # Draw zoom indicator rectangle on main plot and dashed connector lines
+    from matplotlib.patches import Rectangle, ConnectionPatch
+    # Indicator box in data coords on main axes
+    rect = Rectangle((0, 0), inset_limit, 1.0, linewidth=1.2,
+                      edgecolor='gray', facecolor='lightgray', alpha=0.2,
+                      linestyle='-', zorder=0)
+    ax.add_patch(rect)
+    # Connector lines: top-right of indicator box → top-left of inset,
+    #                  bottom-right of indicator box → bottom-left of inset
+    for (xy_main, xy_inset) in [
+        ((inset_limit, 1.0), (0, 1)),   # top corners
+        ((inset_limit, 0.0), (0, 0)),   # bottom corners
+    ]:
+        con = ConnectionPatch(
+            xyA=xy_main, coordsA=ax.transData,
+            xyB=xy_inset, coordsB=ax_inset.transAxes,
+            color='gray', linestyle='--', linewidth=1.0, alpha=0.7)
+        fig.add_artist(con)
 
     plt.tight_layout()
 
@@ -507,7 +612,7 @@ def main():
     print("\n" + "=" * 60)
     print("RUNNING VANILLA CBG")
     print("=" * 60)
-    van_results, van_all_radii = run_vanilla_cbg(df_asn, lp_models)
+    van_results, van_all_radii, van_all_areas = run_vanilla_cbg(df_asn, lp_models)
     van_success = [r for r in van_results if r['error_km'] is not None]
     van_errors = np.array([r['error_km'] for r in van_success])
     van_intersected = sum(1 for r in van_results if r['intersection'])
@@ -515,12 +620,14 @@ def main():
     print(f"  Intersection succeeded: {van_intersected}/{len(van_results)} probes")
     print(f"  Median error: {np.median(van_errors):.1f} km")
     print(f"  Circle radii: N={len(van_all_radii)}, mean={np.mean(van_all_radii):.1f} km, median={np.median(van_all_radii):.1f} km")
+    van_valid_areas = van_all_areas[van_all_areas > 0]
+    print(f"  Intersection areas: N={len(van_valid_areas)}, median={np.median(van_valid_areas):,.0f} km²")
 
     # Run Million-Scale CBG (2/3c + Spherical)
     print("\n" + "=" * 60)
     print("RUNNING MILLION-SCALE CBG")
     print("=" * 60)
-    ms_results, ms_all_radii = run_million_scale_cbg(df_asn)
+    ms_results, ms_all_radii, ms_all_areas = run_million_scale_cbg(df_asn)
     ms_success = [r for r in ms_results if r['error_km'] is not None]
     ms_errors = np.array([r['error_km'] for r in ms_success])
     ms_intersected = sum(1 for r in ms_results if r['intersection'])
@@ -528,6 +635,8 @@ def main():
     print(f"  Intersection succeeded: {ms_intersected}/{len(ms_results)} probes")
     print(f"  Median error: {np.median(ms_errors):.1f} km")
     print(f"  Circle radii: N={len(ms_all_radii)}, mean={np.mean(ms_all_radii):.1f} km, median={np.median(ms_all_radii):.1f} km")
+    ms_valid_areas = ms_all_areas[ms_all_areas > 0]
+    print(f"  Intersection areas: N={len(ms_valid_areas)}, median={np.median(ms_valid_areas):,.0f} km²")
 
     # Per-anchor RTT-distance scatter
     print("\n" + "=" * 60)
@@ -552,6 +661,11 @@ def main():
     # Circle Radius CDF
     radius_cdf_path = OUTPUT_DIR / 'radius_cdf_comparison.png'
     fig = plot_radius_cdf(ms_all_radii, van_all_radii, output_path=radius_cdf_path)
+    plt.close(fig)
+
+    # Intersection Area CDF
+    area_cdf_path = OUTPUT_DIR / 'intersection_area_cdf.png'
+    fig = plot_area_cdf(ms_all_areas, van_all_areas, output_path=area_cdf_path)
     plt.close(fig)
 
     # Statistics
