@@ -1,14 +1,13 @@
 """
 Compare CBG multilateration methods on Vultr US dataset.
 
-Three variants:
-1. Million-Scale CBG: Theoretical 2/3c model + spherical circle intersection
-2. Calibrated CBG: LP bestline model + Shapely polygon intersection
-3. Vanilla CBG: LP bestline model + spherical circle intersection
-   (isolates the impact of multilateration geometry from RTT-distance modeling)
+Two variants:
+1. Million-Scale CBG: Theoretical 2/3c model + spherical circle intersection + closest-VP fallback
+2. Vanilla CBG: LP bestline model + spherical circle intersection + closest-VP fallback
+   (isolates the impact of the RTT-distance model from intersection geometry)
 
 Produces:
-  - Comparative Error CDF plot (3 lines)
+  - Comparative Error CDF plot (2 lines)
   - Per-anchor RTT-distance scatter plots with both model lines
   - Statistics table
 """
@@ -38,11 +37,6 @@ from scripts.analysis.cbg_feasibility.rtt_model import (
     haversine_distance,
     THEORETICAL_SLOPE,
     fit_bestline_lp,
-)
-from scripts.analysis.cbg_feasibility.filter_demonstration import (
-    evaluate_cbg_probe,
-    find_circles_intersection,
-    estimate_location_fallback,
 )
 
 # Plot style
@@ -155,7 +149,7 @@ def run_million_scale_cbg(df_asn):
 
 
 # =============================================================================
-# Calibrated CBG Evaluation (LP + Shapely)
+# LP Model Fitting
 # =============================================================================
 
 def fit_lp_models(df_asn):
@@ -195,27 +189,6 @@ def fit_lp_models(df_asn):
         print(f"  LP model {anchor_ip}: {status}")
 
     return models
-
-
-def run_cbg_multilateration(df, df_asn, models):
-    """
-    Run Calibrated CBG Multilateration using evaluate_cbg_probe().
-
-    This uses the existing code path from filter_demonstration.py:
-    - RTT → distance via LP bestline inversion
-    - Shapely polygon intersection
-    - Weighted average fallback
-    """
-    probe_ips = df_asn['src_ip'].unique()
-    results = []
-
-    for probe_ip in probe_ips:
-        probe_data = df_asn[df_asn['src_ip'] == probe_ip]
-        result = evaluate_cbg_probe(probe_ip, probe_data, models)
-        result['method'] = 'calibrated_cbg'
-        results.append(result)
-
-    return results
 
 
 # =============================================================================
@@ -305,17 +278,16 @@ def run_vanilla_cbg(df_asn, lp_models):
 # Plotting
 # =============================================================================
 
-def plot_error_cdf_comparison(ms_errors, cal_errors, vanilla_errors=None, output_path=None):
-    """Plot comparative Error CDF for all methods."""
+def plot_error_cdf_comparison(ms_errors, vanilla_errors, output_path=None):
+    """Plot comparative Error CDF for both methods."""
     fig, ax = plt.subplots(figsize=(12, 8))
 
     all_series = [
         (vanilla_errors, 'Vanilla CBG', 'black', '-'),
         (ms_errors, 'Million-Scale CBG', 'blue', '-'),
-        (cal_errors, 'Calibrated CBG', 'green', '-'),
     ]
 
-    all_errors_list = [vanilla_errors, ms_errors, cal_errors]
+    all_errors_list = [vanilla_errors, ms_errors]
 
     for errors, label, color, ls in all_series:
         sorted_e = np.sort(errors)
@@ -327,7 +299,7 @@ def plot_error_cdf_comparison(ms_errors, cal_errors, vanilla_errors=None, output
     # Threshold lines
     for thresh, color in [(100, 'green'), (500, 'orange'), (1000, 'red')]:
         parts = []
-        for errors, name in zip(all_errors_list, ['MS', 'Cal', 'Van']):
+        for errors, name in zip(all_errors_list, ['Van', 'MS']):
             parts.append(f'{name}={np.mean(errors <= thresh) * 100:.1f}%')
         ax.axvline(x=thresh, color=color, linestyle='--', alpha=0.5,
                    label=f'{thresh} km: {", ".join(parts)}')
@@ -355,7 +327,6 @@ def plot_error_cdf_comparison(ms_errors, cal_errors, vanilla_errors=None, output
     blocks = [
         _stats_block('Vanilla', vanilla_errors),
         _stats_block('Million-Scale', ms_errors),
-        _stats_block('Calibrated', cal_errors),
     ]
     stats = '\n\n'.join(blocks)
 
@@ -416,16 +387,14 @@ def plot_rtt_distance_scatter(anchor_ip, df_anchor, lp_model, max_rtt_ms=150, ou
     return fig
 
 
-def print_statistics(ms_errors, cal_errors, vanilla_errors=None):
+def print_statistics(ms_errors, vanilla_errors):
     """Print comparison statistics table."""
-    w = 90 if vanilla_errors is not None else 70
+    w = 70
     print("\n" + "=" * w)
     print("CBG MULTILATERATION COMPARISON — STATISTICS")
     print("=" * w)
 
-    cols = [('Million-Scale', ms_errors), ('Calibrated', cal_errors)]
-    if vanilla_errors is not None:
-        cols.append(('Vanilla', vanilla_errors))
+    cols = [('Million-Scale', ms_errors), ('Vanilla', vanilla_errors)]
 
     header = f"{'Metric':<25}" + "".join(f" {name:>20}" for name, _ in cols)
     print(header)
@@ -500,17 +469,7 @@ def main():
     print(f"  Successful: {len(ms_success)}/{len(ms_results)} probes")
     print(f"  Median error: {np.median(ms_errors):.1f} km")
 
-    # Run Calibrated CBG (LP + Inverse-Radius Weighted Average)
-    print("\n" + "=" * 60)
-    print("RUNNING CALIBRATED CBG")
-    print("=" * 60)
-    cal_results = run_cbg_multilateration(df, df_asn, lp_models)
-    cal_success = [r for r in cal_results if r['error_km'] is not None]
-    cal_errors = np.array([r['error_km'] for r in cal_success])
-    print(f"  Successful: {len(cal_success)}/{len(cal_results)} probes")
-    print(f"  Median error: {np.median(cal_errors):.1f} km")
-
-    # Step 6: Per-anchor RTT-distance scatter
+    # Per-anchor RTT-distance scatter
     print("\n" + "=" * 60)
     print("GENERATING RTT-DISTANCE SCATTER PLOTS")
     print("=" * 60)
@@ -522,16 +481,16 @@ def main():
         fig = plot_rtt_distance_scatter(anchor_ip, df_anchor, lp_model, output_path=output_path)
         plt.close(fig)
 
-    # Step 5: Comparative Error CDF
+    # Comparative Error CDF
     print("\n" + "=" * 60)
     print("GENERATING ERROR CDF COMPARISON")
     print("=" * 60)
     cdf_path = OUTPUT_DIR / 'error_cdf_comparison.png'
-    fig = plot_error_cdf_comparison(ms_errors, cal_errors, van_errors, output_path=cdf_path)
+    fig = plot_error_cdf_comparison(ms_errors, van_errors, output_path=cdf_path)
     plt.close(fig)
 
-    # Step 6: Statistics
-    print_statistics(ms_errors, cal_errors, van_errors)
+    # Statistics
+    print_statistics(ms_errors, van_errors)
 
     # Save results JSON
     results_json = {
@@ -543,14 +502,6 @@ def main():
             'mean_km': float(np.mean(ms_errors)),
             'p75_km': float(np.percentile(ms_errors, 75)),
             'p90_km': float(np.percentile(ms_errors, 90)),
-        },
-        'calibrated_cbg': {
-            'total_probes': len(cal_results),
-            'successful': len(cal_success),
-            'median_km': float(np.median(cal_errors)),
-            'mean_km': float(np.mean(cal_errors)),
-            'p75_km': float(np.percentile(cal_errors, 75)),
-            'p90_km': float(np.percentile(cal_errors, 90)),
         },
         'vanilla_cbg': {
             'total_probes': len(van_results),
