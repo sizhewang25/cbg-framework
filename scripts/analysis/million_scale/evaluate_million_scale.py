@@ -1,14 +1,14 @@
 """
-Compare Million-Scale CBG vs Vanilla CBG on Vultr US dataset.
+Compare CBG multilateration methods on Vultr US dataset.
 
-Million-Scale CBG: Theoretical 2/3c model with spherical circle intersection
-  (from IMC 2012 paper replication, scripts/utils/helpers.py)
-
-Vanilla CBG: LP bestline model with Shapely polygon intersection
-  (from filter_demonstration.py, scripts/analysis/cbg_feasibility/rtt_model.py)
+Three variants:
+1. Million-Scale CBG: Theoretical 2/3c model + spherical circle intersection
+2. Calibrated CBG: LP bestline model + Shapely polygon intersection
+3. Vanilla CBG: LP bestline model + spherical circle intersection
+   (isolates the impact of multilateration geometry from RTT-distance modeling)
 
 Produces:
-  - Comparative Error CDF plot
+  - Comparative Error CDF plot (3 lines)
   - Per-anchor RTT-distance scatter plots with both model lines
   - Statistics table
 """
@@ -29,6 +29,9 @@ sys.path.insert(0, str(CBG_DIR))
 from scripts.utils.helpers import (
     select_best_guess_centroid,
     haversine,
+    circle_intersections,
+    polygon_centroid,
+    get_middle_intersection,
 )
 from scripts.analysis.cbg_feasibility.rtt_model import (
     RTTDistanceModel,
@@ -152,7 +155,7 @@ def run_million_scale_cbg(df_asn):
 
 
 # =============================================================================
-# Vanilla CBG Evaluation
+# Calibrated CBG Evaluation (LP + Shapely)
 # =============================================================================
 
 def fit_lp_models(df_asn):
@@ -196,7 +199,7 @@ def fit_lp_models(df_asn):
 
 def run_cbg_multilateration(df, df_asn, models):
     """
-    Run Vanilla CBG Multilateration using evaluate_cbg_probe().
+    Run Calibrated CBG Multilateration using evaluate_cbg_probe().
 
     This uses the existing code path from filter_demonstration.py:
     - RTT → distance via LP bestline inversion
@@ -209,8 +212,91 @@ def run_cbg_multilateration(df, df_asn, models):
     for probe_ip in probe_ips:
         probe_data = df_asn[df_asn['src_ip'] == probe_ip]
         result = evaluate_cbg_probe(probe_ip, probe_data, models)
-        result['method'] = 'vanilla_cbg'
+        result['method'] = 'calibrated_cbg'
         results.append(result)
+
+    return results
+
+
+# =============================================================================
+# Vanilla CBG Evaluation (LP model + Million-Scale multilateration)
+# =============================================================================
+
+def run_vanilla_cbg(df_asn, lp_models):
+    """
+    Run Vanilla CBG: LP bestline RTT→distance + Million-Scale spherical multilateration.
+
+    This isolates the impact of the RTT-distance model by using:
+    - RTT → distance via LP bestline inversion (per-anchor calibrated)
+    - Spherical circle intersection (from helpers.py)
+    - Polygon centroid / closest-VP fallback (from helpers.py)
+
+    Pre-fills (lat, lon, rtt, d, r) tuples so circle_preprocessing() skips
+    its own rtt_to_km(speed_threshold=2/3) conversion.
+    """
+    probe_ips = df_asn['src_ip'].unique()
+    results = []
+
+    for probe_ip in probe_ips:
+        probe_data = df_asn[df_asn['src_ip'] == probe_ip]
+        true_lat = probe_data['probe_latitude'].iloc[0]
+        true_lon = probe_data['probe_longitude'].iloc[0]
+
+        circles = []
+        min_rtt_per_vp_ip = {}
+
+        for _, row in probe_data.iterrows():
+            anchor_ip = row['dst_ip']
+            rtt = row['min_rtt']
+
+            if anchor_ip not in lp_models:
+                continue
+            model = lp_models[anchor_ip]
+            if not model.fitted:
+                continue
+
+            d = model.predict_distance(rtt)
+            if d is None or d <= 0:
+                continue
+
+            min_rtt_per_vp_ip[anchor_ip] = rtt
+            r = d / 6371  # radians
+            circles.append((model.anchor_lat, model.anchor_lon, rtt, d, r))
+
+        if not circles:
+            results.append({
+                'probe_ip': probe_ip, 'true_lat': true_lat, 'true_lon': true_lon,
+                'estimated_lat': None, 'estimated_lon': None,
+                'error_km': None, 'n_anchors': 0, 'method': 'vanilla_cbg'
+            })
+            continue
+
+        # Use Million-Scale spherical intersection pipeline
+        intersections, circles_out = circle_intersections(circles, speed_threshold=2/3)
+
+        if len(intersections) > 2:
+            centroid = polygon_centroid(intersections)
+        elif len(intersections) == 2:
+            centroid = get_middle_intersection(intersections)
+        else:
+            # Fallback: closest anchor by min RTT
+            closest_vp, _ = min(min_rtt_per_vp_ip.items(), key=lambda x: x[1])
+            model = lp_models[closest_vp]
+            centroid = (model.anchor_lat, model.anchor_lon)
+
+        est_lat, est_lon = centroid
+        error_km = haversine((est_lat, est_lon), (true_lat, true_lon))
+
+        results.append({
+            'probe_ip': probe_ip,
+            'true_lat': true_lat,
+            'true_lon': true_lon,
+            'estimated_lat': float(est_lat),
+            'estimated_lon': float(est_lon),
+            'error_km': float(error_km),
+            'n_anchors': len(circles_out),
+            'method': 'vanilla_cbg'
+        })
 
     return results
 
@@ -219,14 +305,19 @@ def run_cbg_multilateration(df, df_asn, models):
 # Plotting
 # =============================================================================
 
-def plot_error_cdf_comparison(ms_errors, cal_errors, output_path=None):
-    """Plot comparative Error CDF for both methods."""
+def plot_error_cdf_comparison(ms_errors, cal_errors, vanilla_errors=None, output_path=None):
+    """Plot comparative Error CDF for all methods."""
     fig, ax = plt.subplots(figsize=(12, 8))
 
-    for errors, label, color, ls in [
-        (ms_errors, 'Million-Scale CBG (2/3c + Spherical)', 'blue', '-'),
-        (cal_errors, 'Vanilla CBG (LP + Shapely)', 'green', '-'),
-    ]:
+    all_series = [
+        (vanilla_errors, 'Vanilla CBG', 'black', '-'),
+        (ms_errors, 'Million-Scale CBG', 'blue', '-'),
+        (cal_errors, 'Calibrated CBG', 'green', '-'),
+    ]
+
+    all_errors_list = [vanilla_errors, ms_errors, cal_errors]
+
+    for errors, label, color, ls in all_series:
         sorted_e = np.sort(errors)
         cdf = np.arange(1, len(sorted_e) + 1) / len(sorted_e)
         median = np.median(errors)
@@ -235,10 +326,11 @@ def plot_error_cdf_comparison(ms_errors, cal_errors, output_path=None):
 
     # Threshold lines
     for thresh, color in [(100, 'green'), (500, 'orange'), (1000, 'red')]:
-        ms_pct = np.mean(ms_errors <= thresh) * 100
-        cal_pct = np.mean(cal_errors <= thresh) * 100
+        parts = []
+        for errors, name in zip(all_errors_list, ['MS', 'Cal', 'Van']):
+            parts.append(f'{name}={np.mean(errors <= thresh) * 100:.1f}%')
         ax.axvline(x=thresh, color=color, linestyle='--', alpha=0.5,
-                   label=f'{thresh} km: MS={ms_pct:.1f}%, Cal={cal_pct:.1f}%')
+                   label=f'{thresh} km: {", ".join(parts)}')
 
     ax.hlines(y=0.5, xmin=0, xmax=3000, color='gray', linestyle='--', alpha=0.5)
     ax.set_xlabel('Error Distance (km)', fontsize=12)
@@ -246,22 +338,27 @@ def plot_error_cdf_comparison(ms_errors, cal_errors, output_path=None):
     ax.set_title(f'CBG Geolocation Error CDF Comparison — AS{ASN}', fontsize=14, fontweight='bold')
     ax.legend(loc='upper right', bbox_to_anchor=(1, 0.9), fontsize=9)
     ax.grid(True, alpha=0.3)
-    ax.set_xlim(0, min(max(ms_errors.max(), cal_errors.max()) * 1.05, 3000))
+    max_err = max(e.max() for e in all_errors_list)
+    ax.set_xlim(0, min(max_err * 1.05, 3000))
     ax.set_ylim(0, 1)
 
     # Statistics text box
-    stats = (
-        f"Million-Scale CBG:\n"
-        f"  Median: {np.median(ms_errors):.0f} km\n"
-        f"  Mean: {np.mean(ms_errors):.0f} km\n"
-        f"  75th: {np.percentile(ms_errors, 75):.0f} km\n"
-        f"  90th: {np.percentile(ms_errors, 90):.0f} km\n\n"
-        f"Vanilla CBG:\n"
-        f"  Median: {np.median(cal_errors):.0f} km\n"
-        f"  Mean: {np.mean(cal_errors):.0f} km\n"
-        f"  75th: {np.percentile(cal_errors, 75):.0f} km\n"
-        f"  90th: {np.percentile(cal_errors, 90):.0f} km"
-    )
+    def _stats_block(name, errors):
+        return (
+            f"{name}:\n"
+            f"  Median: {np.median(errors):.0f} km\n"
+            f"  Mean: {np.mean(errors):.0f} km\n"
+            f"  75th: {np.percentile(errors, 75):.0f} km\n"
+            f"  90th: {np.percentile(errors, 90):.0f} km"
+        )
+
+    blocks = [
+        _stats_block('Vanilla', vanilla_errors),
+        _stats_block('Million-Scale', ms_errors),
+        _stats_block('Calibrated', cal_errors),
+    ]
+    stats = '\n\n'.join(blocks)
+
     ax.text(0.98, 0.02, stats, transform=ax.transAxes,
             fontsize=9, verticalalignment='bottom', horizontalalignment='right',
             bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
@@ -319,40 +416,49 @@ def plot_rtt_distance_scatter(anchor_ip, df_anchor, lp_model, max_rtt_ms=150, ou
     return fig
 
 
-def print_statistics(ms_errors, cal_errors):
+def print_statistics(ms_errors, cal_errors, vanilla_errors=None):
     """Print comparison statistics table."""
-    print("\n" + "=" * 70)
+    w = 90 if vanilla_errors is not None else 70
+    print("\n" + "=" * w)
     print("CBG MULTILATERATION COMPARISON — STATISTICS")
-    print("=" * 70)
+    print("=" * w)
 
-    header = f"{'Metric':<25} {'Million-Scale CBG':>20} {'Vanilla CBG':>20}"
+    cols = [('Million-Scale', ms_errors), ('Calibrated', cal_errors)]
+    if vanilla_errors is not None:
+        cols.append(('Vanilla', vanilla_errors))
+
+    header = f"{'Metric':<25}" + "".join(f" {name:>20}" for name, _ in cols)
     print(header)
-    print("-" * 70)
+    print("-" * w)
 
-    rows = [
-        ('N (probes)', f"{len(ms_errors)}", f"{len(cal_errors)}"),
-        ('Median (km)', f"{np.median(ms_errors):.1f}", f"{np.median(cal_errors):.1f}"),
-        ('Mean (km)', f"{np.mean(ms_errors):.1f}", f"{np.mean(cal_errors):.1f}"),
-        ('Std (km)', f"{np.std(ms_errors):.1f}", f"{np.std(cal_errors):.1f}"),
-        ('Min (km)', f"{np.min(ms_errors):.1f}", f"{np.min(cal_errors):.1f}"),
-        ('Max (km)', f"{np.max(ms_errors):.1f}", f"{np.max(cal_errors):.1f}"),
-        ('25th pct (km)', f"{np.percentile(ms_errors, 25):.1f}", f"{np.percentile(cal_errors, 25):.1f}"),
-        ('75th pct (km)', f"{np.percentile(ms_errors, 75):.1f}", f"{np.percentile(cal_errors, 75):.1f}"),
-        ('90th pct (km)', f"{np.percentile(ms_errors, 90):.1f}", f"{np.percentile(cal_errors, 90):.1f}"),
-        ('95th pct (km)', f"{np.percentile(ms_errors, 95):.1f}", f"{np.percentile(cal_errors, 95):.1f}"),
+    metrics = [
+        ('N (probes)', lambda e: f"{len(e)}"),
+        ('Median (km)', lambda e: f"{np.median(e):.1f}"),
+        ('Mean (km)', lambda e: f"{np.mean(e):.1f}"),
+        ('Std (km)', lambda e: f"{np.std(e):.1f}"),
+        ('Min (km)', lambda e: f"{np.min(e):.1f}"),
+        ('Max (km)', lambda e: f"{np.max(e):.1f}"),
+        ('25th pct (km)', lambda e: f"{np.percentile(e, 25):.1f}"),
+        ('75th pct (km)', lambda e: f"{np.percentile(e, 75):.1f}"),
+        ('90th pct (km)', lambda e: f"{np.percentile(e, 90):.1f}"),
+        ('95th pct (km)', lambda e: f"{np.percentile(e, 95):.1f}"),
     ]
-    for label, ms_val, cal_val in rows:
-        print(f"{label:<25} {ms_val:>20} {cal_val:>20}")
+    for label, fn in metrics:
+        row = f"{label:<25}" + "".join(f" {fn(e):>20}" for _, e in cols)
+        print(row)
 
     print()
-    print(f"{'Accuracy Thresholds':<25} {'Million-Scale CBG':>20} {'Vanilla CBG':>20}")
-    print("-" * 70)
+    header2 = f"{'Accuracy Thresholds':<25}" + "".join(f" {name:>20}" for name, _ in cols)
+    print(header2)
+    print("-" * w)
     for thresh in [50, 100, 250, 500, 1000]:
-        ms_pct = np.mean(ms_errors <= thresh) * 100
-        cal_pct = np.mean(cal_errors <= thresh) * 100
-        print(f"  Within {thresh:4d} km         {ms_pct:>19.1f}% {cal_pct:>19.1f}%")
+        row = f"  Within {thresh:4d} km        "
+        for _, e in cols:
+            pct = np.mean(e <= thresh) * 100
+            row += f" {pct:>19.1f}%"
+        print(row)
 
-    print("=" * 70)
+    print("=" * w)
 
 
 # =============================================================================
@@ -368,7 +474,23 @@ def main():
     print("=" * 60)
     df, df_asn = load_data()
 
-    # Step 2: Run Million-Scale CBG
+    # Fit LP models
+    print("\n" + "=" * 60)
+    print("FITTING LP MODELS")
+    print("=" * 60)
+    lp_models = fit_lp_models(df_asn)
+
+    # Run Vanilla CBG (LP + Spherical)
+    print("\n" + "=" * 60)
+    print("RUNNING VANILLA CBG")
+    print("=" * 60)
+    van_results = run_vanilla_cbg(df_asn, lp_models)
+    van_success = [r for r in van_results if r['error_km'] is not None]
+    van_errors = np.array([r['error_km'] for r in van_success])
+    print(f"  Successful: {len(van_success)}/{len(van_results)} probes")
+    print(f"  Median error: {np.median(van_errors):.1f} km")
+
+    # Run Million-Scale CBG (2/3c + Spherical)
     print("\n" + "=" * 60)
     print("RUNNING MILLION-SCALE CBG")
     print("=" * 60)
@@ -378,18 +500,17 @@ def main():
     print(f"  Successful: {len(ms_success)}/{len(ms_results)} probes")
     print(f"  Median error: {np.median(ms_errors):.1f} km")
 
-    # Step 3: Fit LP models and run Vanilla CBG
+    # Run Calibrated CBG (LP + Inverse-Radius Weighted Average)
     print("\n" + "=" * 60)
-    print("FITTING LP MODELS & RUNNING Vanilla CBG")
+    print("RUNNING CALIBRATED CBG")
     print("=" * 60)
-    lp_models = fit_lp_models(df_asn)
     cal_results = run_cbg_multilateration(df, df_asn, lp_models)
     cal_success = [r for r in cal_results if r['error_km'] is not None]
     cal_errors = np.array([r['error_km'] for r in cal_success])
     print(f"  Successful: {len(cal_success)}/{len(cal_results)} probes")
     print(f"  Median error: {np.median(cal_errors):.1f} km")
 
-    # Step 4: Per-anchor RTT-distance scatter
+    # Step 6: Per-anchor RTT-distance scatter
     print("\n" + "=" * 60)
     print("GENERATING RTT-DISTANCE SCATTER PLOTS")
     print("=" * 60)
@@ -406,11 +527,11 @@ def main():
     print("GENERATING ERROR CDF COMPARISON")
     print("=" * 60)
     cdf_path = OUTPUT_DIR / 'error_cdf_comparison.png'
-    fig = plot_error_cdf_comparison(ms_errors, cal_errors, output_path=cdf_path)
+    fig = plot_error_cdf_comparison(ms_errors, cal_errors, van_errors, output_path=cdf_path)
     plt.close(fig)
 
     # Step 6: Statistics
-    print_statistics(ms_errors, cal_errors)
+    print_statistics(ms_errors, cal_errors, van_errors)
 
     # Save results JSON
     results_json = {
@@ -423,13 +544,21 @@ def main():
             'p75_km': float(np.percentile(ms_errors, 75)),
             'p90_km': float(np.percentile(ms_errors, 90)),
         },
-        'vanilla_cbg': {
+        'calibrated_cbg': {
             'total_probes': len(cal_results),
             'successful': len(cal_success),
             'median_km': float(np.median(cal_errors)),
             'mean_km': float(np.mean(cal_errors)),
             'p75_km': float(np.percentile(cal_errors, 75)),
             'p90_km': float(np.percentile(cal_errors, 90)),
+        },
+        'vanilla_cbg': {
+            'total_probes': len(van_results),
+            'successful': len(van_success),
+            'median_km': float(np.median(van_errors)),
+            'mean_km': float(np.mean(van_errors)),
+            'p75_km': float(np.percentile(van_errors, 75)),
+            'p90_km': float(np.percentile(van_errors, 90)),
         },
     }
     json_path = OUTPUT_DIR / 'comparison_results.json'
