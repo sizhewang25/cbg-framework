@@ -19,7 +19,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
-from scipy.spatial import ConvexHull
+from functools import reduce
+from shapely.geometry import Polygon as ShapelyPolygon, MultiPolygon
 
 # Add project root and cbg_feasibility to path (filter_demonstration.py uses relative imports)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -49,19 +50,38 @@ ASN = 7922
 OUTPUT_DIR = Path(__file__).resolve().parent / 'outputs' / 'comparison'
 
 
-def compute_intersection_area(points):
-    """Compute area (km²) of the convex hull of intersection points [(lat, lon), ...]."""
-    if len(points) < 3:
+def _circle_to_shapely_polygon(clat, clon, radius_km, n_pts=100):
+    """Convert a circle (center lat/lon, radius km) to a Shapely polygon in lon/lat space."""
+    angles = np.linspace(0, 2 * np.pi, n_pts)
+    r_deg_lat = radius_km / 111.0
+    r_deg_lon = radius_km / (111.0 * math.cos(math.radians(clat)))
+    lons = clon + r_deg_lon * np.cos(angles)
+    lats = clat + r_deg_lat * np.sin(angles)
+    return ShapelyPolygon(zip(lons, lats))  # Shapely uses (x, y) = (lon, lat)
+
+
+def compute_intersection_area(circles_data):
+    """Compute area (km²) of the intersection of circles [(lat, lon, radius_km), ...]."""
+    if len(circles_data) < 2:
         return 0.0
-    pts = np.array(points)  # shape (N, 2): lat, lon
     try:
-        hull = ConvexHull(pts)
+        shapely_circles = [
+            _circle_to_shapely_polygon(clat, clon, radius_km)
+            for clat, clon, radius_km in circles_data
+        ]
+        shapely_circles = [p for p in shapely_circles if p.is_valid and not p.is_empty]
+        if len(shapely_circles) < 2:
+            return 0.0
+        intersection_poly = reduce(lambda a, b: a.intersection(b), shapely_circles)
+        if intersection_poly.is_empty or intersection_poly.geom_type not in ('Polygon', 'MultiPolygon'):
+            return 0.0
+        area_deg2 = intersection_poly.area
+        minx, miny, maxx, maxy = intersection_poly.bounds
+        mid_lat = (miny + maxy) / 2  # bounds: (minlon, minlat, maxlon, maxlat)
+        area_km2 = area_deg2 * 111.0 * (111.0 * math.cos(math.radians(mid_lat)))
+        return area_km2
     except Exception:
         return 0.0
-    area_deg2 = hull.volume  # 2D ConvexHull: .volume = area
-    mid_lat = pts[:, 0].mean()
-    area_km2 = area_deg2 * 111.0 * (111.0 * math.cos(math.radians(mid_lat)))
-    return area_km2
 
 
 # =============================================================================
@@ -147,7 +167,8 @@ def run_million_scale_cbg(df_asn):
             continue
 
         intersections, circles_out = circle_intersections(circles, speed_threshold=2/3)
-        area_km2 = compute_intersection_area(intersections)
+        circles_data_for_area = [(lat, lon, 100.0 * rtt) for lat, lon, rtt, _, _ in circles_out]
+        area_km2 = compute_intersection_area(circles_data_for_area)
         all_areas.append(area_km2)
 
         if len(intersections) > 2:
@@ -287,7 +308,8 @@ def run_vanilla_cbg(df_asn, lp_models):
 
         # Use Million-Scale spherical intersection pipeline
         intersections, circles_out = circle_intersections(circles, speed_threshold=2/3)
-        area_km2 = compute_intersection_area(intersections)
+        circles_data_for_area = [(lat, lon, d) for lat, lon, _, d, _ in circles_out]
+        area_km2 = compute_intersection_area(circles_data_for_area)
         all_areas.append(area_km2)
 
         if len(intersections) > 2:
@@ -548,17 +570,29 @@ def plot_circles_on_map(probe_result, circles_data, intersections, method_label,
                 transform=ccrs.PlateCarree(), zorder=5,
                 label=f'VP ({clat:.1f}, {clon:.1f}) r={radius_km:.0f}km')
 
-    # Intersection polygon
-    if len(intersections) >= 3:
-        pts = np.array(intersections)
+    # Intersection polygon via Shapely
+    if len(circles_data) >= 2:
         try:
-            hull = ConvexHull(pts)
-            hull_pts = pts[hull.vertices]
-            hull_pts = np.vstack([hull_pts, hull_pts[0]])  # close polygon
-            ax.fill(hull_pts[:, 1], hull_pts[:, 0], color='yellow', alpha=0.4,
-                    transform=ccrs.PlateCarree(), zorder=3, label='Intersection region')
-            ax.plot(hull_pts[:, 1], hull_pts[:, 0], color='orange', linewidth=2,
-                    transform=ccrs.PlateCarree(), zorder=4)
+            shapely_circles = [
+                _circle_to_shapely_polygon(clat, clon, radius_km)
+                for clat, clon, radius_km in circles_data
+            ]
+            shapely_circles = [p for p in shapely_circles if p.is_valid and not p.is_empty]
+            if shapely_circles:
+                intersection_poly = reduce(lambda a, b: a.intersection(b), shapely_circles)
+                if not intersection_poly.is_empty:
+                    polys = (list(intersection_poly.geoms)
+                             if isinstance(intersection_poly, MultiPolygon)
+                             else [intersection_poly])
+                    for k, poly in enumerate(polys):
+                        if poly.is_empty or poly.geom_type != 'Polygon':
+                            continue
+                        xs, ys = poly.exterior.xy  # xs=lons, ys=lats
+                        label = 'Intersection region' if k == 0 else None
+                        ax.fill(list(xs), list(ys), color='yellow', alpha=0.4,
+                                transform=ccrs.PlateCarree(), zorder=3, label=label)
+                        ax.plot(list(xs), list(ys), color='orange', linewidth=2,
+                                transform=ccrs.PlateCarree(), zorder=4)
         except Exception:
             pass
 
