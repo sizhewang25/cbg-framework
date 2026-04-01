@@ -8,8 +8,9 @@ Per anchor, plots:
 - Raw (RTT, distance) scatter
 - Upper hull R_L (red) and lower hull r_L (blue) with shaded annular region
 - Piecewise linear spline (orange)
-- Cutoff RTT vertical line
+- Low / high cutoff RTT vertical lines (bilateral)
 - Theoretical 2/3c line (black dashed)
+- Spline extended with 2/3c slope outside [low_cutoff, high_cutoff]
 """
 
 import sys
@@ -57,19 +58,23 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
     ax.plot(rtt_range, theoretical_dists, 'k--', linewidth=1.5, alpha=0.5,
             label=f'Theoretical 2/3c')
 
-    # --- Cutoff vertical line ---
+    # --- Low / high cutoff vertical lines ---
+    low_cut = getattr(model, 'low_cutoff_rtt', 0.0)
+    if low_cut > 0:
+        ax.axvline(x=low_cut, color='purple', linestyle=':', linewidth=1.5, alpha=0.7,
+                   label=f'Low cutoff RTT = {low_cut:.1f} ms')
     ax.axvline(x=model.cutoff_rtt, color='gray', linestyle=':', linewidth=1.5, alpha=0.7,
-               label=f'Cutoff RTT = {model.cutoff_rtt:.1f} ms')
+               label=f'High cutoff RTT = {model.cutoff_rtt:.1f} ms')
 
-    # --- Upper and lower hull ---
+    # --- Upper and lower hull (with bilateral cutoff) ---
     upper_dists = np.array([
         hull_rtt_to_distance(r, model.hull_upper_rtts, model.hull_upper_distances,
-                             model.cutoff_rtt, is_upper=True)
+                             model.cutoff_rtt, is_upper=True, low_cutoff_rtt=low_cut)
         for r in rtt_range
     ])
     lower_dists = np.array([
         hull_rtt_to_distance(r, model.hull_lower_rtts, model.hull_lower_distances,
-                             model.cutoff_rtt, is_upper=False)
+                             model.cutoff_rtt, is_upper=False, low_cutoff_rtt=low_cut)
         for r in rtt_range
     ])
 
@@ -80,9 +85,23 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
     ax.fill_between(rtt_range, lower_dists, upper_dists, color='green', alpha=0.07,
                     label='Annular region')
 
-    # --- Piecewise linear spline ---
+    # --- Piecewise linear spline with 2/3c extension outside reliable region ---
     if model.spline_rtt_knots is not None:
-        spline_dists = np.interp(rtt_range, model.spline_rtt_knots, model.spline_dist_knots)
+        knot_rtts = np.array(model.spline_rtt_knots)
+        knot_dists = np.array(model.spline_dist_knots)
+        spline_at_cutoff = float(np.interp(model.cutoff_rtt, knot_rtts, knot_dists))
+
+        # Base interpolation (flat extrapolation outside knot range)
+        spline_base = np.interp(rtt_range, knot_rtts, knot_dists)
+        # Below low cutoff: 2/3c line
+        if low_cut > 0:
+            spline_base = np.where(rtt_range < low_cut, rtt_range / THEORETICAL_SLOPE, spline_base)
+        # Above high cutoff: extend with 2/3c slope from cutoff value
+        spline_dists = np.where(
+            rtt_range > model.cutoff_rtt,
+            spline_at_cutoff + (rtt_range - model.cutoff_rtt) / THEORETICAL_SLOPE,
+            spline_base
+        )
         ax.plot(rtt_range, spline_dists, color='darkorange', linewidth=2.5,
                 label=f'Spline ({model.spline_n_knots} knots)')
 

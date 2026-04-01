@@ -136,26 +136,23 @@ def compute_convex_hull_bounds(
     hull_upper = upper[::-1]
     hull_lower = lower
 
-    # Detect cutoff RTT by scanning bins from high to low
+    # Detect low and high cutoff RTT by scanning bins from low to high.
+    # low_cutoff_rtt: left edge of first dense bin (below = sparse at low RTT)
+    # cutoff_rtt: right edge of last dense bin (above = sparse at high RTT)
+    # Scanning upward avoids isolated high-RTT clusters from inflating the cutoff.
     max_rtt = np.max(rtts)
     min_rtt = np.min(rtts)
-    cutoff_rtt = max_rtt  # Default: no cutoff
+    low_cutoff_rtt = min_rtt  # Default: no low cutoff
+    cutoff_rtt = min_rtt      # Will be updated upward
+    found_first_dense = False
 
-    # Scan from high RTT to low, find where density drops
-    current_rtt = max_rtt
-    while current_rtt > min_rtt:
-        bin_mask = (rtts >= current_rtt - bin_size_ms) & (rtts < current_rtt)
-        bin_count = np.sum(bin_mask)
+    for bin_start in np.arange(min_rtt, max_rtt, bin_size_ms):
+        bin_count = np.sum((rtts >= bin_start) & (rtts < bin_start + bin_size_ms))
         if bin_count >= cutoff_min_points:
-            cutoff_rtt = current_rtt
-            break
-        current_rtt -= bin_size_ms
-
-    if cutoff_rtt == max_rtt:
-        # Check if the last bin has enough points
-        bin_mask = (rtts >= max_rtt - bin_size_ms) & (rtts <= max_rtt)
-        if np.sum(bin_mask) >= cutoff_min_points:
-            cutoff_rtt = max_rtt + bin_size_ms  # No cutoff needed
+            if not found_first_dense:
+                low_cutoff_rtt = bin_start   # Left edge of first dense bin
+                found_first_dense = True
+            cutoff_rtt = bin_start + bin_size_ms  # Right edge of last dense bin seen
 
     return {
         'hull_upper_rtts': [x[0] for x in hull_upper],
@@ -163,6 +160,7 @@ def compute_convex_hull_bounds(
         'hull_lower_rtts': [x[0] for x in hull_lower],
         'hull_lower_distances': [x[1] for x in hull_lower],
         'cutoff_rtt': cutoff_rtt,
+        'low_cutoff_rtt': low_cutoff_rtt,
         'baseline_slope': baseline_slope,
         'success': True,
         'message': f'Hull computed with {len(hull_upper)} upper and {len(hull_lower)} lower vertices'
@@ -175,25 +173,34 @@ def hull_rtt_to_distance(
     hull_distances: List[float],
     cutoff_rtt: float,
     baseline_slope: float = THEORETICAL_SLOPE,
-    is_upper: bool = True
+    is_upper: bool = True,
+    low_cutoff_rtt: float = 0.0
 ) -> float:
     """
     Convert RTT to distance using piecewise-linear hull boundary.
 
-    Interpolates between hull vertices for RTT < cutoff_rtt,
-    uses conservative slope for RTT >= cutoff_rtt.
+    Interpolates between hull vertices for RTT in [low_cutoff_rtt, cutoff_rtt].
+    Below low_cutoff_rtt (sparse at low RTT): upper→2/3c line, lower→0.
+    Above cutoff_rtt (sparse at high RTT): upper extends with 2/3c slope, lower stays flat.
 
     Args:
         rtt: Query RTT in ms
         hull_rtts: RTT values of hull vertices (sorted ascending)
         hull_distances: Distance values of hull vertices
-        cutoff_rtt: RTT threshold for sparse data
+        cutoff_rtt: High RTT threshold for sparse data
         baseline_slope: Conservative slope beyond cutoff (km/ms)
         is_upper: True for upper hull (R_L), False for lower hull (r_L)
+        low_cutoff_rtt: Low RTT threshold below which data is sparse (default 0 = disabled)
 
     Returns:
         Distance in km
     """
+    # Below low cutoff: data too sparse to trust hull vertices.
+    # Upper bound: 2/3c theoretical line (minimum possible distance = conservative).
+    # Lower bound: 0 (vertical line — no reliable lower constraint).
+    if low_cutoff_rtt > 0 and rtt < low_cutoff_rtt:
+        return rtt / baseline_slope if is_upper else 0.0
+
     if len(hull_rtts) == 0:
         # Fallback to speed-of-light conversion
         return rtt / baseline_slope if baseline_slope > 0 else 0.0
@@ -495,8 +502,9 @@ class OctantRTTModel:
     hull_lower_rtts: List[float] = field(default_factory=list)
     hull_lower_distances: List[float] = field(default_factory=list)
 
-    # Reliability cutoff
-    cutoff_rtt: float = 0.0
+    # Reliability cutoffs (bilateral: low and high)
+    cutoff_rtt: float = 0.0        # High RTT cutoff — right edge of last dense bin
+    low_cutoff_rtt: float = 0.0    # Low RTT cutoff — left edge of first dense bin
     cutoff_min_points: int = 5
     baseline_slope: float = THEORETICAL_SLOPE
 
@@ -552,17 +560,24 @@ class OctantRTTModel:
         self.hull_lower_rtts = hull_result['hull_lower_rtts']
         self.hull_lower_distances = hull_result['hull_lower_distances']
         self.cutoff_rtt = hull_result['cutoff_rtt']
+        self.low_cutoff_rtt = hull_result.get('low_cutoff_rtt', 0.0)
 
         # Fit piecewise linear spline for iterative refinement
         if fit_spline:
             try:
-                # Restrict to reliable region (below cutoff) — spline terminates at cutoff
-                reliable_mask = np.asarray(rtts) <= self.cutoff_rtt
-                spline_rtts = np.asarray(rtts)[reliable_mask]
-                spline_distances = np.asarray(distances)[reliable_mask]
+                # Restrict to reliable region [low_cutoff, cutoff] for both ends
+                rtts_arr = np.asarray(rtts)
+                distances_arr = np.asarray(distances)
+                reliable_mask = (rtts_arr >= self.low_cutoff_rtt) & (rtts_arr <= self.cutoff_rtt)
+                spline_rtts = rtts_arr[reliable_mask]
+                spline_distances = distances_arr[reliable_mask]
 
-                # Derive n_knots from upper hull vertices within the reliable region
-                n_knots_used = max(3, sum(r <= self.cutoff_rtt for r in self.hull_upper_rtts))
+                # n_knots = max of hull vertices from either chain within reliable region
+                upper_count = sum(self.low_cutoff_rtt <= r <= self.cutoff_rtt
+                                  for r in self.hull_upper_rtts)
+                lower_count = sum(self.low_cutoff_rtt <= r <= self.cutoff_rtt
+                                  for r in self.hull_lower_rtts)
+                n_knots_used = max(3, max(upper_count, lower_count))
 
                 knot_rtts, knot_dists, spline_meta = fit_rtt_distance_spline(
                     spline_rtts, spline_distances, n_knots=n_knots_used
@@ -612,23 +627,32 @@ class OctantRTTModel:
             if delta is None:
                 raise ValueError('delta required when use_polynomial=True')
 
-            # Evaluate piecewise linear spline; cutoff_rtt=inf disables cutoff
-            # so hull_rtt_to_distance extrapolates from endpoint slope beyond range
-            predicted = hull_rtt_to_distance(
-                rtt, self.spline_rtt_knots, self.spline_dist_knots,
-                cutoff_rtt=float('inf')
-            )
+            knot_rtts = np.array(self.spline_rtt_knots)
+            knot_dists = np.array(self.spline_dist_knots)
+
+            # Below low cutoff: 2/3c line (no reliable data)
+            if self.low_cutoff_rtt > 0 and rtt < self.low_cutoff_rtt:
+                predicted = rtt / self.baseline_slope
+            # Above high cutoff: extend from cutoff value with 2/3c slope
+            elif self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
+                cutoff_val = float(np.interp(self.cutoff_rtt, knot_rtts, knot_dists))
+                predicted = cutoff_val + (rtt - self.cutoff_rtt) / self.baseline_slope
+            else:
+                predicted = float(np.interp(rtt, knot_rtts, knot_dists))
+
             predicted = max(predicted, 1.0)  # Minimum 1 km
             return (predicted / delta, predicted * delta)
 
         # Use convex hull bounds
         max_dist = hull_rtt_to_distance(
             rtt, self.hull_upper_rtts, self.hull_upper_distances,
-            self.cutoff_rtt, self.baseline_slope, is_upper=True
+            self.cutoff_rtt, self.baseline_slope, is_upper=True,
+            low_cutoff_rtt=self.low_cutoff_rtt
         )
         min_dist = hull_rtt_to_distance(
             rtt, self.hull_lower_rtts, self.hull_lower_distances,
-            self.cutoff_rtt, self.baseline_slope, is_upper=False
+            self.cutoff_rtt, self.baseline_slope, is_upper=False,
+            low_cutoff_rtt=self.low_cutoff_rtt
         )
 
         return (max(0, min_dist), max_dist)
@@ -698,6 +722,7 @@ class OctantRTTModel:
             'hull_lower_rtts': self.hull_lower_rtts,
             'hull_lower_distances': self.hull_lower_distances,
             'cutoff_rtt': self.cutoff_rtt,
+            'low_cutoff_rtt': self.low_cutoff_rtt,
             'cutoff_min_points': self.cutoff_min_points,
             'baseline_slope': self.baseline_slope,
             'spline_rtt_knots': self.spline_rtt_knots,
