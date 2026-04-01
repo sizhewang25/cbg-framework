@@ -599,17 +599,18 @@ class OctantRTTModel:
                     for r in grid
                 ])
 
-                # High cutoff: last grid point where spline <= upper hull
-                in_upper = spline_vals <= upper_vals
-                if in_upper.any():
-                    new_high = float(grid[np.where(in_upper)[0][-1]])
+                # Reliable region: spline is within BOTH hull bounds simultaneously
+                in_both = (spline_vals <= upper_vals) & (spline_vals >= lower_vals)
+
+                # High cutoff: last grid point where spline is within both hulls
+                if in_both.any():
+                    new_high = float(grid[np.where(in_both)[0][-1]])
                     if new_high < self.cutoff_rtt:
                         self.cutoff_rtt = new_high
 
-                # Low cutoff: first grid point where spline >= lower hull
-                in_lower = spline_vals >= lower_vals
-                if in_lower.any():
-                    new_low = float(grid[np.where(in_lower)[0][0]])
+                # Low cutoff: first grid point where spline is within both hulls
+                if in_both.any():
+                    new_low = float(grid[np.where(in_both)[0][0]])
                     if new_low > self.low_cutoff_rtt:
                         self.low_cutoff_rtt = new_low
 
