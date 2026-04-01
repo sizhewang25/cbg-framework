@@ -257,8 +257,8 @@ class TestOctantRTTModel(unittest.TestCase):
         for i in range(1, len(model.spline_dist_knots)):
             self.assertGreaterEqual(model.spline_dist_knots[i], model.spline_dist_knots[i - 1])
 
-    def test_predict_with_spline(self):
-        """Spline-mode prediction returns valid (min, max) bounds."""
+    def test_predict_with_spline_in_reliable_region(self):
+        """Delta band within reliable region yields both positive and negative constraints."""
         np.random.seed(42)
         rtts = np.linspace(10, 100, 100)
         distances = 5000 + 50 * rtts + np.random.uniform(-300, 300, 100)
@@ -266,9 +266,42 @@ class TestOctantRTTModel(unittest.TestCase):
         model = OctantRTTModel(anchor_ip='192.168.1.1', anchor_lat=40.0, anchor_lon=-74.0)
         model.fit(rtts, distances)
 
-        min_dist, max_dist = model.predict_distance_bounds(50.0, delta=1.5)
-        self.assertGreater(min_dist, 0)
+        # Query RTT in the middle of reliable region
+        mid_rtt = (model.low_cutoff_rtt + model.cutoff_rtt) / 2
+        min_dist, max_dist = model.predict_distance_bounds(mid_rtt, delta=1.5)
+        self.assertGreater(min_dist, 0, "Negative constraint (inner radius) should be > 0 in reliable region")
         self.assertLess(min_dist, max_dist)
+
+    def test_predict_bounds_below_low_cutoff(self):
+        """Delta band below low_cutoff yields only positive constraint (inner radius = 0)."""
+        np.random.seed(42)
+        rtts = np.linspace(10, 100, 100)
+        distances = 5000 + 50 * rtts + np.random.uniform(-300, 300, 100)
+
+        model = OctantRTTModel(anchor_ip='192.168.1.1', anchor_lat=40.0, anchor_lon=-74.0)
+        model.fit(rtts, distances)
+
+        # Query RTT below low cutoff
+        rtt_below = model.low_cutoff_rtt - 5.0
+        if rtt_below > 0:
+            min_dist, max_dist = model.predict_distance_bounds(rtt_below, delta=1.5)
+            self.assertEqual(min_dist, 0.0, "No negative constraint below low cutoff")
+            self.assertGreater(max_dist, 0.0, "Positive constraint should exist")
+
+    def test_predict_bounds_above_cutoff(self):
+        """Delta band above cutoff yields only positive constraint (inner radius = 0)."""
+        np.random.seed(42)
+        rtts = np.linspace(10, 100, 100)
+        distances = 5000 + 50 * rtts + np.random.uniform(-300, 300, 100)
+
+        model = OctantRTTModel(anchor_ip='192.168.1.1', anchor_lat=40.0, anchor_lon=-74.0)
+        model.fit(rtts, distances)
+
+        # Query RTT above high cutoff
+        rtt_above = model.cutoff_rtt + 20.0
+        min_dist, max_dist = model.predict_distance_bounds(rtt_above, delta=1.5)
+        self.assertEqual(min_dist, 0.0, "No negative constraint above cutoff")
+        self.assertGreater(max_dist, 0.0, "Positive constraint should exist")
 
     def test_serialization(self):
         """Save/load preserves model state."""

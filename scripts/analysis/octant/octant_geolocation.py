@@ -57,7 +57,6 @@ def form_constraint(
     rtt_ms: float,
     model: OctantRTTModel,
     weight_tau_ms: float = 50.0,
-    use_polynomial: bool = False,
     delta: Optional[float] = None,
 ) -> AnnularConstraint:
     """Form a single annular constraint from one landmark's RTT measurement.
@@ -68,15 +67,12 @@ def form_constraint(
         rtt_ms: Measured RTT to target in ms
         model: Fitted OctantRTTModel for this landmark
         weight_tau_ms: Decay constant for exponential weighting
-        use_polynomial: Use polynomial bounds instead of hull
-        delta: Required if use_polynomial is True
+        delta: If provided, use spline delta band instead of hull bounds
 
     Returns:
         AnnularConstraint with (r_L, R_L) bounds and weight
     """
-    inner_km, outer_km = model.predict_distance_bounds(
-        rtt_ms, use_polynomial=use_polynomial, delta=delta
-    )
+    inner_km, outer_km = model.predict_distance_bounds(rtt_ms, delta=delta)
     weight = np.exp(-rtt_ms / weight_tau_ms)
     return AnnularConstraint(
         landmark_lat=landmark_lat,
@@ -95,7 +91,6 @@ def form_constraints(
     landmark_coords: Dict[str, Tuple[float, float]],
     models: Dict[str, OctantRTTModel],
     weight_tau_ms: float = 50.0,
-    use_polynomial: bool = False,
     delta: Optional[float] = None,
     max_rtt_ms: float = 200.0,
 ) -> List[AnnularConstraint]:
@@ -107,8 +102,7 @@ def form_constraints(
         landmark_coords: {landmark_ip: (lat, lon)}
         models: {landmark_ip: fitted OctantRTTModel}
         weight_tau_ms: Decay constant for exponential weighting
-        use_polynomial: Use polynomial bounds instead of hull
-        delta: Required if use_polynomial is True
+        delta: If provided, use spline delta band instead of hull bounds
         max_rtt_ms: Ignore RTTs above this threshold
 
     Returns:
@@ -128,7 +122,6 @@ def form_constraints(
             c = form_constraint(
                 lat, lon, lm_ip, rtt, models[lm_ip],
                 weight_tau_ms=weight_tau_ms,
-                use_polynomial=use_polynomial,
                 delta=delta,
             )
             # Skip degenerate constraints
@@ -644,7 +637,6 @@ class OctantGeolocator:
         n_samples: int = 5000,
         weight_threshold: float = 0.5,
         max_rtt_ms: float = 200.0,
-        use_polynomial: bool = False,
         delta: Optional[float] = None,
         grid_resolution_deg: float = 0.1,
     ):
@@ -655,7 +647,6 @@ class OctantGeolocator:
         self.n_samples = n_samples
         self.weight_threshold = weight_threshold
         self.max_rtt_ms = max_rtt_ms
-        self.use_polynomial = use_polynomial
         self.delta = delta
         self.grid_resolution_deg = grid_resolution_deg
 
@@ -678,7 +669,6 @@ class OctantGeolocator:
         constraints = form_constraints(
             target_ip, rtt_measurements, self.landmark_coords, self.models,
             weight_tau_ms=self.weight_tau_ms,
-            use_polynomial=self.use_polynomial,
             delta=self.delta,
             max_rtt_ms=self.max_rtt_ms,
         )

@@ -695,7 +695,9 @@ class OctantRTTModel:
         Predict (min_distance, max_distance) bounds from RTT.
 
         Without delta: returns convex hull bounds (r_L, R_L).
-        With delta: returns multiplicative spline band (spline/delta, spline*delta).
+        With delta: returns multiplicative spline band, region-aware:
+          - Inside [low_cutoff, cutoff]: (spline/delta, spline*delta) — both constraints
+          - Outside reliable region: (0, spline*delta) — positive constraint only
 
         Args:
             rtt: Round-trip time in ms
@@ -709,7 +711,12 @@ class OctantRTTModel:
 
         if delta is not None:
             predicted = self.predict_distance(rtt)
-            return (predicted / delta, predicted * delta)
+            in_reliable = (self.low_cutoff_rtt <= rtt <= self.cutoff_rtt)
+            if in_reliable:
+                return (predicted / delta, predicted * delta)
+            else:
+                # Outside reliable region: positive constraint only (no negative)
+                return (0.0, predicted * delta)
 
         # Use convex hull bounds
         max_dist = hull_rtt_to_distance(

@@ -196,13 +196,18 @@ Given a query RTT `r`:
 | `low_cutoff_rtt ≤ r ≤ cutoff_rtt` | `interp(r, knot_rtts, knot_dists)` |
 | `r > cutoff_rtt` | `spline(cutoff_rtt) + (r − cutoff_rtt) / THEORETICAL_SLOPE`  (2/3c extension) |
 
-For **delta-band prediction** (`use_polynomial=True`):
+For **delta-band prediction** (region-aware):
 
-```
-(predicted / δ,  predicted × δ)
-```
+| Region | Bounds |
+|---|---|
+| `r < low_cutoff_rtt` | `(0, predicted × δ)` — positive constraint only |
+| `low_cutoff_rtt ≤ r ≤ cutoff_rtt` | `(predicted / δ, predicted × δ)` — both constraints |
+| `r > cutoff_rtt` | `(0, predicted × δ)` — positive constraint only |
 
-where δ is found via binary search to achieve a target coverage fraction α (e.g. 90%) over
+Outside the reliable region, only a positive (outer-radius) constraint is emitted because the
+spline is extrapolating — the calibrated delta band has no statistical basis there.
+
+δ is found via binary search to achieve a target coverage fraction α (e.g. 90%) over
 the calibration scatter: the smallest δ such that at least fraction α of points `d_i` satisfy
 `d_i ∈ [f(rtt_i)/δ, f(rtt_i)×δ]`.
 
