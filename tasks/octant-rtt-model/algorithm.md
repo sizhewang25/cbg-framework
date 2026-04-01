@@ -64,7 +64,7 @@ Upward scanning ensures isolated high-RTT clusters do not inflate the cutoff.
 
 | Region | Upper hull R_L | Lower hull r_L |
 |---|---|---|
-| `rtt < low_cutoff_rtt` | `rtt / THEORETICAL_SLOPE` (2/3c line) | `0` (no lower constraint) |
+| `rtt < low_cutoff_rtt` | `(R_L(low_cutoff_rtt) / low_cutoff_rtt) × rtt` (ramp from origin through hull value at cutoff) | `0` (no lower constraint) |
 | `low_cutoff_rtt ≤ rtt ≤ cutoff_rtt` | Piecewise linear interpolation between hull vertices | Same |
 | `rtt > cutoff_rtt` | `R_L(cutoff_rtt) + (rtt − cutoff_rtt) / THEORETICAL_SLOPE` | `r_L(cutoff_rtt)` (flat) |
 
@@ -192,7 +192,7 @@ Given a query RTT `r`:
 
 | Region | Spline output |
 |---|---|
-| `r < low_cutoff_rtt` | `r / THEORETICAL_SLOPE`  (2/3c line — no reliable data below) |
+| `r < low_cutoff_rtt` | `(spline(low_cutoff_rtt) / low_cutoff_rtt) × r`  (linear ramp from origin through spline left endpoint) |
 | `low_cutoff_rtt ≤ r ≤ cutoff_rtt` | `interp(r, knot_rtts, knot_dists)` |
 | `r > cutoff_rtt` | `spline(cutoff_rtt) + (r − cutoff_rtt) / THEORETICAL_SLOPE`  (2/3c extension) |
 

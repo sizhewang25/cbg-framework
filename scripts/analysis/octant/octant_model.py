@@ -193,10 +193,15 @@ def hull_rtt_to_distance(
         Distance in km
     """
     # Below low cutoff: data too sparse to trust hull vertices.
-    # Upper bound: 2/3c theoretical line (minimum possible distance = conservative).
-    # Lower bound: 0 (vertical line — no reliable lower constraint).
+    # Upper bound: linear ramp from (0,0) through hull value at low_cutoff.
+    # Lower bound: 0 (no reliable lower constraint).
     if low_cutoff_rtt > 0 and rtt < low_cutoff_rtt:
-        return rtt / baseline_slope if is_upper else 0.0
+        if is_upper and len(hull_rtts) > 0:
+            hull_rtts_arr = np.array(hull_rtts)
+            hull_dists_arr = np.array(hull_distances)
+            upper_at_cut = float(np.interp(low_cutoff_rtt, hull_rtts_arr, hull_dists_arr))
+            return (upper_at_cut / low_cutoff_rtt) * rtt
+        return 0.0
 
     if len(hull_rtts) == 0:
         # Fallback to speed-of-light conversion
@@ -669,7 +674,10 @@ class OctantRTTModel:
         knot_dists = np.array(self.spline_dist_knots)
 
         if self.low_cutoff_rtt > 0 and rtt < self.low_cutoff_rtt:
-            predicted = rtt / self.baseline_slope
+            # Linear ramp from (0,0) to spline value at low_cutoff — matches
+            # the calibrated slope rather than the theoretical 2/3c line.
+            low_cutoff_dist = float(np.interp(self.low_cutoff_rtt, knot_rtts, knot_dists))
+            predicted = (low_cutoff_dist / self.low_cutoff_rtt) * rtt
         elif self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
             cutoff_val = float(np.interp(self.cutoff_rtt, knot_rtts, knot_dists))
             predicted = cutoff_val + (rtt - self.cutoff_rtt) / self.baseline_slope
