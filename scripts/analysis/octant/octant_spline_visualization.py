@@ -66,17 +66,21 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
     ax.axvline(x=model.cutoff_rtt, color='gray', linestyle=':', linewidth=1.5, alpha=0.7,
                label=f'High cutoff RTT = {model.cutoff_rtt:.1f} ms')
 
-    # --- Upper and lower hull (with bilateral cutoff) ---
+    # --- Upper and lower hull ---
     upper_dists = np.array([
         hull_rtt_to_distance(r, model.hull_upper_rtts, model.hull_upper_distances,
-                             model.cutoff_rtt, is_upper=True, low_cutoff_rtt=low_cut)
+                             model.cutoff_rtt, is_upper=True)
         for r in rtt_range
     ])
     lower_dists = np.array([
         hull_rtt_to_distance(r, model.hull_lower_rtts, model.hull_lower_distances,
-                             model.cutoff_rtt, is_upper=False, low_cutoff_rtt=low_cut)
+                             model.cutoff_rtt, is_upper=False)
         for r in rtt_range
     ])
+    # Below low cutoff: drop curves to 0 (vertical termination at low cutoff)
+    if low_cut > 0:
+        upper_dists = np.where(rtt_range < low_cut, 0.0, upper_dists)
+        lower_dists = np.where(rtt_range < low_cut, 0.0, lower_dists)
 
     ax.plot(rtt_range, upper_dists, 'r-', linewidth=2,
             label=f'Upper hull R_L ({len(model.hull_upper_rtts)} vertices)')
@@ -93,9 +97,9 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
 
         # Base interpolation (flat extrapolation outside knot range)
         spline_base = np.interp(rtt_range, knot_rtts, knot_dists)
-        # Below low cutoff: 2/3c line
+        # Below low cutoff: drop to 0 (vertical termination at low cutoff)
         if low_cut > 0:
-            spline_base = np.where(rtt_range < low_cut, rtt_range / THEORETICAL_SLOPE, spline_base)
+            spline_base = np.where(rtt_range < low_cut, 0.0, spline_base)
         # Above high cutoff: extend with 2/3c slope from cutoff value
         spline_dists = np.where(
             rtt_range > model.cutoff_rtt,
