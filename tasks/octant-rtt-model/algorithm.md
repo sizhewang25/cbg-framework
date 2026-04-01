@@ -90,13 +90,46 @@ Rationale: the hull already identified where the RTT–distance relationship cha
 
 **Fitting (`scipy.interpolate.make_lsq_spline`, k=1):**
 
-Minimizes `Σ (d_i − f(rtt_i))²` subject to `f` being piecewise linear with `n_knots` breakpoints. The full knot vector with boundary multiplicity 2:
+The spline `S(rtt)` is a linear combination of B-spline basis functions:
+
+```
+S(rtt) = Σ_j  c_j · B_j(rtt; t)
+```
+
+where `B_j(rtt; t)` is the j-th B-spline basis of degree k=1 (a piecewise linear "hat" function
+nonzero only on `[t_j, t_{j+2})`), and `c_j` are unknown coefficients.
+
+The coefficients are found by minimizing the sum of squared residuals:
+
+```
+min_c  Σ_i ( S(rtt_i) − d_i )²   =   min_c  ‖ A·c − d ‖²
+```
+
+where `A` is the collocation matrix with `A_{ij} = B_j(rtt_i; t)`. This is a standard
+overdetermined linear least-squares problem (m data points >> n coefficients), solved via
+QR factorization.
+
+The knot vector `t` must satisfy the **Schoenberg-Whitney conditions** — each basis function
+must have at least one data point in its support — to guarantee a unique solution:
+
+```
+t_j < rtt_j < t_{j+k+1}    for j = 0, ..., n−k−2
+```
+
+The full knot vector with boundary multiplicity k+1 = 2:
 
 ```
 t_full = [rtt_min, rtt_min, t_1, ..., t_{n-1}, rtt_max, rtt_max]
 ```
 
 where `t_1, ..., t_{n-1}` are interior knots placed uniformly in `(rtt_min, rtt_max)`.
+Boundary knots are repeated k+1 times so the spline is defined at the endpoints.
+
+For k=1, each basis function is a hat/tent function spanning two adjacent knot intervals,
+so the resulting spline is a connected sequence of line segments — a "best-fit polyline"
+through the scatter data. Unlike an interpolating spline (which passes through every point),
+the LSQ spline has far fewer knots than data points, smoothing out measurement noise while
+capturing the underlying RTT-distance trend.
 
 **Monotonicity enforcement (post-fit):**
 

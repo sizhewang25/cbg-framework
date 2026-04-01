@@ -63,7 +63,7 @@ def compute_convex_hull_bounds(
     rtts: np.ndarray,
     distances: np.ndarray,
     cutoff_min_points: int = 5,
-    bin_size_ms: float = 10.0,
+    bin_size_ms: float = 5.0,
     baseline_slope: float = THEORETICAL_SLOPE
 ) -> Dict[str, Any]:
     """
@@ -521,7 +521,8 @@ class OctantRTTModel:
         distances: np.ndarray,
         cutoff_min_points: int = 5,
         fit_spline: bool = True,
-        spline_n_knots: int = 20
+        spline_n_knots: int = 20,
+        bin_size_ms=5,
     ) -> bool:
         """
         Fit Octant model: convex hull bounds + optional piecewise linear spline.
@@ -545,7 +546,7 @@ class OctantRTTModel:
             rtts, distances,
             cutoff_min_points=cutoff_min_points,
             baseline_slope=self.baseline_slope,
-            bin_size_ms=5,
+            bin_size_ms=bin_size_ms,
         )
 
         if not hull_result['success']:
