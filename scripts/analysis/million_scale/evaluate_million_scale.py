@@ -728,10 +728,10 @@ def plot_circles_on_map(probe_result, circles_data, intersections, method_label,
     import cartopy.feature as cfeature
 
     proj = ccrs.LambertConformal(central_longitude=-96, central_latitude=39)
-    fig, ax = plt.subplots(figsize=(14, 10), subplot_kw={'projection': proj})
+    fig, ax = plt.subplots(figsize=(20, 14), subplot_kw={'projection': proj})
 
     # US extent
-    ax.set_extent([-125, -66, 24, 50], crs=ccrs.PlateCarree())
+    ax.set_extent([-130, -64, 24, 55], crs=ccrs.PlateCarree())
     ax.add_feature(cfeature.LAND, facecolor='#f0f0f0')
     ax.add_feature(cfeature.OCEAN, facecolor='#e6f2ff')
     ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor='gray')
@@ -850,7 +850,8 @@ def plot_circles_on_map(probe_result, circles_data, intersections, method_label,
                  f'Area: {area_km2 / 1e6:.1f} million km²\n'
                  f'Probe: {probe_result["probe_ip"]}',
                  fontsize=13, fontweight='bold')
-    ax.legend(loc='lower left', fontsize=8, ncol=2)
+    ax.legend(loc='upper left', fontsize=9, ncol=1,
+              bbox_to_anchor=(1.02, 1), borderaxespad=0)
 
     plt.tight_layout()
 

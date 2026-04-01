@@ -24,8 +24,9 @@ def rtt_to_km(rtt, speed_threshold=None, c=300):
     return internet_speed(rtt, speed_threshold) * rtt * c / 2
 
 
-def is_within_cirle(vp_geo, rtt, candidate_geo, speed_threshold=None):
-    d = rtt_to_km(rtt, speed_threshold)
+def is_within_cirle(vp_geo, rtt, candidate_geo, speed_threshold=None, d=None):
+    if d is None:
+        d = rtt_to_km(rtt, speed_threshold)
     d_vp_candidate = haversine(vp_geo, candidate_geo)
     if d < d_vp_candidate:
         return False
@@ -158,7 +159,7 @@ def circle_intersections(circles, speed_threshold=None):
     filtred_points = []
     for point_geo in intersect_points:
         for lat_c, long_c, rtt_c, d_c, r_c in circles:
-            if not is_within_cirle((lat_c, long_c), rtt_c, point_geo, speed_threshold):
+            if not is_within_cirle((lat_c, long_c), rtt_c, point_geo, speed_threshold, d=d_c):
                 break
         else:
             filtred_points.append(point_geo)

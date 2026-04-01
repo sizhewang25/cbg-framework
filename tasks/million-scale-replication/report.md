@@ -189,6 +189,91 @@ The 3 removed circles (San Jose r=1930km, LA r=2547km, Miami r=5101km) were full
 
 This is a property of the original Million-Scale paper's algorithm (`helpers.py:169-179`), not a bug in our evaluation code. The Shapely `.centroid` (area-weighted geometric centroid) would always fall inside a connected polygon, but changing the centroid method would alter the replication fidelity.
 
+## CDF Crossover Investigation
+
+### Observation
+
+The error CDF shows MS CBG (2/3c) outperforms LP CBG at lower percentiles despite LP having better overall median. The blue curve is to the left of the black curve below approximately the 50th percentile.
+
+### Investigation Script
+
+**File:** `scripts/analysis/million_scale/crossover_analysis.py`
+
+**Output directory:** `scripts/analysis/million_scale/outputs/crossover_analysis/`
+
+### Finding 1: No Fallbacks — Pure Centroid Geometry Effect
+
+Contrary to the initial hypothesis (that MS falls back to closest-VP more often, benefiting near-anchor probes), **ALL 266 probes intersect for both methods** — zero fallbacks. The crossover is entirely driven by differences in intersection polygon shape and where the arithmetic-mean centroid lands.
+
+### Finding 2: Bias-Variance Tradeoff in Circle Radii
+
+MS's larger circles (100×rtt) produce **symmetric, well-centered intersections** for near-anchor probes. LP's tighter circles are more sensitive to per-anchor calibration errors (slope/intercept misfit), creating **asymmetric intersections** whose arithmetic-mean centroid can be displaced.
+
+| Percentile | MS Error (km) | LP buggy (km) | LP corrected (km) |
+|-----------|---------|-----------|----------------|
+| P10 | **12.8** | 282.7 | 199.8 |
+| P25 | **69.3** | 470.8 | 337.4 |
+| P50 | 686.7 | 696.8 | **601.5** |
+| P75 | 1373.6 | **1218.7** | **1082.3** |
+| P90 | 1748.8 | **1444.9** | **1433.5** |
+
+MS wins 141/266 probes (53%) against buggy LP, and 135/266 (50.8%) against corrected LP. The crossover persists after bug correction — this is a real geometric phenomenon.
+
+When MS wins, its median error is 102.8 km vs LP's 707.7 km (MS wins big for near-anchor probes). When LP wins, its median error is 689.8 km vs MS's 1284.0 km (LP wins on distant/hard cases).
+
+### Finding 3: `is_within_cirle` Bug in helpers.py
+
+**Location:** `helpers.py:161` inside `circle_intersections()`
+
+**Bug:** The intersection point filtering step calls `is_within_cirle(vp_geo, rtt_c, point_geo, speed_threshold)` which internally computes `d = rtt_to_km(rtt, speed_threshold)` = 100×rtt (the MS formula). It ignores the pre-filled `d_c` from the LP circle tuple.
+
+**Mechanism:**
+- `circle_preprocessing()` (line 64) correctly uses pre-filled `d` when available — so LP circles have correct radii during containment removal
+- But `is_within_cirle()` (line 28) always recomputes `d` via `rtt_to_km()` — so LP intersection points are filtered with MS-sized radii (larger, more permissive)
+- This admits intersection points that lie **outside LP circles but inside MS circles**, contaminating the polygon and shifting the centroid
+
+**Impact:**
+- 207/266 probes have changed errors
+- Zero probes change intersection status (all still intersect)
+- LP median error: 696.8 km (buggy) → 601.5 km (corrected) — **95 km improvement**
+- The bug does NOT cause the crossover — crossover persists after correction
+
+**Visual artifact in map plots:** In `plot_percentile_maps()` / `plot_circles_on_map()` (`evaluate_million_scale.py:715-861`), the yellow intersection region and gray crossing dots are computed correctly using **Shapely** with true LP radii (`circles_data`). However, the red X (arithmetic-mean centroid) comes from `helpers.py:polygon_centroid()` which used vertices filtered by the **buggy** `is_within_cirle()` with MS-sized radii. This means the centroid was computed from a superset of the visible vertices — including spurious points that lie outside the yellow region but inside the larger MS circles. This compounds with the arithmetic-mean-outside-polygon issue: even if all vertices were correct, averaging boundary vertices can land outside a concave region, but here the vertex set itself is contaminated, pulling the centroid further away.
+
+### Finding 4: Near-Anchor Probes Drive MS Advantage
+
+The distance-to-nearest-anchor plot shows MS's advantage is concentrated at probes within 0–200 km of an anchor:
+
+- Probes at <50 km from anchor: MS errors as low as 0.7 km, LP errors 400–700 km
+- The nearby anchor's 2/3c circle creates a small, well-centered constraint
+- LP's calibrated circle for the same anchor has a different radius (due to intercept subtraction), shifting the intersection polygon
+
+Example: Probe `73.189.18.0` (0.7 km from Seattle anchor)
+- MS error: 0.7 km — intersection centroid lands almost exactly on truth
+- LP error: 619.9 km — LP's asymmetric intersection shifts centroid to the midwest
+
+### Outputs Produced
+
+| File | Purpose |
+|---|---|
+| `outputs/crossover_analysis/crossover_cdf.png` | 3-way CDF: MS vs LP (buggy) vs LP (corrected) with shaded crossover regions |
+| `outputs/crossover_analysis/error_scatter.png` | Per-probe error scatter (LP error vs MS error) colored by category |
+| `outputs/crossover_analysis/dist_vs_advantage.png` | Distance-to-nearest-anchor vs error advantage |
+| `outputs/crossover_analysis/mechanism_breakdown.png` | Category breakdown bar chart |
+| `outputs/crossover_analysis/maps/probe_*.png` | 141 side-by-side map plots for all MS-wins probes |
+| `outputs/crossover_analysis/crossover_results.json` | Full per-probe diagnostics |
+
+### Interpretation
+
+The crossover is a **bias-variance tradeoff** inherent to circle-based multilateration:
+
+- **MS (2/3c)** = high bias (large circles, imprecise bounds) but **low variance** (robust to RTT inflation, model misfit, routing anomalies). Best cases are very good because the intersection geometry is stable.
+- **LP (calibrated)** = lower bias (tighter circles, more precise bounds) but **higher variance** (sensitive to per-anchor calibration errors in slope/intercept). Best cases can still miss because a slight misfit in one anchor's model shifts the entire intersection.
+
+At **low percentiles** (best cases), MS's robustness wins — the 2/3c formula is a safe upper bound that reliably contains the truth, producing well-centered intersections. At **high percentiles** (worst cases), LP's tighter constraints produce smaller intersection regions that are geometrically closer to truth even when off-center.
+
+The `is_within_cirle` bug amplifies this effect by contaminating LP's intersection polygons, but is not the root cause.
+
 ## Related Tasks
 
 - `tasks/cbg-feasibility/` — Original CBG feasibility exploration (LP bestline development)
