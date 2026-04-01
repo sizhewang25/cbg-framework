@@ -266,7 +266,7 @@ class TestOctantRTTModel(unittest.TestCase):
         model = OctantRTTModel(anchor_ip='192.168.1.1', anchor_lat=40.0, anchor_lon=-74.0)
         model.fit(rtts, distances)
 
-        min_dist, max_dist = model.predict_distance_bounds(50.0, use_polynomial=True, delta=1.5)
+        min_dist, max_dist = model.predict_distance_bounds(50.0, delta=1.5)
         self.assertGreater(min_dist, 0)
         self.assertLess(min_dist, max_dist)
 

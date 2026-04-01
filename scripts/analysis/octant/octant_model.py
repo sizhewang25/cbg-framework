@@ -44,9 +44,6 @@ class SplineFitError(OctantFitError):
     pass
 
 
-# Backward-compatibility alias
-PolynomialFitError = SplineFitError
-
 
 class DeltaSearchError(OctantFitError):
     """Raised when no delta satisfies the coverage requirement."""
@@ -487,7 +484,7 @@ def find_delta_for_coverage(
 @dataclass
 class OctantRTTModel:
     """
-    Octant-style RTT-distance model with dual bounds and polynomial refinement.
+    Octant-style RTT-distance model with dual bounds and spline refinement.
 
     Produces annular constraints (inner/outer radii) instead of single circles.
     Standalone class - no inheritance from RTTDistanceModel.
@@ -646,46 +643,63 @@ class OctantRTTModel:
         self.fitted = True
         return True
 
+    def predict_distance(self, rtt: float) -> float:
+        """
+        Predict distance from RTT using the fitted spline.
+
+        Applies the piecewise linear spline within [low_cutoff_rtt, cutoff_rtt]
+        and extends with the 2/3c slope outside that range.
+
+        Args:
+            rtt: Round-trip time in ms
+
+        Returns:
+            Estimated distance in km
+
+        Raises:
+            OctantFitError: If model is not fitted or spline is not available
+        """
+        if not self.fitted:
+            raise OctantFitError('Model not fitted')
+        if self.spline_rtt_knots is None:
+            raise SplineFitError('Spline not fitted')
+
+        knot_rtts = np.array(self.spline_rtt_knots)
+        knot_dists = np.array(self.spline_dist_knots)
+
+        if self.low_cutoff_rtt > 0 and rtt < self.low_cutoff_rtt:
+            predicted = rtt / self.baseline_slope
+        elif self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
+            cutoff_val = float(np.interp(self.cutoff_rtt, knot_rtts, knot_dists))
+            predicted = cutoff_val + (rtt - self.cutoff_rtt) / self.baseline_slope
+        else:
+            predicted = float(np.interp(rtt, knot_rtts, knot_dists))
+
+        return max(predicted, 1.0)  # Minimum 1 km
+
     def predict_distance_bounds(
         self,
         rtt: float,
-        use_polynomial: bool = False,
         delta: Optional[float] = None
     ) -> Tuple[float, float]:
         """
         Predict (min_distance, max_distance) bounds from RTT.
 
+        Without delta: returns convex hull bounds (r_L, R_L).
+        With delta: returns multiplicative spline band (spline/delta, spline*delta).
+
         Args:
             rtt: Round-trip time in ms
-            use_polynomial: If True, use polynomial bounds instead of hull
-            delta: Required if use_polynomial=True
+            delta: If provided, use spline delta band instead of hull bounds
 
         Returns:
-            (r_L(rtt), R_L(rtt)) = (inner_radius, outer_radius)
+            (inner_radius, outer_radius) in km
         """
         if not self.fitted:
             raise OctantFitError('Model not fitted')
 
-        if use_polynomial:
-            if self.spline_rtt_knots is None:
-                raise OctantFitError('Spline not fitted')
-            if delta is None:
-                raise ValueError('delta required when use_polynomial=True')
-
-            knot_rtts = np.array(self.spline_rtt_knots)
-            knot_dists = np.array(self.spline_dist_knots)
-
-            # Below low cutoff: 2/3c line (no reliable data)
-            if self.low_cutoff_rtt > 0 and rtt < self.low_cutoff_rtt:
-                predicted = rtt / self.baseline_slope
-            # Above high cutoff: extend from cutoff value with 2/3c slope
-            elif self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
-                cutoff_val = float(np.interp(self.cutoff_rtt, knot_rtts, knot_dists))
-                predicted = cutoff_val + (rtt - self.cutoff_rtt) / self.baseline_slope
-            else:
-                predicted = float(np.interp(rtt, knot_rtts, knot_dists))
-
-            predicted = max(predicted, 1.0)  # Minimum 1 km
+        if delta is not None:
+            predicted = self.predict_distance(rtt)
             return (predicted / delta, predicted * delta)
 
         # Use convex hull bounds
@@ -723,7 +737,7 @@ class OctantRTTModel:
             (min_distance, max_distance, delta_used)
 
         Raises:
-            PolynomialFitError, DeltaSearchError, DeltaSearchTimeout
+            SplineFitError, DeltaSearchError, DeltaSearchTimeout
         """
         if not self.fitted:
             raise OctantFitError('Model not fitted')
@@ -737,9 +751,7 @@ class OctantRTTModel:
             timeout_seconds=timeout_seconds
         )
 
-        min_dist, max_dist = self.predict_distance_bounds(
-            rtt, use_polynomial=True, delta=delta
-        )
+        min_dist, max_dist = self.predict_distance_bounds(rtt, delta=delta)
 
         return (min_dist, max_dist, delta)
 
