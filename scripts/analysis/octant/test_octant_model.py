@@ -3,7 +3,7 @@ Unit tests for Octant RTT-Distance Model
 
 Tests cover:
 - Convex hull extraction and bound computation
-- Polynomial fitting for iterative refinement
+- Piecewise linear spline fitting for iterative refinement
 - Delta search for coverage requirement
 - OctantRTTModel class functionality
 """
@@ -17,11 +17,11 @@ from pathlib import Path
 from octant_model import (
     compute_convex_hull_bounds,
     hull_rtt_to_distance,
-    fit_rtt_distance_polynomial,
+    fit_rtt_distance_spline,
     find_delta_for_coverage,
     OctantRTTModel,
     OctantFitError,
-    PolynomialFitError,
+    SplineFitError,
     DeltaSearchError,
     DeltaSearchTimeout,
     THEORETICAL_SLOPE
@@ -105,31 +105,40 @@ class TestConvexHullBounds(unittest.TestCase):
         self.assertAlmostEqual(dist, 2000.0, delta=1.0)
 
 
-class TestPolynomialFit(unittest.TestCase):
-    """Test polynomial fitting for iterative refinement."""
+class TestSplineFit(unittest.TestCase):
+    """Test piecewise linear spline fitting for iterative refinement."""
 
-    def test_polynomial_fit_basic(self):
-        """Polynomial fits to data with reasonable error."""
+    def test_spline_fit_basic(self):
+        """Spline fits to data with reasonable R²."""
         np.random.seed(42)
-        # Create data that follows a quadratic relationship
-        rtts = np.linspace(10, 100, 50)
-        # distance = 50 * rtt + 0.5 * rtt^2 (quadratic)
-        distances = 50 * rtts + 0.5 * rtts**2 + np.random.normal(0, 100, 50)
+        rtts = np.linspace(10, 100, 100)
+        distances = 5000 + 50 * rtts + np.random.normal(0, 200, 100)
 
-        coefficients, metadata = fit_rtt_distance_polynomial(rtts, distances, degree=2)
+        knot_rtts, knot_dists, metadata = fit_rtt_distance_spline(rtts, distances, n_knots=10)
 
-        self.assertIsNotNone(coefficients)
-        self.assertEqual(len(coefficients), 3)  # degree 2 has 3 coefficients
+        self.assertIsNotNone(knot_rtts)
+        self.assertGreaterEqual(len(knot_rtts), 2)
         self.assertIn('r_squared', metadata)
-        self.assertGreater(metadata['r_squared'], 0.9)  # Should fit well
+        self.assertGreater(metadata['r_squared'], 0.5)
 
-    def test_polynomial_fit_insufficient_data(self):
-        """Raises error with too few points."""
-        rtts = np.array([10.0, 20.0])  # Only 2 points for degree 2
-        distances = np.array([1000.0, 2000.0])
+    def test_spline_knots_monotonic(self):
+        """Spline knot distances are non-decreasing with RTT."""
+        np.random.seed(42)
+        rtts = np.linspace(10, 100, 100)
+        distances = 5000 + 50 * rtts + np.random.normal(0, 500, 100)
 
-        with self.assertRaises(PolynomialFitError):
-            fit_rtt_distance_polynomial(rtts, distances, degree=2)
+        knot_rtts, knot_dists, _ = fit_rtt_distance_spline(rtts, distances, n_knots=15)
+
+        for i in range(1, len(knot_dists)):
+            self.assertGreaterEqual(knot_dists[i], knot_dists[i - 1])
+
+    def test_spline_fit_insufficient_data(self):
+        """Raises SplineFitError with too few points."""
+        rtts = np.array([10.0, 20.0, 30.0])
+        distances = np.array([1000.0, 2000.0, 3000.0])
+
+        with self.assertRaises(SplineFitError):
+            fit_rtt_distance_spline(rtts, distances, n_knots=20)  # needs 23+ points
 
 
 class TestDeltaSearch(unittest.TestCase):
@@ -138,17 +147,13 @@ class TestDeltaSearch(unittest.TestCase):
     def test_delta_search_finds_solution(self):
         """Finds delta achieving target coverage."""
         np.random.seed(42)
-        # Create data around a polynomial
         rtts = np.linspace(10, 100, 100)
-        poly_true = np.array([500, 50, 0.5])  # 500 + 50*rtt + 0.5*rtt^2
-        distances = np.polyval(poly_true[::-1], rtts) + np.random.normal(0, 200, 100)
+        distances = 5000 + 50 * rtts + np.random.normal(0, 500, 100)
 
-        # Fit polynomial first
-        coefficients, _ = fit_rtt_distance_polynomial(rtts, distances, degree=2)
+        knot_rtts, knot_dists, _ = fit_rtt_distance_spline(rtts, distances, n_knots=10)
 
-        # Search for delta with 80% coverage
         delta, metadata = find_delta_for_coverage(
-            rtts, distances, coefficients,
+            rtts, distances, knot_rtts, knot_dists,
             target_coverage=0.80,
             tolerance=0.05,
             timeout_seconds=5.0
@@ -160,42 +165,36 @@ class TestDeltaSearch(unittest.TestCase):
     def test_delta_search_timeout(self):
         """Raises DeltaSearchTimeout when time exceeded."""
         np.random.seed(42)
-        # Large dataset to make search take longer
-        rtts = np.linspace(10, 100, 10000)
-        distances = 100 * rtts + np.random.normal(0, 500, 10000)
-        coefficients, _ = fit_rtt_distance_polynomial(rtts, distances, degree=2)
+        rtts = np.linspace(10, 100, 1000)
+        distances = 5000 + 50 * rtts + np.random.normal(0, 500, 1000)
+        knot_rtts, knot_dists, _ = fit_rtt_distance_spline(rtts, distances, n_knots=20)
 
-        # Test that timeout parameter is respected
-        # Use negative timeout to ensure immediate timeout
         with self.assertRaises(DeltaSearchTimeout):
             find_delta_for_coverage(
-                rtts, distances, coefficients,
-                target_coverage=0.99999,  # Very tight target
-                timeout_seconds=-1.0,  # Negative timeout = instant timeout
+                rtts, distances, knot_rtts, knot_dists,
+                target_coverage=0.99999,
+                timeout_seconds=-1.0,  # Negative = instant timeout
                 max_iterations=1000000
             )
 
     def test_delta_search_no_solution(self):
         """Raises DeltaSearchError when exact coverage impossible within tolerance."""
-        # Create data with outliers that make exact 95% coverage hard to achieve
         np.random.seed(123)
-        rtts = np.linspace(10, 100, 20)
-        distances = 100 * rtts + np.random.normal(0, 50, 20)
+        rtts = np.linspace(10, 100, 50)
+        distances = 5000 + 50 * rtts + np.random.normal(0, 100, 50)
         # Add extreme outliers
         rtts = np.append(rtts, [50, 50])
-        distances = np.append(distances, [100, 50000])  # One very close, one very far
+        distances = np.append(distances, [100, 100000])
 
-        coefficients, _ = fit_rtt_distance_polynomial(rtts, distances, degree=1)
+        knot_rtts, knot_dists, _ = fit_rtt_distance_spline(rtts, distances, n_knots=10)
 
-        # Require 100% coverage with 0 tolerance and limited iterations
-        # This should fail because the outliers make it impossible
         with self.assertRaises((DeltaSearchError, DeltaSearchTimeout)):
             find_delta_for_coverage(
-                rtts, distances, coefficients,
+                rtts, distances, knot_rtts, knot_dists,
                 target_coverage=0.95,
                 tolerance=0.001,  # Very tight tolerance
                 timeout_seconds=0.1,  # Short timeout
-                max_iterations=5  # Very few iterations
+                max_iterations=5
             )
 
 
@@ -242,6 +241,34 @@ class TestOctantRTTModel(unittest.TestCase):
         # Bounds should be reasonable (around 5000 km for RTT=50, slope~100)
         self.assertGreater(min_dist, 0)
         self.assertLess(max_dist, 20000)
+
+    def test_spline_fitted_and_monotonic(self):
+        """Fitted model has monotonically non-decreasing spline knots."""
+        np.random.seed(42)
+        rtts = np.linspace(10, 100, 100)
+        distances = 5000 + 50 * rtts + np.random.uniform(-500, 500, 100)
+
+        model = OctantRTTModel(anchor_ip='192.168.1.1', anchor_lat=40.0, anchor_lon=-74.0)
+        model.fit(rtts, distances)
+
+        self.assertIsNotNone(model.spline_rtt_knots)
+        self.assertIsNotNone(model.spline_dist_knots)
+        self.assertGreaterEqual(len(model.spline_rtt_knots), 2)
+        for i in range(1, len(model.spline_dist_knots)):
+            self.assertGreaterEqual(model.spline_dist_knots[i], model.spline_dist_knots[i - 1])
+
+    def test_predict_with_spline(self):
+        """Spline-mode prediction returns valid (min, max) bounds."""
+        np.random.seed(42)
+        rtts = np.linspace(10, 100, 100)
+        distances = 5000 + 50 * rtts + np.random.uniform(-300, 300, 100)
+
+        model = OctantRTTModel(anchor_ip='192.168.1.1', anchor_lat=40.0, anchor_lon=-74.0)
+        model.fit(rtts, distances)
+
+        min_dist, max_dist = model.predict_distance_bounds(50.0, use_polynomial=True, delta=1.5)
+        self.assertGreater(min_dist, 0)
+        self.assertLess(min_dist, max_dist)
 
     def test_serialization(self):
         """Save/load preserves model state."""

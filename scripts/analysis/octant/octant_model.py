@@ -7,7 +7,7 @@ Implements the Octant framework's dual-bound RTT-distance modeling approach
 Key features:
 - Convex hull dual bounds (R_L upper, r_L lower) for annular constraints
 - Count-based reliability cutoff for sparse data regions
-- Polynomial-based iterative refinement with delta search
+- Piecewise linear spline iterative refinement with delta search
 
 Ablated features (for scalability on passive data):
 - Height computation (requires active traceroute)
@@ -21,8 +21,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, List, Dict, Any
 
-from scipy.spatial import ConvexHull
-from scipy.optimize import lsq_linear
+from scipy.interpolate import make_lsq_spline
 
 # Constants (shared with rtt_model.py)
 EARTH_RADIUS_KM = 6371.0
@@ -40,9 +39,13 @@ class OctantFitError(Exception):
     pass
 
 
-class PolynomialFitError(OctantFitError):
-    """Raised when polynomial fitting fails."""
+class SplineFitError(OctantFitError):
+    """Raised when spline fitting fails."""
     pass
+
+
+# Backward-compatibility alias
+PolynomialFitError = SplineFitError
 
 
 class DeltaSearchError(OctantFitError):
@@ -107,73 +110,31 @@ def compute_convex_hull_bounds(
             'message': f'Need at least 3 valid points, got {len(rtts)}'
         }
 
-    # Stack points as (RTT, distance)
-    points = np.column_stack([rtts, distances])
+    # Monotone chain algorithm for upper and lower convex hull chains.
+    # Points sorted by RTT (x), then distance (y) for ties.
+    # Upper chain = max-distance boundary (R_L, outer radius).
+    # Lower chain = min-distance boundary (r_L, inner radius).
+    def _cross(O, A, B):
+        return (A[0] - O[0]) * (B[1] - O[1]) - (A[1] - O[1]) * (B[0] - O[0])
 
-    try:
-        hull = ConvexHull(points)
-    except Exception as e:
-        return {
-            'hull_upper_rtts': [],
-            'hull_upper_distances': [],
-            'hull_lower_rtts': [],
-            'hull_lower_distances': [],
-            'cutoff_rtt': 0.0,
-            'success': False,
-            'message': f'ConvexHull computation failed: {str(e)}'
-        }
+    pts = sorted(zip(rtts.tolist(), distances.tolist()))
 
-    # Extract hull vertices
-    hull_vertices = points[hull.vertices]
+    lower: list = []
+    for p in pts:
+        while len(lower) >= 2 and _cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
 
-    # Sort by RTT (x-axis)
-    sorted_indices = np.argsort(hull_vertices[:, 0])
-    hull_vertices = hull_vertices[sorted_indices]
+    upper: list = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and _cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
 
-    # Separate upper and lower chains
-    # Find the leftmost and rightmost points
-    min_rtt_idx = 0
-    max_rtt_idx = len(hull_vertices) - 1
-
-    # Split vertices into upper and lower chains
-    # Upper chain: max distance at each RTT
-    # Lower chain: min distance at each RTT
-    hull_upper = []
-    hull_lower = []
-
-    # Use a sweep approach: for each unique RTT region, track max and min
-    # Actually, the convex hull vertices naturally form upper and lower chains
-    # We need to identify which vertices are on the upper vs lower boundary
-
-    # Compute centroid of all points for reference
-    centroid_dist = np.mean(distances)
-
-    # Classify each hull vertex as upper or lower based on distance relative to trend
-    # Simple approach: fit a line through all points, classify based on residual
-    if len(rtts) >= 2:
-        # Fit linear trend
-        slope, intercept = np.polyfit(rtts, distances, 1)
-        trend_at_hull = slope * hull_vertices[:, 0] + intercept
-
-        for i, (rtt, dist) in enumerate(hull_vertices):
-            if dist >= trend_at_hull[i]:
-                hull_upper.append((rtt, dist))
-            else:
-                hull_lower.append((rtt, dist))
-
-    # Ensure both chains have at least the endpoints
-    if len(hull_upper) < 2:
-        # Add min and max RTT points to upper
-        hull_upper = [(hull_vertices[0, 0], hull_vertices[0, 1]),
-                      (hull_vertices[-1, 0], hull_vertices[-1, 1])]
-    if len(hull_lower) < 2:
-        # Add min and max RTT points to lower
-        hull_lower = [(hull_vertices[0, 0], hull_vertices[0, 1]),
-                      (hull_vertices[-1, 0], hull_vertices[-1, 1])]
-
-    # Sort by RTT
-    hull_upper = sorted(hull_upper, key=lambda x: x[0])
-    hull_lower = sorted(hull_lower, key=lambda x: x[0])
+    # Both chains include the shared endpoints; reverse upper so it is
+    # sorted by RTT ascending (leftmost → rightmost).
+    hull_upper = upper[::-1]
+    hull_lower = lower
 
     # Detect cutoff RTT by scanning bins from high to low
     max_rtt = np.max(rtts)
@@ -294,37 +255,33 @@ def hull_rtt_to_distance(
 
 
 # =============================================================================
-# Polynomial Fitting Functions
+# Spline Fitting Functions
 # =============================================================================
 
-def fit_rtt_distance_polynomial(
+def fit_rtt_distance_spline(
     rtts: np.ndarray,
     distances: np.ndarray,
-    degree: int = 2,
-    constrain_monotonic: bool = True
-) -> Tuple[np.ndarray, Dict[str, Any]]:
+    n_knots: int = 20
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     """
-    Fit polynomial minimizing squared error to data.
+    Fit piecewise linear spline minimizing squared error to RTT-distance data.
+
+    Uses scipy.interpolate.make_lsq_spline with k=1 (linear), placing interior
+    knots uniformly across the RTT range. Matches the Octant paper description:
+    "interpolated spline that minimizes the square error to the data points."
 
     Args:
-        rtts: RTT values in ms (x-axis)
-        distances: Geographic distances in km (y-axis)
-        degree: Polynomial degree (default 2 = quadratic)
-        constrain_monotonic: If True, constrain slope coefficients >= 0 to ensure
-                            monotonically increasing curve, while allowing intercept
-                            to be negative (accounts for processing delay). (default True)
+        rtts: RTT values in ms
+        distances: Geographic distances in km
+        n_knots: Number of interior knots (default 20)
 
     Returns:
-        (coefficients, metadata_dict) where coefficients are for np.polyval
-        (highest degree first: [c_n, c_{n-1}, ..., c_1, c_0])
+        (knot_rtts, knot_dists, metadata) where the two arrays define the
+        piecewise linear spline for evaluation via hull_rtt_to_distance() or
+        np.interp(). Monotonicity (non-decreasing distance) is enforced.
 
     Raises:
-        PolynomialFitError: If fitting fails (e.g., insufficient data)
-
-    Note:
-        The intercept (c_0) is allowed to be negative because at RTT=0, distance
-        should be 0, but real measurements have processing/queuing delay. A negative
-        intercept means "distance = 0 when RTT = processing_delay".
+        SplineFitError: If fitting fails (insufficient data or numerical issues)
     """
     rtts = np.asarray(rtts, dtype=float)
     distances = np.asarray(distances, dtype=float)
@@ -334,71 +291,60 @@ def fit_rtt_distance_polynomial(
     rtts = rtts[valid_mask]
     distances = distances[valid_mask]
 
-    min_points = degree + 2  # Need at least degree+2 points for meaningful fit
+    # make_lsq_spline with k=1 and n_knots interior knots needs > n_knots+2 points
+    min_points = n_knots + 3
     if len(rtts) < min_points:
-        raise PolynomialFitError(
-            f'Need at least {min_points} valid points for degree {degree}, got {len(rtts)}'
+        raise SplineFitError(
+            f'Need at least {min_points} valid points for {n_knots} interior knots, got {len(rtts)}'
         )
 
+    # Sort by RTT (required for make_lsq_spline)
+    sort_idx = np.argsort(rtts)
+    rtts = rtts[sort_idx]
+    distances = distances[sort_idx]
+
     try:
-        if constrain_monotonic:
-            # Constrain slope coefficients >= 0, but allow intercept to be any value
-            # For degree=2: distance = c2*rtt^2 + c1*rtt + c0
-            # Constraints: c2 >= 0, c1 >= 0, c0 can be negative (processing delay)
+        # Build full knot vector for k=1: boundary knots repeated k+1=2 times,
+        # with n_knots interior knots strictly inside (rtt_min, rtt_max)
+        interior_knots = np.linspace(rtts[0], rtts[-1], n_knots + 2)[1:-1]
+        t_full = np.r_[(rtts[0],) * 2, interior_knots, (rtts[-1],) * 2]
 
-            # Build Vandermonde matrix: [rtt^2, rtt^1, rtt^0]
-            A = np.vander(rtts, degree + 1)
+        # Global least-squares piecewise linear (k=1) fit
+        spline = make_lsq_spline(rtts, distances, t=t_full, k=1)
 
-            # Bounds: [0, 0, ..., 0, -inf] for lower, [inf, inf, ..., inf] for upper
-            # All coefficients >= 0 except intercept (last one) which can be negative
-            lower_bounds = np.zeros(degree + 1)
-            lower_bounds[-1] = -np.inf  # Intercept can be negative
-            upper_bounds = np.full(degree + 1, np.inf)
+        # Evaluate at uniform grid to extract plain arrays for storage
+        knot_rtts = np.linspace(rtts[0], rtts[-1], n_knots + 2)
+        knot_dists = spline(knot_rtts)
 
-            result = lsq_linear(
-                A, distances,
-                bounds=(lower_bounds, upper_bounds),
-                method='bvls'
-            )
+        # Enforce monotonicity: distance non-decreasing with RTT
+        for i in range(1, len(knot_dists)):
+            if knot_dists[i] < knot_dists[i - 1]:
+                knot_dists[i] = knot_dists[i - 1]
 
-            if result.success:
-                coefficients = result.x
-            else:
-                # Fall back to unconstrained
-                coefficients = np.polyfit(rtts, distances, degree)
-        else:
-            # Unconstrained fit
-            coefficients = np.polyfit(rtts, distances, degree)
-
-        # Calculate R-squared
-        predicted = np.polyval(coefficients, rtts)
+        # Compute R² against original data
+        predicted = spline(rtts)
         ss_res = np.sum((distances - predicted) ** 2)
         ss_tot = np.sum((distances - np.mean(distances)) ** 2)
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
-        # Check if slope coefficients are non-negative (all except intercept)
-        slope_coeffs_positive = all(c >= 0 for c in coefficients[:-1]) if len(coefficients) > 1 else True
-
         metadata = {
-            'degree': degree,
+            'n_knots': len(knot_rtts),
             'n_points': len(rtts),
             'r_squared': r_squared,
-            'residual_std': np.std(distances - predicted),
-            'constrained': constrain_monotonic,
-            'slope_coeffs_positive': slope_coeffs_positive,
-            'intercept': coefficients[-1] if len(coefficients) > 0 else 0.0
+            'residual_std': float(np.std(distances - predicted)),
         }
 
-        return coefficients, metadata
+        return knot_rtts, knot_dists, metadata
 
     except Exception as e:
-        raise PolynomialFitError(f'Polynomial fitting failed: {str(e)}')
+        raise SplineFitError(f'Spline fitting failed: {str(e)}')
 
 
 def find_delta_for_coverage(
     rtts: np.ndarray,
     distances: np.ndarray,
-    poly_coefficients: np.ndarray,
+    spline_rtt_knots: np.ndarray,
+    spline_dist_knots: np.ndarray,
     target_coverage: float,
     tolerance: float = 0.01,
     max_iterations: int = 100,
@@ -407,14 +353,15 @@ def find_delta_for_coverage(
 ) -> Tuple[float, Dict[str, Any]]:
     """
     Find delta such that target_coverage % of data points fall within
-    [poly(rtt)/delta, poly(rtt)*delta] bounds.
+    [spline(rtt)/delta, spline(rtt)*delta] bounds.
 
     Uses binary search to find optimal delta. No upper limit on delta.
 
     Args:
         rtts: RTT values in ms
         distances: Geographic distances in km
-        poly_coefficients: Polynomial coefficients from np.polyfit
+        spline_rtt_knots: RTT knot positions from fit_rtt_distance_spline
+        spline_dist_knots: Distance knot values from fit_rtt_distance_spline
         target_coverage: Desired fraction of points within bounds (e.g., 0.90)
         tolerance: Acceptable deviation from target (e.g., 0.01 = ±1%)
         max_iterations: Maximum binary search iterations
@@ -425,12 +372,12 @@ def find_delta_for_coverage(
         (delta, metadata_dict) where metadata includes actual_coverage, iterations
 
     Raises:
-        PolynomialFitError: If poly_coefficients is None or invalid
+        SplineFitError: If spline knots are None or invalid
         DeltaSearchError: If no delta achieves target coverage
         DeltaSearchTimeout: If search exceeds timeout_seconds
     """
-    if poly_coefficients is None or len(poly_coefficients) == 0:
-        raise PolynomialFitError('Invalid polynomial coefficients')
+    if spline_rtt_knots is None or len(spline_rtt_knots) < 2:
+        raise SplineFitError('Invalid spline knots')
 
     rtts = np.asarray(rtts, dtype=float)
     distances = np.asarray(distances, dtype=float)
@@ -446,9 +393,8 @@ def find_delta_for_coverage(
     start_time = time.time()
 
     def compute_coverage(delta: float) -> float:
-        """Compute fraction of points within [poly/delta, poly*delta]."""
-        predicted = np.polyval(poly_coefficients, rtts)
-        # Handle negative predictions
+        """Compute fraction of points within [spline/delta, spline*delta]."""
+        predicted = np.interp(rtts, spline_rtt_knots, spline_dist_knots)
         predicted = np.maximum(predicted, 1.0)  # Minimum 1 km
         lower = predicted / delta
         upper = predicted * delta
@@ -554,9 +500,10 @@ class OctantRTTModel:
     cutoff_min_points: int = 5
     baseline_slope: float = THEORETICAL_SLOPE
 
-    # Polynomial for iterative refinement
-    poly_coefficients: Optional[np.ndarray] = None
-    poly_degree: int = 2
+    # Piecewise linear spline for iterative refinement
+    spline_rtt_knots: Optional[List[float]] = None
+    spline_dist_knots: Optional[List[float]] = None
+    spline_n_knots: int = 20
 
     # Metadata
     n_measurements: int = 0
@@ -568,25 +515,25 @@ class OctantRTTModel:
         rtts: np.ndarray,
         distances: np.ndarray,
         cutoff_min_points: int = 5,
-        fit_polynomial: bool = True,
-        poly_degree: int = 2
+        fit_spline: bool = True,
+        spline_n_knots: int = 20
     ) -> bool:
         """
-        Fit Octant model: convex hull bounds + optional polynomial.
+        Fit Octant model: convex hull bounds + optional piecewise linear spline.
 
         Args:
             rtts: RTT values in ms
             distances: Geographic distances in km
             cutoff_min_points: Threshold for sparse data detection
-            fit_polynomial: Whether to fit polynomial for refinement
-            poly_degree: Polynomial degree (default 2)
+            fit_spline: Whether to fit piecewise linear spline for refinement
+            spline_n_knots: Number of interior knots for the spline (default 20)
 
         Returns:
             True if fitting succeeded
         """
         self.n_measurements = len(rtts)
         self.cutoff_min_points = cutoff_min_points
-        self.poly_degree = poly_degree
+        self.spline_n_knots = spline_n_knots
 
         # Compute convex hull bounds
         hull_result = compute_convex_hull_bounds(
@@ -606,24 +553,34 @@ class OctantRTTModel:
         self.hull_lower_distances = hull_result['hull_lower_distances']
         self.cutoff_rtt = hull_result['cutoff_rtt']
 
-        # Fit polynomial for iterative refinement
-        if fit_polynomial:
+        # Fit piecewise linear spline for iterative refinement
+        if fit_spline:
             try:
-                self.poly_coefficients, poly_meta = fit_rtt_distance_polynomial(
-                    rtts,
-                    distances,
-                    degree=poly_degree,
-                    constrain_monotonic=True,
+                # Restrict to reliable region (below cutoff) — spline terminates at cutoff
+                reliable_mask = np.asarray(rtts) <= self.cutoff_rtt
+                spline_rtts = np.asarray(rtts)[reliable_mask]
+                spline_distances = np.asarray(distances)[reliable_mask]
+
+                # Derive n_knots from upper hull vertices within the reliable region
+                n_knots_used = max(3, sum(r <= self.cutoff_rtt for r in self.hull_upper_rtts))
+
+                knot_rtts, knot_dists, spline_meta = fit_rtt_distance_spline(
+                    spline_rtts, spline_distances, n_knots=n_knots_used
                 )
+                self.spline_rtt_knots = knot_rtts.tolist()
+                self.spline_dist_knots = knot_dists.tolist()
+                self.spline_n_knots = n_knots_used
                 self.fit_message = (
                     f"Hull: {len(self.hull_upper_rtts)} upper, {len(self.hull_lower_rtts)} lower vertices. "
-                    f"Poly R²={poly_meta['r_squared']:.3f}"
+                    f"Spline: {spline_meta['n_knots']} knots, R²={spline_meta['r_squared']:.3f}"
                 )
-            except PolynomialFitError as e:
-                self.poly_coefficients = None
-                self.fit_message = f"Hull OK, polynomial failed: {str(e)}"
+            except SplineFitError as e:
+                self.spline_rtt_knots = None
+                self.spline_dist_knots = None
+                self.fit_message = f"Hull OK, spline failed: {str(e)}"
         else:
-            self.poly_coefficients = None
+            self.spline_rtt_knots = None
+            self.spline_dist_knots = None
             self.fit_message = f"Hull: {len(self.hull_upper_rtts)} upper, {len(self.hull_lower_rtts)} lower vertices"
 
         self.fitted = True
@@ -650,12 +607,17 @@ class OctantRTTModel:
             raise OctantFitError('Model not fitted')
 
         if use_polynomial:
-            if self.poly_coefficients is None:
-                raise OctantFitError('Polynomial not fitted')
+            if self.spline_rtt_knots is None:
+                raise OctantFitError('Spline not fitted')
             if delta is None:
                 raise ValueError('delta required when use_polynomial=True')
 
-            predicted = np.polyval(self.poly_coefficients, rtt)
+            # Evaluate piecewise linear spline; cutoff_rtt=inf disables cutoff
+            # so hull_rtt_to_distance extrapolates from endpoint slope beyond range
+            predicted = hull_rtt_to_distance(
+                rtt, self.spline_rtt_knots, self.spline_dist_knots,
+                cutoff_rtt=float('inf')
+            )
             predicted = max(predicted, 1.0)  # Minimum 1 km
             return (predicted / delta, predicted * delta)
 
@@ -696,11 +658,12 @@ class OctantRTTModel:
         """
         if not self.fitted:
             raise OctantFitError('Model not fitted')
-        if self.poly_coefficients is None:
-            raise PolynomialFitError('Polynomial not fitted')
+        if self.spline_rtt_knots is None:
+            raise SplineFitError('Spline not fitted')
 
         delta, _ = find_delta_for_coverage(
-            rtts, distances, self.poly_coefficients,
+            rtts, distances,
+            np.array(self.spline_rtt_knots), np.array(self.spline_dist_knots),
             target_coverage=target_coverage,
             timeout_seconds=timeout_seconds
         )
@@ -737,8 +700,9 @@ class OctantRTTModel:
             'cutoff_rtt': self.cutoff_rtt,
             'cutoff_min_points': self.cutoff_min_points,
             'baseline_slope': self.baseline_slope,
-            'poly_coefficients': self.poly_coefficients.tolist() if self.poly_coefficients is not None else None,
-            'poly_degree': self.poly_degree,
+            'spline_rtt_knots': self.spline_rtt_knots,
+            'spline_dist_knots': self.spline_dist_knots,
+            'spline_n_knots': self.spline_n_knots,
             'n_measurements': self.n_measurements,
             'fitted': self.fitted,
             'fit_message': self.fit_message
