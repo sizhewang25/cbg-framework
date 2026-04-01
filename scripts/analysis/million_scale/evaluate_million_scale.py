@@ -40,6 +40,15 @@ from scripts.analysis.cbg_feasibility.rtt_model import (
     THEORETICAL_SLOPE,
     fit_bestline_lp,
 )
+from scripts.analysis.octant.octant_model import OctantRTTModel, find_delta_for_coverage
+from scripts.analysis.octant.octant_geolocation import (
+    form_constraints,
+    compute_feasible_region_unweighted,
+    sample_points_in_region,
+    geometric_median_approx,
+    _region_area_km2,
+    _weighted_centroid_fallback,
+)
 
 # Plot style
 plt.style.use('seaborn-v0_8-whitegrid')
@@ -246,6 +255,170 @@ def fit_lp_models(df_asn):
 
 
 # =============================================================================
+# Octant Model Fitting
+# =============================================================================
+
+def fit_octant_models(df_asn, target_coverage=0.90):
+    """Fit Octant RTT-distance models per anchor and compute shared delta."""
+    anchors = df_asn[['dst_ip', 'anchor_latitude', 'anchor_longitude', 'anchor_city']].drop_duplicates()
+    models = {}
+
+    all_rtts = []
+    all_distances = []
+
+    for _, anchor in anchors.iterrows():
+        anchor_ip = anchor['dst_ip']
+        anchor_data = df_asn[df_asn['dst_ip'] == anchor_ip]
+
+        rtts = anchor_data['min_rtt'].values
+        distances = anchor_data['distance_km'].values
+
+        model = OctantRTTModel(
+            anchor_ip=anchor_ip,
+            anchor_lat=anchor['anchor_latitude'],
+            anchor_lon=anchor['anchor_longitude'],
+        )
+        success = model.fit(rtts, distances)
+        models[anchor_ip] = model
+
+        if success and model.spline_rtt_knots is not None:
+            all_rtts.extend(rtts.tolist())
+            all_distances.extend(distances.tolist())
+
+        status = model.fit_message if model.fitted else "FAILED"
+        print(f"  Octant model {anchor_ip}: {status}")
+
+    # Compute shared delta for target coverage
+    delta = None
+    if all_rtts:
+        # Use the first fitted model's spline as representative for delta search
+        fitted_models = [m for m in models.values() if m.fitted and m.spline_rtt_knots is not None]
+        if fitted_models:
+            ref_model = fitted_models[0]
+            try:
+                delta, delta_meta = find_delta_for_coverage(
+                    np.array(all_rtts),
+                    np.array(all_distances),
+                    np.array(ref_model.spline_rtt_knots),
+                    np.array(ref_model.spline_dist_knots),
+                    target_coverage=target_coverage,
+                )
+                print(f"  Shared delta: {delta:.4f} (coverage={delta_meta['actual_coverage']:.3f})")
+            except Exception as e:
+                print(f"  Delta search failed: {e}, using hull bounds only")
+
+    return models, delta
+
+
+# =============================================================================
+# Octant CBG Evaluation
+# =============================================================================
+
+def run_octant_cbg(df_asn, octant_models, delta):
+    """
+    Run Octant CBG: spline+delta annular constraints + Shapely intersection + Monte Carlo.
+
+    - RTT → annulus via OctantRTTModel.predict_distance_bounds(rtt, delta)
+      inner = spline(rtt)/delta, outer = spline(rtt)*delta
+    - Intersect outer disks, subtract inner disks → possibly MultiPolygon
+    - Monte Carlo geometric median for point selection
+    """
+    anchors = df_asn[['dst_ip', 'anchor_latitude', 'anchor_longitude']].drop_duplicates()
+    anchor_coords = {}
+    for _, row in anchors.iterrows():
+        anchor_coords[row['dst_ip']] = (row['anchor_latitude'], row['anchor_longitude'])
+
+    probe_ips = df_asn['src_ip'].unique()
+    results = []
+    all_outer_radii = []
+    all_areas = []
+    rng = np.random.default_rng(42)
+
+    for probe_ip in probe_ips:
+        probe_data = df_asn[df_asn['src_ip'] == probe_ip]
+        true_lat = probe_data['probe_latitude'].iloc[0]
+        true_lon = probe_data['probe_longitude'].iloc[0]
+
+        # Collect RTT measurements
+        rtt_measurements = {}
+        for _, row in probe_data.iterrows():
+            anchor_ip = row['dst_ip']
+            rtt = row['min_rtt']
+            if anchor_ip in octant_models and octant_models[anchor_ip].fitted:
+                rtt_measurements[anchor_ip] = rtt
+
+        if not rtt_measurements:
+            results.append({
+                'probe_ip': probe_ip, 'true_lat': true_lat, 'true_lon': true_lon,
+                'estimated_lat': None, 'estimated_lon': None,
+                'error_km': None, 'n_anchors': 0,
+                'method': 'octant_cbg', 'intersection': False,
+                'avg_radius_km': None, 'intersection_area_km2': 0.0,
+            })
+            continue
+
+        # Form annular constraints
+        constraints = form_constraints(
+            probe_ip, rtt_measurements, anchor_coords, octant_models,
+            delta=delta, max_rtt_ms=200.0,
+        )
+
+        # Track outer radii
+        outer_radii = [c.outer_radius_km for c in constraints]
+        all_outer_radii.extend(outer_radii)
+
+        if not constraints:
+            results.append({
+                'probe_ip': probe_ip, 'true_lat': true_lat, 'true_lon': true_lon,
+                'estimated_lat': None, 'estimated_lon': None,
+                'error_km': None, 'n_anchors': 0,
+                'method': 'octant_cbg', 'intersection': False,
+                'avg_radius_km': None, 'intersection_area_km2': 0.0,
+            })
+            continue
+
+        # Compute feasible region (intersect outers, subtract inners)
+        region = compute_feasible_region_unweighted(constraints, n_pts=128)
+        area_km2 = _region_area_km2(region) if region is not None else 0.0
+        all_areas.append(area_km2)
+
+        did_intersect = region is not None and not region.is_empty
+
+        if did_intersect:
+            # Monte Carlo geometric median
+            points = sample_points_in_region(region, n_samples=5000, rng=rng)
+            if len(points) >= 2:
+                est_lat, est_lon = geometric_median_approx(points)
+            elif len(points) == 1:
+                est_lat, est_lon = points[0, 0], points[0, 1]
+            else:
+                # Region too small for sampling; use Shapely centroid
+                centroid = region.centroid
+                est_lat, est_lon = centroid.y, centroid.x
+        else:
+            # Fallback: weighted centroid of landmarks
+            est_lat, est_lon = _weighted_centroid_fallback(constraints)
+
+        error_km = haversine((est_lat, est_lon), (true_lat, true_lon))
+
+        results.append({
+            'probe_ip': probe_ip,
+            'true_lat': true_lat,
+            'true_lon': true_lon,
+            'estimated_lat': float(est_lat),
+            'estimated_lon': float(est_lon),
+            'error_km': float(error_km),
+            'n_anchors': len(constraints),
+            'method': 'octant_cbg',
+            'intersection': did_intersect,
+            'avg_radius_km': float(np.mean(outer_radii)) if outer_radii else None,
+            'intersection_area_km2': area_km2,
+        })
+
+    return results, np.array(all_outer_radii), np.array(all_areas)
+
+
+# =============================================================================
 # Vanilla CBG Evaluation (LP model + Million-Scale multilateration)
 # =============================================================================
 
@@ -349,16 +522,21 @@ def run_vanilla_cbg(df_asn, lp_models):
 # Plotting
 # =============================================================================
 
-def plot_error_cdf_comparison(ms_errors, vanilla_errors, output_path=None):
-    """Plot comparative Error CDF for both methods."""
+def plot_error_cdf_comparison(ms_errors, vanilla_errors, octant_errors=None, output_path=None):
+    """Plot comparative Error CDF for all methods."""
     fig, ax = plt.subplots(figsize=(12, 8))
 
     all_series = [
         (vanilla_errors, 'Vanilla CBG', 'black', '-'),
         (ms_errors, 'Million-Scale CBG', 'blue', '-'),
     ]
-
     all_errors_list = [vanilla_errors, ms_errors]
+    short_names = ['Van', 'MS']
+
+    if octant_errors is not None and len(octant_errors) > 0:
+        all_series.append((octant_errors, 'Octant CBG', 'green', '-'))
+        all_errors_list.append(octant_errors)
+        short_names.append('Oct')
 
     for errors, label, color, ls in all_series:
         sorted_e = np.sort(errors)
@@ -370,7 +548,7 @@ def plot_error_cdf_comparison(ms_errors, vanilla_errors, output_path=None):
     # Threshold lines
     for thresh, color in [(100, 'green'), (500, 'orange'), (1000, 'red')]:
         parts = []
-        for errors, name in zip(all_errors_list, ['Van', 'MS']):
+        for errors, name in zip(all_errors_list, short_names):
             parts.append(f'{name}={np.mean(errors <= thresh) * 100:.1f}%')
         ax.axvline(x=thresh, color=color, linestyle='--', alpha=0.5,
                    label=f'{thresh} km: {", ".join(parts)}')
@@ -399,6 +577,8 @@ def plot_error_cdf_comparison(ms_errors, vanilla_errors, output_path=None):
         _stats_block('Vanilla', vanilla_errors),
         _stats_block('Million-Scale', ms_errors),
     ]
+    if octant_errors is not None and len(octant_errors) > 0:
+        blocks.append(_stats_block('Octant', octant_errors))
     stats = '\n\n'.join(blocks)
 
     ax.text(0.98, 0.02, stats, transform=ax.transAxes,
@@ -414,14 +594,18 @@ def plot_error_cdf_comparison(ms_errors, vanilla_errors, output_path=None):
     return fig
 
 
-def plot_radius_cdf(ms_radii, van_radii, output_path=None):
-    """Plot CDF of all individual circle radii for both methods."""
+def plot_radius_cdf(ms_radii, van_radii, octant_radii=None, output_path=None):
+    """Plot CDF of all individual circle radii for all methods."""
     fig, ax = plt.subplots(figsize=(12, 8))
 
-    for radii, label, color in [
+    series = [
         (van_radii, 'Vanilla CBG (LP)', 'black'),
         (ms_radii, 'Million-Scale CBG (2/3c)', 'blue'),
-    ]:
+    ]
+    if octant_radii is not None and len(octant_radii) > 0:
+        series.append((octant_radii, 'Octant CBG (spline·δ)', 'green'))
+
+    for radii, label, color in series:
         sorted_r = np.sort(radii)
         cdf = np.arange(1, len(sorted_r) + 1) / len(sorted_r)
         median = np.median(radii)
@@ -445,8 +629,8 @@ def plot_radius_cdf(ms_radii, van_radii, output_path=None):
     return fig
 
 
-def plot_area_cdf(ms_areas, van_areas, output_path=None):
-    """Plot CDF of intersection areas (km²) for both methods, with zoomed inset."""
+def plot_area_cdf(ms_areas, van_areas, octant_areas=None, output_path=None):
+    """Plot CDF of intersection areas (km²) for all methods, with zoomed inset."""
     from matplotlib.ticker import FuncFormatter
 
     fig, ax = plt.subplots(figsize=(6, 4))
@@ -455,12 +639,16 @@ def plot_area_cdf(ms_areas, van_areas, output_path=None):
     scale = 1e6
     unit = 'million km²'
 
-    series_data = []
-    # Only include probes with area > 0 (successful polygon intersection)
-    for areas, label, color in [
+    series_list = [
         (van_areas, 'Vanilla CBG (LP)', 'black'),
         (ms_areas, 'Million-Scale CBG (2/3c)', 'blue'),
-    ]:
+    ]
+    if octant_areas is not None and len(octant_areas) > 0:
+        series_list.append((octant_areas, 'Octant CBG (spline·δ)', 'green'))
+
+    series_data = []
+    # Only include probes with area > 0 (successful polygon intersection)
+    for areas, label, color in series_list:
         valid = areas[areas > 0]
         sorted_a = np.sort(valid) / scale
         cdf = np.arange(1, len(sorted_a) + 1) / len(sorted_a)
@@ -816,14 +1004,16 @@ def plot_rtt_distance_scatter(anchor_ip, df_anchor, lp_model, max_rtt_ms=150, ou
     return fig
 
 
-def print_statistics(ms_errors, vanilla_errors):
+def print_statistics(ms_errors, vanilla_errors, octant_errors=None):
     """Print comparison statistics table."""
-    w = 70
+    cols = [('Million-Scale', ms_errors), ('Vanilla', vanilla_errors)]
+    if octant_errors is not None and len(octant_errors) > 0:
+        cols.append(('Octant', octant_errors))
+
+    w = 25 + 21 * len(cols)
     print("\n" + "=" * w)
     print("CBG MULTILATERATION COMPARISON — STATISTICS")
     print("=" * w)
-
-    cols = [('Million-Scale', ms_errors), ('Vanilla', vanilla_errors)]
 
     header = f"{'Metric':<25}" + "".join(f" {name:>20}" for name, _ in cols)
     print(header)
@@ -878,6 +1068,12 @@ def main():
     print("=" * 60)
     lp_models = fit_lp_models(df_asn)
 
+    # Fit Octant models
+    print("\n" + "=" * 60)
+    print("FITTING OCTANT MODELS")
+    print("=" * 60)
+    octant_models, octant_delta = fit_octant_models(df_asn)
+
     # Run Vanilla CBG (LP + Spherical)
     print("\n" + "=" * 60)
     print("RUNNING VANILLA CBG")
@@ -908,6 +1104,24 @@ def main():
     ms_valid_areas = ms_all_areas[ms_all_areas > 0]
     print(f"  Intersection areas: N={len(ms_valid_areas)}, median={np.median(ms_valid_areas):,.0f} km²")
 
+    # Run Octant CBG (spline+delta annuli + Shapely + Monte Carlo)
+    print("\n" + "=" * 60)
+    print("RUNNING OCTANT CBG")
+    print("=" * 60)
+    oct_results, oct_all_radii, oct_all_areas = run_octant_cbg(df_asn, octant_models, octant_delta)
+    oct_success = [r for r in oct_results if r['error_km'] is not None]
+    oct_errors = np.array([r['error_km'] for r in oct_success]) if oct_success else np.array([])
+    oct_intersected = sum(1 for r in oct_results if r['intersection'])
+    print(f"  Successful: {len(oct_success)}/{len(oct_results)} probes")
+    print(f"  Intersection succeeded: {oct_intersected}/{len(oct_results)} probes")
+    if len(oct_errors) > 0:
+        print(f"  Median error: {np.median(oct_errors):.1f} km")
+    if len(oct_all_radii) > 0:
+        print(f"  Outer radii: N={len(oct_all_radii)}, mean={np.mean(oct_all_radii):.1f} km, median={np.median(oct_all_radii):.1f} km")
+    oct_valid_areas = oct_all_areas[oct_all_areas > 0] if len(oct_all_areas) > 0 else np.array([])
+    if len(oct_valid_areas) > 0:
+        print(f"  Intersection areas: N={len(oct_valid_areas)}, median={np.median(oct_valid_areas):,.0f} km²")
+
     # Per-anchor RTT-distance scatter
     print("\n" + "=" * 60)
     print("GENERATING RTT-DISTANCE SCATTER PLOTS")
@@ -925,17 +1139,17 @@ def main():
     print("GENERATING ERROR CDF COMPARISON")
     print("=" * 60)
     cdf_path = OUTPUT_DIR / 'error_cdf_comparison.png'
-    fig = plot_error_cdf_comparison(ms_errors, van_errors, output_path=cdf_path)
+    fig = plot_error_cdf_comparison(ms_errors, van_errors, octant_errors=oct_errors, output_path=cdf_path)
     plt.close(fig)
 
     # Circle Radius CDF
     radius_cdf_path = OUTPUT_DIR / 'radius_cdf_comparison.png'
-    fig = plot_radius_cdf(ms_all_radii, van_all_radii, output_path=radius_cdf_path)
+    fig = plot_radius_cdf(ms_all_radii, van_all_radii, octant_radii=oct_all_radii, output_path=radius_cdf_path)
     plt.close(fig)
 
     # Intersection Area CDF
     area_cdf_path = OUTPUT_DIR / 'intersection_area_cdf.png'
-    fig = plot_area_cdf(ms_all_areas, van_all_areas, output_path=area_cdf_path)
+    fig = plot_area_cdf(ms_all_areas, van_all_areas, octant_areas=oct_all_areas, output_path=area_cdf_path)
     plt.close(fig)
 
     # Circle maps at P5, P50, P75 — anchored on Vanilla CBG percentiles
@@ -953,7 +1167,7 @@ def main():
                          percentiles=(5, 50, 75), anchor_method='million_scale')
 
     # Statistics
-    print_statistics(ms_errors, van_errors)
+    print_statistics(ms_errors, van_errors, octant_errors=oct_errors)
 
     # Save results JSON
     results_json = {
@@ -975,6 +1189,16 @@ def main():
             'p90_km': float(np.percentile(van_errors, 90)),
         },
     }
+    if len(oct_errors) > 0:
+        results_json['octant_cbg'] = {
+            'total_probes': len(oct_results),
+            'successful': len(oct_success),
+            'median_km': float(np.median(oct_errors)),
+            'mean_km': float(np.mean(oct_errors)),
+            'p75_km': float(np.percentile(oct_errors, 75)),
+            'p90_km': float(np.percentile(oct_errors, 90)),
+            'delta': float(octant_delta) if octant_delta is not None else None,
+        }
     json_path = OUTPUT_DIR / 'comparison_results.json'
     with open(json_path, 'w') as f:
         json.dump(results_json, f, indent=2)
