@@ -117,8 +117,16 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
             spline_at_cutoff + (rtt_range - model.cutoff_rtt) / THEORETICAL_SLOPE,
             spline_base
         )
-        ax.plot(rtt_range, spline_dists, color='darkorange', linewidth=2.5,
+        # Spline: dotted within reliable region, solid outside
+        in_reliable = (rtt_range >= low_cut) & (rtt_range <= model.cutoff_rtt)
+        # Outside reliable region (solid)
+        outside = ~in_reliable
+        ax.plot(rtt_range, np.where(outside, spline_dists, np.nan),
+                color='darkorange', linewidth=2,
                 label=f'Spline ({model.spline_n_knots} knots)')
+        # Inside reliable region (dotted)
+        ax.plot(rtt_range, np.where(in_reliable, spline_dists, np.nan),
+                color='darkorange', linewidth=2, linestyle=':')
 
         # --- Delta spline band (80% coverage) ---
         try:
@@ -141,10 +149,12 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
             delta_upper = np.where(in_band, np.minimum(delta_upper, upper_dists), delta_upper)
             delta_lower = np.where(in_band, np.maximum(delta_lower, lower_dists), delta_lower)
 
-            ax.plot(rtt_range, delta_upper, color='darkorange', linewidth=1.2,
-                    linestyle='--', alpha=0.8, label=f'Delta upper (δ={delta:.2f})')
-            ax.plot(rtt_range, delta_lower, color='darkorange', linewidth=1.2,
-                    linestyle='--', alpha=0.8, label=f'Delta lower ({coverage_pct:.0f}% coverage)')
+            ax.plot(rtt_range, np.where(in_band, delta_upper, np.nan),
+                    color='darkorange', linewidth=2,
+                    linestyle='-', alpha=0.8, label=f'Delta upper (δ={delta:.2f})')
+            ax.plot(rtt_range, np.where(in_band, delta_lower, np.nan),
+                    color='darkorange', linewidth=2,
+                    linestyle='-', alpha=0.8, label=f'Delta lower ({coverage_pct:.0f}% coverage)')
             ax.fill_between(rtt_range, delta_lower, delta_upper,
                             where=in_band, color='darkorange', alpha=0.12,
                             label=f'Delta band ({coverage_pct:.0f}%)')
