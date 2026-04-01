@@ -1140,7 +1140,7 @@ def main():
     print("GENERATING ERROR CDF COMPARISON")
     print("=" * 60)
     cdf_path = OUTPUT_DIR / 'error_cdf_comparison.png'
-    fig = plot_error_cdf_comparison(ms_errors, van_errors, octant_errors=oct_errors, output_path=cdf_path)
+    fig = plot_error_cdf_comparison(ms_errors, van_errors, octant_errors=None, output_path=cdf_path)
     plt.close(fig)
 
     # Circle Radius CDF
@@ -1150,7 +1150,7 @@ def main():
 
     # Intersection Area CDF
     area_cdf_path = OUTPUT_DIR / 'intersection_area_cdf.png'
-    fig = plot_area_cdf(ms_all_areas, van_all_areas, octant_areas=oct_all_areas, output_path=area_cdf_path)
+    fig = plot_area_cdf(ms_all_areas, van_all_areas, octant_areas=None, output_path=area_cdf_path)
     plt.close(fig)
 
     # Circle maps at P5, P50, P75 — anchored on Vanilla CBG percentiles
