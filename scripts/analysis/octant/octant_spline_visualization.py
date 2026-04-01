@@ -77,9 +77,14 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
                              model.cutoff_rtt, is_upper=False)
         for r in rtt_range
     ])
-    # Below low cutoff: drop curves to 0 (vertical termination at low cutoff)
+    # Below low cutoff: linear ramp from (0,0) to value at low_cutoff (upper); lower stays 0
     if low_cut > 0:
-        upper_dists = np.where(rtt_range < low_cut, 0.0, upper_dists)
+        upper_at_low_cut = float(np.interp(low_cut, rtt_range, upper_dists))
+        upper_dists = np.where(
+            rtt_range < low_cut,
+            (rtt_range / low_cut) * upper_at_low_cut,
+            upper_dists
+        )
         lower_dists = np.where(rtt_range < low_cut, 0.0, lower_dists)
 
     ax.plot(rtt_range, upper_dists, 'r-', linewidth=2,
@@ -97,9 +102,14 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
 
         # Base interpolation (flat extrapolation outside knot range)
         spline_base = np.interp(rtt_range, knot_rtts, knot_dists)
-        # Below low cutoff: drop to 0 (vertical termination at low cutoff)
+        # Below low cutoff: linear ramp from (0,0) to spline value at low_cutoff
         if low_cut > 0:
-            spline_base = np.where(rtt_range < low_cut, 0.0, spline_base)
+            spline_at_low_cut = float(np.interp(low_cut, knot_rtts, knot_dists))
+            spline_base = np.where(
+                rtt_range < low_cut,
+                (rtt_range / low_cut) * spline_at_low_cut,
+                spline_base
+            )
         # Above high cutoff: extend with 2/3c slope from cutoff value
         spline_dists = np.where(
             rtt_range > model.cutoff_rtt,
