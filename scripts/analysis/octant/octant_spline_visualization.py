@@ -116,8 +116,6 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
             spline_at_cutoff + (rtt_range - model.cutoff_rtt) / THEORETICAL_SLOPE,
             spline_base
         )
-        # Clip spline to hull bounds: hull is a hard geometric constraint
-        spline_dists = np.clip(spline_dists, lower_dists, upper_dists)
         ax.plot(rtt_range, spline_dists, color='darkorange', linewidth=2.5,
                 label=f'Spline ({model.spline_n_knots} knots)')
 

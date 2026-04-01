@@ -583,6 +583,49 @@ class OctantRTTModel:
                 knot_rtts, knot_dists, spline_meta = fit_rtt_distance_spline(
                     spline_rtts, spline_distances, n_knots=n_knots_used
                 )
+
+                # Refine cutoffs using spline-hull intersections.
+                # Evaluate spline and hulls on a fine grid within [low_cutoff, cutoff].
+                grid = np.linspace(self.low_cutoff_rtt, self.cutoff_rtt, 500)
+                spline_vals = np.interp(grid, knot_rtts, knot_dists)
+                upper_vals = np.array([
+                    hull_rtt_to_distance(r, self.hull_upper_rtts, self.hull_upper_distances,
+                                         self.cutoff_rtt, is_upper=True)
+                    for r in grid
+                ])
+                lower_vals = np.array([
+                    hull_rtt_to_distance(r, self.hull_lower_rtts, self.hull_lower_distances,
+                                         self.cutoff_rtt, is_upper=False)
+                    for r in grid
+                ])
+
+                # High cutoff: last grid point where spline <= upper hull
+                in_upper = spline_vals <= upper_vals
+                if in_upper.any():
+                    new_high = float(grid[np.where(in_upper)[0][-1]])
+                    if new_high < self.cutoff_rtt:
+                        self.cutoff_rtt = new_high
+
+                # Low cutoff: first grid point where spline >= lower hull
+                in_lower = spline_vals >= lower_vals
+                if in_lower.any():
+                    new_low = float(grid[np.where(in_lower)[0][0]])
+                    if new_low > self.low_cutoff_rtt:
+                        self.low_cutoff_rtt = new_low
+
+                # Refit spline on the refined reliable region
+                reliable_mask = (rtts_arr >= self.low_cutoff_rtt) & (rtts_arr <= self.cutoff_rtt)
+                spline_rtts = rtts_arr[reliable_mask]
+                spline_distances = distances_arr[reliable_mask]
+                upper_count = sum(self.low_cutoff_rtt <= r <= self.cutoff_rtt
+                                  for r in self.hull_upper_rtts)
+                lower_count = sum(self.low_cutoff_rtt <= r <= self.cutoff_rtt
+                                  for r in self.hull_lower_rtts)
+                n_knots_used = max(3, max(upper_count, lower_count))
+                knot_rtts, knot_dists, spline_meta = fit_rtt_distance_spline(
+                    spline_rtts, spline_distances, n_knots=n_knots_used
+                )
+
                 self.spline_rtt_knots = knot_rtts.tolist()
                 self.spline_dist_knots = knot_dists.tolist()
                 self.spline_n_knots = n_knots_used
@@ -641,18 +684,6 @@ class OctantRTTModel:
             else:
                 predicted = float(np.interp(rtt, knot_rtts, knot_dists))
 
-            # Clip to hull bounds: hull is a hard geometric constraint
-            hull_max = hull_rtt_to_distance(
-                rtt, self.hull_upper_rtts, self.hull_upper_distances,
-                self.cutoff_rtt, self.baseline_slope, is_upper=True,
-                low_cutoff_rtt=self.low_cutoff_rtt
-            )
-            hull_min = hull_rtt_to_distance(
-                rtt, self.hull_lower_rtts, self.hull_lower_distances,
-                self.cutoff_rtt, self.baseline_slope, is_upper=False,
-                low_cutoff_rtt=self.low_cutoff_rtt
-            )
-            predicted = float(np.clip(predicted, hull_min, hull_max))
             predicted = max(predicted, 1.0)  # Minimum 1 km
             return (predicted / delta, predicted * delta)
 
