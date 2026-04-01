@@ -641,6 +641,18 @@ class OctantRTTModel:
             else:
                 predicted = float(np.interp(rtt, knot_rtts, knot_dists))
 
+            # Clip to hull bounds: hull is a hard geometric constraint
+            hull_max = hull_rtt_to_distance(
+                rtt, self.hull_upper_rtts, self.hull_upper_distances,
+                self.cutoff_rtt, self.baseline_slope, is_upper=True,
+                low_cutoff_rtt=self.low_cutoff_rtt
+            )
+            hull_min = hull_rtt_to_distance(
+                rtt, self.hull_lower_rtts, self.hull_lower_distances,
+                self.cutoff_rtt, self.baseline_slope, is_upper=False,
+                low_cutoff_rtt=self.low_cutoff_rtt
+            )
+            predicted = float(np.clip(predicted, hull_min, hull_max))
             predicted = max(predicted, 1.0)  # Minimum 1 km
             return (predicted / delta, predicted * delta)
 
