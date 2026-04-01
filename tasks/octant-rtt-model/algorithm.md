@@ -124,13 +124,21 @@ upper_vals  = R_L(grid)
 lower_vals  = r_L(grid)
 ```
 
-**High cutoff refinement** (spline vs upper hull):
-- Find the **last** grid index where `spline_vals[i] ≤ upper_vals[i]`
-- If earlier than the density cutoff → replace `cutoff_rtt` with this intersection RTT
+**Reliable region** — spline must satisfy both bounds simultaneously:
+```
+in_both[i] = (spline_vals[i] ≤ upper_vals[i]) AND (spline_vals[i] ≥ lower_vals[i])
+```
 
-**Low cutoff refinement** (spline vs lower hull):
-- Find the **first** grid index where `spline_vals[i] ≥ lower_vals[i]`
-- If later than the density low_cutoff → replace `low_cutoff_rtt` with this intersection RTT
+**High cutoff refinement**:
+- Find the **last** grid index where `in_both[i]` is True
+- If earlier than the density cutoff → replace `cutoff_rtt` with this RTT
+
+**Low cutoff refinement**:
+- Find the **first** grid index where `in_both[i]` is True
+- If later than the density low_cutoff → replace `low_cutoff_rtt` with this RTT
+
+Using `in_both` for both cutoffs prevents placing a cutoff where the spline satisfies one hull
+but violates the other (e.g. low_cutoff landing where spline exceeds upper hull).
 
 ---
 
