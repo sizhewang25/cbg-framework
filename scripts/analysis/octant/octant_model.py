@@ -547,7 +547,8 @@ class OctantRTTModel:
         hull_result = compute_convex_hull_bounds(
             rtts, distances,
             cutoff_min_points=cutoff_min_points,
-            baseline_slope=self.baseline_slope
+            baseline_slope=self.baseline_slope,
+            bin_size_ms=5,
         )
 
         if not hull_result['success']:
