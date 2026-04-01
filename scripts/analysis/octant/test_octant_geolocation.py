@@ -50,7 +50,7 @@ def _make_fitted_model(anchor_ip: str, lat: float, lon: float) -> OctantRTTModel
     distances = np.maximum(distances, 10.0)  # no negative distances
 
     model = OctantRTTModel(anchor_ip=anchor_ip, anchor_lat=lat, anchor_lon=lon)
-    model.fit(rtts, distances, fit_polynomial=True)
+    model.fit(rtts, distances)
     return model
 
 
