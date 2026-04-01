@@ -35,6 +35,7 @@ from rtt_model import haversine_distance
 from octant_model import (
     OctantRTTModel,
     hull_rtt_to_distance,
+    find_delta_for_coverage,
     THEORETICAL_SLOPE,
 )
 
@@ -118,6 +119,37 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
         )
         ax.plot(rtt_range, spline_dists, color='darkorange', linewidth=2.5,
                 label=f'Spline ({model.spline_n_knots} knots)')
+
+        # --- Delta spline band (80% coverage) ---
+        try:
+            reliable_mask = (rtts >= low_cut) & (rtts <= model.cutoff_rtt)
+            rel_rtts = rtts[reliable_mask]
+            rel_dists = distances[reliable_mask]
+            delta, delta_meta = find_delta_for_coverage(
+                rel_rtts, rel_dists, knot_rtts, knot_dists,
+                target_coverage=0.80
+            )
+            coverage_pct = delta_meta['actual_coverage'] * 100
+
+            # Band only within reliable region; outside → collapse to spline
+            in_band = (rtt_range >= low_cut) & (rtt_range <= model.cutoff_rtt)
+
+            delta_upper = np.where(in_band, spline_base * delta, spline_dists)
+            delta_lower = np.where(in_band, np.maximum(spline_base / delta, 0.0), spline_dists)
+
+            # Clip by hull bounds within reliable region
+            delta_upper = np.where(in_band, np.minimum(delta_upper, upper_dists), delta_upper)
+            delta_lower = np.where(in_band, np.maximum(delta_lower, lower_dists), delta_lower)
+
+            ax.plot(rtt_range, delta_upper, color='darkorange', linewidth=1.2,
+                    linestyle='--', alpha=0.8, label=f'Delta upper (δ={delta:.2f})')
+            ax.plot(rtt_range, delta_lower, color='darkorange', linewidth=1.2,
+                    linestyle='--', alpha=0.8, label=f'Delta lower ({coverage_pct:.0f}% coverage)')
+            ax.fill_between(rtt_range, delta_lower, delta_upper,
+                            where=in_band, color='darkorange', alpha=0.12,
+                            label=f'Delta band ({coverage_pct:.0f}%)')
+        except Exception:
+            pass  # Skip delta band if delta search fails
 
     # --- Labels ---
     ax.set_xlabel('RTT (ms)', fontsize=12)
