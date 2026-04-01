@@ -178,6 +178,30 @@ the calibration scatter: the smallest δ such that at least fraction α of point
 
 ---
 
+## Design Questions
+
+**Q: Why are two rounds of spline fitting necessary?**
+
+The calibration in Phase 3 is circular: we need a spline *to find* where it exits the hull bounds,
+but the cutoffs derived from those intersections define the region the spline should be fit on.
+There is no way to determine the intersection-based cutoffs without first having a spline.
+A single-pass alternative would be to skip the refit — but then the stored spline would cover
+data outside the cutoffs stored on the model, an inconsistency. The second fit resolves this by
+re-fitting on exactly the region the cutoffs describe.
+
+---
+
+**Q: Why is the actual knot count sometimes smaller than `max(upper_hull_vertices, lower_hull_vertices)` within the region?**
+
+`make_lsq_spline` uses *exactly* the `n_knots` passed to it — it has no mechanism to choose fewer.
+The reduction is caused by the calibration in Phase 3. After the cutoffs are tightened by the
+spline-hull intersections, the hull vertex recount in Phase 4 is done over the *new*, narrower
+`[low_cutoff_rtt, cutoff_rtt]`. Hull vertices that were within the original density-based region
+but fall outside the tighter intersection-based region are excluded, yielding a smaller
+`n_knots_used` for the second fit.
+
+---
+
 ## Related Files
 
 - [octant_model.py](../../scripts/analysis/octant/octant_model.py) — implementation
