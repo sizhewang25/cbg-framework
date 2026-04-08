@@ -103,14 +103,6 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
 
         # Base interpolation (flat extrapolation outside knot range)
         spline_base = np.interp(rtt_range, knot_rtts, knot_dists)
-        # Below low cutoff: linear ramp from (0,0) to spline value at low_cutoff
-        if low_cut > 0:
-            spline_at_low_cut = float(np.interp(low_cut, knot_rtts, knot_dists))
-            spline_base = np.where(
-                rtt_range < low_cut,
-                (rtt_range / low_cut) * spline_at_low_cut,
-                spline_base
-            )
         # Above high cutoff: extend with 2/3c slope from cutoff value
         spline_dists = np.where(
             rtt_range > model.cutoff_rtt,
@@ -139,24 +131,19 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
             )
             coverage_pct = delta_meta['actual_coverage'] * 100
 
-            # Band only within reliable region; outside → collapse to spline
-            in_band = (rtt_range >= low_cut) & (rtt_range <= model.cutoff_rtt)
+            # Delta band across full range, clamped by hull bounds
+            delta_upper = np.minimum(spline_dists * delta, upper_dists)
+            delta_lower = np.maximum(spline_dists / delta, lower_dists)
+            delta_lower = np.maximum(delta_lower, 0.0)
 
-            delta_upper = np.where(in_band, spline_base * delta, spline_dists)
-            delta_lower = np.where(in_band, np.maximum(spline_base / delta, 0.0), spline_dists)
-
-            # Clip by hull bounds within reliable region
-            delta_upper = np.where(in_band, np.minimum(delta_upper, upper_dists), delta_upper)
-            delta_lower = np.where(in_band, np.maximum(delta_lower, lower_dists), delta_lower)
-
-            ax.plot(rtt_range, np.where(in_band, delta_upper, np.nan),
+            ax.plot(rtt_range, delta_upper,
                     color='darkorange', linewidth=2,
                     linestyle='-', alpha=0.8, label=f'Delta upper (δ={delta:.2f})')
-            ax.plot(rtt_range, np.where(in_band, delta_lower, np.nan),
+            ax.plot(rtt_range, delta_lower,
                     color='darkorange', linewidth=2,
                     linestyle='-', alpha=0.8, label=f'Delta lower ({coverage_pct:.0f}% coverage)')
             ax.fill_between(rtt_range, delta_lower, delta_upper,
-                            where=in_band, color='darkorange', alpha=0.12,
+                            color='darkorange', alpha=0.12,
                             label=f'Delta band ({coverage_pct:.0f}%)')
         except Exception:
             pass  # Skip delta band if delta search fails

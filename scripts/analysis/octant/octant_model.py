@@ -673,12 +673,7 @@ class OctantRTTModel:
         knot_rtts = np.array(self.spline_rtt_knots)
         knot_dists = np.array(self.spline_dist_knots)
 
-        if self.low_cutoff_rtt > 0 and rtt < self.low_cutoff_rtt:
-            # Linear ramp from (0,0) to spline value at low_cutoff — matches
-            # the calibrated slope rather than the theoretical 2/3c line.
-            low_cutoff_dist = float(np.interp(self.low_cutoff_rtt, knot_rtts, knot_dists))
-            predicted = (low_cutoff_dist / self.low_cutoff_rtt) * rtt
-        elif self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
+        if self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
             cutoff_val = float(np.interp(self.cutoff_rtt, knot_rtts, knot_dists))
             predicted = cutoff_val + (rtt - self.cutoff_rtt) / self.baseline_slope
         else:
@@ -695,9 +690,8 @@ class OctantRTTModel:
         Predict (min_distance, max_distance) bounds from RTT.
 
         Without delta: returns convex hull bounds (r_L, R_L).
-        With delta: returns multiplicative spline band, region-aware:
-          - Inside [low_cutoff, cutoff]: (spline/delta, spline*delta) — both constraints
-          - Outside reliable region: (0, spline*delta) — positive constraint only
+        With delta: returns multiplicative spline band (spline/delta, spline*delta),
+        clamped by hull bounds so inner >= hull_lower and outer <= hull_upper.
 
         Args:
             rtt: Round-trip time in ms
@@ -711,12 +705,24 @@ class OctantRTTModel:
 
         if delta is not None:
             predicted = self.predict_distance(rtt)
-            in_reliable = (self.low_cutoff_rtt <= rtt <= self.cutoff_rtt)
-            if in_reliable:
-                return (predicted / delta, predicted * delta)
-            else:
-                # Outside reliable region: positive constraint only (no negative)
-                return (0.0, predicted * delta)
+            inner = predicted / delta
+            outer = predicted * delta
+
+            # Clamp with hull bounds
+            hull_lower = hull_rtt_to_distance(
+                rtt, self.hull_lower_rtts, self.hull_lower_distances,
+                self.cutoff_rtt, self.baseline_slope, is_upper=False,
+                low_cutoff_rtt=self.low_cutoff_rtt
+            )
+            hull_upper = hull_rtt_to_distance(
+                rtt, self.hull_upper_rtts, self.hull_upper_distances,
+                self.cutoff_rtt, self.baseline_slope, is_upper=True,
+                low_cutoff_rtt=self.low_cutoff_rtt
+            )
+            inner = max(inner, hull_lower)
+            outer = min(outer, hull_upper)
+
+            return (max(0.0, inner), outer)
 
         # Use convex hull bounds
         max_dist = hull_rtt_to_distance(
