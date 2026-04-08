@@ -14,6 +14,7 @@ Coordinate convention:
 """
 
 import logging
+import time
 import numpy as np
 from dataclasses import dataclass
 from functools import reduce
@@ -525,6 +526,7 @@ def estimate_location(
     grid_resolution_deg: float = 0.1,
     n_pts: int = 100,
     rng: Optional[np.random.Generator] = None,
+    collect_benchmark: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Estimate target location from annular constraints.
 
@@ -545,6 +547,7 @@ def estimate_location(
         grid_resolution_deg: For weighted region grid
         n_pts: Points per circle polygon
         rng: Random generator for reproducibility
+        collect_benchmark: Whether to return per-step wall-clock timings
 
     Returns:
         Dict with lat, lon, region_area_km2, n_constraints, method, fallback
@@ -553,13 +556,27 @@ def estimate_location(
     if not constraints:
         return None
 
+    benchmark = {
+        'weighted_region_sec': 0.0,
+        'weighted_low_threshold_sec': 0.0,
+        'unweighted_region_sec': 0.0,
+        'sample_points_sec': 0.0,
+        'geometric_median_sec': 0.0,
+        'region_centroid_sec': 0.0,
+        'centroid_fallback_sec': 0.0,
+        'total_sec': 0.0,
+    } if collect_benchmark else None
+    total_start = time.perf_counter() if collect_benchmark else None
+
     fallback = False
     actual_method = method
     region = None
 
     if method == 'centroid':
+        if collect_benchmark:
+            centroid_start = time.perf_counter()
         lat, lon = _weighted_centroid_fallback(constraints)
-        return {
+        result = {
             'lat': lat,
             'lon': lon,
             'region_area_km2': 0.0,
@@ -567,33 +584,49 @@ def estimate_location(
             'method': 'centroid',
             'fallback': False,
         }
+        if collect_benchmark:
+            benchmark['centroid_fallback_sec'] = time.perf_counter() - centroid_start
+            benchmark['total_sec'] = time.perf_counter() - total_start
+            result['benchmark_sec'] = benchmark
+        return result
 
     # Try primary method
     if method == 'weighted':
+        weighted_start = time.perf_counter() if collect_benchmark else None
         region = compute_feasible_region_weighted(
             constraints, weight_threshold=weight_threshold,
             grid_resolution_deg=grid_resolution_deg,
         )
+        if collect_benchmark:
+            benchmark['weighted_region_sec'] += time.perf_counter() - weighted_start
         # Fallback: lower threshold
         if region is None:
+            weighted_relaxed_start = time.perf_counter() if collect_benchmark else None
             region = compute_feasible_region_weighted(
                 constraints, weight_threshold=weight_threshold / 2.0,
                 grid_resolution_deg=grid_resolution_deg,
             )
+            if collect_benchmark:
+                benchmark['weighted_low_threshold_sec'] += time.perf_counter() - weighted_relaxed_start
             if region is not None:
                 fallback = True
                 actual_method = 'weighted_low_threshold'
 
     if method == 'unweighted' or region is None:
+        unweighted_start = time.perf_counter() if collect_benchmark else None
         region = compute_feasible_region_unweighted(constraints, n_pts=n_pts)
+        if collect_benchmark:
+            benchmark['unweighted_region_sec'] += time.perf_counter() - unweighted_start
         if region is not None and actual_method != 'unweighted':
             fallback = True
             actual_method = 'unweighted'
 
     # Final fallback: weighted centroid
     if region is None:
+        if collect_benchmark:
+            centroid_start = time.perf_counter()
         lat, lon = _weighted_centroid_fallback(constraints)
-        return {
+        result = {
             'lat': lat,
             'lon': lon,
             'region_area_km2': 0.0,
@@ -601,19 +634,33 @@ def estimate_location(
             'method': 'centroid_fallback',
             'fallback': True,
         }
+        if collect_benchmark:
+            benchmark['centroid_fallback_sec'] = time.perf_counter() - centroid_start
+            benchmark['total_sec'] = time.perf_counter() - total_start
+            result['benchmark_sec'] = benchmark
+        return result
 
     # Sample points and find geometric median
     area_km2 = _region_area_km2(region)
+    sample_start = time.perf_counter() if collect_benchmark else None
     points = sample_points_in_region(region, n_samples=n_samples, rng=rng)
+    if collect_benchmark:
+        benchmark['sample_points_sec'] += time.perf_counter() - sample_start
 
     if len(points) < 2:
         # Region too small for sampling; use Shapely centroid
+        centroid_start = time.perf_counter() if collect_benchmark else None
         centroid = region.centroid
         lat, lon = centroid.y, centroid.x
+        if collect_benchmark:
+            benchmark['region_centroid_sec'] += time.perf_counter() - centroid_start
     else:
+        median_start = time.perf_counter() if collect_benchmark else None
         lat, lon = geometric_median_approx(points)
+        if collect_benchmark:
+            benchmark['geometric_median_sec'] += time.perf_counter() - median_start
 
-    return {
+    result = {
         'lat': lat,
         'lon': lon,
         'region_area_km2': area_km2,
@@ -622,6 +669,10 @@ def estimate_location(
         'fallback': fallback,
         'n_samples': len(points),
     }
+    if collect_benchmark:
+        benchmark['total_sec'] = time.perf_counter() - total_start
+        result['benchmark_sec'] = benchmark
+    return result
 
 
 class OctantGeolocator:

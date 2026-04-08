@@ -15,6 +15,7 @@ Produces:
 import sys
 import json
 import math
+import time
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -329,22 +330,41 @@ def run_octant_cbg(df_asn, octant_models, delta):
     results = []
     all_outer_radii = []
     all_areas = []
+    benchmark_totals = {
+        'collect_rtts_sec': 0.0,
+        'form_constraints_sec': 0.0,
+        'estimate_location_sec': 0.0,
+        'weighted_region_sec': 0.0,
+        'weighted_low_threshold_sec': 0.0,
+        'unweighted_region_sec': 0.0,
+        'sample_points_sec': 0.0,
+        'geometric_median_sec': 0.0,
+        'region_centroid_sec': 0.0,
+        'centroid_fallback_sec': 0.0,
+        'probe_total_sec': 0.0,
+    }
+    method_counts = {}
+    fallback_count = 0
     rng = np.random.default_rng(42)
 
     for probe_ip in probe_ips:
+        probe_start = time.perf_counter()
         probe_data = df_asn[df_asn['src_ip'] == probe_ip]
         true_lat = probe_data['probe_latitude'].iloc[0]
         true_lon = probe_data['probe_longitude'].iloc[0]
 
         # Collect RTT measurements
+        collect_start = time.perf_counter()
         rtt_measurements = {}
         for _, row in probe_data.iterrows():
             anchor_ip = row['dst_ip']
             rtt = row['min_rtt']
             if anchor_ip in octant_models and octant_models[anchor_ip].fitted:
                 rtt_measurements[anchor_ip] = rtt
+        benchmark_totals['collect_rtts_sec'] += time.perf_counter() - collect_start
 
         if not rtt_measurements:
+            benchmark_totals['probe_total_sec'] += time.perf_counter() - probe_start
             results.append({
                 'probe_ip': probe_ip, 'true_lat': true_lat, 'true_lon': true_lon,
                 'estimated_lat': None, 'estimated_lon': None,
@@ -355,6 +375,7 @@ def run_octant_cbg(df_asn, octant_models, delta):
             continue
 
         # Form annular constraints
+        constraints_start = time.perf_counter()
         constraints = form_constraints(
             probe_ip, 
             rtt_measurements,
@@ -362,6 +383,7 @@ def run_octant_cbg(df_asn, octant_models, delta):
             octant_models,
             delta=delta,
         )
+        benchmark_totals['form_constraints_sec'] += time.perf_counter() - constraints_start
 
         # Track outer radii
         outer_radii = [c.outer_radius_km for c in constraints]
@@ -380,6 +402,7 @@ def run_octant_cbg(df_asn, octant_models, delta):
         # Keep the paper-style weighted region selection, but use a slightly
         # coarser grid than the visualization path so the million-scale sweep
         # stays tractable.
+        estimate_start = time.perf_counter()
         estimate = estimate_location(
             constraints,
             method='weighted',
@@ -388,9 +411,12 @@ def run_octant_cbg(df_asn, octant_models, delta):
             grid_resolution_deg=0.25,
             n_pts=128,
             rng=rng,
+            collect_benchmark=True,
         )
+        benchmark_totals['estimate_location_sec'] += time.perf_counter() - estimate_start
 
         if estimate is None:
+            benchmark_totals['probe_total_sec'] += time.perf_counter() - probe_start
             results.append({
                 'probe_ip': probe_ip,
                 'true_lat': true_lat,
@@ -408,13 +434,28 @@ def run_octant_cbg(df_asn, octant_models, delta):
             })
             continue
 
+        benchmark = estimate.get('benchmark_sec', {})
+        for key in (
+            'weighted_region_sec',
+            'weighted_low_threshold_sec',
+            'unweighted_region_sec',
+            'sample_points_sec',
+            'geometric_median_sec',
+            'region_centroid_sec',
+            'centroid_fallback_sec',
+        ):
+            benchmark_totals[key] += benchmark.get(key, 0.0)
+
         est_lat = estimate['lat']
         est_lon = estimate['lon']
         area_km2 = float(estimate['region_area_km2'])
         all_areas.append(area_km2)
         did_intersect = estimate['method'] != 'centroid_fallback'
+        method_counts[estimate['method']] = method_counts.get(estimate['method'], 0) + 1
+        fallback_count += int(bool(estimate['fallback']))
 
         error_km = haversine((est_lat, est_lon), (true_lat, true_lon))
+        benchmark_totals['probe_total_sec'] += time.perf_counter() - probe_start
 
         results.append({
             'probe_ip': probe_ip,
@@ -432,7 +473,45 @@ def run_octant_cbg(df_asn, octant_models, delta):
             'fallback': bool(estimate['fallback']),
         })
 
-    return results, np.array(all_outer_radii), np.array(all_areas)
+    benchmark_summary = {
+        'totals_sec': benchmark_totals,
+        'method_counts': method_counts,
+        'fallback_count': fallback_count,
+        'n_probes': len(probe_ips),
+        'avg_constraints_per_probe': float(np.mean([r['n_anchors'] for r in results])) if results else 0.0,
+    }
+
+    return results, np.array(all_outer_radii), np.array(all_areas), benchmark_summary
+
+
+def print_speed_benchmarks(stage_times, octant_benchmarks=None):
+    """Print wall-clock timing benchmarks for the evaluation run."""
+    print("\n" + "=" * 88)
+    print("SPEED BENCHMARKS")
+    print("=" * 88)
+    print("Overall Phases")
+    for name, seconds in sorted(stage_times.items(), key=lambda item: item[1], reverse=True):
+        print(f"  {name:<28} {seconds:>10.3f} s")
+
+    if not octant_benchmarks:
+        print("=" * 88)
+        return
+
+    n_probes = max(int(octant_benchmarks.get('n_probes', 0)), 1)
+    totals = octant_benchmarks.get('totals_sec', {})
+    print("\nOctant Per-Probe Aggregates")
+    for name, seconds in sorted(totals.items(), key=lambda item: item[1], reverse=True):
+        avg_ms = (seconds / n_probes) * 1000.0
+        print(f"  {name:<28} {seconds:>10.3f} s total  ({avg_ms:>8.2f} ms/probe)")
+
+    method_counts = octant_benchmarks.get('method_counts', {})
+    if method_counts:
+        print("\nOctant Region Selection Counts")
+        for method, count in sorted(method_counts.items(), key=lambda item: (-item[1], item[0])):
+            print(f"  {method:<28} {count:>10d}")
+    print(f"\n  {'fallback_count':<28} {octant_benchmarks.get('fallback_count', 0):>10d}")
+    print(f"  {'avg_constraints_per_probe':<28} {octant_benchmarks.get('avg_constraints_per_probe', 0.0):>10.2f}")
+    print("=" * 88)
 
 
 # =============================================================================
@@ -1073,30 +1152,40 @@ def print_statistics(ms_errors, vanilla_errors, octant_errors=None):
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    total_start = time.perf_counter()
+    stage_times = {}
 
     # Step 1: Load data
     print("=" * 60)
     print("LOADING DATA")
     print("=" * 60)
+    stage_start = time.perf_counter()
     df, df_asn = load_data()
+    stage_times['load_data_sec'] = time.perf_counter() - stage_start
 
     # Fit LP models
     print("\n" + "=" * 60)
     print("FITTING LP MODELS")
     print("=" * 60)
+    stage_start = time.perf_counter()
     lp_models = fit_lp_models(df_asn)
+    stage_times['fit_lp_models_sec'] = time.perf_counter() - stage_start
 
     # Fit Octant models
     print("\n" + "=" * 60)
     print("FITTING OCTANT MODELS")
     print("=" * 60)
+    stage_start = time.perf_counter()
     octant_models, octant_delta = fit_octant_models(df_asn, target_coverage=0.80)
+    stage_times['fit_octant_models_sec'] = time.perf_counter() - stage_start
 
     # Run Vanilla CBG (LP + Spherical)
     print("\n" + "=" * 60)
     print("RUNNING VANILLA CBG")
     print("=" * 60)
+    stage_start = time.perf_counter()
     van_results, van_all_radii, van_all_areas = run_vanilla_cbg(df_asn, lp_models)
+    stage_times['run_vanilla_cbg_sec'] = time.perf_counter() - stage_start
     van_success = [r for r in van_results if r['error_km'] is not None]
     van_errors = np.array([r['error_km'] for r in van_success])
     van_intersected = sum(1 for r in van_results if r['intersection'])
@@ -1111,7 +1200,9 @@ def main():
     print("\n" + "=" * 60)
     print("RUNNING MILLION-SCALE CBG")
     print("=" * 60)
+    stage_start = time.perf_counter()
     ms_results, ms_all_radii, ms_all_areas = run_million_scale_cbg(df_asn)
+    stage_times['run_million_scale_cbg_sec'] = time.perf_counter() - stage_start
     ms_success = [r for r in ms_results if r['error_km'] is not None]
     ms_errors = np.array([r['error_km'] for r in ms_success])
     ms_intersected = sum(1 for r in ms_results if r['intersection'])
@@ -1126,7 +1217,9 @@ def main():
     print("\n" + "=" * 60)
     print("RUNNING OCTANT CBG")
     print("=" * 60)
-    oct_results, oct_all_radii, oct_all_areas = run_octant_cbg(df_asn, octant_models, octant_delta)
+    stage_start = time.perf_counter()
+    oct_results, oct_all_radii, oct_all_areas, oct_benchmarks = run_octant_cbg(df_asn, octant_models, octant_delta)
+    stage_times['run_octant_cbg_sec'] = time.perf_counter() - stage_start
     oct_success = [r for r in oct_results if r['error_km'] is not None]
     oct_errors = np.array([r['error_km'] for r in oct_success]) if oct_success else np.array([])
     oct_intersected = sum(1 for r in oct_results if r['intersection'])
@@ -1144,6 +1237,7 @@ def main():
     print("\n" + "=" * 60)
     print("GENERATING RTT-DISTANCE SCATTER PLOTS")
     print("=" * 60)
+    stage_start = time.perf_counter()
     anchor_ips = df_asn['dst_ip'].unique()
     for anchor_ip in anchor_ips:
         df_anchor = df_asn[df_asn['dst_ip'] == anchor_ip]
@@ -1151,45 +1245,59 @@ def main():
         output_path = OUTPUT_DIR / f"scatter_{anchor_ip.replace('.', '_')}.png"
         fig = plot_rtt_distance_scatter(anchor_ip, df_anchor, lp_model, output_path=output_path)
         plt.close(fig)
+    stage_times['plot_scatter_sec'] = time.perf_counter() - stage_start
 
     # Comparative Error CDF
     print("\n" + "=" * 60)
     print("GENERATING ERROR CDF COMPARISON")
     print("=" * 60)
     cdf_path = OUTPUT_DIR / 'error_cdf_comparison.png'
-    fig = plot_error_cdf_comparison(ms_errors, van_errors, octant_errors=None, output_path=cdf_path)
+    stage_start = time.perf_counter()
+    fig = plot_error_cdf_comparison(ms_errors, van_errors, octant_errors=oct_errors, output_path=cdf_path)
     plt.close(fig)
+    stage_times['plot_error_cdf_sec'] = time.perf_counter() - stage_start
 
     # Circle Radius CDF
     radius_cdf_path = OUTPUT_DIR / 'radius_cdf_comparison.png'
+    stage_start = time.perf_counter()
     fig = plot_radius_cdf(ms_all_radii, van_all_radii, octant_radii=oct_all_radii, output_path=radius_cdf_path)
     plt.close(fig)
+    stage_times['plot_radius_cdf_sec'] = time.perf_counter() - stage_start
 
     # Intersection Area CDF
     area_cdf_path = OUTPUT_DIR / 'intersection_area_cdf.png'
+    stage_start = time.perf_counter()
     fig = plot_area_cdf(ms_all_areas, van_all_areas, octant_areas=None, output_path=area_cdf_path)
     plt.close(fig)
+    stage_times['plot_area_cdf_sec'] = time.perf_counter() - stage_start
 
     # Circle maps at P5, P50, P75 — anchored on Vanilla CBG percentiles
     print("\n" + "=" * 60)
     print("GENERATING CIRCLE MAP PLOTS (Vanilla P5, P50, P75)")
     print("=" * 60)
+    stage_start = time.perf_counter()
     plot_percentile_maps(ms_results, van_results, df_asn, lp_models,
                          percentiles=(5, 50, 75), anchor_method='vanilla')
+    stage_times['plot_percentile_maps_vanilla_sec'] = time.perf_counter() - stage_start
 
     # Circle maps at P5, P50, P75 — anchored on Million-Scale percentiles
     print("\n" + "=" * 60)
     print("GENERATING CIRCLE MAP PLOTS (MS P5, P50, P75)")
     print("=" * 60)
+    stage_start = time.perf_counter()
     plot_percentile_maps(ms_results, van_results, df_asn, lp_models,
                          percentiles=(5, 50, 75), anchor_method='million_scale')
+    stage_times['plot_percentile_maps_ms_sec'] = time.perf_counter() - stage_start
 
     # Statistics
     print_statistics(ms_errors, van_errors, octant_errors=oct_errors)
+    stage_times['total_runtime_sec'] = time.perf_counter() - total_start
+    print_speed_benchmarks(stage_times, octant_benchmarks=oct_benchmarks)
 
     # Save results JSON
     results_json = {
         'asn': ASN,
+        'speed_benchmarks_sec': stage_times,
         'million_scale_cbg': {
             'total_probes': len(ms_results),
             'successful': len(ms_success),
@@ -1217,6 +1325,7 @@ def main():
             'p90_km': float(np.percentile(oct_errors, 90)),
             'delta': float(octant_delta) if octant_delta is not None else None,
         }
+    results_json['octant_geolocation_benchmarks'] = oct_benchmarks
     json_path = OUTPUT_DIR / 'comparison_results.json'
     with open(json_path, 'w') as f:
         json.dump(results_json, f, indent=2)
