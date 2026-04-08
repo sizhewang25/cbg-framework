@@ -10,7 +10,7 @@ Per anchor, plots:
 - Piecewise linear spline (orange)
 - Low / high cutoff RTT vertical lines (bilateral)
 - Theoretical 2/3c line (black dashed)
-- Spline extended with 2/3c slope outside [low_cutoff, high_cutoff]
+- Spline extended with 2/3c slope above high_cutoff
 """
 
 import sys
@@ -59,11 +59,7 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
     ax.plot(rtt_range, theoretical_dists, 'k--', linewidth=1.5, alpha=0.5,
             label=f'Theoretical 2/3c')
 
-    # --- Low / high cutoff vertical lines ---
-    low_cut = getattr(model, 'low_cutoff_rtt', 0.0)
-    if low_cut > 0:
-        ax.axvline(x=low_cut, color='purple', linestyle=':', linewidth=1.5, alpha=0.7,
-                   label=f'Low cutoff RTT = {low_cut:.1f} ms')
+    # --- High cutoff vertical line ---
     ax.axvline(x=model.cutoff_rtt, color='gray', linestyle=':', linewidth=1.5, alpha=0.7,
                label=f'High cutoff RTT = {model.cutoff_rtt:.1f} ms')
 
@@ -78,16 +74,6 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
                              model.cutoff_rtt, is_upper=False)
         for r in rtt_range
     ])
-    # Below low cutoff: linear ramp from (0,0) to value at low_cutoff (upper); lower stays 0
-    if low_cut > 0:
-        upper_at_low_cut = float(np.interp(low_cut, rtt_range, upper_dists))
-        upper_dists = np.where(
-            rtt_range < low_cut,
-            (rtt_range / low_cut) * upper_at_low_cut,
-            upper_dists
-        )
-        lower_dists = np.where(rtt_range < low_cut, 0.0, lower_dists)
-
     ax.plot(rtt_range, upper_dists, 'r-', linewidth=2,
             label=f'Upper hull R_L ({len(model.hull_upper_rtts)} vertices)')
     ax.plot(rtt_range, lower_dists, 'b-', linewidth=2,
@@ -109,20 +95,13 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
             spline_at_cutoff + (rtt_range - model.cutoff_rtt) / THEORETICAL_SLOPE,
             spline_base
         )
-        # Spline: dotted within reliable region, solid outside
-        in_reliable = (rtt_range >= low_cut) & (rtt_range <= model.cutoff_rtt)
-        # Outside reliable region (solid)
-        outside = ~in_reliable
-        ax.plot(rtt_range, np.where(outside, spline_dists, np.nan),
-                color='darkorange', linewidth=2,
-                label=f'Spline ({model.spline_n_knots} knots)')
-        # Inside reliable region (dotted)
-        ax.plot(rtt_range, np.where(in_reliable, spline_dists, np.nan),
-                color='darkorange', linewidth=2, linestyle=':')
+        # Clamp spline by hull bounds
+        spline_dists = np.clip(spline_dists, lower_dists, upper_dists)
 
         # --- Delta spline band (80% coverage) ---
+        delta_lower = None
         try:
-            reliable_mask = (rtts >= low_cut) & (rtts <= model.cutoff_rtt)
+            reliable_mask = rtts <= model.cutoff_rtt
             rel_rtts = rtts[reliable_mask]
             rel_dists = distances[reliable_mask]
             delta, delta_meta = find_delta_for_coverage(
@@ -147,6 +126,22 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
                             label=f'Delta band ({coverage_pct:.0f}%)')
         except Exception:
             pass  # Skip delta band if delta search fails
+
+        # Spline: dotted within reliable region, solid outside.
+        # Hide where delta_lower has converged with the spline (redundant).
+        in_reliable = rtt_range <= model.cutoff_rtt
+        if delta_lower is not None:
+            tol = 0.02 * np.maximum(spline_dists, 1.0)
+            spline_visible = np.abs(spline_dists - delta_lower) > tol
+        else:
+            spline_visible = np.ones_like(rtt_range, dtype=bool)
+        outside = ~in_reliable & spline_visible
+        inside = in_reliable & spline_visible
+        ax.plot(rtt_range, np.where(outside, spline_dists, np.nan),
+                color='darkorange', linewidth=2,
+                label=f'Spline ({model.spline_n_knots} knots)')
+        ax.plot(rtt_range, np.where(inside, spline_dists, np.nan),
+                color='darkorange', linewidth=2, linestyle=':')
 
     # --- Labels ---
     ax.set_xlabel('RTT (ms)', fontsize=12)
