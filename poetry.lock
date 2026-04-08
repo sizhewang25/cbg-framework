@@ -1011,6 +1011,20 @@ files = [
 ]
 
 [[package]]
+name = "geom-median"
+version = "0.1.0"
+description = "Implementation of the smoothed Weiszfeld algorithm to compute the geometric median"
+optional = false
+python-versions = ">=3.6"
+groups = ["main"]
+files = [
+    {file = "geom_median-0.1.0.tar.gz", hash = "sha256:5a5bd8c930fde58febcf00aab9ecea5f12a54bc75589e5063754deb5b6e90495"},
+]
+
+[package.dependencies]
+numpy = ">=1.18.1"
+
+[[package]]
 name = "geopandas"
 version = "0.13.2"
 description = "Geographic pandas extensions"
@@ -3557,4 +3571,4 @@ testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "p
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.9"
-content-hash = "9f9246576b208716281ce5a7715301f8be6ec7756fffeb1b56ac8f5b8e515cbe"
+content-hash = "cb987ad4134b9b100d6337bb6188a8a578670a7e209d74490fdf7ecb10f346ec"

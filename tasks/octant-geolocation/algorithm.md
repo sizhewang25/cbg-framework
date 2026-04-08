@@ -206,27 +206,70 @@ estimate from that region.
 
 ### Step 4.1 - Monte Carlo Sampling
 
-Uniformly sample random points inside the region via rejection sampling over the
-region bounding box:
+Sample points inside the region with Sobol low-discrepancy rejection sampling
+over the region bounding box.
+
+The implementation:
+
+1. derives a deterministic integer seed from the passed NumPy RNG
+2. builds `qmc.Sobol(d=2, scramble=True, rng=seed)`
+3. generates candidate points in powers-of-two batches via `random_base2(m)`
+4. maps Sobol points from `[0, 1)^2` into the Shapely bounding box
+5. keeps only candidates satisfying `region.contains(Point(lon, lat))`
+
+In pseudocode:
 
 ```
-while collected < n_samples:
-    draw random lon/lat in region bounds
-    keep point if region.contains(point)
+sobol = Sobol(d=2, scramble=True, rng=seed)
+
+while len(collected) < n_samples and attempts < max_attempts:
+    batch = sobol.random_base2(m)
+    lon = minx + (maxx - minx) * batch[:, 0]
+    lat = miny + (maxy - miny) * batch[:, 1]
+    keep points where region.contains(Point(lon, lat))
 ```
 
 The output is an array of sampled `(lat, lon)` points.
 
+Why Sobol is used:
+
+- it covers the bounding box more evenly than plain IID random sampling
+- it reduces clumping and large empty gaps for the same sample budget
+- using `random_base2(m)` preserves the intended low-discrepancy structure of
+  Sobol prefixes
+
+As before, the function may still return fewer than `n_samples` points if the
+region is very small relative to its bounding box and the attempt budget is
+exhausted.
+
 ### Step 4.2 - Approximate Geometric Median
 
-If at least two sample points were collected, compute the point whose total
-distance to all other sampled points is minimal:
+If at least two sample points were collected, compute the geometric median of
+the sampled `(lat, lon)` array with `geom_median.numpy.compute_geometric_median(...)`.
 
 ```
-argmin_i sum_j haversine(point_i, point_j)
+result = compute_geometric_median(points)
+median = result.median
 ```
 
-This is an approximate geometric median of the feasible region.
+The implementation then returns:
+
+```
+(median[0], median[1])
+```
+
+This preserves the repo's internal coordinate convention `(lat, lon)`.
+
+Conceptually, the geometric median is the point minimizing total Euclidean
+distance to the sampled point cloud. Compared with the previous implementation,
+the current code no longer computes an explicit all-pairs haversine distance
+matrix and no longer restricts the answer to be one of the sampled points.
+
+So the current behavior is:
+
+- sample a finite cloud inside the feasible region
+- run a dedicated geometric median solver on that cloud
+- use the solver's median as the representative point estimate
 
 ### Small-Region Fallback
 

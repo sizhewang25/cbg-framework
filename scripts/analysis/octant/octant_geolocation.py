@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from functools import reduce
 from typing import Dict, List, Optional, Tuple, Any
 
+from geom_median.numpy import compute_geometric_median
+from scipy.stats import qmc
 from shapely.geometry import Point, Polygon, MultiPolygon
 from shapely.ops import unary_union
 
@@ -403,9 +405,10 @@ def sample_points_in_region(
     rng: Optional[np.random.Generator] = None,
     max_attempts_factor: int = 20,
 ) -> np.ndarray:
-    """Sample uniformly random points within a Shapely geometry.
+    """Sample points within a Shapely geometry using Sobol QMC rejection sampling.
 
-    Uses rejection sampling within the bounding box.
+    Uses low-discrepancy Sobol points over the region bounding box, rejecting
+    candidates that fall outside the geometry.
 
     Args:
         region: Shapely geometry (Polygon or MultiPolygon)
@@ -417,8 +420,14 @@ def sample_points_in_region(
         Array of shape (n_collected, 2) with columns [lat, lon].
         May return fewer than n_samples if region is very small.
     """
+    if n_samples <= 0:
+        return np.empty((0, 2))
+
     if rng is None:
         rng = np.random.default_rng()
+
+    sobol_seed = int(rng.integers(0, np.iinfo(np.uint32).max, dtype=np.uint32))
+    sampler = qmc.Sobol(d=2, scramble=True, rng=sobol_seed)
 
     minx, miny, maxx, maxy = region.bounds  # (min_lon, min_lat, max_lon, max_lat)
     collected = []
@@ -426,12 +435,17 @@ def sample_points_in_region(
     attempts = 0
 
     while len(collected) < n_samples and attempts < max_attempts:
-        batch_size = min(n_samples * 4, max_attempts - attempts)
-        rand_lons = rng.uniform(minx, maxx, batch_size)
-        rand_lats = rng.uniform(miny, maxy, batch_size)
+        remaining_needed = n_samples - len(collected)
+        remaining_budget = max_attempts - attempts
+        target_batch = min(max(remaining_needed * 4, 1), remaining_budget)
+        batch_size = 1 if target_batch <= 1 else 1 << int(np.floor(np.log2(target_batch)))
+        sobol_points = sampler.random_base2(int(np.log2(batch_size)))
         attempts += batch_size
 
-        for lon, lat in zip(rand_lons, rand_lats):
+        rand_lons = minx + (maxx - minx) * sobol_points[:, 0]
+        rand_lats = miny + (maxy - miny) * sobol_points[:, 1]
+
+        for lon, lat in zip(rand_lons, rand_lats, strict=False):
             if region.contains(Point(lon, lat)):
                 collected.append((lat, lon))  # Internal convention: (lat, lon)
                 if len(collected) >= n_samples:
@@ -441,10 +455,7 @@ def sample_points_in_region(
 
 
 def geometric_median_approx(points: np.ndarray) -> Tuple[float, float]:
-    """Approximate geometric median via minimum sum-of-distances.
-
-    For each point, computes sum of haversine distances to all other points.
-    Returns the point with the minimum sum.
+    """Approximate geometric median using the geom-median NumPy implementation.
 
     Args:
         points: Array of shape (n, 2) with columns [lat, lon]
@@ -458,27 +469,13 @@ def geometric_median_approx(points: np.ndarray) -> Tuple[float, float]:
     if n == 1:
         return (points[0, 0], points[0, 1])
 
-    lats = points[:, 0]
-    lons = points[:, 1]
-
-    # Vectorized pairwise distance computation
-    lat_rad = np.radians(lats)
-    lon_rad = np.radians(lons)
-
-    # Compute all pairwise distances using broadcasting
-    dlat = lat_rad[:, None] - lat_rad[None, :]
-    dlon = lon_rad[:, None] - lon_rad[None, :]
-
-    a = (np.sin(dlat / 2.0) ** 2 +
-         np.cos(lat_rad[:, None]) * np.cos(lat_rad[None, :]) *
-         np.sin(dlon / 2.0) ** 2)
-    dist_matrix = EARTH_RADIUS_KM * 2 * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
-
-    # Sum of distances for each point
-    sum_distances = dist_matrix.sum(axis=1)
-    best_idx = np.argmin(sum_distances)
-
-    return (lats[best_idx], lons[best_idx])
+    result = compute_geometric_median(
+        np.asarray(points, dtype=float),
+        per_component=False,
+        skip_typechecks=False,
+    )
+    median = np.asarray(result.median, dtype=float).reshape(-1)
+    return (float(median[0]), float(median[1]))
 
 
 # =============================================================================

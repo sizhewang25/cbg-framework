@@ -351,6 +351,14 @@ class TestPointSelection(unittest.TestCase):
                 f"Point ({lat}, {lon}) should be inside region"
             )
 
+    def test_sampling_is_deterministic_for_seeded_rng(self):
+        """A fixed RNG seed should reproduce the same Sobol sample set."""
+        region = self._make_simple_region()
+        points_a = sample_points_in_region(region, n_samples=64, rng=np.random.default_rng(42))
+        points_b = sample_points_in_region(region, n_samples=64, rng=np.random.default_rng(42))
+        self.assertEqual(points_a.shape, points_b.shape)
+        np.testing.assert_allclose(points_a, points_b)
+
     def test_median_symmetric(self):
         """Geometric median of symmetric points is near the center."""
         # Many points symmetrically around (40, -74)
