@@ -359,8 +359,11 @@ def run_octant_cbg(df_asn, octant_models, delta):
 
         # Form annular constraints
         constraints = form_constraints(
-            probe_ip, rtt_measurements, anchor_coords, octant_models,
-            delta=delta, max_rtt_ms=200.0,
+            probe_ip, 
+            rtt_measurements,
+            anchor_coords, 
+            octant_models,
+            delta=delta,
         )
 
         # Track outer radii
@@ -1073,7 +1076,7 @@ def main():
     print("\n" + "=" * 60)
     print("FITTING OCTANT MODELS")
     print("=" * 60)
-    octant_models, octant_delta = fit_octant_models(df_asn)
+    octant_models, octant_delta = fit_octant_models(df_asn, target_coverage=0.80)
 
     # Run Vanilla CBG (LP + Spherical)
     print("\n" + "=" * 60)

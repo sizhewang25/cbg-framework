@@ -93,7 +93,7 @@ def form_constraints(
     models: Dict[str, OctantRTTModel],
     weight_tau_ms: float = 50.0,
     delta: Optional[float] = None,
-    max_rtt_ms: float = 200.0,
+    max_rtt_ms: float | None = None,
 ) -> List[AnnularConstraint]:
     """Form all annular constraints for a target from its RTT measurements.
 
@@ -111,7 +111,7 @@ def form_constraints(
     """
     constraints = []
     for lm_ip, rtt in rtt_measurements.items():
-        if rtt > max_rtt_ms:
+        if isinstance(max_rtt_ms, float) and rtt > max_rtt_ms:
             continue
         if lm_ip not in models or not models[lm_ip].fitted:
             continue
