@@ -28,6 +28,7 @@ EARTH_RADIUS_KM = 6371.0
 SPEED_OF_LIGHT_KM_S = 300_000.0
 SPEED_OF_LIGHT_KM_MS = SPEED_OF_LIGHT_KM_S / 1000.0  # 300 km/ms
 THEORETICAL_SLOPE = 2 / (SPEED_OF_LIGHT_KM_MS * (2/3))  # ~0.01 ms/km for 2/3 c
+VALID_CUTOFF_VARIANTS = ('none', 'high_only', 'low_only', 'both')
 
 
 # =============================================================================
@@ -509,6 +510,9 @@ class OctantRTTModel:
     low_cutoff_rtt: float = 0.0    # Low RTT cutoff — left edge of first dense bin
     cutoff_min_points: int = 5
     baseline_slope: float = THEORETICAL_SLOPE
+    cutoff_variant: str = 'high_only'
+    reliable_min_rtt: float = 0.0
+    reliable_max_rtt: float = 0.0
 
     # Piecewise linear spline for iterative refinement
     spline_rtt_knots: Optional[List[float]] = None
@@ -519,6 +523,107 @@ class OctantRTTModel:
     n_measurements: int = 0
     fitted: bool = False
     fit_message: str = ''
+
+    def _validate_cutoff_variant(self) -> None:
+        if self.cutoff_variant not in VALID_CUTOFF_VARIANTS:
+            raise ValueError(
+                f"Invalid cutoff_variant={self.cutoff_variant!r}. "
+                f"Expected one of {VALID_CUTOFF_VARIANTS}."
+            )
+
+    def _low_cutoff_enabled(self) -> bool:
+        return self.cutoff_variant in ('low_only', 'both')
+
+    def _high_cutoff_enabled(self) -> bool:
+        return self.cutoff_variant in ('high_only', 'both')
+
+    def _effective_low_cutoff_rtt(self) -> float:
+        if not self._low_cutoff_enabled():
+            return 0.0
+        if self.reliable_min_rtt > 0:
+            return self.reliable_min_rtt
+        return float(self.low_cutoff_rtt)
+
+    def _effective_high_cutoff_rtt(self) -> float:
+        if not self._high_cutoff_enabled():
+            return 0.0
+        if self.reliable_max_rtt > 0:
+            return self.reliable_max_rtt
+        return float(self.cutoff_rtt)
+
+    def _set_reliable_interval(self, min_valid_rtt: float, max_valid_rtt: float) -> None:
+        self.reliable_min_rtt = float(min_valid_rtt)
+        self.reliable_max_rtt = float(max_valid_rtt)
+
+        if self._low_cutoff_enabled():
+            self.reliable_min_rtt = max(self.reliable_min_rtt, float(self.low_cutoff_rtt))
+        if self._high_cutoff_enabled():
+            self.reliable_max_rtt = min(self.reliable_max_rtt, float(self.cutoff_rtt))
+
+    def _fit_spline_on_reliable_region(
+        self,
+        rtts: np.ndarray,
+        distances: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any], int]:
+        reliable_mask = (rtts >= self.reliable_min_rtt) & (rtts <= self.reliable_max_rtt)
+        spline_rtts = rtts[reliable_mask]
+        spline_distances = distances[reliable_mask]
+
+        upper_count = sum(
+            self.reliable_min_rtt <= r <= self.reliable_max_rtt
+            for r in self.hull_upper_rtts
+        )
+        lower_count = sum(
+            self.reliable_min_rtt <= r <= self.reliable_max_rtt
+            for r in self.hull_lower_rtts
+        )
+        n_knots_used = max(3, max(upper_count, lower_count))
+
+        knot_rtts, knot_dists, spline_meta = fit_rtt_distance_spline(
+            spline_rtts, spline_distances, n_knots=n_knots_used
+        )
+        return knot_rtts, knot_dists, spline_meta, n_knots_used
+
+    def _hull_distance(self, rtt: float, is_upper: bool) -> float:
+        hull_rtts = self.hull_upper_rtts if is_upper else self.hull_lower_rtts
+        hull_distances = self.hull_upper_distances if is_upper else self.hull_lower_distances
+        return hull_rtt_to_distance(
+            rtt,
+            hull_rtts,
+            hull_distances,
+            self._effective_high_cutoff_rtt(),
+            self.baseline_slope,
+            is_upper=is_upper,
+            low_cutoff_rtt=self._effective_low_cutoff_rtt(),
+        )
+
+    def _hull_distance_array(self, rtt_array: np.ndarray, is_upper: bool) -> np.ndarray:
+        return np.array([self._hull_distance(float(rtt), is_upper=is_upper) for rtt in rtt_array])
+
+    def _predict_distance_raw(self, rtt: float) -> float:
+        knot_rtts = np.array(self.spline_rtt_knots)
+        knot_dists = np.array(self.spline_dist_knots)
+        high_cutoff_rtt = self._effective_high_cutoff_rtt()
+
+        if self._high_cutoff_enabled() and high_cutoff_rtt > 0 and rtt > high_cutoff_rtt:
+            cutoff_val = float(np.interp(high_cutoff_rtt, knot_rtts, knot_dists))
+            return cutoff_val + (rtt - high_cutoff_rtt) / self.baseline_slope
+        return float(np.interp(rtt, knot_rtts, knot_dists))
+
+    def _predict_distance_array_raw(self, rtt_array: np.ndarray) -> np.ndarray:
+        knot_rtts = np.array(self.spline_rtt_knots)
+        knot_dists = np.array(self.spline_dist_knots)
+        high_cutoff_rtt = self._effective_high_cutoff_rtt()
+
+        base = np.interp(rtt_array, knot_rtts, knot_dists)
+        if self._high_cutoff_enabled() and high_cutoff_rtt > 0:
+            cutoff_val = float(np.interp(high_cutoff_rtt, knot_rtts, knot_dists))
+            base = np.where(
+                rtt_array > high_cutoff_rtt,
+                cutoff_val + (rtt_array - high_cutoff_rtt) / self.baseline_slope,
+                base,
+            )
+        return np.maximum(base, 0.0)
 
     def fit(
         self,
@@ -542,9 +647,21 @@ class OctantRTTModel:
         Returns:
             True if fitting succeeded
         """
-        self.n_measurements = len(rtts)
+        self._validate_cutoff_variant()
         self.cutoff_min_points = cutoff_min_points
         self.spline_n_knots = spline_n_knots
+        rtts_arr = np.asarray(rtts, dtype=float)
+        distances_arr = np.asarray(distances, dtype=float)
+
+        valid_mask = (
+            (rtts_arr > 0)
+            & (distances_arr > 0)
+            & np.isfinite(rtts_arr)
+            & np.isfinite(distances_arr)
+        )
+        valid_rtts = rtts_arr[valid_mask]
+        valid_distances = distances_arr[valid_mask]
+        self.n_measurements = len(valid_rtts)
 
         # Compute convex hull bounds
         hull_result = compute_convex_hull_bounds(
@@ -565,86 +682,72 @@ class OctantRTTModel:
         self.hull_lower_distances = hull_result['hull_lower_distances']
         self.cutoff_rtt = hull_result['cutoff_rtt']
         self.low_cutoff_rtt = hull_result.get('low_cutoff_rtt', 0.0)
+        self.spline_rtt_knots = None
+        self.spline_dist_knots = None
+
+        if len(valid_rtts) > 0:
+            self._set_reliable_interval(float(np.min(valid_rtts)), float(np.max(valid_rtts)))
+        else:
+            self.reliable_min_rtt = 0.0
+            self.reliable_max_rtt = 0.0
 
         # Fit piecewise linear spline for iterative refinement
         if fit_spline:
             try:
-                # Restrict to reliable region [low_cutoff, cutoff] for both ends
-                rtts_arr = np.asarray(rtts)
-                distances_arr = np.asarray(distances)
-                reliable_mask = (rtts_arr >= self.low_cutoff_rtt) & (rtts_arr <= self.cutoff_rtt)
-                spline_rtts = rtts_arr[reliable_mask]
-                spline_distances = distances_arr[reliable_mask]
-
-                # n_knots = max of hull vertices from either chain within reliable region
-                upper_count = sum(self.low_cutoff_rtt <= r <= self.cutoff_rtt
-                                  for r in self.hull_upper_rtts)
-                lower_count = sum(self.low_cutoff_rtt <= r <= self.cutoff_rtt
-                                  for r in self.hull_lower_rtts)
-                n_knots_used = max(3, max(upper_count, lower_count))
-
-                knot_rtts, knot_dists, spline_meta = fit_rtt_distance_spline(
-                    spline_rtts, spline_distances, n_knots=n_knots_used
+                knot_rtts, knot_dists, spline_meta, n_knots_used = self._fit_spline_on_reliable_region(
+                    valid_rtts, valid_distances
                 )
 
-                # Refine cutoffs using spline-hull intersections.
-                # Evaluate spline and hulls on a fine grid within [low_cutoff, cutoff].
-                grid = np.linspace(self.low_cutoff_rtt, self.cutoff_rtt, 500)
-                spline_vals = np.interp(grid, knot_rtts, knot_dists)
-                upper_vals = np.array([
-                    hull_rtt_to_distance(r, self.hull_upper_rtts, self.hull_upper_distances,
-                                         self.cutoff_rtt, is_upper=True)
-                    for r in grid
-                ])
-                lower_vals = np.array([
-                    hull_rtt_to_distance(r, self.hull_lower_rtts, self.hull_lower_distances,
-                                         self.cutoff_rtt, is_upper=False)
-                    for r in grid
-                ])
+                if (
+                    (self._low_cutoff_enabled() or self._high_cutoff_enabled())
+                    and self.reliable_max_rtt > self.reliable_min_rtt
+                ):
+                    grid = np.linspace(self.reliable_min_rtt, self.reliable_max_rtt, 500)
+                    spline_vals = np.interp(grid, knot_rtts, knot_dists)
+                    upper_vals = self._hull_distance_array(grid, is_upper=True)
+                    lower_vals = self._hull_distance_array(grid, is_upper=False)
+                    in_both = (spline_vals <= upper_vals) & (spline_vals >= lower_vals)
 
-                # Reliable region: spline is within BOTH hull bounds simultaneously
-                in_both = (spline_vals <= upper_vals) & (spline_vals >= lower_vals)
+                    if in_both.any():
+                        if self._low_cutoff_enabled():
+                            self.reliable_min_rtt = max(
+                                self.reliable_min_rtt,
+                                float(grid[np.where(in_both)[0][0]]),
+                            )
+                        if self._high_cutoff_enabled():
+                            self.reliable_max_rtt = min(
+                                self.reliable_max_rtt,
+                                float(grid[np.where(in_both)[0][-1]]),
+                            )
 
-                # High cutoff: last grid point where spline is within both hulls
-                if in_both.any():
-                    new_high = float(grid[np.where(in_both)[0][-1]])
-                    if new_high < self.cutoff_rtt:
-                        self.cutoff_rtt = new_high
-
-                # Low cutoff: first grid point where spline is within both hulls
-                if in_both.any():
-                    new_low = float(grid[np.where(in_both)[0][0]])
-                    if new_low > self.low_cutoff_rtt:
-                        self.low_cutoff_rtt = new_low
-
-                # Refit spline on the refined reliable region
-                reliable_mask = (rtts_arr >= self.low_cutoff_rtt) & (rtts_arr <= self.cutoff_rtt)
-                spline_rtts = rtts_arr[reliable_mask]
-                spline_distances = distances_arr[reliable_mask]
-                upper_count = sum(self.low_cutoff_rtt <= r <= self.cutoff_rtt
-                                  for r in self.hull_upper_rtts)
-                lower_count = sum(self.low_cutoff_rtt <= r <= self.cutoff_rtt
-                                  for r in self.hull_lower_rtts)
-                n_knots_used = max(3, max(upper_count, lower_count))
-                knot_rtts, knot_dists, spline_meta = fit_rtt_distance_spline(
-                    spline_rtts, spline_distances, n_knots=n_knots_used
-                )
+                        if self.reliable_max_rtt > self.reliable_min_rtt:
+                            knot_rtts, knot_dists, spline_meta, n_knots_used = (
+                                self._fit_spline_on_reliable_region(valid_rtts, valid_distances)
+                            )
 
                 self.spline_rtt_knots = knot_rtts.tolist()
                 self.spline_dist_knots = knot_dists.tolist()
                 self.spline_n_knots = n_knots_used
                 self.fit_message = (
                     f"Hull: {len(self.hull_upper_rtts)} upper, {len(self.hull_lower_rtts)} lower vertices. "
+                    f"Variant={self.cutoff_variant}. "
+                    f"Reliable RTT=[{self.reliable_min_rtt:.3f}, {self.reliable_max_rtt:.3f}] ms. "
                     f"Spline: {spline_meta['n_knots']} knots, R²={spline_meta['r_squared']:.3f}"
                 )
             except SplineFitError as e:
                 self.spline_rtt_knots = None
                 self.spline_dist_knots = None
-                self.fit_message = f"Hull OK, spline failed: {str(e)}"
+                self.fit_message = (
+                    f"Hull OK for variant={self.cutoff_variant}, spline failed: {str(e)}"
+                )
         else:
             self.spline_rtt_knots = None
             self.spline_dist_knots = None
-            self.fit_message = f"Hull: {len(self.hull_upper_rtts)} upper, {len(self.hull_lower_rtts)} lower vertices"
+            self.fit_message = (
+                f"Hull: {len(self.hull_upper_rtts)} upper, {len(self.hull_lower_rtts)} lower vertices. "
+                f"Variant={self.cutoff_variant}. "
+                f"Reliable RTT=[{self.reliable_min_rtt:.3f}, {self.reliable_max_rtt:.3f}] ms"
+            )
 
         self.fitted = True
         return True
@@ -671,24 +774,11 @@ class OctantRTTModel:
         if self.spline_rtt_knots is None:
             raise SplineFitError('Spline not fitted')
 
-        knot_rtts = np.array(self.spline_rtt_knots)
-        knot_dists = np.array(self.spline_dist_knots)
-
-        if self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
-            cutoff_val = float(np.interp(self.cutoff_rtt, knot_rtts, knot_dists))
-            predicted = cutoff_val + (rtt - self.cutoff_rtt) / self.baseline_slope
-        else:
-            predicted = float(np.interp(rtt, knot_rtts, knot_dists))
+        predicted = self._predict_distance_raw(rtt)
 
         if self.hull_upper_rtts and self.hull_lower_rtts:
-            hull_lower = hull_rtt_to_distance(
-                rtt, self.hull_lower_rtts, self.hull_lower_distances,
-                self.cutoff_rtt, self.baseline_slope, is_upper=False,
-            )
-            hull_upper = hull_rtt_to_distance(
-                rtt, self.hull_upper_rtts, self.hull_upper_distances,
-                self.cutoff_rtt, self.baseline_slope, is_upper=True,
-            )
+            hull_lower = self._hull_distance(rtt, is_upper=False)
+            hull_upper = self._hull_distance(rtt, is_upper=True)
             predicted = max(hull_lower, min(predicted, hull_upper))
 
         return max(predicted, 0.0)
@@ -713,31 +803,9 @@ class OctantRTTModel:
         if self.spline_rtt_knots is None:
             raise SplineFitError('Spline not fitted')
 
-        knot_rtts = np.array(self.spline_rtt_knots)
-        knot_dists = np.array(self.spline_dist_knots)
-
-        base = np.interp(rtt_array, knot_rtts, knot_dists)
-        if self.cutoff_rtt > 0:
-            cutoff_val = float(np.interp(self.cutoff_rtt, knot_rtts, knot_dists))
-            result = np.where(
-                rtt_array > self.cutoff_rtt,
-                cutoff_val + (rtt_array - self.cutoff_rtt) / self.baseline_slope,
-                base,
-            )
-        else:
-            result = base
-        result = np.maximum(result, 0.0)
-
-        upper = np.array([
-            hull_rtt_to_distance(r, self.hull_upper_rtts, self.hull_upper_distances,
-                                 self.cutoff_rtt, self.baseline_slope, is_upper=True)
-            for r in rtt_array
-        ])
-        lower = np.array([
-            hull_rtt_to_distance(r, self.hull_lower_rtts, self.hull_lower_distances,
-                                 self.cutoff_rtt, self.baseline_slope, is_upper=False)
-            for r in rtt_array
-        ])
+        result = self._predict_distance_array_raw(rtt_array)
+        upper = self._hull_distance_array(rtt_array, is_upper=True)
+        lower = self._hull_distance_array(rtt_array, is_upper=False)
         result = np.clip(result, lower, upper)
 
         return result
@@ -760,27 +828,25 @@ class OctantRTTModel:
             (lower_array, upper_array) both in km, clamped by hulls
         """
         spline = self.predict_distance_array(rtt_array)
-
-        upper_hull = np.array([
-            hull_rtt_to_distance(r, self.hull_upper_rtts, self.hull_upper_distances,
-                                 self.cutoff_rtt, self.baseline_slope, is_upper=True)
-            for r in rtt_array
-        ])
-        lower_hull = np.array([
-            hull_rtt_to_distance(r, self.hull_lower_rtts, self.hull_lower_distances,
-                                 self.cutoff_rtt, self.baseline_slope, is_upper=False)
-            for r in rtt_array
-        ])
+        upper_hull = self._hull_distance_array(rtt_array, is_upper=True)
+        lower_hull = self._hull_distance_array(rtt_array, is_upper=False)
 
         delta_upper = np.minimum(spline * delta, upper_hull)
         delta_lower = np.maximum(spline / delta, lower_hull)
         delta_lower = np.maximum(delta_lower, 0.0)
+        high_cutoff_rtt = self._effective_high_cutoff_rtt()
+        low_cutoff_rtt = self._effective_low_cutoff_rtt()
 
-        # Beyond cutoff: fall back to hull bounds directly (spline unreliable)
-        if self.cutoff_rtt > 0:
-            beyond = rtt_array > self.cutoff_rtt
+        # Outside the reliable interval on enabled cutoff sides, fall back to
+        # hull bounds directly because the spline is not trusted there.
+        if self._high_cutoff_enabled() and high_cutoff_rtt > 0:
+            beyond = rtt_array > high_cutoff_rtt
             delta_upper[beyond] = upper_hull[beyond]
             delta_lower[beyond] = np.maximum(lower_hull[beyond], 0.0)
+        if self._low_cutoff_enabled() and low_cutoff_rtt > 0:
+            below = rtt_array < low_cutoff_rtt
+            delta_upper[below] = upper_hull[below]
+            delta_lower[below] = np.maximum(lower_hull[below], 0.0)
 
         return delta_lower, delta_upper
 
@@ -805,31 +871,23 @@ class OctantRTTModel:
         """
         if not self.fitted:
             raise OctantFitError('Model not fitted')
+        high_cutoff_rtt = self._effective_high_cutoff_rtt()
+        low_cutoff_rtt = self._effective_low_cutoff_rtt()
 
-        # Beyond cutoff: spline is unreliable, fall back to hull bounds directly
-        if self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
-            max_dist = hull_rtt_to_distance(
-                rtt, self.hull_upper_rtts, self.hull_upper_distances,
-                self.cutoff_rtt, self.baseline_slope, is_upper=True,
-            )
-            min_dist = hull_rtt_to_distance(
-                rtt, self.hull_lower_rtts, self.hull_lower_distances,
-                self.cutoff_rtt, self.baseline_slope, is_upper=False,
-            )
+        if (
+            (self._low_cutoff_enabled() and low_cutoff_rtt > 0 and rtt < low_cutoff_rtt)
+            or (self._high_cutoff_enabled() and high_cutoff_rtt > 0 and rtt > high_cutoff_rtt)
+        ):
+            max_dist = self._hull_distance(rtt, is_upper=True)
+            min_dist = self._hull_distance(rtt, is_upper=False)
             return (max(0, min_dist), max_dist)
 
         if delta is not None:
             predicted = self.predict_distance(rtt)
 
             # Clamp spline by hull bounds before delta expansion
-            hull_lower = hull_rtt_to_distance(
-                rtt, self.hull_lower_rtts, self.hull_lower_distances,
-                self.cutoff_rtt, self.baseline_slope, is_upper=False,
-            )
-            hull_upper = hull_rtt_to_distance(
-                rtt, self.hull_upper_rtts, self.hull_upper_distances,
-                self.cutoff_rtt, self.baseline_slope, is_upper=True,
-            )
+            hull_lower = self._hull_distance(rtt, is_upper=False)
+            hull_upper = self._hull_distance(rtt, is_upper=True)
             predicted = max(hull_lower, min(predicted, hull_upper))
 
             inner = predicted / delta
@@ -842,14 +900,8 @@ class OctantRTTModel:
             return (max(0.0, inner), outer)
 
         # Use convex hull bounds
-        max_dist = hull_rtt_to_distance(
-            rtt, self.hull_upper_rtts, self.hull_upper_distances,
-            self.cutoff_rtt, self.baseline_slope, is_upper=True,
-        )
-        min_dist = hull_rtt_to_distance(
-            rtt, self.hull_lower_rtts, self.hull_lower_distances,
-            self.cutoff_rtt, self.baseline_slope, is_upper=False,
-        )
+        max_dist = self._hull_distance(rtt, is_upper=True)
+        min_dist = self._hull_distance(rtt, is_upper=False)
 
         return (max(0, min_dist), max_dist)
 
@@ -892,6 +944,21 @@ class OctantRTTModel:
 
         return (min_dist, max_dist, delta)
 
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        if 'cutoff_variant' not in self.__dict__:
+            self.cutoff_variant = 'high_only'
+        if 'reliable_min_rtt' not in self.__dict__:
+            if self.spline_rtt_knots is not None and len(self.spline_rtt_knots) > 0:
+                self.reliable_min_rtt = float(self.spline_rtt_knots[0])
+            else:
+                self.reliable_min_rtt = float(self.low_cutoff_rtt)
+        if 'reliable_max_rtt' not in self.__dict__:
+            if self.spline_rtt_knots is not None and len(self.spline_rtt_knots) > 0:
+                self.reliable_max_rtt = float(self.spline_rtt_knots[-1])
+            else:
+                self.reliable_max_rtt = float(self.cutoff_rtt)
+
     def save(self, filepath: Path) -> None:
         """Save model to pickle file."""
         filepath = Path(filepath)
@@ -919,6 +986,9 @@ class OctantRTTModel:
             'low_cutoff_rtt': self.low_cutoff_rtt,
             'cutoff_min_points': self.cutoff_min_points,
             'baseline_slope': self.baseline_slope,
+            'cutoff_variant': self.cutoff_variant,
+            'reliable_min_rtt': self.reliable_min_rtt,
+            'reliable_max_rtt': self.reliable_max_rtt,
             'spline_rtt_knots': self.spline_rtt_knots,
             'spline_dist_knots': self.spline_dist_knots,
             'spline_n_knots': self.spline_n_knots,
@@ -931,9 +1001,14 @@ class OctantRTTModel:
         if self.fitted:
             return (
                 f"OctantRTTModel(anchor={self.anchor_ip}, "
+                f"variant={self.cutoff_variant}, "
                 f"hull_upper={len(self.hull_upper_rtts)} vertices, "
                 f"hull_lower={len(self.hull_lower_rtts)} vertices, "
-                f"cutoff_rtt={self.cutoff_rtt:.1f}ms)"
+                f"cutoff_rtt={self.cutoff_rtt:.1f}ms, "
+                f"reliable=[{self.reliable_min_rtt:.1f}, {self.reliable_max_rtt:.1f}]ms)"
             )
         else:
-            return f"OctantRTTModel(anchor={self.anchor_ip}, fitted=False)"
+            return (
+                f"OctantRTTModel(anchor={self.anchor_ip}, "
+                f"variant={self.cutoff_variant}, fitted=False)"
+            )

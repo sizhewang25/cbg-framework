@@ -13,19 +13,32 @@ import numpy as np
 import tempfile
 from pathlib import Path
 
-# Import will be updated once module is implemented
-from octant_model import (
-    compute_convex_hull_bounds,
-    hull_rtt_to_distance,
-    fit_rtt_distance_spline,
-    find_delta_for_coverage,
-    OctantRTTModel,
-    OctantFitError,
-    SplineFitError,
-    DeltaSearchError,
-    DeltaSearchTimeout,
-    THEORETICAL_SLOPE
-)
+try:
+    from scripts.analysis.octant.octant_model import (
+        compute_convex_hull_bounds,
+        hull_rtt_to_distance,
+        fit_rtt_distance_spline,
+        find_delta_for_coverage,
+        OctantRTTModel,
+        OctantFitError,
+        SplineFitError,
+        DeltaSearchError,
+        DeltaSearchTimeout,
+        THEORETICAL_SLOPE,
+    )
+except ImportError:
+    from octant_model import (
+        compute_convex_hull_bounds,
+        hull_rtt_to_distance,
+        fit_rtt_distance_spline,
+        find_delta_for_coverage,
+        OctantRTTModel,
+        OctantFitError,
+        SplineFitError,
+        DeltaSearchError,
+        DeltaSearchTimeout,
+        THEORETICAL_SLOPE,
+    )
 
 
 class TestConvexHullBounds(unittest.TestCase):
@@ -201,6 +214,27 @@ class TestDeltaSearch(unittest.TestCase):
 class TestOctantRTTModel(unittest.TestCase):
     """Test OctantRTTModel class."""
 
+    @staticmethod
+    def _make_variant_test_model(cutoff_variant: str) -> OctantRTTModel:
+        """Create a small fitted model with explicit cutoff metadata."""
+        return OctantRTTModel(
+            anchor_ip='192.168.1.1',
+            anchor_lat=40.0,
+            anchor_lon=-74.0,
+            fitted=True,
+            cutoff_variant=cutoff_variant,
+            low_cutoff_rtt=8.0,
+            cutoff_rtt=20.0,
+            reliable_min_rtt=8.0,
+            reliable_max_rtt=20.0,
+            hull_upper_rtts=[0.0, 10.0],
+            hull_upper_distances=[0.0, 1500.0],
+            hull_lower_rtts=[0.0, 10.0],
+            hull_lower_distances=[0.0, 200.0],
+            spline_rtt_knots=[0.0, 10.0],
+            spline_dist_knots=[0.0, 1000.0],
+        )
+
     def test_fit_basic(self):
         """Model fits successfully on valid data."""
         np.random.seed(42)
@@ -351,10 +385,7 @@ class TestOctantRTTModel(unittest.TestCase):
         self.assertGreaterEqual(min_dist, 0.0)
         self.assertLess(min_dist, max_dist)
         # Upper bound should not exceed hull upper
-        hull_upper = hull_rtt_to_distance(
-            rtt_above, model.hull_upper_rtts, model.hull_upper_distances,
-            model.cutoff_rtt, is_upper=True,
-        )
+        hull_upper = model._hull_distance(rtt_above, is_upper=True)
         self.assertLessEqual(max_dist, hull_upper + 1.0)
 
     def test_predict_distance_array_matches_scalar(self):
@@ -384,14 +415,8 @@ class TestOctantRTTModel(unittest.TestCase):
         test_rtts = np.linspace(5, model.cutoff_rtt + 20, 50)
         clamped = model.predict_distance_array(test_rtts)
         for i, rtt in enumerate(test_rtts):
-            hull_lower = hull_rtt_to_distance(
-                rtt, model.hull_lower_rtts, model.hull_lower_distances,
-                model.cutoff_rtt, is_upper=False,
-            )
-            hull_upper = hull_rtt_to_distance(
-                rtt, model.hull_upper_rtts, model.hull_upper_distances,
-                model.cutoff_rtt, is_upper=True,
-            )
+            hull_lower = model._hull_distance(rtt, is_upper=False)
+            hull_upper = model._hull_distance(rtt, is_upper=True)
             self.assertGreaterEqual(clamped[i], hull_lower - 0.01)
             self.assertLessEqual(clamped[i], hull_upper + 0.01)
 
@@ -407,14 +432,8 @@ class TestOctantRTTModel(unittest.TestCase):
         test_rtts = np.linspace(5, model.cutoff_rtt + 20, 50)
         lower, upper = model.predict_bounds_array(test_rtts, delta=1.5)
         for i, rtt in enumerate(test_rtts):
-            hull_lower = hull_rtt_to_distance(
-                rtt, model.hull_lower_rtts, model.hull_lower_distances,
-                model.cutoff_rtt, is_upper=False,
-            )
-            hull_upper = hull_rtt_to_distance(
-                rtt, model.hull_upper_rtts, model.hull_upper_distances,
-                model.cutoff_rtt, is_upper=True,
-            )
+            hull_lower = model._hull_distance(rtt, is_upper=False)
+            hull_upper = model._hull_distance(rtt, is_upper=True)
             self.assertGreaterEqual(lower[i], hull_lower - 0.01)
             self.assertLessEqual(upper[i], hull_upper + 0.01)
             self.assertLessEqual(lower[i], upper[i])
@@ -434,6 +453,86 @@ class TestOctantRTTModel(unittest.TestCase):
             scalar_lower, scalar_upper = model.predict_distance_bounds(rtt, delta=1.5)
             self.assertAlmostEqual(lower[i], scalar_lower, places=3)
             self.assertAlmostEqual(upper[i], scalar_upper, places=3)
+
+    def test_cutoff_variant_none_disables_low_and_high_fallback(self):
+        """The no-cutoff variant keeps delta refinement active on both sides."""
+        model = self._make_variant_test_model('none')
+
+        low_inner, low_outer = model.predict_distance_bounds(5.0, delta=2.0)
+        self.assertAlmostEqual(low_inner, 250.0, places=3)
+        self.assertAlmostEqual(low_outer, 750.0, places=3)
+
+        high_inner, high_outer = model.predict_distance_bounds(25.0, delta=2.0)
+        self.assertAlmostEqual(high_inner, 500.0, places=3)
+        self.assertAlmostEqual(high_outer, 2000.0, places=3)
+
+    def test_cutoff_variant_high_only_preserves_high_side_fallback(self):
+        """The default high-only variant falls back only above the reliable max RTT."""
+        model = self._make_variant_test_model('high_only')
+
+        low_inner, low_outer = model.predict_distance_bounds(5.0, delta=2.0)
+        self.assertAlmostEqual(low_inner, 250.0, places=3)
+        self.assertAlmostEqual(low_outer, 750.0, places=3)
+
+        high_inner, high_outer = model.predict_distance_bounds(25.0, delta=2.0)
+        self.assertAlmostEqual(high_inner, model._hull_distance(25.0, is_upper=False), places=2)
+        self.assertAlmostEqual(high_outer, model._hull_distance(25.0, is_upper=True), places=2)
+
+    def test_cutoff_variant_low_only_adds_low_side_fallback(self):
+        """The low-only variant falls back only below the reliable min RTT."""
+        model = self._make_variant_test_model('low_only')
+
+        low_inner, low_outer = model.predict_distance_bounds(5.0, delta=2.0)
+        self.assertAlmostEqual(low_inner, 0.0, places=3)
+        self.assertAlmostEqual(low_outer, 750.0, places=3)
+
+        high_inner, high_outer = model.predict_distance_bounds(25.0, delta=2.0)
+        self.assertAlmostEqual(high_inner, 500.0, places=3)
+        self.assertAlmostEqual(high_outer, 2000.0, places=3)
+
+    def test_cutoff_variant_both_applies_both_fallbacks(self):
+        """The bilateral variant falls back on both low and high sparse regions."""
+        model = self._make_variant_test_model('both')
+
+        low_inner, low_outer = model.predict_distance_bounds(5.0, delta=2.0)
+        self.assertAlmostEqual(low_inner, 0.0, places=3)
+        self.assertAlmostEqual(low_outer, 750.0, places=3)
+
+        high_inner, high_outer = model.predict_distance_bounds(25.0, delta=2.0)
+        self.assertAlmostEqual(high_inner, model._hull_distance(25.0, is_upper=False), places=2)
+        self.assertAlmostEqual(high_outer, model._hull_distance(25.0, is_upper=True), places=2)
+
+    def test_reliable_region_respects_cutoff_variant(self):
+        """Each cutoff variant keeps the intended reliable fitting interval."""
+        rng = np.random.default_rng(7)
+        rtts = np.concatenate([
+            np.array([2.0, 3.0]),
+            np.linspace(20.0, 60.0, 80),
+            np.array([90.0, 100.0]),
+        ])
+        distances = 100.0 * rtts + rng.uniform(-100.0, 100.0, len(rtts))
+        min_valid_rtt = float(np.min(rtts))
+        max_valid_rtt = float(np.max(rtts))
+
+        model_none = OctantRTTModel(anchor_ip='none', cutoff_variant='none')
+        model_none.fit(rtts, distances)
+        self.assertAlmostEqual(model_none.reliable_min_rtt, min_valid_rtt, places=6)
+        self.assertAlmostEqual(model_none.reliable_max_rtt, max_valid_rtt, places=6)
+
+        model_high = OctantRTTModel(anchor_ip='high', cutoff_variant='high_only')
+        model_high.fit(rtts, distances)
+        self.assertAlmostEqual(model_high.reliable_min_rtt, min_valid_rtt, places=6)
+        self.assertLessEqual(model_high.reliable_max_rtt, model_high.cutoff_rtt + 1e-6)
+
+        model_low = OctantRTTModel(anchor_ip='low', cutoff_variant='low_only')
+        model_low.fit(rtts, distances)
+        self.assertGreaterEqual(model_low.reliable_min_rtt, model_low.low_cutoff_rtt - 1e-6)
+        self.assertAlmostEqual(model_low.reliable_max_rtt, max_valid_rtt, places=6)
+
+        model_both = OctantRTTModel(anchor_ip='both', cutoff_variant='both')
+        model_both.fit(rtts, distances)
+        self.assertGreaterEqual(model_both.reliable_min_rtt, model_both.low_cutoff_rtt - 1e-6)
+        self.assertLessEqual(model_both.reliable_max_rtt, model_both.cutoff_rtt + 1e-6)
 
     def test_serialization(self):
         """Save/load preserves model state."""
