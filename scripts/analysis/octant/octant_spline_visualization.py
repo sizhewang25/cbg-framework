@@ -86,7 +86,7 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
     # so spline and delta band are only shown within the reliable region.
     if model.spline_rtt_knots is not None:
         in_reliable = rtt_range <= model.cutoff_rtt
-        spline_dists = model.predict_distance_array(rtt_range, clamp_by_hull=True)
+        spline_dists = model.predict_distance_array(rtt_range)
 
         # --- Delta spline band (80% coverage) ---
         delta_lower = None

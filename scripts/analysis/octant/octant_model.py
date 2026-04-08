@@ -654,7 +654,8 @@ class OctantRTTModel:
         Predict distance from RTT using the fitted spline.
 
         Applies the piecewise linear spline within [low_cutoff_rtt, cutoff_rtt]
-        and extends with the 2/3c slope outside that range.
+        and extends with the 2/3c slope outside that range, clipping the
+        estimate to the convex-hull envelope.
 
         Args:
             rtt: Round-trip time in ms
@@ -679,21 +680,30 @@ class OctantRTTModel:
         else:
             predicted = float(np.interp(rtt, knot_rtts, knot_dists))
 
+        if self.hull_upper_rtts and self.hull_lower_rtts:
+            hull_lower = hull_rtt_to_distance(
+                rtt, self.hull_lower_rtts, self.hull_lower_distances,
+                self.cutoff_rtt, self.baseline_slope, is_upper=False,
+            )
+            hull_upper = hull_rtt_to_distance(
+                rtt, self.hull_upper_rtts, self.hull_upper_distances,
+                self.cutoff_rtt, self.baseline_slope, is_upper=True,
+            )
+            predicted = max(hull_lower, min(predicted, hull_upper))
+
         return max(predicted, 0.0)
 
     def predict_distance_array(
         self,
         rtt_array: np.ndarray,
-        clamp_by_hull: bool = False
     ) -> np.ndarray:
         """Vectorized distance prediction over an array of RTTs.
 
         Applies the piecewise linear spline, extending with baseline slope
-        beyond cutoff_rtt. Optionally clamps result between hull bounds.
+        beyond cutoff_rtt, then clips the result between hull bounds.
 
         Args:
             rtt_array: Array of RTT values in ms
-            clamp_by_hull: If True, clip between hull lower and upper bounds
 
         Returns:
             Array of predicted distances in km
@@ -718,18 +728,17 @@ class OctantRTTModel:
             result = base
         result = np.maximum(result, 0.0)
 
-        if clamp_by_hull:
-            upper = np.array([
-                hull_rtt_to_distance(r, self.hull_upper_rtts, self.hull_upper_distances,
-                                     self.cutoff_rtt, self.baseline_slope, is_upper=True)
-                for r in rtt_array
-            ])
-            lower = np.array([
-                hull_rtt_to_distance(r, self.hull_lower_rtts, self.hull_lower_distances,
-                                     self.cutoff_rtt, self.baseline_slope, is_upper=False)
-                for r in rtt_array
-            ])
-            result = np.clip(result, lower, upper)
+        upper = np.array([
+            hull_rtt_to_distance(r, self.hull_upper_rtts, self.hull_upper_distances,
+                                 self.cutoff_rtt, self.baseline_slope, is_upper=True)
+            for r in rtt_array
+        ])
+        lower = np.array([
+            hull_rtt_to_distance(r, self.hull_lower_rtts, self.hull_lower_distances,
+                                 self.cutoff_rtt, self.baseline_slope, is_upper=False)
+            for r in rtt_array
+        ])
+        result = np.clip(result, lower, upper)
 
         return result
 
@@ -750,7 +759,7 @@ class OctantRTTModel:
         Returns:
             (lower_array, upper_array) both in km, clamped by hulls
         """
-        spline = self.predict_distance_array(rtt_array, clamp_by_hull=True)
+        spline = self.predict_distance_array(rtt_array)
 
         upper_hull = np.array([
             hull_rtt_to_distance(r, self.hull_upper_rtts, self.hull_upper_distances,

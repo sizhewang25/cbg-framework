@@ -249,15 +249,40 @@ class TestOctantRTTModel(unittest.TestCase):
             anchor_lat=40.0,
             anchor_lon=-74.0,
             fitted=True,
+            hull_upper_rtts=[0.0, 10.0],
+            hull_upper_distances=[0.0, 1000.0],
+            hull_lower_rtts=[0.0, 10.0],
+            hull_lower_distances=[0.0, 0.0],
             spline_rtt_knots=[0.0, 10.0],
             spline_dist_knots=[0.0, 1000.0],
-            cutoff_rtt=10.0,
+            cutoff_rtt=20.0,
         )
 
         self.assertEqual(model.predict_distance(0.0), 0.0)
 
         array_result = model.predict_distance_array(np.array([0.0, 5.0, 10.0]))
         np.testing.assert_allclose(array_result, np.array([0.0, 500.0, 1000.0]))
+
+    def test_predict_distance_is_hull_bounded(self):
+        """Scalar and array predictions are always hull-bounded."""
+        model = OctantRTTModel(
+            anchor_ip='192.168.1.1',
+            anchor_lat=40.0,
+            anchor_lon=-74.0,
+            fitted=True,
+            hull_upper_rtts=[0.0, 10.0],
+            hull_upper_distances=[0.0, 300.0],
+            hull_lower_rtts=[0.0, 10.0],
+            hull_lower_distances=[0.0, 100.0],
+            spline_rtt_knots=[0.0, 10.0],
+            spline_dist_knots=[0.0, 1000.0],
+            cutoff_rtt=20.0,
+        )
+
+        self.assertEqual(model.predict_distance(5.0), 150.0)
+
+        array_result = model.predict_distance_array(np.array([5.0]))
+        np.testing.assert_allclose(array_result, np.array([150.0]))
 
     def test_spline_fitted_and_monotonic(self):
         """Fitted model has monotonically non-decreasing spline knots."""
@@ -347,8 +372,8 @@ class TestOctantRTTModel(unittest.TestCase):
             scalar_result = model.predict_distance(rtt)
             self.assertAlmostEqual(array_result[i], scalar_result, places=3)
 
-    def test_predict_distance_array_clamped(self):
-        """predict_distance_array with clamp_by_hull stays within hull bounds."""
+    def test_predict_distance_array_within_hull_bounds(self):
+        """predict_distance_array stays within hull bounds."""
         np.random.seed(42)
         rtts = np.linspace(10, 100, 100)
         distances = 100 * rtts + np.random.uniform(-300, 300, 100)
@@ -357,7 +382,7 @@ class TestOctantRTTModel(unittest.TestCase):
         model.fit(rtts, distances)
 
         test_rtts = np.linspace(5, model.cutoff_rtt + 20, 50)
-        clamped = model.predict_distance_array(test_rtts, clamp_by_hull=True)
+        clamped = model.predict_distance_array(test_rtts)
         for i, rtt in enumerate(test_rtts):
             hull_lower = hull_rtt_to_distance(
                 rtt, model.hull_lower_rtts, model.hull_lower_distances,
