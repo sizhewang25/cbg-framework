@@ -681,6 +681,94 @@ class OctantRTTModel:
 
         return max(predicted, 1.0)  # Minimum 1 km
 
+    def predict_distance_array(
+        self,
+        rtt_array: np.ndarray,
+        clamp_by_hull: bool = False
+    ) -> np.ndarray:
+        """Vectorized distance prediction over an array of RTTs.
+
+        Applies the piecewise linear spline, extending with baseline slope
+        beyond cutoff_rtt. Optionally clamps result between hull bounds.
+
+        Args:
+            rtt_array: Array of RTT values in ms
+            clamp_by_hull: If True, clip between hull lower and upper bounds
+
+        Returns:
+            Array of predicted distances in km
+        """
+        if not self.fitted:
+            raise OctantFitError('Model not fitted')
+        if self.spline_rtt_knots is None:
+            raise SplineFitError('Spline not fitted')
+
+        knot_rtts = np.array(self.spline_rtt_knots)
+        knot_dists = np.array(self.spline_dist_knots)
+
+        base = np.interp(rtt_array, knot_rtts, knot_dists)
+        if self.cutoff_rtt > 0:
+            cutoff_val = float(np.interp(self.cutoff_rtt, knot_rtts, knot_dists))
+            result = np.where(
+                rtt_array > self.cutoff_rtt,
+                cutoff_val + (rtt_array - self.cutoff_rtt) / self.baseline_slope,
+                base,
+            )
+        else:
+            result = base
+        result = np.maximum(result, 1.0)
+
+        if clamp_by_hull:
+            upper = np.array([
+                hull_rtt_to_distance(r, self.hull_upper_rtts, self.hull_upper_distances,
+                                     self.cutoff_rtt, self.baseline_slope, is_upper=True)
+                for r in rtt_array
+            ])
+            lower = np.array([
+                hull_rtt_to_distance(r, self.hull_lower_rtts, self.hull_lower_distances,
+                                     self.cutoff_rtt, self.baseline_slope, is_upper=False)
+                for r in rtt_array
+            ])
+            result = np.clip(result, lower, upper)
+
+        return result
+
+    def predict_bounds_array(
+        self,
+        rtt_array: np.ndarray,
+        delta: float,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Vectorized delta bounds over an array of RTTs.
+
+        Computes (spline/delta, spline*delta) clamped by hull bounds,
+        using hull-clamped spline as the base prediction.
+
+        Args:
+            rtt_array: Array of RTT values in ms
+            delta: Multiplicative delta factor
+
+        Returns:
+            (lower_array, upper_array) both in km, clamped by hulls
+        """
+        spline = self.predict_distance_array(rtt_array, clamp_by_hull=True)
+
+        upper_hull = np.array([
+            hull_rtt_to_distance(r, self.hull_upper_rtts, self.hull_upper_distances,
+                                 self.cutoff_rtt, self.baseline_slope, is_upper=True)
+            for r in rtt_array
+        ])
+        lower_hull = np.array([
+            hull_rtt_to_distance(r, self.hull_lower_rtts, self.hull_lower_distances,
+                                 self.cutoff_rtt, self.baseline_slope, is_upper=False)
+            for r in rtt_array
+        ])
+
+        delta_upper = np.minimum(spline * delta, upper_hull)
+        delta_lower = np.maximum(spline / delta, lower_hull)
+        delta_lower = np.maximum(delta_lower, 0.0)
+
+        return delta_lower, delta_upper
+
     def predict_distance_bounds(
         self,
         rtt: float,
@@ -705,20 +793,22 @@ class OctantRTTModel:
 
         if delta is not None:
             predicted = self.predict_distance(rtt)
-            inner = predicted / delta
-            outer = predicted * delta
 
-            # Clamp with hull bounds
+            # Clamp spline by hull bounds before delta expansion
             hull_lower = hull_rtt_to_distance(
                 rtt, self.hull_lower_rtts, self.hull_lower_distances,
                 self.cutoff_rtt, self.baseline_slope, is_upper=False,
-                low_cutoff_rtt=self.low_cutoff_rtt
             )
             hull_upper = hull_rtt_to_distance(
                 rtt, self.hull_upper_rtts, self.hull_upper_distances,
                 self.cutoff_rtt, self.baseline_slope, is_upper=True,
-                low_cutoff_rtt=self.low_cutoff_rtt
             )
+            predicted = max(hull_lower, min(predicted, hull_upper))
+
+            inner = predicted / delta
+            outer = predicted * delta
+
+            # Clamp bounds by hulls
             inner = max(inner, hull_lower)
             outer = min(outer, hull_upper)
 
@@ -728,12 +818,10 @@ class OctantRTTModel:
         max_dist = hull_rtt_to_distance(
             rtt, self.hull_upper_rtts, self.hull_upper_distances,
             self.cutoff_rtt, self.baseline_slope, is_upper=True,
-            low_cutoff_rtt=self.low_cutoff_rtt
         )
         min_dist = hull_rtt_to_distance(
             rtt, self.hull_lower_rtts, self.hull_lower_distances,
             self.cutoff_rtt, self.baseline_slope, is_upper=False,
-            low_cutoff_rtt=self.low_cutoff_rtt
         )
 
         return (max(0, min_dist), max_dist)

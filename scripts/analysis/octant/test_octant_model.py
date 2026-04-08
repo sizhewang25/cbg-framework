@@ -273,7 +273,7 @@ class TestOctantRTTModel(unittest.TestCase):
         self.assertLess(min_dist, max_dist)
 
     def test_predict_bounds_below_low_cutoff(self):
-        """Delta band below low_cutoff yields only positive constraint (inner radius = 0)."""
+        """Delta band below low_cutoff is clamped by hull bounds."""
         np.random.seed(42)
         rtts = np.linspace(10, 100, 100)
         distances = 5000 + 50 * rtts + np.random.uniform(-300, 300, 100)
@@ -285,11 +285,17 @@ class TestOctantRTTModel(unittest.TestCase):
         rtt_below = model.low_cutoff_rtt - 5.0
         if rtt_below > 0:
             min_dist, max_dist = model.predict_distance_bounds(rtt_below, delta=1.5)
-            self.assertEqual(min_dist, 0.0, "No negative constraint below low cutoff")
-            self.assertGreater(max_dist, 0.0, "Positive constraint should exist")
+            self.assertGreaterEqual(min_dist, 0.0)
+            self.assertLess(min_dist, max_dist)
+            # Bounds should be within hull envelope
+            hull_upper = hull_rtt_to_distance(
+                rtt_below, model.hull_upper_rtts, model.hull_upper_distances,
+                model.cutoff_rtt, is_upper=True,
+            )
+            self.assertLessEqual(max_dist, hull_upper + 1.0)
 
     def test_predict_bounds_above_cutoff(self):
-        """Delta band above cutoff yields only positive constraint (inner radius = 0)."""
+        """Delta band above cutoff is clamped by hull bounds."""
         np.random.seed(42)
         rtts = np.linspace(10, 100, 100)
         distances = 5000 + 50 * rtts + np.random.uniform(-300, 300, 100)
@@ -300,8 +306,92 @@ class TestOctantRTTModel(unittest.TestCase):
         # Query RTT above high cutoff
         rtt_above = model.cutoff_rtt + 20.0
         min_dist, max_dist = model.predict_distance_bounds(rtt_above, delta=1.5)
-        self.assertEqual(min_dist, 0.0, "No negative constraint above cutoff")
-        self.assertGreater(max_dist, 0.0, "Positive constraint should exist")
+        self.assertGreaterEqual(min_dist, 0.0)
+        self.assertLess(min_dist, max_dist)
+        # Upper bound should not exceed hull upper
+        hull_upper = hull_rtt_to_distance(
+            rtt_above, model.hull_upper_rtts, model.hull_upper_distances,
+            model.cutoff_rtt, is_upper=True,
+        )
+        self.assertLessEqual(max_dist, hull_upper + 1.0)
+
+    def test_predict_distance_array_matches_scalar(self):
+        """predict_distance_array matches per-element predict_distance."""
+        np.random.seed(42)
+        rtts = np.linspace(10, 100, 100)
+        distances = 100 * rtts + np.random.uniform(-300, 300, 100)
+
+        model = OctantRTTModel(anchor_ip='192.168.1.1', anchor_lat=40.0, anchor_lon=-74.0)
+        model.fit(rtts, distances)
+
+        test_rtts = np.array([15.0, 50.0, model.cutoff_rtt + 10.0])
+        array_result = model.predict_distance_array(test_rtts)
+        for i, rtt in enumerate(test_rtts):
+            scalar_result = model.predict_distance(rtt)
+            self.assertAlmostEqual(array_result[i], scalar_result, places=3)
+
+    def test_predict_distance_array_clamped(self):
+        """predict_distance_array with clamp_by_hull stays within hull bounds."""
+        np.random.seed(42)
+        rtts = np.linspace(10, 100, 100)
+        distances = 100 * rtts + np.random.uniform(-300, 300, 100)
+
+        model = OctantRTTModel(anchor_ip='192.168.1.1', anchor_lat=40.0, anchor_lon=-74.0)
+        model.fit(rtts, distances)
+
+        test_rtts = np.linspace(5, model.cutoff_rtt + 20, 50)
+        clamped = model.predict_distance_array(test_rtts, clamp_by_hull=True)
+        for i, rtt in enumerate(test_rtts):
+            hull_lower = hull_rtt_to_distance(
+                rtt, model.hull_lower_rtts, model.hull_lower_distances,
+                model.cutoff_rtt, is_upper=False,
+            )
+            hull_upper = hull_rtt_to_distance(
+                rtt, model.hull_upper_rtts, model.hull_upper_distances,
+                model.cutoff_rtt, is_upper=True,
+            )
+            self.assertGreaterEqual(clamped[i], hull_lower - 0.01)
+            self.assertLessEqual(clamped[i], hull_upper + 0.01)
+
+    def test_predict_bounds_array_within_hulls(self):
+        """predict_bounds_array returns bounds within hull envelope."""
+        np.random.seed(42)
+        rtts = np.linspace(10, 100, 100)
+        distances = 100 * rtts + np.random.uniform(-300, 300, 100)
+
+        model = OctantRTTModel(anchor_ip='192.168.1.1', anchor_lat=40.0, anchor_lon=-74.0)
+        model.fit(rtts, distances)
+
+        test_rtts = np.linspace(5, model.cutoff_rtt + 20, 50)
+        lower, upper = model.predict_bounds_array(test_rtts, delta=1.5)
+        for i, rtt in enumerate(test_rtts):
+            hull_lower = hull_rtt_to_distance(
+                rtt, model.hull_lower_rtts, model.hull_lower_distances,
+                model.cutoff_rtt, is_upper=False,
+            )
+            hull_upper = hull_rtt_to_distance(
+                rtt, model.hull_upper_rtts, model.hull_upper_distances,
+                model.cutoff_rtt, is_upper=True,
+            )
+            self.assertGreaterEqual(lower[i], hull_lower - 0.01)
+            self.assertLessEqual(upper[i], hull_upper + 0.01)
+            self.assertLessEqual(lower[i], upper[i])
+
+    def test_predict_bounds_array_matches_scalar(self):
+        """predict_bounds_array matches per-element predict_distance_bounds."""
+        np.random.seed(42)
+        rtts = np.linspace(10, 100, 100)
+        distances = 100 * rtts + np.random.uniform(-300, 300, 100)
+
+        model = OctantRTTModel(anchor_ip='192.168.1.1', anchor_lat=40.0, anchor_lon=-74.0)
+        model.fit(rtts, distances)
+
+        test_rtts = np.array([15.0, 50.0, model.cutoff_rtt + 10.0])
+        lower, upper = model.predict_bounds_array(test_rtts, delta=1.5)
+        for i, rtt in enumerate(test_rtts):
+            scalar_lower, scalar_upper = model.predict_distance_bounds(rtt, delta=1.5)
+            self.assertAlmostEqual(lower[i], scalar_lower, places=3)
+            self.assertAlmostEqual(upper[i], scalar_upper, places=3)
 
     def test_serialization(self):
         """Save/load preserves model state."""

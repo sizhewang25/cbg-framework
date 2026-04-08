@@ -81,39 +81,23 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
     ax.fill_between(rtt_range, lower_dists, upper_dists, color='green', alpha=0.07,
                     label='Annular region')
 
-    # --- Piecewise linear spline with 2/3c extension outside reliable region ---
+    # --- Piecewise linear spline with 2/3c extension, clamped by hulls ---
     if model.spline_rtt_knots is not None:
-        knot_rtts = np.array(model.spline_rtt_knots)
-        knot_dists = np.array(model.spline_dist_knots)
-        spline_at_cutoff = float(np.interp(model.cutoff_rtt, knot_rtts, knot_dists))
-
-        # Base interpolation (flat extrapolation outside knot range)
-        spline_base = np.interp(rtt_range, knot_rtts, knot_dists)
-        # Above high cutoff: extend with 2/3c slope from cutoff value
-        spline_dists = np.where(
-            rtt_range > model.cutoff_rtt,
-            spline_at_cutoff + (rtt_range - model.cutoff_rtt) / THEORETICAL_SLOPE,
-            spline_base
-        )
-        # Clamp spline by hull bounds
-        spline_dists = np.clip(spline_dists, lower_dists, upper_dists)
+        spline_dists = model.predict_distance_array(rtt_range, clamp_by_hull=True)
 
         # --- Delta spline band (80% coverage) ---
         delta_lower = None
         try:
+            knot_rtts = np.array(model.spline_rtt_knots)
+            knot_dists = np.array(model.spline_dist_knots)
             reliable_mask = rtts <= model.cutoff_rtt
-            rel_rtts = rtts[reliable_mask]
-            rel_dists = distances[reliable_mask]
             delta, delta_meta = find_delta_for_coverage(
-                rel_rtts, rel_dists, knot_rtts, knot_dists,
-                target_coverage=0.80
+                rtts[reliable_mask], distances[reliable_mask],
+                knot_rtts, knot_dists, target_coverage=0.80,
             )
             coverage_pct = delta_meta['actual_coverage'] * 100
 
-            # Delta band across full range, clamped by hull bounds
-            delta_upper = np.minimum(spline_dists * delta, upper_dists)
-            delta_lower = np.maximum(spline_dists / delta, lower_dists)
-            delta_lower = np.maximum(delta_lower, 0.0)
+            delta_lower, delta_upper = model.predict_bounds_array(rtt_range, delta)
 
             ax.plot(rtt_range, delta_upper,
                     color='darkorange', linewidth=2,

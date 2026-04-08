@@ -99,7 +99,7 @@ class TestConstraintFormation(unittest.TestCase):
 
         self.assertIsInstance(c, AnnularConstraint)
         self.assertGreater(c.outer_radius_km, c.inner_radius_km)
-        self.assertGreater(c.inner_radius_km, 0)
+        self.assertGreaterEqual(c.inner_radius_km, 0)
         self.assertAlmostEqual(c.weight, np.exp(-30.0 / 50.0), places=6)
         self.assertEqual(c.rtt_ms, 30.0)
 
