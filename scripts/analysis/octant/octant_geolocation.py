@@ -104,15 +104,15 @@ def form_constraints(
         models: {landmark_ip: fitted OctantRTTModel}
         weight_tau_ms: Decay constant for exponential weighting
         delta: If provided, use spline delta band instead of hull bounds
-        max_rtt_ms: Ignore RTTs above this threshold
+        max_rtt_ms: Retained for API compatibility; high-RTT constraints are no
+            longer filtered here so later weighting and region selection can
+            decide how much they matter.
 
     Returns:
         List of AnnularConstraint sorted by weight descending
     """
     constraints = []
     for lm_ip, rtt in rtt_measurements.items():
-        if isinstance(max_rtt_ms, float) and rtt > max_rtt_ms:
-            continue
         if lm_ip not in models or not models[lm_ip].fitted:
             continue
         if lm_ip not in landmark_coords:
@@ -257,7 +257,7 @@ def compute_feasible_region_unweighted(
 
     Args:
         constraints: List of annular constraints
-        n_pts: Points per circle polygon
+        n_pts: Points per circle polygon for the unweighted region path
 
     Returns:
         Shapely geometry (Polygon/MultiPolygon) or None if empty
@@ -296,7 +296,6 @@ def compute_feasible_region_unweighted(
 def compute_feasible_region_weighted(
     constraints: List[AnnularConstraint],
     weight_threshold: float = 0.5,
-    n_pts: int = 100,
     grid_resolution_deg: float = 0.1,
 ) -> Optional[Any]:
     """Compute weighted feasible region using grid-based approach.
@@ -308,7 +307,6 @@ def compute_feasible_region_weighted(
     Args:
         constraints: List of annular constraints
         weight_threshold: Fraction of max possible weight required
-        n_pts: Points per circle polygon
         grid_resolution_deg: Grid spacing in degrees
 
     Returns:
@@ -574,13 +572,13 @@ def estimate_location(
     if method == 'weighted':
         region = compute_feasible_region_weighted(
             constraints, weight_threshold=weight_threshold,
-            n_pts=n_pts, grid_resolution_deg=grid_resolution_deg,
+            grid_resolution_deg=grid_resolution_deg,
         )
         # Fallback: lower threshold
         if region is None:
             region = compute_feasible_region_weighted(
                 constraints, weight_threshold=weight_threshold / 2.0,
-                n_pts=n_pts, grid_resolution_deg=grid_resolution_deg,
+                grid_resolution_deg=grid_resolution_deg,
             )
             if region is not None:
                 fallback = True

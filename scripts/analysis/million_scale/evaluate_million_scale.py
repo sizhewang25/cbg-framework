@@ -43,11 +43,7 @@ from scripts.analysis.cbg_feasibility.rtt_model import (
 from scripts.analysis.octant.octant_model import OctantRTTModel, find_delta_for_coverage
 from scripts.analysis.octant.octant_geolocation import (
     form_constraints,
-    compute_feasible_region_unweighted,
-    sample_points_in_region,
-    geometric_median_approx,
-    _region_area_km2,
-    _weighted_centroid_fallback,
+    estimate_location,
 )
 
 # Plot style
@@ -258,7 +254,7 @@ def fit_lp_models(df_asn):
 # Octant Model Fitting
 # =============================================================================
 
-def fit_octant_models(df_asn, target_coverage=0.90):
+def fit_octant_models(df_asn, target_coverage=0.80):
     """Fit Octant RTT-distance models per anchor and compute shared delta."""
     anchors = df_asn[['dst_ip', 'anchor_latitude', 'anchor_longitude', 'anchor_city']].drop_duplicates()
     models = {}
@@ -316,12 +312,13 @@ def fit_octant_models(df_asn, target_coverage=0.90):
 
 def run_octant_cbg(df_asn, octant_models, delta):
     """
-    Run Octant CBG: spline+delta annular constraints + Shapely intersection + Monte Carlo.
+    Run Octant CBG with Octant's weighted-region geolocation flow.
 
     - RTT → annulus via OctantRTTModel.predict_distance_bounds(rtt, delta)
       inner = spline(rtt)/delta, outer = spline(rtt)*delta
-    - Intersect outer disks, subtract inner disks → possibly MultiPolygon
-    - Monte Carlo geometric median for point selection
+    - Prefer weighted feasible-region construction, then fall back to
+      unweighted region formation if needed
+    - Use Monte Carlo geometric-median point selection within the final region
     """
     anchors = df_asn[['dst_ip', 'anchor_latitude', 'anchor_longitude']].drop_duplicates()
     anchor_coords = {}
@@ -380,27 +377,42 @@ def run_octant_cbg(df_asn, octant_models, delta):
             })
             continue
 
-        # Compute feasible region (intersect outers, subtract inners)
-        region = compute_feasible_region_unweighted(constraints, n_pts=128)
-        area_km2 = _region_area_km2(region) if region is not None else 0.0
+        # Keep the paper-style weighted region selection, but use a slightly
+        # coarser grid than the visualization path so the million-scale sweep
+        # stays tractable.
+        estimate = estimate_location(
+            constraints,
+            method='weighted',
+            n_samples=5000,
+            weight_threshold=0.5,
+            grid_resolution_deg=0.25,
+            n_pts=128,
+            rng=rng,
+        )
+
+        if estimate is None:
+            results.append({
+                'probe_ip': probe_ip,
+                'true_lat': true_lat,
+                'true_lon': true_lon,
+                'estimated_lat': None,
+                'estimated_lon': None,
+                'error_km': None,
+                'n_anchors': len(constraints),
+                'method': 'octant_cbg',
+                'intersection': False,
+                'avg_radius_km': float(np.mean(outer_radii)) if outer_radii else None,
+                'intersection_area_km2': 0.0,
+                'geolocation_method': None,
+                'fallback': True,
+            })
+            continue
+
+        est_lat = estimate['lat']
+        est_lon = estimate['lon']
+        area_km2 = float(estimate['region_area_km2'])
         all_areas.append(area_km2)
-
-        did_intersect = region is not None and not region.is_empty
-
-        if did_intersect:
-            # Monte Carlo geometric median
-            points = sample_points_in_region(region, n_samples=5000, rng=rng)
-            if len(points) >= 2:
-                est_lat, est_lon = geometric_median_approx(points)
-            elif len(points) == 1:
-                est_lat, est_lon = points[0, 0], points[0, 1]
-            else:
-                # Region too small for sampling; use Shapely centroid
-                centroid = region.centroid
-                est_lat, est_lon = centroid.y, centroid.x
-        else:
-            # Fallback: weighted centroid of landmarks
-            est_lat, est_lon = _weighted_centroid_fallback(constraints)
+        did_intersect = estimate['method'] != 'centroid_fallback'
 
         error_km = haversine((est_lat, est_lon), (true_lat, true_lon))
 
@@ -416,6 +428,8 @@ def run_octant_cbg(df_asn, octant_models, delta):
             'intersection': did_intersect,
             'avg_radius_km': float(np.mean(outer_radii)) if outer_radii else None,
             'intersection_area_km2': area_km2,
+            'geolocation_method': estimate['method'],
+            'fallback': bool(estimate['fallback']),
         })
 
     return results, np.array(all_outer_radii), np.array(all_areas)

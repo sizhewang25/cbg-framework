@@ -114,15 +114,15 @@ class TestConstraintFormation(unittest.TestCase):
         self.assertIn('lm_nyc', ips)
         self.assertNotIn('unfitted', ips)
 
-    def test_filters_high_rtt(self):
-        """RTTs above max_rtt_ms are excluded."""
+    def test_keeps_high_rtt(self):
+        """High-RTT measurements are retained for later weighted handling."""
         rtts = {'lm_nyc': 20.0, 'lm_chi': 300.0}
         constraints = form_constraints(
             'target', rtts, LANDMARKS, self.models, max_rtt_ms=200.0
         )
         ips = [c.landmark_ip for c in constraints]
         self.assertIn('lm_nyc', ips)
-        self.assertNotIn('lm_chi', ips)
+        self.assertIn('lm_chi', ips)
 
     def test_sorted_by_weight(self):
         """Constraints are sorted by weight descending (lowest RTT first)."""
