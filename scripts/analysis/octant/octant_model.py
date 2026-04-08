@@ -767,6 +767,12 @@ class OctantRTTModel:
         delta_lower = np.maximum(spline / delta, lower_hull)
         delta_lower = np.maximum(delta_lower, 0.0)
 
+        # Beyond cutoff: fall back to hull bounds directly (spline unreliable)
+        if self.cutoff_rtt > 0:
+            beyond = rtt_array > self.cutoff_rtt
+            delta_upper[beyond] = upper_hull[beyond]
+            delta_lower[beyond] = np.maximum(lower_hull[beyond], 0.0)
+
         return delta_lower, delta_upper
 
     def predict_distance_bounds(
@@ -790,6 +796,18 @@ class OctantRTTModel:
         """
         if not self.fitted:
             raise OctantFitError('Model not fitted')
+
+        # Beyond cutoff: spline is unreliable, fall back to hull bounds directly
+        if self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
+            max_dist = hull_rtt_to_distance(
+                rtt, self.hull_upper_rtts, self.hull_upper_distances,
+                self.cutoff_rtt, self.baseline_slope, is_upper=True,
+            )
+            min_dist = hull_rtt_to_distance(
+                rtt, self.hull_lower_rtts, self.hull_lower_distances,
+                self.cutoff_rtt, self.baseline_slope, is_upper=False,
+            )
+            return (max(0, min_dist), max_dist)
 
         if delta is not None:
             predicted = self.predict_distance(rtt)

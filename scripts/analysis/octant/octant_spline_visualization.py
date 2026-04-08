@@ -81,8 +81,11 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
     ax.fill_between(rtt_range, lower_dists, upper_dists, color='green', alpha=0.07,
                     label='Annular region')
 
-    # --- Piecewise linear spline with 2/3c extension, clamped by hulls ---
+    # --- Piecewise linear spline + delta band (reliable region only) ---
+    # Beyond cutoff, hull bounds are used directly for constraints,
+    # so spline and delta band are only shown within the reliable region.
     if model.spline_rtt_knots is not None:
+        in_reliable = rtt_range <= model.cutoff_rtt
         spline_dists = model.predict_distance_array(rtt_range, clamp_by_hull=True)
 
         # --- Delta spline band (80% coverage) ---
@@ -99,33 +102,31 @@ def plot_anchor(anchor_ip, anchor_city, rtts, distances, model, output_path):
 
             delta_lower, delta_upper = model.predict_bounds_array(rtt_range, delta)
 
-            ax.plot(rtt_range, delta_upper,
+            # Only show delta band within reliable region
+            ax.plot(rtt_range, np.where(in_reliable, delta_upper, np.nan),
                     color='darkorange', linewidth=2,
                     linestyle='-', alpha=0.8, label=f'Delta upper (δ={delta:.2f})')
-            ax.plot(rtt_range, delta_lower,
+            ax.plot(rtt_range, np.where(in_reliable, delta_lower, np.nan),
                     color='darkorange', linewidth=2,
                     linestyle='-', alpha=0.8, label=f'Delta lower ({coverage_pct:.0f}% coverage)')
-            ax.fill_between(rtt_range, delta_lower, delta_upper,
+            ax.fill_between(rtt_range,
+                            np.where(in_reliable, delta_lower, np.nan),
+                            np.where(in_reliable, delta_upper, np.nan),
                             color='darkorange', alpha=0.12,
                             label=f'Delta band ({coverage_pct:.0f}%)')
         except Exception:
             pass  # Skip delta band if delta search fails
 
-        # Spline: dotted within reliable region, solid outside.
+        # Spline: only within reliable region.
         # Hide where delta_lower has converged with the spline (redundant).
-        in_reliable = rtt_range <= model.cutoff_rtt
         if delta_lower is not None:
             tol = 0.02 * np.maximum(spline_dists, 1.0)
-            spline_visible = np.abs(spline_dists - delta_lower) > tol
+            spline_visible = in_reliable & (np.abs(spline_dists - delta_lower) > tol)
         else:
-            spline_visible = np.ones_like(rtt_range, dtype=bool)
-        outside = ~in_reliable & spline_visible
-        inside = in_reliable & spline_visible
-        ax.plot(rtt_range, np.where(outside, spline_dists, np.nan),
-                color='darkorange', linewidth=2,
+            spline_visible = in_reliable
+        ax.plot(rtt_range, np.where(spline_visible, spline_dists, np.nan),
+                color='darkorange', linewidth=2, linestyle=':',
                 label=f'Spline ({model.spline_n_knots} knots)')
-        ax.plot(rtt_range, np.where(inside, spline_dists, np.nan),
-                color='darkorange', linewidth=2, linestyle=':')
 
     # --- Labels ---
     ax.set_xlabel('RTT (ms)', fontsize=12)
