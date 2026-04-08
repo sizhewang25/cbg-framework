@@ -679,7 +679,7 @@ class OctantRTTModel:
         else:
             predicted = float(np.interp(rtt, knot_rtts, knot_dists))
 
-        return max(predicted, 1.0)  # Minimum 1 km
+        return max(predicted, 0.0)
 
     def predict_distance_array(
         self,
@@ -716,7 +716,7 @@ class OctantRTTModel:
             )
         else:
             result = base
-        result = np.maximum(result, 1.0)
+        result = np.maximum(result, 0.0)
 
         if clamp_by_hull:
             upper = np.array([

@@ -28,6 +28,7 @@ from scripts.utils.helpers import haversine
 logger = logging.getLogger(__name__)
 
 EARTH_RADIUS_KM = 6371.0
+SHAPELY_RADIUS_EPSILON_KM = 1e-3
 
 
 # =============================================================================
@@ -154,6 +155,10 @@ def _circle_to_shapely(
     Uses degree-based approximation accounting for latitude.
     Shapely coordinates are (lon, lat) = (x, y).
     """
+    # Shapely polygons need nonzero radius to avoid collapsing exact matches
+    # into degenerate geometries during region intersection.
+    radius_km = max(radius_km, SHAPELY_RADIUS_EPSILON_KM)
+
     km_per_deg_lat = 111.0
     km_per_deg_lon = 111.0 * np.cos(np.radians(center_lat))
     km_per_deg_lon = max(km_per_deg_lon, 1.0)  # avoid division by zero near poles

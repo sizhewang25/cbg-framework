@@ -242,6 +242,23 @@ class TestOctantRTTModel(unittest.TestCase):
         self.assertGreater(min_dist, 0)
         self.assertLess(max_dist, 20000)
 
+    def test_predict_distance_allows_exact_zero(self):
+        """Spline predictions can be exactly zero at the model layer."""
+        model = OctantRTTModel(
+            anchor_ip='192.168.1.1',
+            anchor_lat=40.0,
+            anchor_lon=-74.0,
+            fitted=True,
+            spline_rtt_knots=[0.0, 10.0],
+            spline_dist_knots=[0.0, 1000.0],
+            cutoff_rtt=10.0,
+        )
+
+        self.assertEqual(model.predict_distance(0.0), 0.0)
+
+        array_result = model.predict_distance_array(np.array([0.0, 5.0, 10.0]))
+        np.testing.assert_allclose(array_result, np.array([0.0, 500.0, 1000.0]))
+
     def test_spline_fitted_and_monotonic(self):
         """Fitted model has monotonically non-decreasing spline knots."""
         np.random.seed(42)

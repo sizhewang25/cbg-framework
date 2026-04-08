@@ -146,6 +146,12 @@ class TestConstraintFormation(unittest.TestCase):
 
 class TestAnnulusGeometry(unittest.TestCase):
 
+    def test_zero_radius_circle_uses_geometry_epsilon(self):
+        """Zero-radius circles still produce a usable Shapely geometry."""
+        result = _circle_to_shapely(40.0, -74.0, 0.0, n_pts=64)
+        self.assertFalse(result.is_empty)
+        self.assertGreater(result.area, 0)
+
     def test_annulus_valid(self):
         """Annulus with inner < outer produces a valid ring polygon."""
         result = _annulus_to_shapely(40.0, -74.0, 100.0, 500.0, n_pts=64)
