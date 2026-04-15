@@ -42,3 +42,17 @@
 - [ ] Sanity-check: A1 should match existing Million-Scale CBG results from `evaluate_million_scale.py`
 - [ ] Sanity-check: B1 should match existing geometric centroid results from `centroid_comparison.py`
 - [ ] Document key findings in report.md
+
+## Phase 4: Octant Integration
+- [ ] Implement `unweighted_annulus` multilateration variant in `scripts/framework/multilateration/unweighted_annulus.py`
+  - Wraps `compute_feasible_region_unweighted()` — intersect outer disks, subtract inner disks
+  - Convert `CircleConstraint` → `AnnularConstraint` (same pattern as `weighted_grid.py`)
+- [ ] Implement `monte_carlo_median` centroid variant in `scripts/framework/centroid/monte_carlo_median.py`
+  - Wraps `sample_points_in_region()` + `geometric_median_approx()` from octant_geolocation.py
+  - Only works with Shapely region input (not vertex lists)
+  - Parameters: n_samples=5000, rng seed
+- [ ] Add new combinations to `combinations.py` for unweighted_annulus + 3 centroids (arith, geom, mc_median)
+- [ ] Add new combinations for monte_carlo_median on existing Shapely paths (shapely + mc_median)
+- [ ] Update CDF plot to handle expanded combination set
+- [ ] Validate: `unweighted_annulus + geometric_centroid` matches octant standalone results
+- [ ] Validate: `monte_carlo_median` vs `geometric_centroid` on same regions

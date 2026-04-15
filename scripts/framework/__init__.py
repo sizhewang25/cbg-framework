@@ -31,8 +31,8 @@ Available components (string names for from_config):
 
     Distance:       speed_of_internet, low_envelope, bounded_spline
     Filtering:      redundant_circle, none
-    Multilateration: spherical, shapely, weighted_grid
-    Centroid:       arithmetic_mean, geometric_centroid
+    Multilateration: spherical, shapely, weighted_grid, unweighted_annulus
+    Centroid:       arithmetic_mean, geometric_centroid, monte_carlo_median
 """
 
 from scripts.framework.pipeline import CBGPipeline
@@ -71,7 +71,15 @@ try:
 except ImportError:
     pass
 try:
+    import scripts.framework.multilateration.unweighted_annulus  # noqa: F401
+except ImportError:
+    pass
+try:
     import scripts.framework.centroid.geometric  # noqa: F401
+except ImportError:
+    pass
+try:
+    import scripts.framework.centroid.monte_carlo_median  # noqa: F401
 except ImportError:
     pass
 

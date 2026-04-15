@@ -23,10 +23,14 @@ from scripts.analysis.cbg_evaluation.evaluate import ProbeResult, get_errors
 # Within each panel, color distinguishes multilateration+centroid path.
 _PATH_STYLE = {
     # (multilateration, centroid) → (color, short_label)
-    ("spherical", "arithmetic_mean"):     ("#D55E00", "Spherical + Arith"),
-    ("spherical", "geometric_centroid"):  ("#CC79A7", "Spherical + Geom"),
-    ("shapely", "arithmetic_mean"):       ("#009E73", "Shapely + Arith"),
-    ("shapely", "geometric_centroid"):    ("#0072B2", "Shapely + Geom"),
+    ("spherical", "arithmetic_mean"):          ("#D55E00", "Spherical + Arith"),
+    ("spherical", "geometric_centroid"):       ("#CC79A7", "Spherical + Geom"),
+    ("shapely", "arithmetic_mean"):            ("#009E73", "Shapely + Arith"),
+    ("shapely", "geometric_centroid"):         ("#0072B2", "Shapely + Geom"),
+    ("shapely", "monte_carlo_median"):         ("#882255", "Shapely + MC Median"),
+    ("unweighted_annulus", "arithmetic_mean"):  ("#E69F00", "Annulus + Arith"),
+    ("unweighted_annulus", "geometric_centroid"):("#56B4E9", "Annulus + Geom"),
+    ("unweighted_annulus", "monte_carlo_median"):("#999933", "Annulus + MC Median"),
 }
 
 _DISTANCE_TITLES = {

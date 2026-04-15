@@ -167,6 +167,59 @@ Note: Path D uses `arithmetic_mean` on Shapely geometry by extracting vertices f
 
 **Total: 10 combinations** (or 7 core + 3 cross-compatibility)
 
+### Current ID mapping (after reordering)
+
+| Path | Multilateration | Centroid | Combos |
+|------|----------------|----------|--------|
+| A | spherical | arithmetic_mean | A1 (SoI), A2 (LP), A3 (Spline) |
+| B | spherical | geometric_centroid | B1, B2, B3 |
+| C | shapely | arithmetic_mean | C1, C2, C3 |
+| D | shapely | geometric_centroid | D1, D2, D3 |
+
+**12 combinations total** across 3 distance models × 4 multilateration+centroid paths.
+
+### Missing Octant-specific components (Phase 5 integration)
+
+Two Octant features are NOT yet in the framework:
+
+**1. Unweighted annulus intersection (multilateration)**
+- Source: `octant_geolocation.py:253` → `compute_feasible_region_unweighted()`
+- Logic: `intersection(all outer disks) - union(all inner disks)`
+- Different from existing `shapely` multilateration which uses `radius_km` (outer) only and ignores `inner_radius_km`
+- When `inner_radius_km > 0` (Octant spline), this subtracts the inner disks from the region — a fundamentally different feasible region shape
+- Only meaningful with `bounded_spline` distance (which produces annuli)
+- Framework target: new `"unweighted_annulus"` multilateration variant
+
+**2. Monte Carlo geometric median (centroid)**
+- Source: `octant_geolocation.py:402-477` → `sample_points_in_region()` + `geometric_median_approx()`
+- Logic: Sobol QMC rejection sampling inside the Shapely region → `geom_median.numpy.compute_geometric_median()`
+- Different from both `arithmetic_mean` (vertex average) and `geometric_centroid` (Shapely `.centroid` area-weighted center of mass)
+- Geometric median minimizes sum of Euclidean distances to all sampled points — more robust to outlier boundary shapes
+- Depends on `geom-median` package (already installed)
+- Framework target: new `"monte_carlo_median"` centroid variant
+
+### Integration plan
+
+**Step 1: Add `unweighted_annulus` multilateration** (`scripts/framework/multilateration/unweighted_annulus.py`)
+- Wraps `compute_feasible_region_unweighted()` from `octant_geolocation.py`
+- Converts `CircleConstraint` → `AnnularConstraint` (same pattern as `weighted_grid.py`)
+- Returns `MultilatResult(region=shapely_geometry)`
+
+**Step 2: Add `monte_carlo_median` centroid** (`scripts/framework/centroid/monte_carlo_median.py`)
+- Wraps `sample_points_in_region()` + `geometric_median_approx()` from `octant_geolocation.py`
+- Input: `MultilatResult` with `.region` (Shapely geometry) — NOT compatible with vertex-only results
+- Parameters: `n_samples=5000`, `rng` seed for reproducibility
+- Returns `(lat, lon)` or `None`
+
+**Step 3: Add new combinations to `combinations.py`**
+- New paths E and F (unweighted_annulus with arith/geom/median centroids)
+- New centroid column for monte_carlo_median on existing Shapely paths
+- Exact combo list TBD after Step 1-2 are working
+
+**Step 4: Validate**
+- Compare `unweighted_annulus + geometric_centroid` against `octant_geolocation.py` standalone
+- Compare `monte_carlo_median` against existing centroids on same regions
+
 ### Step 4: Build the evaluation harness
 
 Single script that:

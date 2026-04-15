@@ -7,7 +7,8 @@
 ## Summary
 
 Systematic evaluation of CBG geolocation pipeline combinations across four phases:
-- 3 distance models × 3 multilateration/centroid paths = 9 valid combinations (A1-A3, B1-B3, C1-C3)
+- 3 distance models × 4 multilateration/centroid paths = 12 combinations (A1-D3)
+- Next: integrate Octant-specific multilateration (unweighted annulus) and centroid (Monte Carlo geometric median)
 
 ## Findings
 
