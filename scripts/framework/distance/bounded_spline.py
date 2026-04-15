@@ -34,7 +34,7 @@ class BoundedSplineDistance(BaseDistance):
     def __init__(
         self,
         weight_tau_ms: float = 50.0,
-        max_rtt_ms: float = 200.0,
+        max_rtt_ms: float = float("inf"),
     ):
         self.weight_tau_ms = weight_tau_ms
         self.max_rtt_ms = max_rtt_ms

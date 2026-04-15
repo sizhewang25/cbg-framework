@@ -30,7 +30,7 @@ class SpeedOfInternetDistance(BaseDistance):
     def __init__(
         self,
         speed_threshold: float = 2 / 3,
-        max_rtt_ms: float = 100.0,
+        max_rtt_ms: float = float("inf"),
     ):
         self.speed_threshold = speed_threshold
         self.max_rtt_ms = max_rtt_ms
