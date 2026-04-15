@@ -437,9 +437,8 @@ def sample_points_in_region(
     while len(collected) < n_samples and attempts < max_attempts:
         remaining_needed = n_samples - len(collected)
         remaining_budget = max_attempts - attempts
-        target_batch = min(max(remaining_needed * 4, 1), remaining_budget)
-        batch_size = 1 if target_batch <= 1 else 1 << int(np.floor(np.log2(target_batch)))
-        sobol_points = sampler.random_base2(int(np.log2(batch_size)))
+        batch_size = min(max(remaining_needed * 4, 1), remaining_budget)
+        sobol_points = sampler.random(batch_size)
         attempts += batch_size
 
         rand_lons = minx + (maxx - minx) * sobol_points[:, 0]
