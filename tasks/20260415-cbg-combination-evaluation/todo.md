@@ -26,14 +26,15 @@
 - [ ] Verify: A2 (low_envelope + redundant_circle + spherical + arithmetic_mean) matches `run_vanilla_cbg()` output exactly
 
 ## Phase 2: Evaluation Harness (`scripts/analysis/cbg_evaluation/`)
-- [ ] Create `combinations.py` — PipelineSpec registry (9 combos: A1-A3, B1-B3, C1-C3) + DIFF_PAIRS
-- [ ] Create `evaluate.py` — load_and_prepare(), build_pipeline(), evaluate_combination(), evaluate_all()
-- [ ] Create `plot_error_cdf.py` — N-series Error CDF (generalize evaluate_million_scale pattern)
-- [ ] Create `plot_error_diff_cdf.py` — pairwise error delta CDF (NEW plot type)
-- [ ] Create `plot_rtt_error_scatter.py` — 2×5 subplot grid (generalize rtt_error_scatter pattern)
-- [ ] Create `plot_percentile_maps.py` — Cartopy maps at p5/p25/p50/p75/p95 (reuse plot_circles_on_map)
-- [ ] Create `run_evaluation.py` — CLI entry point wiring all above
-- [ ] Output JSON results with per-combination statistics
+- [x] Create `combinations.py` — PipelineSpec registry (9 combos: A1-A3, B1-B3, C1-C3) + 6 diff pairs — 2026-04-15
+- [x] Create `evaluate.py` — load_and_prepare(), build_pipeline(), evaluate_combination(), evaluate_all() — 2026-04-15
+- [x] Create `plot_error_cdf.py` — N-series Error CDF (generalize evaluate_million_scale pattern) — 2026-04-15
+- [x] Create `plot_error_diff_cdf.py` — pairwise error delta CDF (NEW plot type) — 2026-04-15
+- [x] Create `plot_rtt_error_scatter.py` — 3×3 subplot grid with binned median trend — 2026-04-15
+- [x] Create `plot_percentile_maps.py` — Cartopy maps at p5/p25/p50/p75/p95 (reuses plot_circles_on_map) — 2026-04-15
+- [x] Create `run_evaluation.py` — CLI entry point wiring all above — 2026-04-15
+- [x] Output JSON results with per-combination statistics — 2026-04-15
+  - 8 source files, 1,029 lines total. Commit `855f45c`. End-to-end run: 9.4s, 266 probes.
 
 ## Phase 3: Validation & Polish
 - [ ] Review all plots for readability (colors, labels, legends, axis ranges)
