@@ -19,7 +19,7 @@ from scripts.utils.helpers import rtt_to_km
 
 @register_distance("speed_of_internet")
 class SpeedOfInternetDistance(BaseDistance):
-    """Theoretical speed-of-Internet model (IMC 2012).
+    """Theoretical speed-of-Internet model (IMC 2023).
 
     Converts RTT to distance using a fixed fraction of the speed of light.
     Default: 2/3c → radius = 100 × RTT.

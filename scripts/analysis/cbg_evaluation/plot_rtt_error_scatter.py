@@ -1,4 +1,4 @@
-"""RTT-Error scatter plot: 3x3 grid, one panel per combination.
+"""RTT-Error scatter plot: NxM grid, one panel per combination.
 
 Generalizes rtt_error_scatter.py to N combinations with binned median trend.
 """
@@ -75,7 +75,7 @@ def plot_rtt_error_scatter(
     bin_width_ms: float = BIN_WIDTH_MS,
     min_bin_count: int = MIN_BIN_COUNT,
 ) -> plt.Figure:
-    """3x3 subplot grid: RTT-error scatter with binned median trend per combination."""
+    """Subplot grid: RTT-error scatter with binned median trend per combination."""
     n = len(specs)
     ncols = 3
     nrows = math.ceil(n / ncols)
