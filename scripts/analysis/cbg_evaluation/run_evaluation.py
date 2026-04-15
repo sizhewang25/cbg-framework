@@ -1,0 +1,182 @@
+"""CLI entry point: run all 9 pipeline combinations and generate plots.
+
+Usage:
+    python scripts/analysis/cbg_evaluation/run_evaluation.py
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import time
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts.analysis.cbg_evaluation.combinations import (
+    COMBINATIONS,
+    DIFF_PAIRS,
+    SPECS_BY_ID,
+)
+from scripts.analysis.cbg_evaluation.evaluate import (
+    evaluate_all,
+    get_errors,
+    load_and_prepare,
+    print_statistics,
+)
+from scripts.analysis.cbg_evaluation.plot_error_cdf import plot_error_cdf
+from scripts.analysis.cbg_evaluation.plot_error_diff_cdf import (
+    compute_error_diff,
+    plot_error_diff_cdf,
+)
+from scripts.analysis.cbg_evaluation.plot_rtt_error_scatter import (
+    plot_rtt_error_scatter,
+)
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
+
+
+def save_json_summary(all_results, output_path):
+    """Save per-combination statistics and diff-pair summaries as JSON."""
+    summary = {
+        "dataset": "vultr_pings_us_only.csv",
+        "asn": 7922,
+        "n_combinations": len(COMBINATIONS),
+        "combinations": {},
+        "diff_pairs": {},
+    }
+
+    for spec in COMBINATIONS:
+        errors = get_errors(all_results[spec.combo_id])
+        results = all_results[spec.combo_id]
+        n_intersected = sum(1 for r in results if r.did_intersect)
+
+        entry = {
+            "label": spec.label,
+            "config": {
+                "distance": spec.distance,
+                "filtering": spec.filtering,
+                "multilateration": spec.multilateration,
+                "centroid": spec.centroid,
+            },
+            "n_probes": len(results),
+            "n_successful": len(errors),
+            "intersection_rate_pct": round(n_intersected / max(len(results), 1) * 100, 1),
+        }
+        if len(errors) > 0:
+            entry.update({
+                "median_error_km": round(float(np.median(errors)), 1),
+                "mean_error_km": round(float(np.mean(errors)), 1),
+                "p25_km": round(float(np.percentile(errors, 25)), 1),
+                "p75_km": round(float(np.percentile(errors, 75)), 1),
+                "p90_km": round(float(np.percentile(errors, 90)), 1),
+                "within_100km_pct": round(float(np.mean(errors <= 100) * 100), 1),
+                "within_500km_pct": round(float(np.mean(errors <= 500) * 100), 1),
+                "within_1000km_pct": round(float(np.mean(errors <= 1000) * 100), 1),
+            })
+        summary["combinations"][spec.combo_id] = entry
+
+    for id_a, id_b in DIFF_PAIRS:
+        deltas = compute_error_diff(all_results[id_a], all_results[id_b])
+        if len(deltas) > 0:
+            summary["diff_pairs"][f"{id_a}_vs_{id_b}"] = {
+                "n_common_probes": len(deltas),
+                "median_delta_km": round(float(np.median(deltas)), 1),
+                "a_better_pct": round(float(np.mean(deltas < 0) * 100), 1),
+                "b_better_pct": round(float(np.mean(deltas > 0) * 100), 1),
+            }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"Saved: {output_path}")
+
+
+def main():
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    total_start = time.perf_counter()
+
+    # 1. Load data, fit models
+    data = load_and_prepare()
+
+    # 2. Evaluate all 9 combinations
+    print("\n" + "=" * 60)
+    print("EVALUATING ALL COMBINATIONS")
+    print("=" * 60)
+    all_results = evaluate_all(
+        COMBINATIONS,
+        data["lp_models"],
+        data["octant_models"],
+        data["octant_delta"],
+        data["anchor_coords"],
+        data["probe_targets"],
+    )
+
+    # 3. Statistics table
+    print_statistics(all_results, COMBINATIONS)
+
+    # 4. Error CDF
+    print("\n" + "=" * 60)
+    print("GENERATING ERROR CDF")
+    print("=" * 60)
+    fig = plot_error_cdf(all_results, COMBINATIONS, OUTPUT_DIR / "error_cdf_all.png")
+    plt.close(fig)
+
+    # 5. Error-Diff CDF
+    print("\n" + "=" * 60)
+    print("GENERATING ERROR-DIFF CDF")
+    print("=" * 60)
+    fig = plot_error_diff_cdf(
+        all_results, SPECS_BY_ID, DIFF_PAIRS,
+        OUTPUT_DIR / "error_diff_cdf.png",
+    )
+    plt.close(fig)
+
+    # 6. RTT-Error Scatter
+    print("\n" + "=" * 60)
+    print("GENERATING RTT-ERROR SCATTER")
+    print("=" * 60)
+    fig = plot_rtt_error_scatter(
+        all_results, COMBINATIONS, OUTPUT_DIR / "rtt_error_scatter.png",
+    )
+    plt.close(fig)
+
+    # 7. Percentile Maps
+    print("\n" + "=" * 60)
+    print("GENERATING PERCENTILE MAPS")
+    print("=" * 60)
+    try:
+        from scripts.analysis.cbg_evaluation.plot_percentile_maps import (
+            plot_percentile_maps,
+        )
+        plot_percentile_maps(
+            all_results,
+            SPECS_BY_ID,
+            data["lp_models"],
+            data["octant_models"],
+            data["octant_delta"],
+            data["anchor_coords"],
+            data["probe_targets"],
+            OUTPUT_DIR / "maps",
+        )
+    except ImportError as e:
+        print(f"  Skipping percentile maps (missing dependency): {e}")
+    except Exception as e:
+        print(f"  Percentile maps failed: {e}")
+
+    # 8. JSON summary
+    save_json_summary(all_results, OUTPUT_DIR / "evaluation_summary.json")
+
+    elapsed = time.perf_counter() - total_start
+    print(f"\nTotal runtime: {elapsed:.1f}s")
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()
