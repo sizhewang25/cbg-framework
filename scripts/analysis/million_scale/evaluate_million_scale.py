@@ -234,13 +234,13 @@ def fit_lp_models(df_asn):
             rtts=rtts,
             method='lp',
             baseline_slope=THEORETICAL_SLOPE,
-            n_std=1.0,
-            global_n_std=1.0,
-            bin_percentile=0.05,
             enable_baseline_filter=True,
             enable_bin_filter=False,
+            # bin_percentile=0.05,
             enable_percentile_filter=False,
+            # n_std=1.0,
             enable_global_filter=False,
+            # global_n_std=1.0,
         )
 
         models[anchor_ip] = model
