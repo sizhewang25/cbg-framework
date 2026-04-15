@@ -5,6 +5,7 @@ Generalizes rtt_error_scatter.py to N combinations with binned median trend.
 
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -12,6 +13,8 @@ from typing import Dict, List, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from scripts.analysis.cbg_evaluation.combinations import PipelineSpec
 from scripts.analysis.cbg_evaluation.evaluate import ProbeResult, get_errors
@@ -142,5 +145,5 @@ def plot_rtt_error_scatter(
     plt.tight_layout(rect=(0.02, 0.02, 1, 0.96))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    print(f"Saved: {output_path}")
+    logger.info("Saved: %s", output_path)
     return fig

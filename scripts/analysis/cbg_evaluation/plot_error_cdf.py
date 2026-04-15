@@ -5,11 +5,14 @@ Generalizes evaluate_million_scale.py:plot_error_cdf_comparison() to N series.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from scripts.analysis.cbg_evaluation.combinations import PipelineSpec
 from scripts.analysis.cbg_evaluation.evaluate import ProbeResult, get_errors
@@ -97,5 +100,5 @@ def plot_error_cdf(
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    print(f"Saved: {output_path}")
+    logger.info("Saved: %s", output_path)
     return fig

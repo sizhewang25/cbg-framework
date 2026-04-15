@@ -7,6 +7,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -40,6 +43,33 @@ from scripts.analysis.cbg_evaluation.plot_rtt_error_scatter import (
 )
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+
+
+def _setup_logging(output_dir: Path) -> None:
+    """Configure root logger with file + console handlers."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    log_path = output_dir / "evaluation.log"
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    # File handler — full log
+    fh = logging.FileHandler(log_path, mode="w")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root.addHandler(fh)
+
+    # Console handler — INFO and above
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(ch)
+
+    logger.info("Logging to %s", log_path)
 
 
 def save_json_summary(all_results, output_path):
@@ -95,20 +125,22 @@ def save_json_summary(all_results, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"Saved: {output_path}")
+    logger.info("Saved: %s", output_path)
 
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _setup_logging(LOG_DIR)
     total_start = time.perf_counter()
 
     # 1. Load data, fit models
     data = load_and_prepare()
 
     # 2. Evaluate all 9 combinations
-    print("\n" + "=" * 60)
-    print("EVALUATING ALL COMBINATIONS")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("EVALUATING ALL COMBINATIONS")
+    logger.info("=" * 60)
     all_results = evaluate_all(
         COMBINATIONS,
         data["lp_models"],
@@ -122,16 +154,16 @@ def main():
     print_statistics(all_results, COMBINATIONS)
 
     # 4. Error CDF
-    print("\n" + "=" * 60)
-    print("GENERATING ERROR CDF")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("GENERATING ERROR CDF")
+    logger.info("=" * 60)
     fig = plot_error_cdf(all_results, COMBINATIONS, OUTPUT_DIR / "error_cdf_all.png")
     plt.close(fig)
 
     # 5. Error-Diff CDF
-    print("\n" + "=" * 60)
-    print("GENERATING ERROR-DIFF CDF")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("GENERATING ERROR-DIFF CDF")
+    logger.info("=" * 60)
     fig = plot_error_diff_cdf(
         all_results, SPECS_BY_ID, DIFF_PAIRS,
         OUTPUT_DIR / "error_diff_cdf.png",
@@ -139,18 +171,18 @@ def main():
     plt.close(fig)
 
     # 6. RTT-Error Scatter
-    print("\n" + "=" * 60)
-    print("GENERATING RTT-ERROR SCATTER")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("GENERATING RTT-ERROR SCATTER")
+    logger.info("=" * 60)
     fig = plot_rtt_error_scatter(
         all_results, COMBINATIONS, OUTPUT_DIR / "rtt_error_scatter.png",
     )
     plt.close(fig)
 
     # 7. Percentile Maps
-    print("\n" + "=" * 60)
-    print("GENERATING PERCENTILE MAPS")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("GENERATING PERCENTILE MAPS")
+    logger.info("=" * 60)
     try:
         from scripts.analysis.cbg_evaluation.plot_percentile_maps import (
             plot_percentile_maps,
@@ -166,16 +198,16 @@ def main():
             OUTPUT_DIR / "maps",
         )
     except ImportError as e:
-        print(f"  Skipping percentile maps (missing dependency): {e}")
+        logger.warning("Skipping percentile maps (missing dependency): %s", e)
     except Exception as e:
-        print(f"  Percentile maps failed: {e}")
+        logger.error("Percentile maps failed: %s", e)
 
     # 8. JSON summary
     save_json_summary(all_results, OUTPUT_DIR / "evaluation_summary.json")
 
     elapsed = time.perf_counter() - total_start
-    print(f"\nTotal runtime: {elapsed:.1f}s")
-    print("Done.")
+    logger.info("Total runtime: %.1fs", elapsed)
+    logger.info("Done.")
 
 
 if __name__ == "__main__":

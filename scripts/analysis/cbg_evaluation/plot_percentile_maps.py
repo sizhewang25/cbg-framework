@@ -6,6 +6,7 @@ For each combo × percentile, selects the nearest probe and plots circles.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -13,6 +14,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from scripts.analysis.cbg_evaluation.combinations import PipelineSpec
 from scripts.analysis.cbg_evaluation.evaluate import ProbeResult, get_errors
@@ -94,4 +97,4 @@ def plot_percentile_maps(
                 )
                 plt.close(fig)
             except Exception as e:
-                print(f"  Warning: map {combo_id} p{pct} failed: {e}")
+                logger.warning("map %s p%d failed: %s", combo_id, pct, e)

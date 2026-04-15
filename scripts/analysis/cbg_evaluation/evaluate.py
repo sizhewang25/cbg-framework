@@ -5,6 +5,7 @@ Fits models once and shares them across all pipeline combinations.
 
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -51,19 +54,19 @@ def load_and_prepare() -> Dict[str, Any]:
     )
     from scripts.analysis.octant.octant_evaluation import fit_octant_models
 
-    print("=" * 60)
-    print("LOADING DATA")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("LOADING DATA")
+    logger.info("=" * 60)
     _, df_asn = load_data()
 
-    print("\n" + "=" * 60)
-    print("FITTING LP MODELS")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("FITTING LP MODELS")
+    logger.info("=" * 60)
     lp_models = fit_lp_models(df_asn)
 
-    print("\n" + "=" * 60)
-    print("FITTING OCTANT MODELS")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("FITTING OCTANT MODELS")
+    logger.info("=" * 60)
     octant_models, octant_delta = fit_octant_models(df_asn, target_coverage=0.80)
 
     # Build anchor_coords
@@ -167,7 +170,7 @@ def evaluate_all(
     all_results: Dict[str, List[ProbeResult]] = {}
 
     for spec in combinations:
-        print(f"\n  Running {spec.combo_id}: {spec.label} ...", end=" ", flush=True)
+        logger.info("Running %s: %s ...", spec.combo_id, spec.label)
         t0 = time.perf_counter()
         pipe = build_pipeline(spec, lp_models, octant_models, octant_delta)
         results = evaluate_combination(spec, pipe, anchor_coords, probe_targets)
@@ -176,9 +179,9 @@ def evaluate_all(
         success = [r for r in results if r.error_km is not None]
         errors = np.array([r.error_km for r in success])
         median = float(np.median(errors)) if len(errors) > 0 else float("nan")
-        print(
-            f"{len(success)}/{len(results)} probes, "
-            f"median={median:.1f} km, {elapsed:.2f}s"
+        logger.info(
+            "  %s: %d/%d probes, median=%.1f km, %.2fs",
+            spec.combo_id, len(success), len(results), median, elapsed,
         )
         all_results[spec.combo_id] = results
 
@@ -202,11 +205,11 @@ def print_statistics(
     header = f"{'Metric':<22}" + "".join(f" {cid:>{col_w}}" for cid, _, _ in cols)
     sep = "=" * (22 + (col_w + 1) * len(cols))
 
-    print(f"\n{sep}")
-    print("CBG COMBINATION EVALUATION — STATISTICS")
-    print(sep)
-    print(header)
-    print("-" * len(sep))
+    logger.info(sep)
+    logger.info("CBG COMBINATION EVALUATION — STATISTICS")
+    logger.info(sep)
+    logger.info(header)
+    logger.info("-" * len(sep))
 
     metrics = [
         ("N (probes)", lambda e: f"{len(e)}"),
@@ -218,15 +221,15 @@ def print_statistics(
     ]
     for label, fn in metrics:
         row = f"{label:<22}" + "".join(f" {fn(e):>{col_w}}" for _, _, e in cols)
-        print(row)
+        logger.info(row)
 
-    print()
-    print(f"{'Accuracy Thresholds':<22}" + "".join(f" {cid:>{col_w}}" for cid, _, _ in cols))
-    print("-" * len(sep))
+    logger.info("")
+    logger.info(f"{'Accuracy Thresholds':<22}" + "".join(f" {cid:>{col_w}}" for cid, _, _ in cols))
+    logger.info("-" * len(sep))
     for thresh in [50, 100, 250, 500, 1000]:
         row = f"  Within {thresh:4d} km      "
         for _, _, e in cols:
             pct = np.mean(e <= thresh) * 100
             row += f" {pct:>{col_w - 1}.1f}%"
-        print(row)
-    print(sep)
+        logger.info(row)
+    logger.info(sep)
