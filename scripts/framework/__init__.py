@@ -1,0 +1,86 @@
+"""Modular CBG Geolocation Framework.
+
+HuggingFace-style pipeline with pluggable phases:
+  Phase 1: Distance estimation (RTT → radius)
+  Phase 2: Filtering (remove redundant constraints)
+  Phase 3: Multilateration (intersect → region)
+  Phase 4: Centroid selection (region → single point)
+
+Usage::
+
+    from scripts.framework import CBGPipeline
+
+    # Million-Scale CBG (default)
+    pipe = CBGPipeline.from_config()
+
+    # Vanilla CBG (LP bestline)
+    pipe = CBGPipeline.from_config(distance="low_envelope")
+    pipe.distance.fit(df_asn=df_asn)
+
+    # Custom combination
+    pipe = CBGPipeline.from_config(
+        distance="low_envelope",
+        filtering="redundant_circle",
+        multilateration="shapely",
+        centroid="geometric_centroid",
+    )
+
+    location, circles = pipe.geolocate(measurements, anchor_coords)
+
+Available components (string names for from_config):
+
+    Distance:       speed_of_internet, low_envelope, bounded_spline
+    Filtering:      redundant_circle, none
+    Multilateration: spherical, shapely, weighted_grid
+    Centroid:       arithmetic_mean, geometric_centroid
+"""
+
+from scripts.framework.pipeline import CBGPipeline
+from scripts.framework.registry import (
+    CENTROID_REGISTRY,
+    DISTANCE_REGISTRY,
+    FILTERING_REGISTRY,
+    MULTILATERATION_REGISTRY,
+)
+from scripts.framework.types import CircleConstraint, MultilatResult
+
+# Import all variant modules to trigger @register_* decorators.
+# Each import activates the decorator on the class, populating the registries.
+import scripts.framework.distance.speed_of_internet  # noqa: F401
+import scripts.framework.filtering.redundant_circle  # noqa: F401
+import scripts.framework.filtering.none  # noqa: F401
+import scripts.framework.multilateration.spherical  # noqa: F401
+import scripts.framework.centroid.arithmetic_mean  # noqa: F401
+
+# Deferred imports — these have heavier dependencies (LP models, Octant, Shapely).
+# They are imported lazily to avoid import errors when dependencies are missing.
+try:
+    import scripts.framework.distance.low_envelope  # noqa: F401
+except ImportError:
+    pass
+try:
+    import scripts.framework.distance.bounded_spline  # noqa: F401
+except ImportError:
+    pass
+try:
+    import scripts.framework.multilateration.shapely_intersection  # noqa: F401
+except ImportError:
+    pass
+try:
+    import scripts.framework.multilateration.weighted_grid  # noqa: F401
+except ImportError:
+    pass
+try:
+    import scripts.framework.centroid.geometric  # noqa: F401
+except ImportError:
+    pass
+
+__all__ = [
+    "CBGPipeline",
+    "CircleConstraint",
+    "MultilatResult",
+    "DISTANCE_REGISTRY",
+    "FILTERING_REGISTRY",
+    "MULTILATERATION_REGISTRY",
+    "CENTROID_REGISTRY",
+]
