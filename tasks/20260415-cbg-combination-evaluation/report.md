@@ -61,6 +61,23 @@ Implemented evaluation harness under `scripts/analysis/cbg_evaluation/` (commit 
 
 **Outputs**: error_cdf_all.png, error_diff_cdf.png, rtt_error_scatter.png, 15 percentile maps, evaluation_summary.json
 
+### 2026-04-20 — MC Median vs Other Centroid Methods
+
+Compared three single-point estimation methods using their best-performing pipeline configuration (266 probes, AS7922, 7 anchors):
+
+| Method | Best Config | Median Error | Within 100km | Within 500km | Within 1000km | Runtime (266 probes) |
+|--------|------------|:------------:|:------------:|:------------:|:-------------:|:--------------------:|
+| **MC Median** | G3 (Spline + Annulus) | **312.4 km** | 20.7% | **77.4%** | **94.0%** | ~27s |
+| **Geometric Centroid** | F3 (Spline + Annulus) | 328.0 km | 21.4% | 74.4% | 94.0% | ~0.21s |
+| **Arithmetic Mean** | A3 (Spline + Spherical) | 336.8 km | 28.2% | 57.1% | 86.8% | ~0.18s |
+
+**Key takeaways**:
+- MC Median achieves the best median error (312 km, ~5% better than geometric centroid, ~7% better than arithmetic mean) but is ~130x slower due to Sobol quasi-random sampling (1000 points) + geometric median optimization per target
+- Geometric Centroid (area-weighted via Shapely) provides the best accuracy/speed trade-off: nearly identical to MC Median at the 1000 km threshold (both 94%) for ~1/130th the compute cost
+- Arithmetic Mean is fastest but degrades significantly at the 500 km threshold (57% vs 74-77%) — likely because it does not account for region shape/area
+- MC Median is only worth the cost in offline/batch settings where the ~5% median error improvement justifies the runtime penalty
+- All three methods benefit most from the Spline distance model + Annulus multilateration; the centroid method choice is secondary to the upstream pipeline
+
 ## Conclusions
 
 *Final assessment when task completes.*
