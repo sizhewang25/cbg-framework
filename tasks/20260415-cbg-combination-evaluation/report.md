@@ -2,7 +2,7 @@
 
 **Status**: In Progress
 **Created**: 2026-04-15
-**Last Updated**: 2026-04-15
+**Last Updated**: 2026-04-24
 
 ## Summary
 
@@ -60,6 +60,26 @@ Implemented evaluation harness under `scripts/analysis/cbg_evaluation/` (commit 
 - SoI has highest within-100km rate despite high median — bimodal: very accurate or very wrong
 
 **Outputs**: error_cdf_all.png, error_diff_cdf.png, rtt_error_scatter.png, 15 percentile maps, evaluation_summary.json
+
+### 2026-04-24 — Multilateration Technique Comparison: Spherical vs Shapely vs Unweighted Annulus
+
+Confirmed via code inspection (`scripts/framework/multilateration/`):
+
+| Aspect | Spherical | Shapely | Unweighted Annulus |
+|--------|-----------|---------|-------------------|
+| Geometry | Exact great-circle on sphere | Planar degree-space approximation | Planar degree-space (Octant) |
+| Output | Vertex point set | Shapely Polygon/MultiPolygon | Shapely Polygon/MultiPolygon |
+| Inner radius (annulus) | Ignored — full disks only | Ignored — full disks only | Used — true annular subtraction |
+| Algorithm | Pairwise crossing points → filter inside all circles | `reduce(intersection)` of 100-pt polygons | `∩(outer disks) − ∪(inner disks)` |
+| Origin | IMC 2012 CBG | Octant-style polygon intersection | Octant (NSDI 2007) |
+
+**Spherical** (`helpers.py:circle_intersections`): converts VP coordinates to 3D Cartesian, computes exact pairwise great-circle arc crossing points, keeps only points inside all circles. Returns a vertex list — no polygon area.
+
+**Shapely**: approximates each RTT circle as a 100-point polygon in degree space (with latitude compression correction: `km_per_deg_lon = 111 × cos(lat)`), then sequentially intersects all polygons. Returns an explicit Shapely area geometry.
+
+**Unweighted Annulus**: same polygon intersection as Shapely but uses the full annular constraint — intersects outer disks then *subtracts* inner disks. Only meaningful with `bounded_spline` distance model which produces non-zero `inner_radius_km`. With disk-only constraints it degenerates to Shapely.
+
+**Key implication**: Shapely and Spherical both discard `inner_radius_km`, so pairing them with `bounded_spline` wastes the annular constraint. Only `unweighted_annulus` (and `weighted_grid`) exploit the full Octant spline output.
 
 ### 2026-04-20 — MC Median vs Other Centroid Methods
 
