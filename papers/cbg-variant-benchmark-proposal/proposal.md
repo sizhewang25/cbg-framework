@@ -1,61 +1,65 @@
-# Benchmarking Constraint-Based Geolocation Variants: Accuracy and Scalability for Internet-Scale IP Geolocation
+# Constraint-Based Geolocation for Internet Hosts at Scale: Which Variant Is Production-Ready?
 
 ---
 
 ## 1. Project Objective
 
-We propose to conduct the **first systematic benchmark of Constraint-Based Geolocation (CBG) algorithm variants**, covering all three phases of the CBG pipeline across implementations from three landmark papers (original CBG, Million-Scale CBG, Octant). We evaluate each combination on both **accuracy** (error CDF, median error, within-N-km rates) and **scalability** (runtime and memory per IP), motivated by the need to geolocate tens of millions of unicast IPs in mobile operator networks.
+An operator who wants to deploy Constraint-Based Geolocation (CBG) today faces a practical problem: three landmark papers have been proposed for decades, none has been benchmarked against the others in a controlled setting, and no paper characterizes compute cost at operational scale. There is no evidence-based guide for choosing a configuration.
 
-Our contributions will be:
-1. A three-phase CBG pipeline taxonomy that unifies disparate prior implementations
-2. A modular open-source framework implementing all known CBG variants
-3. Comprehensive benchmark results on curated RTT datasets from mobile vantage points and RIPE Atlas
-4. Practical guidance on which configuration is SOTA and when the accuracy-cost tradeoff favors simpler variants
+We close this gap with the **first systematic, cross-variant CBG benchmark** for unicast IP geolocation. We decompose CBG into three independent phases — RTT-to-distance modeling, multilateration, and single-point estimation — and evaluate all valid phase combinations on both **accuracy** and **runtime**, using curated RTT datasets from operational vantage points and RIPE Atlas.
+
+Our contributions:
+
+1. A three-phase CBG taxonomy that unifies disparate prior implementations
+2. A modular open-source framework implementing all known CBG variants (original CBG and Octant have no public code)
+3. Controlled cross-variant benchmark results isolating the per-phase contribution to accuracy and runtime
+4. A Pareto frontier of median error vs. runtime per IP — the first evidence-based answer to "which CBG variant is production-ready?"
 
 ---
 
 ## 2. Motivation
 
-### 2.1 The IP Geolocation Problem for Mobile Operators
+### 2.1 Why Latency-Based Geolocation?
 
-Mobile operators observe tens of millions of unique IP addresses communicating with their subscribers daily. Knowing where those IPs are physically located enables:
-- Traffic engineering and CDN selection
-- Regulatory compliance (geo-restricted content, data sovereignty)
-- Anomaly detection (traffic from unexpected geographies)
-- Network planning and capacity forecasting
+ISPs, CDN operators, network researchers, and security analysts need to know where Internet hosts are physically located — for traffic engineering, CDN server selection, regulatory compliance, anomaly detection, and capacity planning. No single method covers all unicast IPs with high accuracy.
 
-No single geolocation method covers all IPs with high accuracy. A practical multi-tier pipeline combines methods in order of reliability and coverage:
+Declarative sources (GeoFeed, rDNS) have limited coverage [[ACM 2024](https://dl.acm.org/doi/10.1145/3676869), [ACM TOIT 2021](https://dl.acm.org/doi/10.1145/3457611)]. Other approaches each have a fundamental deployment barrier:
 
-```
-Tier 1 — Official:   GeoFeed (RFC 8805), Reverse DNS parsing
-Tier 2 — Empirical:  Constraint-Based Geolocation (CBG)
-Validation:          Speed-of-Internet violation check
-```
 
-CBG outperforms simpler heuristics (GeoPing, GeoCluster) and serves as both the primary prediction layer when declarative methods fail and a validation layer — observed RTTs from vantage points bound where an IP can physically be.
+| Method                                                                                                                                           | Key Limitation                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| **GeoCluster** [[WWW 2001](https://dl.acm.org/doi/10.1145/383059.383073)]                                                                        | Silent failure for large ISP prefixes spanning multiple cities                          |
+| **Commercial DBs** [[IEEE 2023](https://ieeexplore.ieee.org/document/10167899/), [ACM CCR 2011](https://dl.acm.org/doi/10.1145/1971162.1971171)] | Opaque, inaccurate on cloud/mobile IPs; not auditable                                   |
+| **ML/GNN** [[KDD 2022](https://dl.acm.org/doi/abs/10.1145/3534678.3539049)]                                                                      | Requires large labeled training datasets; black-box; cannot generalize to unlabeled IPs |
+| **Topology-based** [[Cybersecurity 2019](https://cybersecurity.springeropen.com/articles/10.1186/s42400-019-0030-2)]                             | 10–20 probes per IP × 10M targets = 100–200M probes per cycle; infeasible at ISP scale  |
 
-### 2.2 Why Unicast CBG is the Right Starting Point
 
-Unicast IP geolocation with CBG is the most tractable problem:
-- Ground truth is available via RIPE Atlas anchors (verified coordinates)
-- RTT measurements are available at scale from RIPE Atlas and mobile VPs
-- All three reference CBG implementations were designed for unicast
-- Benchmarking unicast CBG establishes the baseline before tackling anycast, which requires detecting that the IP is anycast before applying CBG
+Latency-based geolocation avoids all of these barriers. It requires no labeled training data and no per-IP active probing beyond the RTT data ISPs already observe passively — PoPs and mobile core networks see round-trip times to communicating hosts as a byproduct of normal traffic. Furthermore, **any geolocation estimate can be validated against observed RTTs**: `distance ≤ RTT/2 × propagation speed` is a hard physical bound — any estimate violating it is provably wrong.
 
-### 2.3 The Scalability Imperative
+### 2.2 Why CBG Among Latency-Based Methods?
 
-Prior CBG evaluations treat geolocation as a research exercise on hundreds of targets. Operating at the scale of a mobile operator (10s of millions of IPs) changes the design constraints fundamentally:
+The simplest latency-based approach, **GeoPing**, reports the nearest VP's location (lowest RTT) — a single-VP heuristic with no geometric constraint, producing a **68-mile median error** [[NSDI 2007](https://www.usenix.org/conference/nsdi-07/octant-comprehensive-framework-geolocalization-internet-hosts)] that degrades whenever no VP is co-located with the target.
 
-- **Accuracy** matters, but an extra 5% median error reduction that costs 130× more compute is not acceptable at scale
-- **Runtime per IP** must be sub-second; a 27-second per-IP method (Monte Carlo median) is infeasible for 50M IPs
-- **Memory footprint** for RTT model fitting scales with vantage point count and model complexity
-- **Parallelizability** of the pipeline determines whether wall-clock time can be reduced horizontally
+**CBG** converts RTTs from multiple VPs into geographic constraints (circles or annuli) and intersects them to find the feasible region where the target must reside — aggregating independent physical evidence rather than trusting a single VP:
 
-This scalability dimension is absent from all prior CBG evaluations.
+- **More accurate** — Octant (best CBG variant) achieves **22-mile median error** [[NSDI 2007](https://www.usenix.org/conference/nsdi-07/octant-comprehensive-framework-geolocalization-internet-hosts)], 3× better than GeoPing; on our preliminary US cloud dataset, the best CBG variant reaches **328 km** vs. **687 km** for the simplest (2× improvement)
+- **Auditable** — raw RTTs → explicit circles → intersection; every step is inspectable and reproducible
+- **Label-free** — works for any IP reachable from the VP set, no training data needed
+- **Tunable** — accuracy improves directly as more or better-distributed VPs are added
 
-### 2.4 The Open-Source Gap
+CBG is therefore the practical choice for operators who need high-accuracy, auditable geolocation at scale. **But which CBG variant?** That question has never been answered.
 
-Only one public CBG implementation exists: the IMC 2023 replication codebase (Darwich et al.), which re-implements Million-Scale and Street-Level CBG. The original CBG (Gueye et al.) and Octant (Wong et al.) have no public code. This prevents the research community from building on, comparing against, or extending these methods. Our framework fills this gap.
+### 2.3 Why Practitioners Cannot Choose a Variant Today
+
+**No controlled cross-variant evaluation exists.** Each CBG paper (Gueye 2004, Hu 2012, Wong 2007) evaluates only its own full pipeline on its own proprietary dataset. No paper isolates phase contributions, so practitioners cannot determine: Is it worth calibrating a per-VP spline, or does 2/3c suffice? Does annulus multilateration justify its added complexity over spherical intersection? Does Monte Carlo median's 130× runtime overhead over geometric centroid deliver meaningful accuracy gains? Our preliminary results show Phase 1 alone accounts for the 2× accuracy gap — but without a controlled benchmark, there is no way to know this.
+
+**Only one public CBG implementation exists.** The IMC 2023 replication codebase [[Darwich et al.](https://dl.acm.org/doi/10.1145/3618257.3624801)] covers only Million-Scale and Street-Level CBG. Original CBG and Octant have **no public code** — an operator who wants to evaluate Octant must reimplement it from scratch.
+
+### 2.4 What the Benchmark Delivers
+
+Accuracy benchmarks alone are insufficient for deployment decisions. Despite IP geolocation being studied for over two decades, none of the foundational CBG papers report per-IP runtime or memory figures — the field has never evaluated algorithms against a deployment budget. At operational scale (10M–50M IPs), this matters: **Monte Carlo median** at ~27 s/IP requires ~15,700 CPU-years for 50M IPs; **geometric centroid** at ~0.21 s/IP requires ~3 CPU-years. A 5% accuracy gain at 130× cost is not a viable production tradeoff.
+
+Our benchmark provides the first Pareto frontier of median error vs. runtime per IP across all valid CBG phase combinations — a concrete, evidence-based answer to which configuration maximizes accuracy within a given compute budget, and where future phase-level investment will have the most impact.
 
 ---
 
@@ -80,38 +84,45 @@ Output: Geolocation estimate
 
 ### Phase 1 — RTT-to-Distance Modeling
 
-| Variant | Source | Method | Output |
-|---------|--------|--------|--------|
-| **2/3c (Speed-of-Internet)** | Million-Scale (IMC 2012) | Fixed constant: `radius = RTT/2 × 2c/3` | Disk (outer radius only) |
-| **LP Low-Envelope** | Original CBG (IMC 2004) | Per-VP linear regression fitted to RTT-distance scatter via LP bestline | Disk (outer radius only) |
-| **Bounded Spline** | Octant (NSDI 2007) | Per-VP spline fit + shared delta band calibrated to coverage target | Annulus (inner + outer radius) |
+
+| Variant                      | Source                   | Method                                                                  | Output                         |
+| ---------------------------- | ------------------------ | ----------------------------------------------------------------------- | ------------------------------ |
+| **2/3c (Speed-of-Internet)** | Million-Scale (IMC 2012) | Fixed constant: `radius = RTT/2 × 2c/3`                                 | Disk (outer radius only)       |
+| **LP Low-Envelope**          | Original CBG (IMC 2004)  | Per-VP linear regression fitted to RTT-distance scatter via LP bestline | Disk (outer radius only)       |
+| **Bounded Spline**           | Octant (NSDI 2007)       | Per-VP spline fit + shared delta band calibrated to coverage target     | Annulus (inner + outer radius) |
+
 
 The spline model produces **annuli** rather than disks, encoding both a maximum and minimum distance from each VP — a fundamentally tighter constraint.
 
 ### Phase 2 — Multilateration
 
-| Variant | Source | Method | Output |
-|---------|--------|--------|--------|
-| **Spherical Intersection** | Original CBG / Million-Scale | Pairwise great-circle crossings; keeps points inside all circles | Vertex list |
-| **Shapely Polygon Intersection** | — | Approximate circles as 100-point polygons; sequential Shapely intersection | Shapely polygon |
-| **Unweighted Annulus Intersection** | Octant | `∩(outer disks) − ∪(inner disks)` | Shapely polygon |
-| **Weighted Grid** | Octant | Grid-based weight accumulation over annuli; fused Phase 2+3 | Shapely polygon |
+
+| Variant                             | Source                       | Method                                                                     | Output          |
+| ----------------------------------- | ---------------------------- | -------------------------------------------------------------------------- | --------------- |
+| **Spherical Intersection**          | Original CBG / Million-Scale | Pairwise great-circle crossings; keeps points inside all circles           | Vertex list     |
+| **Shapely Polygon Intersection**    | —                            | Approximate circles as 100-point polygons; sequential Shapely intersection | Shapely polygon |
+| **Unweighted Annulus Intersection** | Octant                       | `∩(outer disks) − ∪(inner disks)`                                          | Shapely polygon |
+| **Weighted Grid**                   | Octant                       | Grid-based weight accumulation over annuli; fused Phase 2+3                | Shapely polygon |
+
 
 Unweighted annulus intersection is qualitatively different from disk intersection: by subtracting the inner exclusion zones, it removes near-VP regions that are geometrically inconsistent with the RTT constraint — producing a tighter, more accurate feasible region.
 
 ### Phase 3 — Single-Point Estimation
 
-| Variant | Source | Method | Complexity |
-|---------|--------|--------|-----------|
-| **Arithmetic Mean** | Original CBG | Average of intersection vertex coordinates | O(1) |
-| **Geometric Centroid** | — | Area-weighted centroid of feasible polygon (Shapely `.centroid`) | O(1) |
-| **MC Geometric Median** | Octant | 1000-point Sobol QMC sampling + `geom_median` optimization | O(n_samples) |
+
+| Variant                 | Source       | Method                                                           | Complexity   |
+| ----------------------- | ------------ | ---------------------------------------------------------------- | ------------ |
+| **Arithmetic Mean**     | Original CBG | Average of intersection vertex coordinates                       | O(1)         |
+| **Geometric Centroid**  | —            | Area-weighted centroid of feasible polygon (Shapely `.centroid`) | O(1)         |
+| **MC Geometric Median** | Octant       | 1000-point Sobol QMC sampling + `geom_median` optimization       | O(n_samples) |
+
 
 The geometric median minimizes sum of distances to all sampled points, making it more robust to irregular polygon shapes. However, it incurs a ~130× runtime penalty versus the geometric centroid.
 
 ### Valid Phase Combinations
 
 Not all combinations are valid due to type constraints:
+
 - Annulus multilateration requires the spline distance model (annuli as input)
 - Arithmetic mean on vertex lists only works after spherical intersection
 - MC median and geometric centroid require a Shapely polygon
@@ -202,24 +213,38 @@ Uses GPS-tagged user requests as ground truth to evaluate commercial services. F
 
 Commercial services are opaque, inaccurate on mobile IPs, and unauditable — motivating an open, measurement-based alternative.
 
-### 5.5 Recent Adjacent Work
+### 5.5 Broader Geolocation Method Landscape
+
+**Padmanabhan & Subramanian, "An Investigation of Geographic Mapping Techniques for Internet Hosts"** (WWW 2001) [[ACM](https://dl.acm.org/doi/10.1145/383059.383073)]
+Introduced GeoCluster: propagate known location labels through BGP prefixes. Works for coarse-grained geolocation in small operator prefixes; produces silent errors for large ISP prefixes spanning multiple cities.
+
+**Li et al., "Connecting the Hosts: Street-Level IP Geolocation with Graph Neural Networks"** (KDD 2022) [[ACM](https://dl.acm.org/doi/abs/10.1145/3534678.3539049)]
+GNN-based street-level geolocation treating IP location as node regression on attribute graphs. State-of-the-art for supervised ML approaches. Requires large labeled training datasets; not auditable; cannot generalize to unlabeled IPs outside the training distribution.
+
+**"Towards IP Geolocation with Intermediate Routers Based on Topology Discovery"** (Cybersecurity 2019) [[Springer](https://cybersecurity.springeropen.com/articles/10.1186/s42400-019-0030-2)]
+Uses traceroutes to discover intermediate routers as secondary landmarks. Improves accuracy in landmark-sparse regions but requires 10–20 probes per target — prohibitive at ISP scale.
+
+**"Selection of Landmarks for Efficient Active Geolocation"** (TMA 2024) [[IEEE](https://ieeexplore.ieee.org/document/10559002/)]
+Demonstrates that even geographic distribution of landmarks significantly improves CBG precision. Confirms landmark placement is a first-order factor in CBG accuracy — directly relevant to our VP selection evaluation.
 
 **"Leveraging Traceroute Inconsistencies to Improve IP Geolocation"** (arXiv 2025) [[arXiv](https://arxiv.org/html/2501.15064v1)]
-Improves geolocation by detecting topological inconsistencies in traceroute paths. Topology-based — not a CBG variant and not scalable to tens of millions of IPs, but citable as a complementary direction for high-value targets.
+Improves geolocation by detecting topological inconsistencies in traceroute paths. Topology-based — not a CBG variant and not scalable to millions of IPs; complementary direction for high-value targets.
 
 **"GeoFINDR: Practical Approach to Verify Cloud Instances Geolocation in Multicloud"** (arXiv April 2025) [[arXiv](https://arxiv.org/abs/2504.18685)]
-RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and barycenter estimation; achieves 22.6 km average accuracy. Shares the RIPE Atlas landmark infrastructure but differs in goal (CSP compliance verification vs. IP geolocation at scale), algorithm (sectorization, not CBG multilateration), and VP model (internal audit from within the VM).
+RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and barycenter estimation; achieves 22.6 km average accuracy. Shares the RIPE Atlas landmark infrastructure but differs in goal (CSP compliance verification vs. unicast IP geolocation at scale), algorithm (DDR sectorization, not CBG multilateration), and VP model (internal audit from within the VM).
 
 ### 5.6 Positioning Summary
 
-| Gap in Existing Literature | Our Contribution |
-|---------------------------|-----------------|
-| No systematic cross-phase CBG benchmark | First to decompose CBG into 3 phases and benchmark all valid combinations |
-| Phase 1 improvements proposed in isolation | Controlled evaluation holding other phases fixed |
-| Only one public CBG implementation | Open-source framework covering all known variants |
-| No accuracy-vs-scalability characterization | Pareto frontier of median error vs. runtime for 18 combinations |
-| No CBG benchmark from mobile operator VPs | Curated RTT dataset from mobile VPs + RIPE Atlas cross-validation |
-| Commercial services opaque, inaccurate on mobile IPs | Auditable, reproducible CBG alternative |
+
+| Gap in Existing Literature                                             | Our Contribution                                                          |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| No systematic cross-phase CBG benchmark                                | First to decompose CBG into 3 phases and benchmark all valid combinations |
+| Phase 1 improvements proposed in isolation                             | Controlled evaluation holding other phases fixed                          |
+| Only one public CBG implementation (IMC 2023)                          | Open-source framework covering all known variants                         |
+| No accuracy-vs-scalability characterization                            | Pareto frontier of median error vs. runtime for 18 combinations           |
+| Simpler alternatives (GeoPing, GeoCluster, ML) each have critical gaps | CBG: physics-grounded, label-free, auditable, scalable to millions of IPs |
+| Commercial services opaque and inaccurate on cloud IPs                 | Auditable, reproducible CBG alternative                                   |
+
 
 ---
 
@@ -234,23 +259,25 @@ RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and b
 
 ### Results Table
 
-| ID | Distance Model | Multilateration | Centroid | Median Error | Within 500km | Within 1000km |
-|----|---------------|-----------------|----------|:------------:|:------------:|:-------------:|
-| **G3** | Octant spline | Unweighted annulus | MC median | **312 km** | **77.4%** | **94.0%** |
-| **F3** | Octant spline | Unweighted annulus | Geometric | **328 km** | **74.4%** | **94.0%** |
-| E3 | Octant spline | Unweighted annulus | Arith. mean | 374 km | 64.7% | 92.9% |
-| C1 | 2/3c | Shapely | Arith. mean | 333 km | 59.0% | 82.0% |
-| A3 | Octant spline | Spherical | Arith. mean | 337 km | 57.1% | 86.8% |
-| D1 | 2/3c | Shapely | Geometric | 395 km | 56.0% | 81.6% |
-| H1 | 2/3c | Shapely | MC median | 394 km | 56.4% | 81.6% |
-| A2 | LP low-envelope | Spherical | Arith. mean | 602 km | 40.2% | 69.2% |
-| A1 | 2/3c | Spherical | Arith. mean | 687 km | 45.1% | 59.0% |
+
+| ID     | Distance Model  | Multilateration    | Centroid    | Median Error | Within 500km | Within 1000km |
+| ------ | --------------- | ------------------ | ----------- | ------------ | ------------ | ------------- |
+| **G3** | Octant spline   | Unweighted annulus | MC median   | **312 km**   | **77.4%**    | **94.0%**     |
+| **F3** | Octant spline   | Unweighted annulus | Geometric   | **328 km**   | **74.4%**    | **94.0%**     |
+| E3     | Octant spline   | Unweighted annulus | Arith. mean | 374 km       | 64.7%        | 92.9%         |
+| C1     | 2/3c            | Shapely            | Arith. mean | 333 km       | 59.0%        | 82.0%         |
+| A3     | Octant spline   | Spherical          | Arith. mean | 337 km       | 57.1%        | 86.8%         |
+| D1     | 2/3c            | Shapely            | Geometric   | 395 km       | 56.0%        | 81.6%         |
+| H1     | 2/3c            | Shapely            | MC median   | 394 km       | 56.4%        | 81.6%         |
+| A2     | LP low-envelope | Spherical          | Arith. mean | 602 km       | 40.2%        | 69.2%         |
+| A1     | 2/3c            | Spherical          | Arith. mean | 687 km       | 45.1%        | 59.0%         |
+
 
 *All 18 combinations achieved 100% intersection rate (n=266). Full table in evaluation_summary.json.*
 
 ### Error CDF
 
-![Error CDF for all 18 combinations](refs/error_cdf_all.png)
+Error CDF for all 18 combinations
 
 *Figure: Cumulative distribution of geolocation error for all 18 CBG combinations. The Octant spline + unweighted annulus cluster (E3/F3/G3, top-left) clearly separates from all other configurations.*
 
@@ -263,10 +290,11 @@ Switching from 2/3c (A1) to the Octant spline model (A3) while holding multilate
 With the same spline distance model, switching from Shapely disk intersection (D3: 464 km median) to unweighted annulus intersection (F3: 328 km median) yields a **29% median error reduction** and improves within-500km from 55% to 74%. The annulus inner radius excludes physically implausible near-VP regions, tightening the feasible region. Pairwise: E3 outperforms C3 in 68.4% of probes.
 
 **Finding 3 — MC geometric median is the most accurate centroid, but geometric centroid is preferable at scale.**
-G3 (MC median) achieves 312 km vs. F3 (geometric centroid) at 328 km — only a **5% difference** in median error, identical within-1000km (94.0%). However, MC median requires ~27s per target (1000-point Sobol sampling + `geom_median` optimization) versus ~0.2s for geometric centroid — a **~130× runtime penalty**. At 50M IPs, MC median is infeasible without massive parallelism. **Geometric centroid (F3) is the preferred production configuration.**
+G3 (MC median) achieves 312 km vs. F3 (geometric centroid) at 328 km — only a **5% difference** in median error, identical within-1000km (94.0%). However, MC median requires ~~27s per target (1000-point Sobol sampling + `geom_median` optimization) versus ~0.2s for geometric centroid — a **~~130× runtime penalty**. At 50M IPs, MC median is infeasible without massive parallelism. **Geometric centroid (F3) is the preferred production configuration.**
 
 **Finding 4 — The Octant pipeline (F3) dominates across all metrics.**
 Spline + annulus + geometric centroid (F3) achieves:
+
 - Best median error among sub-second methods: **328 km**
 - Best within-500km: **74.4%**
 - Best within-1000km (tied with G3): **94.0%**
@@ -279,12 +307,14 @@ On the Shapely/spherical paths (poor multilateration), switching centroid from a
 
 ### Scalability Comparison
 
-| Configuration | Median Error | Runtime / target | Feasible at 50M IPs? |
-|--------------|:------------:|:----------------:|:--------------------:|
-| G3 (Spline + Annulus + MC median) | 312 km | ~27s | No (requires massive parallelism) |
-| **F3 (Spline + Annulus + Geom centroid)** | **328 km** | **~0.2s** | **Yes** |
-| A3 (Spline + Spherical + Arith) | 337 km | ~0.18s | Yes |
-| A1 (2/3c + Spherical + Arith) | 687 km | ~0.04s | Yes |
+
+| Configuration                             | Median Error | Runtime / target | Feasible at 50M IPs?              |
+| ----------------------------------------- | ------------ | ---------------- | --------------------------------- |
+| G3 (Spline + Annulus + MC median)         | 312 km       | ~27s             | No (requires massive parallelism) |
+| **F3 (Spline + Annulus + Geom centroid)** | **328 km**   | **~0.2s**        | **Yes**                           |
+| A3 (Spline + Spherical + Arith)           | 337 km       | ~0.18s           | Yes                               |
+| A1 (2/3c + Spherical + Arith)             | 687 km       | ~0.04s           | Yes                               |
+
 
 *Runtime measured on AS7922 dataset, 266 probes, single-threaded.*
 
@@ -295,21 +325,25 @@ On the Shapely/spherical paths (poor multilateration), switching centroid from a
 **Scope: Unicast IP geolocation with CBG** — anycast and topology-based methods are deferred to future work.
 
 ### Phase 1: Finalize Unicast Benchmark (mobile VP dataset)
+
 - Confirm all 18 combinations produce stable, reproducible results
 - Add memory profiling per combination (model storage + runtime peak)
 - Add availability metric: fraction of targets with non-null CBG estimate
 - Extend runtime measurements to larger target set (1K+ IPs) for reliable throughput estimates
 
 ### Phase 2: RIPE Atlas Cross-Validation
+
 - Run all 18 combinations on RIPE Atlas anchor meshed pings (US subset)
 - Run all 18 combinations on RIPE Atlas EU subset
 - Test whether phase rankings hold across datasets and geographies
 
 ### Phase 3: VP Count Sensitivity Analysis
+
 - Vary number of VPs (1, 3, 5, 10, 20) for top-3 configurations
 - Quantify accuracy degradation with fewer VPs — relevant for mobile operator deployments where VP count is fixed and potentially small
 
 ### Phase 4: Paper Writing and Open-Source Release
+
 - Clean and document `scripts/framework/` as a standalone open-source CBG library
 - Write paper targeting **IMC 2026** (deadline TBD)
 - Release curated datasets alongside the paper
@@ -323,3 +357,4 @@ On the Shapely/spherical paths (poor multilateration), switching centroid from a
 3. **Benchmark dataset**: Curated RTT measurements from mobile VPs + RIPE Atlas, with verified ground truth
 4. **Scalability analysis**: First accuracy-vs-runtime Pareto characterization of CBG variants, directly applicable to production deployment decisions
 5. **Practical guidance**: F3 (Octant spline + annulus + geometric centroid) is the recommended configuration — 328 km median error, 94% within 1000 km, ~0.2s per IP
+

@@ -154,13 +154,61 @@ Uses GPS-tagged user requests as ground truth to evaluate commercial geolocation
 arXiv 2025
 [arXiv 2501.15064](https://arxiv.org/html/2501.15064v1)
 
-Improves geolocation by detecting and exploiting topological inconsistencies in traceroute paths. Topology-based approach — out of scope for our benchmark (not scalable to mobile-operator scale) but citable as a complementary direction for high-value targets.
+Improves geolocation by detecting and exploiting topological inconsistencies in traceroute paths. Topology-based approach — not scalable to Internet scale (requires traceroute per target) but citable as a complementary direction for high-value targets.
 
 ### "GeoFINDR: Practical Approach to Verify Cloud Instances Geolocation in Multicloud"
 arXiv April 2025
 [arXiv 2504.18685](https://arxiv.org/abs/2504.18685)
 
-RIPE Atlas-based delay approach for VM-scale cloud instance localization in multicloud environments. Achieves 22.6 km median accuracy. Close in motivation (cloud provider localization via latency) but focuses on compliance verification rather than CBG pipeline benchmarking. Differentiate by: (a) we benchmark CBG variants rather than propose a single method, (b) we target anycast as well as unicast, (c) our VP set comes from mobile operators rather than RIPE Atlas anchors.
+RIPE Atlas-based delay approach for VM-scale cloud instance localization in multicloud environments. Achieves 22.6 km median accuracy. Close in motivation (cloud provider localization via latency) but focuses on compliance verification rather than CBG pipeline benchmarking. Differentiate by: (a) we benchmark CBG variants rather than propose a single method, (b) we focus on unicast IP geolocation at scale rather than VM compliance auditing.
+
+---
+
+## 7. IP Geolocation Method Landscape
+
+This section covers the broader landscape of unicast IP geolocation methods — necessary context for justifying why CBG is the right approach and what alternatives fail to address.
+
+### GeoPing — Closest-VP Heuristic
+No standalone paper; compared directly against CBG and Octant in Wong et al. (NSDI 2007).
+
+Picks the vantage point with the lowest RTT to the target and reports that VP's location as the estimate. Single-VP, no multilateration, no geometric constraint. On the Octant benchmark dataset: GeoPing achieves **68-mile median error** — worse than Octant (22 miles) but better than original CBG (89 miles, due to its loose LP distance model). The VP-proximity heuristic works as a rough approximation but is systematically inaccurate when the nearest VP is not co-located with the target.
+
+### Padmanabhan & Subramanian — GeoCluster / Prefix-Based
+**"An Investigation of Geographic Mapping Techniques for Internet Hosts"**
+IMC/WWW 2001
+[ACM WWW 2001](https://dl.acm.org/doi/10.1145/383059.383073)
+
+Propagates known location labels through BGP prefixes: if any IP in a /24 is known, all IPs in that prefix are assigned the same location. Works for coarse-grained geolocation when prefixes are small and belong to a single operator. Fails for large ISP prefixes spanning multiple cities, produces silent errors (returns a location without indicating confidence), and is inapplicable to anycast IPs. Foundational work demonstrating prefix clustering as a practical fallback.
+
+### Li et al. — Graph Neural Network (Street-Level ML)
+**"Connecting the Hosts: Street-Level IP Geolocation with Graph Neural Networks"**
+KDD 2022
+[ACM KDD 2022](https://dl.acm.org/doi/abs/10.1145/3534678.3539049)
+
+Reframes unicast IP geolocation as node regression on attribute graphs combining network topology and RTT measurements. State-of-the-art for supervised ML approaches; achieves street-level accuracy on the evaluated datasets. **Limitation for our use case:** Requires large labeled training datasets (known ground-truth IP locations) to train the model. Not auditable (inference is a black box). Does not generalize to IPs outside the training distribution. Cannot be applied to the long tail of unlabeled IPs at Internet scale without substantial labeled data collection.
+
+### Jiang — Neural Network with Stable Landmarks
+**"IP Geolocation Estimation using Neural Networks with Stable Landmarks"**
+SIGCOMM GI Workshop 2016
+[IEEE 2016](https://ieeexplore.ieee.org/document/7562066/)
+
+Neural network classifier on RTT feature vectors collected from stable landmark nodes. Achieves **4.1 km median error** on a US dataset with 1547 landmarks. Demonstrates the accuracy ceiling achievable by supervised ML when training data is available. Same limitations as above: depends on curated labeled training set and does not scale to unlabeled IPs.
+
+### Topology-Based: Intermediate Routers as Landmarks
+**"Towards IP Geolocation with Intermediate Routers Based on Topology Discovery"**
+Cybersecurity (SpringerOpen) 2019
+[Springer 2019](https://cybersecurity.springeropen.com/articles/10.1186/s42400-019-0030-2)
+
+Uses traceroutes to discover intermediate routers as secondary landmarks, which are then geolocated and used to tighten CBG constraints. Improves accuracy in landmark-sparse regions. **Scalability limitation:** Requires a traceroute (10–20 probes) per target IP. At 10M+ IPs, this represents 100M–200M probes per measurement cycle — prohibitive for operational use at ISP scale. Active measurement budgets (RIPE Atlas credits, probe bandwidth) further constrain this approach.
+
+### Efficient Landmark Selection for Active Geolocation
+**"Selection of Landmarks for Efficient Active Geolocation"**
+TMA 2024
+[IEEE TMA 2024](https://ieeexplore.ieee.org/document/10559002/)
+
+Proposes optimal landmark selection strategies for active geolocation (minimizing probing while maximizing coverage). Shows that even geographic distribution of landmarks significantly improves CBG precision, especially in underserved regions (Africa, South America). Relevant to our VP selection evaluation in the benchmark; confirms that landmark placement is a first-order factor in CBG accuracy.
+
+**Gap:** None of these alternatives — GeoPing, GeoCluster, ML/GNN, topology-based — is suitable as a general-purpose unicast geolocation fallback at Internet scale. GeoPing and GeoCluster lack accuracy guarantees; ML/GNN requires labeled training data; topology-based methods are too expensive to probe. CBG occupies the unique position of being physics-grounded, label-free, and scalable to millions of IPs with a fixed measurement infrastructure.
 
 ---
 
@@ -187,5 +235,10 @@ RIPE Atlas-based delay approach for VM-scale cloud instance localization in mult
 | DB accuracy | 2023 | Eval | IEEE | Motivates open alternatives |
 | DB unreliable | 2011 | Eval | ACM CCR | Motivates open alternatives |
 | GPS-based | 2022 | Eval | PAM | Motivates open alternatives |
-| Traceroute inconsistencies | 2025 | Topology | arXiv | Adjacent; out of scope |
-| GeoFINDR | 2025 | CBG-like | arXiv | Adjacent; different goal |
+| Traceroute inconsistencies | 2025 | Topology | arXiv | Adjacent; out of scope (not scalable) |
+| GeoFINDR | 2025 | CBG-like | arXiv | Adjacent; different goal (VM compliance) |
+| Padmanabhan & Subramanian — GeoCluster | 2001 | Tier 1 alt | WWW | Prefix-based fallback; fails on large ISP prefixes |
+| Li et al. — GNN Street-Level | 2022 | ML | KDD | SOTA supervised ML; requires labeled training data |
+| Jiang — NN + Stable Landmarks | 2016 | ML | GI/SIGCOMM | Neural network baseline; labeled data required |
+| Topology + Intermediate Routers | 2019 | Topology | Cybersecurity | Traceroute-based; infeasible probing cost at scale |
+| Landmark Selection (TMA 2024) | 2024 | Phase 1 | TMA | Landmark placement is first-order accuracy factor |
