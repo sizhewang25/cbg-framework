@@ -3,6 +3,10 @@
 Theoretical 2/3c model: radius_km = rtt_to_km(rtt, speed_threshold=2/3).
 At 2/3c this equals 100 * rtt_ms.
 
+The legacy Million-Scale evaluation filtered measurements with RTT > 100 ms.
+This wrapper leaves `max_rtt_ms` unbounded by default for controlled
+cross-variant benchmarking; set `max_rtt_ms=100.0` for strict legacy parity.
+
 Wraps: scripts/utils/helpers.py :: rtt_to_km()
 Reference: run_million_scale_cbg() in evaluate_million_scale.py:123
 """
@@ -23,6 +27,12 @@ class SpeedOfInternetDistance(BaseDistance):
 
     Converts RTT to distance using a fixed fraction of the speed of light.
     Default: 2/3c → radius = 100 × RTT.
+
+    Note:
+        run_million_scale_cbg() drops RTT measurements above 100 ms. The
+        framework default is intentionally unbounded so all distance models see
+        the same available measurements unless a benchmark config opts into the
+        legacy cutoff via `max_rtt_ms=100.0`.
     """
 
     name = "speed_of_internet"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 
 EARTH_RADIUS_KM = 6371.0
@@ -48,3 +48,23 @@ class MultilatResult:
     region: Any = None  # Shapely geometry
     circles_used: list = field(default_factory=list)
     success: bool = False
+
+
+@dataclass
+class GeolocationResult:
+    """Full pipeline result for one target.
+
+    `location` may be present even when `multilateration_success` is false if
+    the closest-VP fallback was used. Callers that need intersection-rate or
+    availability metrics should use the explicit metadata fields instead of
+    inferring state from `location is not None`.
+    """
+
+    location: Optional[Tuple[float, float]]
+    circles_used: list = field(default_factory=list)
+    all_circles: list = field(default_factory=list)
+    filtered_circles: list = field(default_factory=list)
+    multilateration_success: bool = False
+    centroid_success: bool = False
+    fallback_used: bool = False
+    fallback_reason: Optional[str] = None

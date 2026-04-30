@@ -86,6 +86,12 @@ def save_json_summary(all_results, output_path):
         errors = get_errors(all_results[spec.combo_id])
         results = all_results[spec.combo_id]
         n_intersected = sum(1 for r in results if r.did_intersect)
+        n_fallback = sum(1 for r in results if r.fallback_used)
+        fallback_reasons = {}
+        for r in results:
+            if r.fallback_used:
+                reason = r.fallback_reason or "unknown"
+                fallback_reasons[reason] = fallback_reasons.get(reason, 0) + 1
 
         entry = {
             "label": spec.label,
@@ -98,6 +104,9 @@ def save_json_summary(all_results, output_path):
             "n_probes": len(results),
             "n_successful": len(errors),
             "intersection_rate_pct": round(n_intersected / max(len(results), 1) * 100, 1),
+            "fallback_count": n_fallback,
+            "fallback_rate_pct": round(n_fallback / max(len(results), 1) * 100, 1),
+            "fallback_reasons": fallback_reasons,
         }
         if len(errors) > 0:
             entry.update({

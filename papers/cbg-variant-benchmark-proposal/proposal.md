@@ -67,11 +67,16 @@ Our benchmark provides the first Pareto frontier of median error vs. runtime per
 
 A key insight of this work is that **every published CBG variant can be decomposed into three independent phases**, each with interchangeable implementations. This abstraction enables systematic cross-variant benchmarking for the first time.
 
+The implementation also supports optional constraint filtering between Phase 1 and Phase 2. We treat this as Phase 1.5 preprocessing rather than a fourth conceptual CBG phase because it does not create a new geolocation representation; it only decides which Phase 1 constraints proceed to multilateration.
+
 ```
 Input: RTT measurements from N vantage points (VPs) to target IP
           ↓
 Phase 1: RTT-to-Distance Modeling
          Convert per-VP RTT → distance constraint (radius or annulus)
+          ↓
+Optional preprocessing: Constraint Filtering
+         Remove redundant or invalid constraints when enabled
           ↓
 Phase 2: Multilateration
          Intersect per-VP constraints → feasible region (geometry)
@@ -139,7 +144,7 @@ The fundamental challenge of CBG is that the RTT-to-distance mapping is noisy. F
 
 ### 4.2 Multilateration Failure (Zero Intersection)
 
-When RTT constraints are noisy or the VP set is poorly chosen, the intersection of distance circles may be empty. All existing methods handle this differently (fallback to nearest VP, centroid of closest circles, barycenter). Consistent failure handling is critical for a fair benchmark and for production use.
+When RTT constraints are noisy or the VP set is poorly chosen, the intersection of distance circles may be empty. All existing methods handle this differently (fallback to nearest VP, centroid of closest circles, barycenter). Consistent failure handling is critical for a fair benchmark and for production use. Our implementation records fallback usage separately from successful multilateration so availability, intersection rate, and accuracy metrics are not conflated.
 
 ### 4.3 Scalability vs. Accuracy Tradeoff
 
@@ -357,4 +362,3 @@ On the Shapely/spherical paths (poor multilateration), switching centroid from a
 3. **Benchmark dataset**: Curated RTT measurements from mobile VPs + RIPE Atlas, with verified ground truth
 4. **Scalability analysis**: First accuracy-vs-runtime Pareto characterization of CBG variants, directly applicable to production deployment decisions
 5. **Practical guidance**: F3 (Octant spline + annulus + geometric centroid) is the recommended configuration — 328 km median error, 94% within 1000 km, ~0.2s per IP
-

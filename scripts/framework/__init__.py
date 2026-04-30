@@ -1,10 +1,10 @@
 """Modular CBG Geolocation Framework.
 
-HuggingFace-style pipeline with pluggable phases:
+HuggingFace-style pipeline with pluggable core phases:
   Phase 1: Distance estimation (RTT → radius)
-  Phase 2: Filtering (remove redundant constraints)
-  Phase 3: Multilateration (intersect → region)
-  Phase 4: Centroid selection (region → single point)
+  Optional preprocessing: Filtering (remove redundant constraints)
+  Phase 2: Multilateration (intersect → region)
+  Phase 3: Centroid selection (region → single point)
 
 Usage::
 
@@ -20,12 +20,13 @@ Usage::
     # Custom combination
     pipe = CBGPipeline.from_config(
         distance="low_envelope",
-        filtering="redundant_circle",
+        filtering="redundant_circle",  # use filtering="none" to disable
         multilateration="shapely",
         centroid="geometric_centroid",
     )
 
     location, circles = pipe.geolocate(measurements, anchor_coords)
+    result = pipe.geolocate_with_metadata(measurements, anchor_coords)
 
 Available components (string names for from_config):
 
@@ -42,7 +43,7 @@ from scripts.framework.registry import (
     FILTERING_REGISTRY,
     MULTILATERATION_REGISTRY,
 )
-from scripts.framework.types import CircleConstraint, MultilatResult
+from scripts.framework.types import CircleConstraint, GeolocationResult, MultilatResult
 
 # Import all variant modules to trigger @register_* decorators.
 # Each import activates the decorator on the class, populating the registries.
@@ -86,6 +87,7 @@ except ImportError:
 __all__ = [
     "CBGPipeline",
     "CircleConstraint",
+    "GeolocationResult",
     "MultilatResult",
     "DISTANCE_REGISTRY",
     "FILTERING_REGISTRY",

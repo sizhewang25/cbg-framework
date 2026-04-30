@@ -1,4 +1,4 @@
-"""CBGPipeline — composable 4-phase geolocation pipeline.
+"""CBGPipeline — composable CBG geolocation pipeline.
 
 Usage:
     pipe = CBGPipeline.from_config(
@@ -8,6 +8,10 @@ Usage:
         centroid="arithmetic_mean",
     )
     location, circles = pipe.geolocate(measurements, anchor_coords)
+
+    result = pipe.geolocate_with_metadata(measurements, anchor_coords)
+    if result.fallback_used:
+        ...
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from __future__ import annotations
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
-from scripts.framework.types import CircleConstraint
+from scripts.framework.types import CircleConstraint, GeolocationResult
 
 
 # Incompatible (multilateration, distance) pairs
@@ -26,13 +30,16 @@ _INCOMPATIBLE_MULTILAT_DISTANCE = {
 
 
 class CBGPipeline:
-    """Composable 4-phase CBG geolocation pipeline.
+    """Composable CBG geolocation pipeline.
 
-    Phases:
+    Core phases:
         1. distance     — RTT → CircleConstraint list
-        2. filtering    — remove erroneous/redundant constraints
-        3. multilateration — intersect constraints → region
-        4. centroid     — select single point from region
+        2. multilateration — intersect constraints → region
+        3. centroid     — select single point from region
+
+    Optional preprocessing:
+        filtering — remove erroneous/redundant constraints before multilateration.
+        Use filtering="none" or filtering=None to disable it.
 
     Fallback: when centroid selection fails, uses closest VP by min RTT.
     """
@@ -58,29 +65,68 @@ class CBGPipeline:
             (location_or_None, circles_used)
             location is (lat, lon) or None if all phases fail.
         """
+        result = self.geolocate_with_metadata(measurements, anchor_coords)
+        return result.location, result.circles_used
+
+    def geolocate_with_metadata(
+        self,
+        measurements: Dict[str, float],
+        anchor_coords: Dict[str, Tuple[float, float]],
+    ) -> GeolocationResult:
+        """Run the full pipeline and return explicit success/fallback metadata.
+
+        Unlike `geolocate()`, this method distinguishes a real multilateration
+        result from closest-VP fallback. Use it for benchmark metrics.
+        """
         # Phase 1: Distance estimation
         circles = self.distance.estimate(measurements, anchor_coords)
         if not circles:
-            return None, []
+            return GeolocationResult(
+                location=None,
+                fallback_reason="no_constraints",
+            )
 
-        # Phase 2: Filtering
+        # Optional preprocessing: Filtering
         filtered = self.filtering.filter(circles)
         if not filtered:
-            return None, circles
+            return GeolocationResult(
+                location=None,
+                circles_used=circles,
+                all_circles=circles,
+                fallback_reason="filtering_removed_all_constraints",
+            )
 
-        # Phase 3: Multilateration
-        result = self.multilateration.multilaterate(filtered)
+        # Phase 2: Multilateration
+        multilat_result = self.multilateration.multilaterate(filtered)
 
-        # Phase 4: Centroid selection
-        location = self.centroid.select(result)
+        # Phase 3: Centroid selection
+        location = self.centroid.select(multilat_result)
+        centroid_success = location is not None
 
         # Fallback: closest VP by min RTT
+        fallback_used = False
+        fallback_reason = None
         if location is None and filtered:
             closest = min(filtered, key=lambda c: c.rtt_ms)
             location = (closest.vp_lat, closest.vp_lon)
+            fallback_used = True
+            fallback_reason = (
+                "centroid_failed"
+                if multilat_result.success
+                else "multilateration_failed"
+            )
 
-        used = result.circles_used if result.circles_used else filtered
-        return location, used
+        used = multilat_result.circles_used if multilat_result.circles_used else filtered
+        return GeolocationResult(
+            location=location,
+            circles_used=used,
+            all_circles=circles,
+            filtered_circles=filtered,
+            multilateration_success=multilat_result.success,
+            centroid_success=centroid_success,
+            fallback_used=fallback_used,
+            fallback_reason=fallback_reason,
+        )
 
     def geolocate_batch(
         self,
@@ -105,7 +151,7 @@ class CBGPipeline:
     def from_config(
         cls,
         distance: str = "speed_of_internet",
-        filtering: str = "redundant_circle",
+        filtering: Optional[str] = "redundant_circle",
         multilateration: str = "spherical",
         centroid: str = "arithmetic_mean",
         distance_kwargs: Optional[Dict[str, Any]] = None,
@@ -117,7 +163,7 @@ class CBGPipeline:
 
         Args:
             distance: Name registered in DISTANCE_REGISTRY.
-            filtering: Name registered in FILTERING_REGISTRY.
+            filtering: Name registered in FILTERING_REGISTRY, or None for "none".
             multilateration: Name registered in MULTILATERATION_REGISTRY.
             centroid: Name registered in CENTROID_REGISTRY.
             *_kwargs: Optional keyword arguments for each component's __init__.
@@ -135,6 +181,8 @@ class CBGPipeline:
             FILTERING_REGISTRY,
             MULTILATERATION_REGISTRY,
         )
+
+        filtering = filtering or "none"
 
         # Validate compatibility
         if (multilateration, distance) in _INCOMPATIBLE_MULTILAT_DISTANCE:

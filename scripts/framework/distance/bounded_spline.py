@@ -8,6 +8,7 @@ Reference: run_octant_cbg() in octant_evaluation.py, form_constraint() in octant
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -15,6 +16,8 @@ import numpy as np
 from scripts.framework.distance import BaseDistance
 from scripts.framework.registry import register_distance
 from scripts.framework.types import CircleConstraint
+
+logger = logging.getLogger(__name__)
 
 
 @register_distance("bounded_spline")
@@ -85,9 +88,20 @@ class BoundedSplineDistance(BaseDistance):
             model = self.models[vp_ip]
             if not model.fitted:
                 continue
-            inner_km, outer_km = model.predict_distance_bounds(
-                rtt, delta=self.delta
-            )
+            try:
+                inner_km, outer_km = model.predict_distance_bounds(
+                    rtt, delta=self.delta
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Failed to predict Octant bounds for %s at RTT %.3f ms: %s",
+                    vp_ip,
+                    rtt,
+                    exc,
+                )
+                continue
+            inner_km = max(0.0, inner_km)
+            outer_km = max(0.0, outer_km)
             if outer_km <= inner_km:
                 continue
             lat, lon = anchor_coords[vp_ip]
@@ -99,7 +113,7 @@ class BoundedSplineDistance(BaseDistance):
                     vp_ip=vp_ip,
                     rtt_ms=rtt,
                     radius_km=outer_km,
-                    inner_radius_km=max(0.0, inner_km),
+                    inner_radius_km=inner_km,
                     weight=weight,
                 )
             )

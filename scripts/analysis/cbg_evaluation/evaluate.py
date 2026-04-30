@@ -39,6 +39,8 @@ class ProbeResult:
     n_circles: int
     min_rtt_ms: float
     did_intersect: bool
+    fallback_used: bool = False
+    fallback_reason: Optional[str] = None
 
 
 def load_and_prepare() -> Dict[str, Any]:
@@ -128,9 +130,11 @@ def evaluate_combination(
     """Run one pipeline across all probes."""
     results = []
     for probe_ip, target in probe_targets.items():
-        location, circles_used = pipe.geolocate(
+        geo_result = pipe.geolocate_with_metadata(
             target["measurements"], anchor_coords
         )
+        location = geo_result.location
+        circles_used = geo_result.circles_used
 
         true = (target["true_lat"], target["true_lon"])
         if location is not None:
@@ -152,7 +156,9 @@ def evaluate_combination(
                 error_km=error_km,
                 n_circles=len(circles_used),
                 min_rtt_ms=min_rtt,
-                did_intersect=len(circles_used) > 0 and location is not None,
+                did_intersect=geo_result.multilateration_success,
+                fallback_used=geo_result.fallback_used,
+                fallback_reason=geo_result.fallback_reason,
             )
         )
     return results
