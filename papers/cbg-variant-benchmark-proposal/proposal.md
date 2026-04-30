@@ -51,7 +51,7 @@ CBG is therefore the practical choice for operators who need high-accuracy, audi
 
 ### 2.3 Why Practitioners Cannot Choose a Variant Today
 
-**No controlled cross-variant evaluation exists.** Each CBG paper (Gueye 2004, Hu 2012, Wong 2007) evaluates only its own full pipeline on its own proprietary dataset. No paper isolates phase contributions, so practitioners cannot determine: Is it worth calibrating a per-VP spline, or does 2/3c suffice? Does annulus multilateration justify its added complexity over spherical intersection? Does Monte Carlo median's 130× runtime overhead over geometric centroid deliver meaningful accuracy gains? Our preliminary results show Phase 1 alone accounts for the 2× accuracy gap — but without a controlled benchmark, there is no way to know this.
+**No controlled cross-variant evaluation exists.** Each CBG paper (Gueye 2004, Hu 2012, Wong 2007) evaluates only its own full pipeline on its own proprietary dataset. No paper isolates phase contributions, so practitioners cannot determine: Is it worth calibrating a per-VP spline, or does 2/3c suffice? Does `planar_annulus` multilateration justify its added complexity over `spherical_circle`? Does Monte Carlo median's 130× runtime overhead over geometric centroid deliver meaningful accuracy gains? Our preliminary results show Phase 1 alone accounts for the 2× accuracy gap — but without a controlled benchmark, there is no way to know this.
 
 **Only one public CBG implementation exists.** The IMC 2023 replication codebase [[Darwich et al.](https://dl.acm.org/doi/10.1145/3618257.3624801)] covers only Million-Scale and Street-Level CBG. Original CBG and Octant have **no public code** — an operator who wants to evaluate Octant must reimplement it from scratch.
 
@@ -104,13 +104,13 @@ The spline model produces **annuli** rather than disks, encoding both a maximum 
 
 | Variant                             | Source                       | Method                                                                     | Output          |
 | ----------------------------------- | ---------------------------- | -------------------------------------------------------------------------- | --------------- |
-| **Spherical Intersection**          | Original CBG / Million-Scale | Pairwise great-circle crossings; keeps points inside all circles           | Vertex list     |
-| **Shapely Polygon Intersection**    | —                            | Approximate circles as 100-point polygons; sequential Shapely intersection | Shapely polygon |
-| **Unweighted Annulus Intersection** | Octant                       | `∩(outer disks) − ∪(inner disks)`                                          | Shapely polygon |
-| **Weighted Grid**                   | Octant                       | Grid-based weight accumulation over annuli; fused Phase 2+3                | Shapely polygon |
+| **`spherical_circle`**         | Original CBG / Million-Scale | Pairwise great-circle crossings on the Earth sphere; keeps points inside all circles | Vertex list     |
+| **`planar_circle`**            | —                            | Approximate circles as 100-point polygons in `(lon, lat)` degree space; sequential Shapely intersection | Shapely polygon |
+| **`planar_annulus`**           | Octant                       | `∩(outer disks) − ∪(inner disks)` in planar `(lon, lat)` degree space      | Shapely polygon |
+| **`planar_annulus_weighted`**  | Octant                       | Grid-based weight accumulation over planar annuli; fused Phase 2+3         | Shapely polygon |
 
 
-Unweighted annulus intersection is qualitatively different from disk intersection: by subtracting the inner exclusion zones, it removes near-VP regions that are geometrically inconsistent with the RTT constraint — producing a tighter, more accurate feasible region.
+`planar_annulus` is qualitatively different from `planar_circle`: by subtracting the inner exclusion zones, it removes near-VP regions that are geometrically inconsistent with the RTT constraint — producing a tighter, more accurate feasible region.
 
 ### Phase 3 — Single-Point Estimation
 
@@ -128,8 +128,8 @@ The geometric median minimizes sum of distances to all sampled points, making it
 
 Not all combinations are valid due to type constraints:
 
-- Annulus multilateration requires the spline distance model (annuli as input)
-- Arithmetic mean on vertex lists only works after spherical intersection
+- `planar_annulus` and `planar_annulus_weighted` require the spline distance model (annuli as input)
+- Arithmetic mean on vertex lists only works after `spherical_circle`
 - MC median and geometric centroid require a Shapely polygon
 
 We evaluated **18 valid combinations** across these constraints (see Section 6).
@@ -148,7 +148,7 @@ When RTT constraints are noisy or the VP set is poorly chosen, the intersection 
 
 ### 4.3 Scalability vs. Accuracy Tradeoff
 
-The most accurate CBG configuration (Octant spline + annulus + MC geometric median) achieves 312 km median error but requires ~27s per target due to the 1000-sample Monte Carlo step. At 50M IPs, this is computationally infeasible without massive parallelism. We must characterize the entire Pareto frontier of accuracy vs. cost across all 18 combinations to identify which configurations are viable at scale.
+The most accurate CBG configuration (Octant spline + `planar_annulus` + MC geometric median) achieves 312 km median error but requires ~27s per target due to the 1000-sample Monte Carlo step. At 50M IPs, this is computationally infeasible without massive parallelism. We must characterize the entire Pareto frontier of accuracy vs. cost across all 18 combinations to identify which configurations are viable at scale.
 
 ### 4.4 VP Selection and Coverage
 
@@ -165,10 +165,10 @@ Authoritative ground truth for unicast IPs is difficult to obtain at scale. RIPE
 ### 5.1 Foundational CBG Papers
 
 **Gueye et al., "Constraint-based geolocation of internet hosts"** (IMC 2004 / IEEE/ACM ToN 2006) [[ACM](https://dl.acm.org/doi/10.1145/1028788.1028828)]
-Original CBG. Fits a DDR per landmark via linear regression (PlanetLab). Introduces the three-phase structure (modeling → intersection → centroid) that all subsequent CBG variants follow. Defines the LP low-envelope Phase 1 variant and spherical circle intersection Phase 2 variant used as our baselines.
+Original CBG. Fits a DDR per landmark via linear regression (PlanetLab). Introduces the three-phase structure (modeling → intersection → centroid) that all subsequent CBG variants follow. Defines the LP low-envelope Phase 1 variant and `spherical_circle` Phase 2 variant used as our baselines.
 
 **Wong et al., "Octant: A Comprehensive Framework for the Geolocalization of Internet Hosts"** (NSDI 2007) [[USENIX](https://www.usenix.org/conference/nsdi-07/octant-comprehensive-framework-geolocalization-internet-hosts)]
-Replaces the linear DDR with a convex-hull spline model producing annular constraints (inner + outer radius). Adds negative constraints (oceans, uninhabitable areas). Reports 22-mile median error vs. CBG's 89-mile — a 4× improvement. Introduces MC geometric median as the centroid estimator. The source of our bounded spline Phase 1 model and unweighted annulus Phase 2 multilateration.
+Replaces the linear DDR with a convex-hull spline model producing annular constraints (inner + outer radius). Adds negative constraints (oceans, uninhabitable areas). Reports 22-mile median error vs. CBG's 89-mile — a 4× improvement. Introduces MC geometric median as the centroid estimator. The source of our bounded spline Phase 1 model and `planar_annulus` Phase 2 multilateration.
 
 **Hu et al., "Towards geolocation of millions of IP addresses"** (IMC 2012) [[ACM](https://dl.acm.org/doi/10.1145/2398776.2398790)]
 Simplifies to the 2/3c (two-thirds speed of light) model, eliminating the need for per-landmark calibration. Introduces greedy VP selection prioritizing proximity to the target. Scales to geolocate ~35% of the IPv4 address space. The source of our 2/3c Phase 1 baseline.
@@ -267,15 +267,15 @@ RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and b
 
 | ID     | Distance Model  | Multilateration    | Centroid    | Median Error | Within 500km | Within 1000km |
 | ------ | --------------- | ------------------ | ----------- | ------------ | ------------ | ------------- |
-| **G3** | Octant spline   | Unweighted annulus | MC median   | **312 km**   | **77.4%**    | **94.0%**     |
-| **F3** | Octant spline   | Unweighted annulus | Geometric   | **328 km**   | **74.4%**    | **94.0%**     |
-| E3     | Octant spline   | Unweighted annulus | Arith. mean | 374 km       | 64.7%        | 92.9%         |
-| C1     | 2/3c            | Shapely            | Arith. mean | 333 km       | 59.0%        | 82.0%         |
-| A3     | Octant spline   | Spherical          | Arith. mean | 337 km       | 57.1%        | 86.8%         |
-| D1     | 2/3c            | Shapely            | Geometric   | 395 km       | 56.0%        | 81.6%         |
-| H1     | 2/3c            | Shapely            | MC median   | 394 km       | 56.4%        | 81.6%         |
-| A2     | LP low-envelope | Spherical          | Arith. mean | 602 km       | 40.2%        | 69.2%         |
-| A1     | 2/3c            | Spherical          | Arith. mean | 687 km       | 45.1%        | 59.0%         |
+| **G3** | Octant spline   | `planar_annulus`   | MC median   | **312 km**   | **77.4%**    | **94.0%**     |
+| **F3** | Octant spline   | `planar_annulus`   | Geometric   | **328 km**   | **74.4%**    | **94.0%**     |
+| E3     | Octant spline   | `planar_annulus`   | Arith. mean | 374 km       | 64.7%        | 92.9%         |
+| C1     | 2/3c            | `planar_circle`    | Arith. mean | 333 km       | 59.0%        | 82.0%         |
+| A3     | Octant spline   | `spherical_circle` | Arith. mean | 337 km       | 57.1%        | 86.8%         |
+| D1     | 2/3c            | `planar_circle`    | Geometric   | 395 km       | 56.0%        | 81.6%         |
+| H1     | 2/3c            | `planar_circle`    | MC median   | 394 km       | 56.4%        | 81.6%         |
+| A2     | LP low-envelope | `spherical_circle` | Arith. mean | 602 km       | 40.2%        | 69.2%         |
+| A1     | 2/3c            | `spherical_circle` | Arith. mean | 687 km       | 45.1%        | 59.0%         |
 
 
 *All 18 combinations achieved 100% intersection rate (n=266). Full table in evaluation_summary.json.*
@@ -284,21 +284,21 @@ RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and b
 
 Error CDF for all 18 combinations
 
-*Figure: Cumulative distribution of geolocation error for all 18 CBG combinations. The Octant spline + unweighted annulus cluster (E3/F3/G3, top-left) clearly separates from all other configurations.*
+*Figure: Cumulative distribution of geolocation error for all 18 CBG combinations. The Octant spline + `planar_annulus` cluster (E3/F3/G3, top-left) clearly separates from all other configurations.*
 
 ### Key Findings
 
 **Finding 1 — Distance model is the dominant factor.**
 Switching from 2/3c (A1) to the Octant spline model (A3) while holding multilateration and centroid fixed cuts median error from 687 km to 337 km — a **2× improvement**. Pairwise comparison confirms: A3 outperforms A2 (LP low-envelope) in 78.9% of probes with a 285 km median improvement. The RTT-to-distance calibration quality has more impact on final accuracy than the choice of multilateration algorithm or centroid method.
 
-**Finding 2 — Annulus multilateration significantly improves the tail.**
-With the same spline distance model, switching from Shapely disk intersection (D3: 464 km median) to unweighted annulus intersection (F3: 328 km median) yields a **29% median error reduction** and improves within-500km from 55% to 74%. The annulus inner radius excludes physically implausible near-VP regions, tightening the feasible region. Pairwise: E3 outperforms C3 in 68.4% of probes.
+**Finding 2 — `planar_annulus` significantly improves the tail.**
+With the same spline distance model, switching from `planar_circle` (D3: 464 km median) to `planar_annulus` (F3: 328 km median) yields a **29% median error reduction** and improves within-500km from 55% to 74%. The annulus inner radius excludes physically implausible near-VP regions, tightening the feasible region. Pairwise: E3 outperforms C3 in 68.4% of probes.
 
 **Finding 3 — MC geometric median is the most accurate centroid, but geometric centroid is preferable at scale.**
 G3 (MC median) achieves 312 km vs. F3 (geometric centroid) at 328 km — only a **5% difference** in median error, identical within-1000km (94.0%). However, MC median requires ~~27s per target (1000-point Sobol sampling + `geom_median` optimization) versus ~0.2s for geometric centroid — a **~~130× runtime penalty**. At 50M IPs, MC median is infeasible without massive parallelism. **Geometric centroid (F3) is the preferred production configuration.**
 
 **Finding 4 — The Octant pipeline (F3) dominates across all metrics.**
-Spline + annulus + geometric centroid (F3) achieves:
+Spline + `planar_annulus` + geometric centroid (F3) achieves:
 
 - Best median error among sub-second methods: **328 km**
 - Best within-500km: **74.4%**
@@ -308,17 +308,17 @@ Spline + annulus + geometric centroid (F3) achieves:
 This configuration should be adopted as the practical SOTA for unicast CBG at scale.
 
 **Finding 5 — Centroid method matters little when multilateration is good; it matters more when multilateration is poor.**
-On the Shapely/spherical paths (poor multilateration), switching centroid from arithmetic mean to geometric centroid or MC median gives inconsistent and small gains. On the annulus path (good multilateration), the centroid choice yields 5–15% median error differences. The multilateration quality provides the floor; centroid refinement operates on what remains.
+On the `planar_circle`/`spherical_circle` paths (poor multilateration), switching centroid from arithmetic mean to geometric centroid or MC median gives inconsistent and small gains. On the `planar_annulus` path (good multilateration), the centroid choice yields 5–15% median error differences. The multilateration quality provides the floor; centroid refinement operates on what remains.
 
 ### Scalability Comparison
 
 
 | Configuration                             | Median Error | Runtime / target | Feasible at 50M IPs?              |
 | ----------------------------------------- | ------------ | ---------------- | --------------------------------- |
-| G3 (Spline + Annulus + MC median)         | 312 km       | ~27s             | No (requires massive parallelism) |
-| **F3 (Spline + Annulus + Geom centroid)** | **328 km**   | **~0.2s**        | **Yes**                           |
-| A3 (Spline + Spherical + Arith)           | 337 km       | ~0.18s           | Yes                               |
-| A1 (2/3c + Spherical + Arith)             | 687 km       | ~0.04s           | Yes                               |
+| G3 (Spline + `planar_annulus` + MC median)         | 312 km       | ~27s             | No (requires massive parallelism) |
+| **F3 (Spline + `planar_annulus` + Geom centroid)** | **328 km**   | **~0.2s**        | **Yes**                           |
+| A3 (Spline + `spherical_circle` + Arith)    | 337 km       | ~0.18s           | Yes                               |
+| A1 (2/3c + `spherical_circle` + Arith)      | 687 km       | ~0.04s           | Yes                               |
 
 
 *Runtime measured on AS7922 dataset, 266 probes, single-threaded.*
@@ -358,7 +358,7 @@ On the Shapely/spherical paths (poor multilateration), switching centroid from a
 ## 8. Expected Contributions
 
 1. **CBG pipeline taxonomy**: First formal decomposition of CBG into three independent, interchangeable phases — enabling reproducible cross-variant comparison
-2. **Open-source framework**: Faithful implementations of all CBG variants (2/3c, LP, Octant spline; spherical, Shapely, annulus multilateration; arithmetic, geometric, MC median centroid)
+2. **Open-source framework**: Faithful implementations of all CBG variants (2/3c, LP, Octant spline; `spherical_circle`, `planar_circle`, `planar_annulus` multilateration; arithmetic, geometric, MC median centroid)
 3. **Benchmark dataset**: Curated RTT measurements from mobile VPs + RIPE Atlas, with verified ground truth
 4. **Scalability analysis**: First accuracy-vs-runtime Pareto characterization of CBG variants, directly applicable to production deployment decisions
-5. **Practical guidance**: F3 (Octant spline + annulus + geometric centroid) is the recommended configuration — 328 km median error, 94% within 1000 km, ~0.2s per IP
+5. **Practical guidance**: F3 (Octant spline + `planar_annulus` + geometric centroid) is the recommended configuration — 328 km median error, 94% within 1000 km, ~0.2s per IP

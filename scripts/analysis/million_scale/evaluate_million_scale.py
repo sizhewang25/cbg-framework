@@ -125,7 +125,7 @@ def run_million_scale_cbg(df_asn):
     Run Million-Scale CBG (inlined from select_best_guess_centroid).
 
     - RTT → distance via rtt_to_km(rtt, speed_threshold=2/3)
-    - Spherical circle intersection
+    - `spherical_circle` intersection
     - Polygon centroid or closest-VP fallback
     """
     # Build anchor coordinate lookup
@@ -290,7 +290,7 @@ def run_vanilla_cbg(df_asn, lp_models):
 
     This isolates the impact of the RTT-distance model by using:
     - RTT → distance via LP bestline inversion (per-anchor calibrated)
-    - Spherical circle intersection (from helpers.py)
+    - `spherical_circle` intersection (from helpers.py)
     - Polygon centroid / closest-VP fallback (from helpers.py)
 
     Pre-fills (lat, lon, rtt, d, r) tuples so circle_preprocessing() skips
@@ -945,7 +945,7 @@ def main():
     octant_models, octant_delta = fit_octant_models(df_asn, target_coverage=0.80)
     stage_times['fit_octant_models_sec'] = time.perf_counter() - stage_start
 
-    # Run Vanilla CBG (LP + Spherical)
+    # Run Vanilla CBG (LP + spherical_circle)
     print("\n" + "=" * 60)
     print("RUNNING VANILLA CBG")
     print("=" * 60)
@@ -962,7 +962,7 @@ def main():
     van_valid_areas = van_all_areas[van_all_areas > 0]
     print(f"  Intersection areas: N={len(van_valid_areas)}, median={np.median(van_valid_areas):,.0f} km²")
 
-    # Run Million-Scale CBG (2/3c + Spherical)
+    # Run Million-Scale CBG (2/3c + spherical_circle)
     print("\n" + "=" * 60)
     print("RUNNING MILLION-SCALE CBG")
     print("=" * 60)
@@ -979,7 +979,7 @@ def main():
     ms_valid_areas = ms_all_areas[ms_all_areas > 0]
     print(f"  Intersection areas: N={len(ms_valid_areas)}, median={np.median(ms_valid_areas):,.0f} km²")
 
-    # Run Octant CBG (spline+delta annuli + Shapely + Monte Carlo)
+    # Run Octant CBG (spline+delta annuli + planar_annulus + Monte Carlo)
     print("\n" + "=" * 60)
     print("RUNNING OCTANT CBG")
     print("=" * 60)

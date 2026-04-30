@@ -16,13 +16,13 @@ From 18-combination benchmark on AS7922 Vultr mobile VP dataset (266 probes, 7 a
 
 | Combination | Distance Model | Multilateration | Centroid | Median Error | Within 1000km | Runtime |
 |-------------|---------------|-----------------|----------|:------------:|:-------------:|:-------:|
-| G3 (best) | Octant spline | Unweighted annulus | MC median | **312 km** | 94.0% | ~27s |
-| F3 | Octant spline | Unweighted annulus | Geometric | 328 km | 94.0% | ~0.21s |
-| A3 | Octant spline | Spherical | Arith. mean | 337 km | 86.8% | ~0.18s |
+| G3 (best) | Octant spline | `planar_annulus` | MC median | **312 km** | 94.0% | ~27s |
+| F3 | Octant spline | `planar_annulus` | Geometric | 328 km | 94.0% | ~0.21s |
+| A3 | Octant spline | `spherical_circle` | Arith. mean | 337 km | 86.8% | ~0.18s |
 
 Key patterns established:
 - Distance model dominates: Octant spline consistently outperforms 2/3c and LP low-envelope
-- Unweighted annulus multilateration outperforms spherical and Shapely at the 500km+ thresholds
+- `planar_annulus` multilateration outperforms `spherical_circle` and `planar_circle` at the 500km+ thresholds
 - MC median adds ~5% accuracy over geometric centroid at ~130x the compute cost
 - Geometric centroid is the best accuracy/speed trade-off for production use
 
@@ -32,8 +32,8 @@ Key patterns established:
 
 | Paper | Venue | Key Contribution | Relation to This Work |
 |-------|-------|------------------|-----------------------|
-| Gueye et al., "Constraint-based geolocation of internet hosts" | IMC 2004 / IEEE/ACM ToN 2006 | Original CBG: linear regression DDR, PlanetLab landmarks, multilateration via circle intersection | Defines LP low-envelope (Phase 1) and spherical intersection (Phase 3) — one of our baselines |
-| Wong et al., "Octant: A Comprehensive Framework for the Geolocalization of Internet Hosts" | NSDI 2007 | Convex-hull RTT-distance model; positive + negative constraints; 22-mile median error vs CBG 89-mile | Source of our Octant spline distance model and annulus multilateration |
+| Gueye et al., "Constraint-based geolocation of internet hosts" | IMC 2004 / IEEE/ACM ToN 2006 | Original CBG: linear regression DDR, PlanetLab landmarks, multilateration via circle intersection | Defines LP low-envelope (Phase 1) and spherical_circle multilateration (Phase 3) — one of our baselines |
+| Wong et al., "Octant: A Comprehensive Framework for the Geolocalization of Internet Hosts" | NSDI 2007 | Convex-hull RTT-distance model; positive + negative constraints; 22-mile median error vs CBG 89-mile | Source of our Octant spline distance model and `planar_annulus` multilateration |
 | Hu et al., "Towards geolocation of millions of IP addresses" | IMC 2012 | 2/3c RTT-distance model; VP selection greedy algorithm; ~35% of IPv4 space geolocated | Source of our 2/3c distance model baseline |
 | Wang et al., "Towards Street-Level Client-Independent IP Geolocation" | NSDI 2011 | Three-tier street-level algorithm | Implemented in this repo; not the focus of this benchmark paper |
 | Darwich et al., "Replication: Towards a Publicly Available Internet Scale IP Geolocation Dataset" | IMC 2023 | Only publicly available CBG implementation; replicates both IMC 2012 and NSDI 2011 | This repo — our benchmark builds directly on it |

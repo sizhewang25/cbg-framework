@@ -32,7 +32,7 @@ class ArithmeticMeanCentroid(BaseCentroid):
         if not result.success:
             return None
 
-        # Vertex-based path (from spherical multilateration)
+        # Vertex-based path (from spherical_circle multilateration)
         if result.vertices is not None:
             n = len(result.vertices)
             if n > 2:
@@ -43,7 +43,7 @@ class ArithmeticMeanCentroid(BaseCentroid):
                 return result.vertices[0]
             return None
 
-        # Shapely region path (from shapely/weighted multilateration)
+        # Shapely region path (from planar multilateration)
         if result.region is not None:
             coords = _extract_vertex_coords(result.region)
             if coords:

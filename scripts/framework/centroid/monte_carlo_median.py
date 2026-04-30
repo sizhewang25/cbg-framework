@@ -47,7 +47,7 @@ class MonteCarloMedianCentroid(BaseCentroid):
         if not result.success:
             return None
 
-        # Shapely region path (from shapely/unweighted_annulus/weighted_grid)
+        # Shapely region path (from planar multilateration)
         if result.region is not None:
             points = sample_points_in_region(
                 result.region, n_samples=self.n_samples, rng=self.rng,
@@ -60,7 +60,7 @@ class MonteCarloMedianCentroid(BaseCentroid):
             c = result.region.centroid
             return (c.y, c.x)
 
-        # Vertex list path (from spherical multilateration)
+        # Vertex list path (from spherical_circle multilateration)
         if result.vertices is not None and len(result.vertices) >= 2:
             points = np.array(result.vertices, dtype=float)
             return geometric_median_approx(points)

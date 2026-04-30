@@ -40,8 +40,8 @@ class MultilatResult:
     """Output of Phase 3 multilateration.
 
     Exactly one of `vertices` or `region` is set when success=True.
-    - vertices: list of (lat, lon) from spherical intersection
-    - region: Shapely Polygon/MultiPolygon from shapely/weighted methods
+    - vertices: list of (lat, lon) from spherical_circle intersection
+    - region: Shapely Polygon/MultiPolygon from planar methods
     """
 
     vertices: Optional[list] = None

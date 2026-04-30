@@ -7,14 +7,14 @@
 IMC 2004 / IEEE/ACM Transactions on Networking 2006
 [ACM IMC 2004](https://dl.acm.org/doi/10.1145/1028788.1028828) · [IEEE/ACM ToN 2006](https://dl.acm.org/doi/10.1109/TNET.2006.886332)
 
-The original CBG paper. Fits a Delay-Distance Relation (DDR) per landmark using linear regression over PlanetLab RTT measurements, then constrains the target location to the intersection of per-landmark distance circles. Multilateration via spherical circle intersection; final estimate is the centroid of intersection vertices. Sets the template for the three-phase pipeline this paper benchmarks.
+The original CBG paper. Fits a Delay-Distance Relation (DDR) per landmark using linear regression over PlanetLab RTT measurements, then constrains the target location to the intersection of per-landmark distance circles. Multilateration via `spherical_circle`; final estimate is the centroid of intersection vertices. Sets the template for the three-phase pipeline this paper benchmarks.
 
 ### Wong et al. — Octant
 **"Octant: A Comprehensive Framework for the Geolocalization of Internet Hosts"**
 NSDI 2007
 [USENIX NSDI 2007](https://www.usenix.org/conference/nsdi-07/octant-comprehensive-framework-geolocalization-internet-hosts)
 
-Replaces CBG's linear DDR with a convex-hull fit (bounding spline), producing annular constraints (inner + outer radius) rather than simple disks. Also incorporates negative constraints (oceans, uninhabitable areas) to tighten feasible regions. Reports 22-mile median error vs. CBG's 89-mile and GeoPing's 68-mile on the same dataset. Our Octant spline distance model and unweighted annulus multilateration are direct implementations of this work.
+Replaces CBG's linear DDR with a convex-hull fit (bounding spline), producing annular constraints (inner + outer radius) rather than simple disks. Also incorporates negative constraints (oceans, uninhabitable areas) to tighten feasible regions. Reports 22-mile median error vs. CBG's 89-mile and GeoPing's 68-mile on the same dataset. Our Octant spline distance model and `planar_annulus` multilateration are direct implementations of this work.
 
 ### Hu et al. — Million-Scale
 **"Towards geolocation of millions of IP addresses"**
@@ -288,8 +288,8 @@ Builds a large landmark set by discovering stable live webcams with extractable 
 
 | Paper | Year | Phase(s) | Venue | Relation |
 |-------|------|----------|-------|----------|
-| Gueye et al. — CBG | 2004/2006 | 1+2+3 | IMC/ToN | Baseline: LP model + spherical intersection |
-| Wong et al. — Octant | 2007 | 1+2+3 | NSDI | Baseline: spline model + annulus multilateration |
+| Gueye et al. — CBG | 2004/2006 | 1+2+3 | IMC/ToN | Baseline: LP model + spherical_circle intersection |
+| Wong et al. — Octant | 2007 | 1+2+3 | NSDI | Baseline: spline model + `planar_annulus` multilateration |
 | Hu et al. — Million-Scale | 2012 | 1+3 | IMC | Baseline: 2/3c model + VP selection |
 | Chandrasekaran et al. — Alidade | 2015 | CBG-like | Tech report | Most recent CBG-family system; offline constraints, no query-time probes |
 | Wang et al. — Street-Level | 2011 | — | NSDI | In-repo; out of scope |

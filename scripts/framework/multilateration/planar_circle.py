@@ -1,7 +1,7 @@
-"""Phase 2 variant: Shapely Polygon Intersection.
+"""Phase 2 variant: `planar_circle`.
 
-Approximates circles as 100-point polygons in degree space and computes
-their intersection via Shapely. Returns a Shapely geometry.
+Approximates circles as 100-point polygons in `(lon, lat)` degree space and
+computes their intersection via Shapely. Returns a Shapely geometry.
 
 Pattern from: evaluate_million_scale.py:58 and octant_geolocation.py:150
 """
@@ -20,7 +20,12 @@ from scripts.framework.registry import register_multilateration
 from scripts.framework.types import CircleConstraint, MultilatResult
 
 
-def _circle_to_shapely(clat: float, clon: float, radius_km: float, n_pts: int = 100):
+def _circle_to_planar_polygon(
+    clat: float,
+    clon: float,
+    radius_km: float,
+    n_pts: int = 100,
+):
     """Convert a geographic circle to a Shapely polygon in (lon, lat) space.
 
     Uses degree-based approximation accounting for latitude compression.
@@ -36,15 +41,16 @@ def _circle_to_shapely(clat: float, clon: float, radius_km: float, n_pts: int = 
     return ShapelyPolygon(zip(lons, lats))  # Shapely: (x, y) = (lon, lat)
 
 
-@register_multilateration("shapely")
-class ShapelyMultilateration(BaseMultilateration):
-    """Shapely polygon intersection of RTT constraint circles.
+@register_multilateration("planar_circle")
+class PlanarCircleMultilateration(BaseMultilateration):
+    """Planar polygon intersection of RTT constraint circles.
 
-    Each circle is approximated as a polygon with n_pts vertices.
-    The intersection of all circles forms the feasible region.
+    Each circle is approximated as a Shapely polygon with n_pts vertices in
+    raw `(lon, lat)` degree space. The intersection of all polygons forms the
+    feasible region.
     """
 
-    name = "shapely"
+    name = "planar_circle"
 
     def __init__(self, n_pts: int = 100):
         self.n_pts = n_pts
@@ -55,7 +61,12 @@ class ShapelyMultilateration(BaseMultilateration):
 
         polys = []
         for c in circles:
-            p = _circle_to_shapely(c.vp_lat, c.vp_lon, c.radius_km, self.n_pts)
+            p = _circle_to_planar_polygon(
+                c.vp_lat,
+                c.vp_lon,
+                c.radius_km,
+                self.n_pts,
+            )
             if p.is_valid and not p.is_empty:
                 polys.append(p)
 

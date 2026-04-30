@@ -1,4 +1,4 @@
-"""Phase 2 variant: Weighted Grid (Octant — fused Phase 2+3).
+"""Phase 2 variant: `planar_annulus_weighted` (Octant, fused Phase 2+3).
 
 Grid-based weight accumulation over annular constraints. Points with
 cumulative weight exceeding a threshold form the feasible region.
@@ -20,9 +20,9 @@ from scripts.analysis.octant.octant_geolocation import (
 )
 
 
-@register_multilateration("weighted_grid")
-class WeightedGridMultilateration(BaseMultilateration):
-    """Octant weighted grid multilateration (fused filtering + region formation).
+@register_multilateration("planar_annulus_weighted")
+class PlanarAnnulusWeightedMultilateration(BaseMultilateration):
+    """Octant weighted planar-annulus grid multilateration.
 
     For each grid point, accumulates weights from constraints whose annulus
     contains the point. Points above threshold × max_weight form the region.
@@ -30,7 +30,7 @@ class WeightedGridMultilateration(BaseMultilateration):
     Note: This method has built-in filtering. Phase 2 should typically be 'none'.
     """
 
-    name = "weighted_grid"
+    name = "planar_annulus_weighted"
 
     def __init__(
         self,

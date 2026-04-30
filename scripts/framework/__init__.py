@@ -21,7 +21,7 @@ Usage::
     pipe = CBGPipeline.from_config(
         distance="low_envelope",
         filtering="redundant_circle",  # use filtering="none" to disable
-        multilateration="shapely",
+        multilateration="planar_circle",
         centroid="geometric_centroid",
     )
 
@@ -32,7 +32,8 @@ Available components (string names for from_config):
 
     Distance:       speed_of_internet, low_envelope, bounded_spline
     Filtering:      redundant_circle, none
-    Multilateration: spherical, shapely, weighted_grid, unweighted_annulus
+    Multilateration: spherical_circle, planar_circle, planar_annulus,
+                    planar_annulus_weighted
     Centroid:       arithmetic_mean, geometric_centroid, monte_carlo_median
 """
 
@@ -50,7 +51,7 @@ from scripts.framework.types import CircleConstraint, GeolocationResult, Multila
 import scripts.framework.distance.speed_of_internet  # noqa: F401
 import scripts.framework.filtering.redundant_circle  # noqa: F401
 import scripts.framework.filtering.none  # noqa: F401
-import scripts.framework.multilateration.spherical  # noqa: F401
+import scripts.framework.multilateration.spherical_circle  # noqa: F401
 import scripts.framework.centroid.arithmetic_mean  # noqa: F401
 
 # Deferred imports — these have heavier dependencies (LP models, Octant, Shapely).
@@ -64,15 +65,15 @@ try:
 except ImportError:
     pass
 try:
-    import scripts.framework.multilateration.shapely_intersection  # noqa: F401
+    import scripts.framework.multilateration.planar_circle  # noqa: F401
 except ImportError:
     pass
 try:
-    import scripts.framework.multilateration.weighted_grid  # noqa: F401
+    import scripts.framework.multilateration.planar_annulus_weighted  # noqa: F401
 except ImportError:
     pass
 try:
-    import scripts.framework.multilateration.unweighted_annulus  # noqa: F401
+    import scripts.framework.multilateration.planar_annulus  # noqa: F401
 except ImportError:
     pass
 try:

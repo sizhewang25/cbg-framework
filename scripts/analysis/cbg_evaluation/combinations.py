@@ -28,125 +28,125 @@ class PipelineSpec:
 # ---------------------------------------------------------------------------
 # 18 combinations across 7 paths
 # ---------------------------------------------------------------------------
-# Path A: spherical → arithmetic_mean           (3 distance models)
-# Path B: spherical → geometric_centroid         (3 distance models)
-# Path C: shapely   → arithmetic_mean            (3 distance models)
-# Path D: shapely   → geometric_centroid          (3 distance models)
-# Path E: unweighted_annulus → arithmetic_mean    (spline only)
-# Path F: unweighted_annulus → geometric_centroid  (spline only)
-# Path G: unweighted_annulus → monte_carlo_median  (spline only)
-# Path H: shapely   → monte_carlo_median          (3 distance models)
+# Path A: spherical_circle → arithmetic_mean           (3 distance models)
+# Path B: spherical_circle → geometric_centroid         (3 distance models)
+# Path C: planar_circle    → arithmetic_mean            (3 distance models)
+# Path D: planar_circle    → geometric_centroid          (3 distance models)
+# Path E: planar_annulus   → arithmetic_mean            (spline only)
+# Path F: planar_annulus   → geometric_centroid          (spline only)
+# Path G: planar_annulus   → monte_carlo_median          (spline only)
+# Path H: planar_circle    → monte_carlo_median          (3 distance models)
 # ---------------------------------------------------------------------------
 
 COMBINATIONS: List[PipelineSpec] = [
-    # Path A: spherical + arithmetic_mean
+    # Path A: spherical_circle + arithmetic_mean
     PipelineSpec(
-        "A1", "SoI + Spherical + Arith",
-        "speed_of_internet", "redundant_circle", "spherical", "arithmetic_mean",
+        "A1", "SoI + spherical_circle + Arith",
+        "speed_of_internet", "redundant_circle", "spherical_circle", "arithmetic_mean",
         "#0072B2", "-",
     ),
     PipelineSpec(
-        "A2", "LP + Spherical + Arith",
-        "low_envelope", "redundant_circle", "spherical", "arithmetic_mean",
+        "A2", "LP + spherical_circle + Arith",
+        "low_envelope", "redundant_circle", "spherical_circle", "arithmetic_mean",
         "#000000", "-",
         needs_lp_fit=True,
     ),
     PipelineSpec(
-        "A3", "Spline + Spherical + Arith",
-        "bounded_spline", "redundant_circle", "spherical", "arithmetic_mean",
+        "A3", "Spline + spherical_circle + Arith",
+        "bounded_spline", "redundant_circle", "spherical_circle", "arithmetic_mean",
         "#009E73", "-",
         needs_octant_fit=True,
     ),
-    # Path B: spherical + geometric_centroid
+    # Path B: spherical_circle + geometric_centroid
     PipelineSpec(
-        "B1", "SoI + Spherical + Geom",
-        "speed_of_internet", "redundant_circle", "spherical", "geometric_centroid",
+        "B1", "SoI + spherical_circle + Geom",
+        "speed_of_internet", "redundant_circle", "spherical_circle", "geometric_centroid",
         "#0072B2", "--",
     ),
     PipelineSpec(
-        "B2", "LP + Spherical + Geom",
-        "low_envelope", "redundant_circle", "spherical", "geometric_centroid",
+        "B2", "LP + spherical_circle + Geom",
+        "low_envelope", "redundant_circle", "spherical_circle", "geometric_centroid",
         "#000000", "--",
         needs_lp_fit=True,
     ),
     PipelineSpec(
-        "B3", "Spline + Spherical + Geom",
-        "bounded_spline", "redundant_circle", "spherical", "geometric_centroid",
+        "B3", "Spline + spherical_circle + Geom",
+        "bounded_spline", "redundant_circle", "spherical_circle", "geometric_centroid",
         "#009E73", "--",
         needs_octant_fit=True,
     ),
-    # Path C: shapely + arithmetic_mean
+    # Path C: planar_circle + arithmetic_mean
     PipelineSpec(
-        "C1", "SoI + Shapely + Arith",
-        "speed_of_internet", "redundant_circle", "shapely", "arithmetic_mean",
+        "C1", "SoI + planar_circle + Arith",
+        "speed_of_internet", "redundant_circle", "planar_circle", "arithmetic_mean",
         "#0072B2", "-.",
     ),
     PipelineSpec(
-        "C2", "LP + Shapely + Arith",
-        "low_envelope", "redundant_circle", "shapely", "arithmetic_mean",
+        "C2", "LP + planar_circle + Arith",
+        "low_envelope", "redundant_circle", "planar_circle", "arithmetic_mean",
         "#000000", "-.",
         needs_lp_fit=True,
     ),
     PipelineSpec(
-        "C3", "Spline + Shapely + Arith",
-        "bounded_spline", "redundant_circle", "shapely", "arithmetic_mean",
+        "C3", "Spline + planar_circle + Arith",
+        "bounded_spline", "redundant_circle", "planar_circle", "arithmetic_mean",
         "#009E73", "-.",
         needs_octant_fit=True,
     ),
-    # Path D: shapely + geometric_centroid
+    # Path D: planar_circle + geometric_centroid
     PipelineSpec(
-        "D1", "SoI + Shapely + Geom",
-        "speed_of_internet", "redundant_circle", "shapely", "geometric_centroid",
+        "D1", "SoI + planar_circle + Geom",
+        "speed_of_internet", "redundant_circle", "planar_circle", "geometric_centroid",
         "#0072B2", ":",
     ),
     PipelineSpec(
-        "D2", "LP + Shapely + Geom",
-        "low_envelope", "redundant_circle", "shapely", "geometric_centroid",
+        "D2", "LP + planar_circle + Geom",
+        "low_envelope", "redundant_circle", "planar_circle", "geometric_centroid",
         "#000000", ":",
         needs_lp_fit=True,
     ),
     PipelineSpec(
-        "D3", "Spline + Shapely + Geom",
-        "bounded_spline", "redundant_circle", "shapely", "geometric_centroid",
+        "D3", "Spline + planar_circle + Geom",
+        "bounded_spline", "redundant_circle", "planar_circle", "geometric_centroid",
         "#009E73", ":",
         needs_octant_fit=True,
     ),
-    # Path E: unweighted_annulus + arithmetic_mean (spline only)
+    # Path E: planar_annulus + arithmetic_mean (spline only)
     PipelineSpec(
-        "E3", "Spline + Annulus + Arith",
-        "bounded_spline", "none", "unweighted_annulus", "arithmetic_mean",
+        "E3", "Spline + planar_annulus + Arith",
+        "bounded_spline", "none", "planar_annulus", "arithmetic_mean",
         "#009E73", "-",
         needs_octant_fit=True,
     ),
-    # Path F: unweighted_annulus + geometric_centroid (spline only)
+    # Path F: planar_annulus + geometric_centroid (spline only)
     PipelineSpec(
-        "F3", "Spline + Annulus + Geom",
-        "bounded_spline", "none", "unweighted_annulus", "geometric_centroid",
+        "F3", "Spline + planar_annulus + Geom",
+        "bounded_spline", "none", "planar_annulus", "geometric_centroid",
         "#009E73", "-",
         needs_octant_fit=True,
     ),
-    # Path G: unweighted_annulus + monte_carlo_median (spline only)
+    # Path G: planar_annulus + monte_carlo_median (spline only)
     PipelineSpec(
-        "G3", "Spline + Annulus + MC Median",
-        "bounded_spline", "none", "unweighted_annulus", "monte_carlo_median",
+        "G3", "Spline + planar_annulus + MC Median",
+        "bounded_spline", "none", "planar_annulus", "monte_carlo_median",
         "#009E73", "-",
         needs_octant_fit=True,
     ),
-    # Path H: shapely + monte_carlo_median (all 3 distance models)
+    # Path H: planar_circle + monte_carlo_median (all 3 distance models)
     PipelineSpec(
-        "H1", "SoI + Shapely + MC Median",
-        "speed_of_internet", "redundant_circle", "shapely", "monte_carlo_median",
+        "H1", "SoI + planar_circle + MC Median",
+        "speed_of_internet", "redundant_circle", "planar_circle", "monte_carlo_median",
         "#0072B2", "-",
     ),
     PipelineSpec(
-        "H2", "LP + Shapely + MC Median",
-        "low_envelope", "redundant_circle", "shapely", "monte_carlo_median",
+        "H2", "LP + planar_circle + MC Median",
+        "low_envelope", "redundant_circle", "planar_circle", "monte_carlo_median",
         "#000000", "-",
         needs_lp_fit=True,
     ),
     PipelineSpec(
-        "H3", "Spline + Shapely + MC Median",
-        "bounded_spline", "redundant_circle", "shapely", "monte_carlo_median",
+        "H3", "Spline + planar_circle + MC Median",
+        "bounded_spline", "redundant_circle", "planar_circle", "monte_carlo_median",
         "#009E73", "-",
         needs_octant_fit=True,
     ),
@@ -162,24 +162,24 @@ SPECS_BY_ID: Dict[str, PipelineSpec] = {s.combo_id: s for s in COMBINATIONS}
 # Negative delta → A is better
 
 DIFF_PAIRS: List[Tuple[str, str]] = [
-    # Distance ablation (hold spherical + arithmetic_mean)
+    # Distance ablation (hold spherical_circle + arithmetic_mean)
     ("A1", "A2"),   # SoI vs LP
     ("A2", "A3"),   # LP vs Spline
     ("A1", "A3"),   # SoI vs Spline
-    # Centroid ablation (hold SoI + spherical)
-    ("A1", "B1"),   # arith vs geom (spherical)
-    # Centroid ablation (hold SoI + shapely)
-    ("C1", "D1"),   # arith vs geom (shapely)
+    # Centroid ablation (hold SoI + spherical_circle)
+    ("A1", "B1"),   # arith vs geom (spherical_circle)
+    # Centroid ablation (hold SoI + planar_circle)
+    ("C1", "D1"),   # arith vs geom (planar_circle)
     # Multilateration ablation (hold SoI + arith)
-    ("A1", "C1"),   # spherical vs shapely (arith)
+    ("A1", "C1"),   # spherical_circle vs planar_circle (arith)
     # Multilateration ablation (hold SoI + geom)
-    ("B1", "D1"),   # spherical vs shapely (geom)
-    # MC median vs geometric centroid (hold SoI + shapely)
-    ("H1", "D1"),   # mc_median vs geom (shapely)
-    # MC median vs arithmetic mean (hold SoI + shapely)
-    ("H1", "C1"),   # mc_median vs arith (shapely)
-    # Annulus vs shapely (hold spline + geom)
-    ("F3", "D3"),   # annulus vs shapely (geom, spline)
-    # Annulus vs shapely (hold spline + arith)
-    ("E3", "C3"),   # annulus vs shapely (arith, spline)
+    ("B1", "D1"),   # spherical_circle vs planar_circle (geom)
+    # MC median vs geometric centroid (hold SoI + planar_circle)
+    ("H1", "D1"),   # mc_median vs geom (planar_circle)
+    # MC median vs arithmetic mean (hold SoI + planar_circle)
+    ("H1", "C1"),   # mc_median vs arith (planar_circle)
+    # planar_annulus vs planar_circle (hold spline + geom)
+    ("F3", "D3"),   # planar_annulus vs planar_circle (geom, spline)
+    # planar_annulus vs planar_circle (hold spline + arith)
+    ("E3", "C3"),   # planar_annulus vs planar_circle (arith, spline)
 ]

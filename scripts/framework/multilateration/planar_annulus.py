@@ -1,10 +1,11 @@
-"""Phase 2 variant: Unweighted Annulus Intersection (Octant).
+"""Phase 2 variant: `planar_annulus` (Octant).
 
 Intersects all outer disks, then subtracts all inner disks.
 Result = intersection(all outer disks) - union(all inner disks)
 
-Unlike `shapely` which treats all constraints as disks (ignores inner_radius_km),
-this method uses the full annular constraint when inner_radius_km > 0.
+Unlike `planar_circle` which treats all constraints as disks (ignores
+inner_radius_km), this method uses the full annular constraint when
+inner_radius_km > 0.
 
 Wraps: scripts/analysis/octant/octant_geolocation.py :: compute_feasible_region_unweighted()
 """
@@ -22,9 +23,9 @@ from scripts.analysis.octant.octant_geolocation import (
 )
 
 
-@register_multilateration("unweighted_annulus")
-class UnweightedAnnulusMultilateration(BaseMultilateration):
-    """Octant unweighted annulus intersection.
+@register_multilateration("planar_annulus")
+class PlanarAnnulusMultilateration(BaseMultilateration):
+    """Octant `planar_annulus` intersection.
 
     For each constraint, builds an outer disk and an inner disk.
     The feasible region is the intersection of all outer disks minus
@@ -33,10 +34,10 @@ class UnweightedAnnulusMultilateration(BaseMultilateration):
     Only meaningful with bounded_spline distance (which produces
     annular constraints with inner_radius_km > 0). For disk constraints
     (inner_radius_km = 0), this degenerates to the same result as
-    shapely multilateration.
+    planar_circle multilateration.
     """
 
-    name = "unweighted_annulus"
+    name = "planar_annulus"
 
     def __init__(self, n_pts: int = 100):
         self.n_pts = n_pts
@@ -45,7 +46,7 @@ class UnweightedAnnulusMultilateration(BaseMultilateration):
         if not circles:
             return MultilatResult(success=False)
 
-        # Convert CircleConstraint → AnnularConstraint (same mapping as weighted_grid.py)
+        # Convert CircleConstraint → AnnularConstraint.
         annular = [
             AnnularConstraint(
                 landmark_lat=c.vp_lat,

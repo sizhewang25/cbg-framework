@@ -31,11 +31,11 @@ Produces:
 | **Model Fitting** | None — hardcoded constant | `fit_bestline_lp()` with 5-stage filtering pipeline |
 | **RTT Filtering (at fitting)** | N/A (no fitting step) | Stage 1: remove zero/negative/inf RTTs; Stage 2: baseline filter (speed-of-light constraint: `rtt >= THEORETICAL_SLOPE * distance`); Stages 3-5: optional bin-sigma, percentile, global filters |
 | **RTT Filtering (at evaluation)** | Drops `min_rtt > 100` ms; `isinstance(min_rtt, float)` guard silently skips integer RTTs | Drops anchors where `predict_distance(rtt) <= 0` (i.e., `rtt < intercept`); requires `model.fitted` |
-| **Circle Geometry** | Spherical (3D Cartesian vector math on unit sphere) | Planar (Shapely polygons, 64-point circle approximation) |
+| **Circle Geometry** | spherical_circle (3D Cartesian vector math on unit sphere) | planar_circle (Shapely polygons, 64-point circle approximation) |
 | **Circle Intersection** | `circle_intersections()` from `helpers.py` — exact spherical pairwise | `find_circles_intersection()` from `filter_demonstration.py` — Shapely `.intersection()` |
 | **Circle Preprocessing** | `circle_preprocessing()` removes fully-contained circles | None — intersects all circles directly |
 | **Single Circle Handling** | 4 evenly-spaced points on circumference via `get_points_on_circle()` | N/A — requires `len(circles) >= 2`, otherwise returns failure |
-| **Centroid Computation** | `polygon_centroid()` on spherical intersection points | Shapely `.centroid` on resulting polygon |
+| **Centroid Computation** | `polygon_centroid()` on spherical_circle intersection points | Shapely `.centroid` on resulting polygon |
 | **No-Intersection Fallback** | Closest VP by min RTT (`min_rtt_per_vp_ip`) | `estimate_location_fallback()` — inverse-radius weighted average of all anchor positions |
 | **Earth Radius** | Inconsistent: 6367 km (haversine), 6371 km (preprocessing), 6378.137 km (point generation) | Consistent via `haversine_distance()` from `rtt_model.py` |
 | **Input Construction** | `{anchor_ip: [min_rtt]}` dict -> `select_best_guess_centroid()` | DataFrame rows -> `evaluate_cbg_probe()` with fitted `RTTDistanceModel` objects |
@@ -47,7 +47,7 @@ Produces:
 
 2. **Filtering**: Million-Scale has a crude `min_rtt > 100` ms hard cutoff plus the `isinstance(float)` guard. Calibrated CBG filters during model fitting (invalid values, speed-of-light violations, optional statistical outlier removal) and during evaluation (negative predicted distance means RTT is below the intercept, indicating the measurement is faster than the model expects — likely a very close target).
 
-3. **Geometry**: Million-Scale works in true spherical geometry (3D vectors, exact intersection points). Calibrated CBG approximates circles as 64-sided polygons and uses Shapely's planar intersection. For US-scale distances, the planar approximation is adequate.
+3. **Geometry**: Million-Scale uses spherical_circle geometry (3D vectors, exact intersection points). Calibrated CBG uses planar_circle geometry by approximating circles as 64-sided polygons and intersecting them with Shapely. For US-scale distances, the planar approximation is adequate.
 
 4. **Fallback strategy**: When circles don't intersect, Million-Scale picks the closest anchor by RTT. Calibrated CBG computes an inverse-radius weighted average across all anchors, which tends to give a more stable (though not necessarily more accurate) estimate.
 

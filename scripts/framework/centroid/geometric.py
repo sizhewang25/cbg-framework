@@ -20,6 +20,7 @@ from scripts.framework.types import MultilatResult
 @register_centroid("geometric_centroid")
 class GeometricCentroid(BaseCentroid):
     """Area-weighted centroid via Shapely.
+    https://shapely.readthedocs.io/en/2.1.1/reference/shapely.centroid.html
 
     For Shapely regions: uses .centroid directly (area-weighted center of mass).
     For vertex lists: builds a Shapely polygon first, then uses .centroid.
@@ -31,12 +32,12 @@ class GeometricCentroid(BaseCentroid):
         if not result.success:
             return None
 
-        # Shapely region path (from shapely/weighted multilateration)
+        # Shapely region path (from planar multilateration)
         if result.region is not None:
             c = result.region.centroid
             return (c.y, c.x)  # Shapely: y=lat, x=lon
 
-        # Vertex list path (from spherical multilateration)
+        # Vertex list path (from spherical_circle multilateration)
         if result.vertices is not None and len(result.vertices) >= 3:
             # Convert (lat, lon) → Shapely (lon, lat)
             coords = [(lon, lat) for lat, lon in result.vertices]

@@ -4,7 +4,7 @@ Usage:
     pipe = CBGPipeline.from_config(
         distance="speed_of_internet",
         filtering="redundant_circle",
-        multilateration="spherical",
+        multilateration="spherical_circle",
         centroid="arithmetic_mean",
     )
     location, circles = pipe.geolocate(measurements, anchor_coords)
@@ -24,10 +24,10 @@ from scripts.framework.types import CircleConstraint, GeolocationResult
 
 # Incompatible (multilateration, distance) pairs
 _INCOMPATIBLE_MULTILAT_DISTANCE = {
-    ("weighted_grid", "speed_of_internet"),
-    ("weighted_grid", "low_envelope"),
+    ("planar_annulus_weighted", "speed_of_internet"),
+    ("planar_annulus_weighted", "low_envelope"),
 }
-_ANNULUS_AWARE_MULTILAT = {"unweighted_annulus", "weighted_grid"}
+_ANNULUS_AWARE_MULTILAT = {"planar_annulus", "planar_annulus_weighted"}
 
 
 class CBGPipeline:
@@ -153,7 +153,7 @@ class CBGPipeline:
         cls,
         distance: str = "speed_of_internet",
         filtering: Optional[str] = "redundant_circle",
-        multilateration: str = "spherical",
+        multilateration: str = "spherical_circle",
         centroid: str = "arithmetic_mean",
         distance_kwargs: Optional[Dict[str, Any]] = None,
         filtering_kwargs: Optional[Dict[str, Any]] = None,
@@ -191,10 +191,11 @@ class CBGPipeline:
                 f"multilateration={multilateration!r} requires 'bounded_spline' "
                 f"distance, got {distance!r}"
             )
-        if multilateration == "weighted_grid" and filtering != "none":
+        if multilateration == "planar_annulus_weighted" and filtering != "none":
             warnings.warn(
-                f"weighted_grid has built-in filtering; filtering={filtering!r} "
-                f"is redundant. Consider filtering='none'.",
+                "planar_annulus_weighted has built-in filtering; "
+                f"filtering={filtering!r} is redundant. Consider "
+                "filtering='none'.",
                 stacklevel=2,
             )
         if (
