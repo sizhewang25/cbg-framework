@@ -23,6 +23,15 @@ IMC 2012
 
 Uses a simplified 2/3c (two-thirds speed of light) RTT-to-distance model, removing the need for per-landmark calibration. Introduces a greedy VP selection algorithm that prioritizes proximity to the target, scaling CBG to geolocate ~35% of the allocated IPv4 address space. Our 2/3c distance model baseline is a direct implementation.
 
+### Chandrasekaran et al. — Alidade
+**"Alidade: IP Geolocation without Active Probing"**
+Duke University Technical Report CS-TR-2015-001, January 2015; revised April 2015
+[PDF](https://users.cs.duke.edu/~bmm/assets/pubs/alidade--cs-tr-2015-001.pdf)
+
+Strong end-to-end system work from Akamai and coauthors including one of the Octant authors. Alidade tries to unify passive measurement data, non-measurement geolocation datasets, and auxiliary sources to geolocate the full IP address space. It keeps CBG's constraint-region view but changes the deployment model: rather than issuing active probes at query time, it fuses already-available constraints, resolves conflicts among them, and precomputes a joint solution for IP space. Each prediction includes both a representative point and a geographic region, making it closer to CBG/Octant than to opaque commercial databases.
+
+Alidade is built on top of the Octant line of work, including its traceroute-extension direction, but simplifies the CBG integration. Specifically, it adopts the simplest 2/3c speed-of-Internet RTT-to-distance mapping, polygon-based multilateration and intersection-region optimization, and does not specify a distinct centroid-selection technique. While Alidade focuses on end-to-end system design and whole-Internet precomputation, we argue that the individual CBG variants still deserve careful understanding and benchmarking. Alidade does not compare against other CBG variants or isolate phase-level contributions, leaving the gap this paper addresses.
+
 ### Wang et al. — Street-Level
 **"Towards Street-Level Client-Independent IP Geolocation"**
 NSDI 2011
@@ -82,6 +91,20 @@ ACM Transactions on Internet Technology 2021
 [ACM TOIT 2021](https://dl.acm.org/doi/10.1145/3457611)
 
 Parses rDNS hostnames to extract location hints; places ~54% of hostnames within 20 km of ground truth. Open-source (Microsoft). Effective for well-named infrastructure but silent on cloud/anycast IPs with opaque hostnames.
+
+### Scheitle et al. — HLOC
+**"HLOC: Hints-Based Geolocation Leveraging Multiple Measurement Frameworks"**
+TMA 2017
+[IEEE TMA 2017](https://doi.org/10.23919/TMA.2017.8002903)
+
+Extracts location hints from DNS names and validates them using latency measurements from public measurement platforms such as RIPE Atlas. HLOC is relevant because it bridges declarative rDNS evidence and measurement-based validation: unlike pure rDNS parsing, it can reject implausible hostname hints. It is complementary to our pipeline's Tier 1 sources; our CBG benchmark focuses on the empirical fallback when such hints are unavailable, ambiguous, or insufficiently trustworthy.
+
+### Izhikevich et al. — Operator-Reported Geolocation
+**"Trust, But Verify, Operator-Reported Geolocation"**
+arXiv 2024
+[arXiv 2409.19109](https://arxiv.org/abs/2409.19109)
+
+Audits operator-reported geolocation for RIPE Atlas vantage points and shows that misreported VP locations, while rare overall, can disproportionately affect coverage in underrepresented regions. This matters for our benchmark because RIPE Atlas probes and anchors are both measurement infrastructure and ground-truth/reference points; we should validate or filter operator-reported coordinates before treating them as reliable landmarks.
 
 **Role in our work:** GeoFeed and rDNS form Tier 1 of the multi-tier pipeline. Their coverage and accuracy limitations (especially for anycast IPs) motivate CBG as the necessary empirical fallback tier.
 
@@ -144,11 +167,32 @@ PAM 2022
 
 Uses GPS-tagged user requests as ground truth to evaluate commercial geolocation services. Finds significant errors, especially for mobile and residential IPs.
 
+### Gouel et al. — Database Stability
+**"IP Geolocation Database Stability and Implications for Network Research"**
+TMA 2021
+[PDF](https://dl.ifip.org/db/conf/tma/tma2021/tma2021-paper2.pdf)
+
+Studies longitudinal changes in MaxMind snapshots and shows that database version choice can materially change research results. This is directly relevant to our evaluation protocol: whenever IPInfo or MaxMind is used as supporting evidence rather than authoritative ground truth, the paper should report the database provider, edition, and snapshot date.
+
 **Role in our work:** These papers collectively motivate our position that commercial services are insufficient as the sole geolocation layer for mobile operators — they are opaque, inaccurate on mobile/anycast IPs, and unauditable.
 
 ---
 
 ## 6. Recent Adjacent Work
+
+### Rimlinger et al. — GeoResolver
+**"GeoResolver: An Accurate, Scalable, and Explainable Geolocation Technique Using DNS Redirection"**
+Proceedings of the ACM on Networking / CoNEXT 2025
+[ACM 2025](https://doi.org/10.1145/3749219)
+
+Uses DNS redirection behavior, including EDNS Client Subnet, to infer which RIPE Atlas vantage points are likely to be informative for a target IP, reducing the measurement cost of active geolocation while keeping estimates explainable. GeoResolver is adjacent rather than a CBG phase variant: it targets scalable VP selection and DNS-redirection-derived locality, whereas our benchmark asks which CBG distance model, multilateration method, and point estimator should be used once RTT constraints are available.
+
+### Du et al. — RIPE IPmap
+**"RIPE IPmap Active Geolocation: Mechanism and Performance Evaluation"**
+ACM SIGCOMM CCR 2020
+[ACM CCR 2020](https://doi.org/10.1145/3402413.3402415)
+
+Introduces and evaluates RIPE IPmap's single-radius active geolocation engine, including accuracy, coverage, and consistency against ground truth and commercial databases. This is important operational context for our RIPE Atlas evaluation: IPmap demonstrates that public measurement infrastructure can support active geolocation, while our work decomposes the CBG algorithmic choices that such systems can use internally.
 
 ### "Leveraging Traceroute Inconsistencies to Improve IP Geolocation"
 arXiv 2025
@@ -194,6 +238,27 @@ SIGCOMM GI Workshop 2016
 
 Neural network classifier on RTT feature vectors collected from stable landmark nodes. Achieves **4.1 km median error** on a US dataset with 1547 landmarks. Demonstrates the accuracy ceiling achievable by supervised ML when training data is available. Same limitations as above: depends on curated labeled training set and does not scale to unlabeled IPs.
 
+### Youn et al. — Statistical Geolocation
+**"Statistical Geolocation of Internet Hosts"**
+ICCCN 2009
+[IEEE ICCCN 2009](https://doi.org/10.1109/ICCCN.2009.5235373)
+
+Replaces deterministic delay-to-distance constraints with a statistical model: kernel density estimation over landmark delay measurements followed by maximum-likelihood location estimation. Relevant as an early probabilistic alternative to CBG. It improves over deterministic bounds in the evaluated PlanetLab setting, but it is not a modular CBG variant and does not address the phase-level accuracy/runtime tradeoffs we benchmark.
+
+### Eriksson et al. — Learning-Based IP Geolocation
+**"A Learning-Based Approach for IP Geolocation"**
+PAM 2010
+[Springer PAM 2010](https://doi.org/10.1007/978-3-642-12334-4_18)
+
+Frames IP geolocation as a Naive Bayes classification problem using lightweight measurements from monitors to targets. It reports improvements over prior CBG-style baselines, but depends on learned probability densities from training data. It belongs with the supervised/statistical alternatives rather than the CBG variant set because it does not produce explicit physical feasible regions.
+
+### Katz-Bassett et al. — Topology-Based Geolocation
+**"Towards IP Geolocation Using Delay and Topology Measurements"**
+IMC 2006
+[ACM IMC 2006](https://doi.org/10.1145/1177080.1177090)
+
+Introduces TBG, which combines delay constraints with traceroute-derived topology constraints and jointly solves for router and host locations. TBG is foundational for topology-assisted geolocation and should be cited before later intermediate-router approaches. Its cost profile differs from CBG because it requires topology discovery and alias/router reasoning, making it more expensive than fixed-VP RTT multilateration for large target sets.
+
 ### Topology-Based: Intermediate Routers as Landmarks
 **"Towards IP Geolocation with Intermediate Routers Based on Topology Discovery"**
 Cybersecurity (SpringerOpen) 2019
@@ -208,7 +273,14 @@ TMA 2024
 
 Proposes optimal landmark selection strategies for active geolocation (minimizing probing while maximizing coverage). Shows that even geographic distribution of landmarks significantly improves CBG precision, especially in underserved regions (Africa, South America). Relevant to our VP selection evaluation in the benchmark; confirms that landmark placement is a first-order factor in CBG accuracy.
 
-**Gap:** None of these alternatives — GeoPing, GeoCluster, ML/GNN, topology-based — is suitable as a general-purpose unicast geolocation fallback at Internet scale. GeoPing and GeoCluster lack accuracy guarantees; ML/GNN requires labeled training data; topology-based methods are too expensive to probe. CBG occupies the unique position of being physics-grounded, label-free, and scalable to millions of IPs with a fixed measurement infrastructure.
+### Li et al. — GeoCAM
+**"GeoCAM: An IP-Based Geolocation Service Through Fine-Grained and Stable Webcam Landmarks"**
+IEEE/ACM Transactions on Networking 2021
+[IEEE/ACM ToN 2021](https://doi.org/10.1109/TNET.2021.3073926)
+
+Builds a large landmark set by discovering stable live webcams with extractable geographic coordinates, then uses latency and topology constraints to geolocate targets. GeoCAM is relevant to the benchmark's VP/landmark-sensitivity analysis: it shows that landmark density and quality can dominate geolocation accuracy. It is not a CBG phase variant, but it motivates evaluating how phase rankings change with VP count and geographic coverage.
+
+**Gap:** None of these alternatives — GeoPing, GeoCluster, statistical/ML/GNN, topology-based — is suitable as a general-purpose unicast geolocation fallback at Internet scale under our deployment assumptions. GeoPing and GeoCluster lack accuracy guarantees; statistical and ML/GNN methods require labeled training data or learned regional densities; topology-based methods are too expensive to probe. CBG occupies the unique position of being physics-grounded, label-free, and scalable to millions of IPs with a fixed measurement infrastructure.
 
 ---
 
@@ -219,6 +291,7 @@ Proposes optimal landmark selection strategies for active geolocation (minimizin
 | Gueye et al. — CBG | 2004/2006 | 1+2+3 | IMC/ToN | Baseline: LP model + spherical intersection |
 | Wong et al. — Octant | 2007 | 1+2+3 | NSDI | Baseline: spline model + annulus multilateration |
 | Hu et al. — Million-Scale | 2012 | 1+3 | IMC | Baseline: 2/3c model + VP selection |
+| Chandrasekaran et al. — Alidade | 2015 | CBG-like | Tech report | Most recent CBG-family system; offline constraints, no query-time probes |
 | Wang et al. — Street-Level | 2011 | — | NSDI | In-repo; out of scope |
 | Darwich et al. — IMC 2023 | 2023 | 1+2+3 | IMC | Direct codebase; only public CBG impl |
 | Modelling of IP Geolocation | 2015/2020 | 1 | IEEE/arXiv | Phase 1 improvement only |
@@ -227,6 +300,8 @@ Proposes optimal landmark selection strategies for active geolocation (minimizin
 | Geofeeds | 2024 | Tier 1 | ACM Networking | Motivates CBG as fallback |
 | Geofeed Adoption | 2025 | Tier 1 | IEEE/arXiv | Motivates CBG as fallback |
 | rDNS Geolocation | 2021 | Tier 1 | ACM TOIT | Motivates CBG as fallback |
+| HLOC | 2017 | Tier 1 + validation | TMA | rDNS hints validated by latency measurements |
+| Trust, But Verify | 2024 | Ground truth | arXiv | Validates operator-reported VP locations |
 | iGreedy | 2016 | Anycast | IEEE JSAC | SOTA anycast geoloc; doesn't benchmark CBG |
 | Fistful of pings | 2015 | Anycast | IEEE INFOCOM | Anycast enumeration baseline |
 | LACeS | 2025 | Anycast | arXiv | Large-scale anycast census using iGreedy |
@@ -235,10 +310,17 @@ Proposes optimal landmark selection strategies for active geolocation (minimizin
 | DB accuracy | 2023 | Eval | IEEE | Motivates open alternatives |
 | DB unreliable | 2011 | Eval | ACM CCR | Motivates open alternatives |
 | GPS-based | 2022 | Eval | PAM | Motivates open alternatives |
+| DB stability | 2021 | Eval | TMA | Snapshot date affects reproducibility |
+| GeoResolver | 2025 | VP selection | PACM Networking | Scalable explainable geolocation using DNS redirection |
+| RIPE IPmap | 2020 | Active geoloc | ACM CCR | Operational active geolocation with RIPE Atlas |
 | Traceroute inconsistencies | 2025 | Topology | arXiv | Adjacent; out of scope (not scalable) |
 | GeoFINDR | 2025 | CBG-like | arXiv | Adjacent; different goal (VM compliance) |
 | Padmanabhan & Subramanian — GeoCluster | 2001 | Tier 1 alt | WWW | Prefix-based fallback; fails on large ISP prefixes |
 | Li et al. — GNN Street-Level | 2022 | ML | KDD | SOTA supervised ML; requires labeled training data |
 | Jiang — NN + Stable Landmarks | 2016 | ML | GI/SIGCOMM | Neural network baseline; labeled data required |
+| Youn et al. — Statistical Geolocation | 2009 | Statistical | ICCCN | Probabilistic delay model; not modular CBG |
+| Eriksson et al. — Learning-Based | 2010 | ML/statistical | PAM | Naive Bayes geolocation from monitor measurements |
+| Katz-Bassett et al. — TBG | 2006 | Topology | IMC | Foundational delay+topology geolocation |
 | Topology + Intermediate Routers | 2019 | Topology | Cybersecurity | Traceroute-based; infeasible probing cost at scale |
 | Landmark Selection (TMA 2024) | 2024 | Phase 1 | TMA | Landmark placement is first-order accuracy factor |
+| GeoCAM | 2021 | Landmarks | ToN | Large webcam landmark set; motivates VP/landmark analysis |
