@@ -13,6 +13,7 @@ from typing import Optional, Tuple
 from shapely.geometry import Polygon as ShapelyPolygon
 
 from scripts.framework.centroid import BaseCentroid
+from scripts.framework.geometry import get_middle_intersection
 from scripts.framework.registry import register_centroid
 from scripts.framework.types import MultilatResult
 
@@ -52,8 +53,6 @@ class GeometricCentroid(BaseCentroid):
         # Fallback for < 3 vertices
         if result.vertices:
             if len(result.vertices) == 2:
-                from scripts.utils.helpers import get_middle_intersection
-
                 return get_middle_intersection(result.vertices)
             if len(result.vertices) == 1:
                 return result.vertices[0]

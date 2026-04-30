@@ -119,10 +119,10 @@ The spline model produces **annuli** rather than disks, encoding both a maximum 
 | ----------------------- | ------------ | ---------------------------------------------------------------- | ------------ |
 | **Arithmetic Mean**     | Original CBG | Average of intersection vertex coordinates                       | O(1)         |
 | **Geometric Centroid**  | —            | Area-weighted centroid of feasible polygon (Shapely `.centroid`) | O(1)         |
-| **MC Geometric Median** | Octant       | 1000-point Sobol QMC sampling + `geom_median` optimization       | O(n_samples) |
+| **MC Sampled Medoid**   | Octant       | 1000-point Sobol QMC sampling + sampled point with minimum total pairwise distance | O(n_samples²) |
 
 
-The geometric median minimizes sum of distances to all sampled points, making it more robust to irregular polygon shapes. However, it incurs a ~130× runtime penalty versus the geometric centroid.
+The MC sampled medoid minimizes sum of distances to all sampled feasible points and returns one of those points, making it robust to irregular polygon shapes while preserving feasibility. However, it incurs a large runtime penalty versus the geometric centroid.
 
 ### Valid Phase Combinations
 
@@ -148,7 +148,7 @@ When RTT constraints are noisy or the VP set is poorly chosen, the intersection 
 
 ### 4.3 Scalability vs. Accuracy Tradeoff
 
-The most accurate CBG configuration (Octant spline + `planar_annulus` + MC geometric median) achieves 312 km median error but requires ~27s per target due to the 1000-sample Monte Carlo step. At 50M IPs, this is computationally infeasible without massive parallelism. We must characterize the entire Pareto frontier of accuracy vs. cost across all 18 combinations to identify which configurations are viable at scale.
+The most accurate preliminary CBG configuration (Octant spline + `planar_annulus` + MC median) achieves 312 km median error but requires ~27s per target due to the 1000-sample Monte Carlo step. At 50M IPs, this is computationally infeasible without massive parallelism. We must characterize the entire Pareto frontier of accuracy vs. cost across all 18 combinations to identify which configurations are viable at scale.
 
 ### 4.4 VP Selection and Coverage
 
@@ -168,7 +168,7 @@ Authoritative ground truth for unicast IPs is difficult to obtain at scale. RIPE
 Original CBG. Fits a DDR per landmark via linear regression (PlanetLab). Introduces the three-phase structure (modeling → intersection → centroid) that all subsequent CBG variants follow. Defines the LP low-envelope Phase 1 variant and `spherical_circle` Phase 2 variant used as our baselines.
 
 **Wong et al., "Octant: A Comprehensive Framework for the Geolocalization of Internet Hosts"** (NSDI 2007) [[USENIX](https://www.usenix.org/conference/nsdi-07/octant-comprehensive-framework-geolocalization-internet-hosts)]
-Replaces the linear DDR with a convex-hull spline model producing annular constraints (inner + outer radius). Adds negative constraints (oceans, uninhabitable areas). Reports 22-mile median error vs. CBG's 89-mile — a 4× improvement. Introduces MC geometric median as the centroid estimator. The source of our bounded spline Phase 1 model and `planar_annulus` Phase 2 multilateration.
+Replaces the linear DDR with a convex-hull spline model producing annular constraints (inner + outer radius). Adds negative constraints (oceans, uninhabitable areas). Reports 22-mile median error vs. CBG's 89-mile — a 4× improvement. Introduces MC sampled point selection as the centroid estimator. The source of our bounded spline Phase 1 model and `planar_annulus` Phase 2 multilateration.
 
 **Hu et al., "Towards geolocation of millions of IP addresses"** (IMC 2012) [[ACM](https://dl.acm.org/doi/10.1145/2398776.2398790)]
 Simplifies to the 2/3c (two-thirds speed of light) model, eliminating the need for per-landmark calibration. Introduces greedy VP selection prioritizing proximity to the target. Scales to geolocate ~35% of the IPv4 address space. The source of our 2/3c Phase 1 baseline.
@@ -294,8 +294,8 @@ Switching from 2/3c (A1) to the Octant spline model (A3) while holding multilate
 **Finding 2 — `planar_annulus` significantly improves the tail.**
 With the same spline distance model, switching from `planar_circle` (D3: 464 km median) to `planar_annulus` (F3: 328 km median) yields a **29% median error reduction** and improves within-500km from 55% to 74%. The annulus inner radius excludes physically implausible near-VP regions, tightening the feasible region. Pairwise: E3 outperforms C3 in 68.4% of probes.
 
-**Finding 3 — MC geometric median is the most accurate centroid, but geometric centroid is preferable at scale.**
-G3 (MC median) achieves 312 km vs. F3 (geometric centroid) at 328 km — only a **5% difference** in median error, identical within-1000km (94.0%). However, MC median requires ~~27s per target (1000-point Sobol sampling + `geom_median` optimization) versus ~0.2s for geometric centroid — a **~~130× runtime penalty**. At 50M IPs, MC median is infeasible without massive parallelism. **Geometric centroid (F3) is the preferred production configuration.**
+**Finding 3 — MC sampled point selection is the most accurate centroid, but geometric centroid is preferable at scale.**
+G3 (MC median) achieves 312 km vs. F3 (geometric centroid) at 328 km — only a **5% difference** in median error, identical within-1000km (94.0%). However, MC median requires ~~27s per target (1000-point Sobol sampling + medoid-style point selection) versus ~0.2s for geometric centroid — a **~~130× runtime penalty**. At 50M IPs, MC median is infeasible without massive parallelism. **Geometric centroid (F3) is the preferred production configuration.**
 
 **Finding 4 — The Octant pipeline (F3) dominates across all metrics.**
 Spline + `planar_annulus` + geometric centroid (F3) achieves:

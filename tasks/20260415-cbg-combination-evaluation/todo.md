@@ -48,7 +48,7 @@
   - Wraps `compute_feasible_region_unweighted()` — intersect outer disks, subtract inner disks
   - Convert `CircleConstraint` → `AnnularConstraint` (same pattern as `planar_annulus_weighted.py`)
 - [ ] Implement `monte_carlo_median` centroid variant in `scripts/framework/centroid/monte_carlo_median.py`
-  - Wraps `sample_points_in_region()` + `geometric_median_approx()` from octant_geolocation.py
+  - Wraps `sample_points_in_region()` from octant_geolocation.py and framework sampled-medoid selection
   - Only works with Shapely region input (not vertex lists)
   - Parameters: n_samples=5000, rng seed
 - [ ] Add new combinations to `combinations.py` for `planar_annulus` + 3 centroids (arith, geom, mc_median)

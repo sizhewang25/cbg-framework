@@ -2,7 +2,7 @@
 
 **Status**: In Progress
 **Created**: 2026-04-24
-**Last Updated**: 2026-04-24 (related work survey added)
+**Last Updated**: 2026-04-30 (geometry library note added)
 
 ## Summary
 
@@ -25,6 +25,18 @@ Key patterns established:
 - `planar_annulus` multilateration outperforms `spherical_circle` and `planar_circle` at the 500km+ thresholds
 - MC median adds ~5% accuracy over geometric centroid at ~130x the compute cost
 - Geometric centroid is the best accuracy/speed trade-off for production use
+
+### 2026-04-30 — Why Shapely is used and possible spherical alternatives
+
+Current `planar_circle` and `planar_annulus` variants use Shapely because they need filled-region geometry and Boolean set operations: intersect all outer disks, union inner disks, subtract inner exclusions, compute polygon centroids, and sample points inside feasible regions. The legacy `spherical_circle` helper does not build a filled region; it computes pairwise great-circle crossing points, filters those points against all circles, and returns a sparse vertex list. That is sufficient for disk-only CBG plus arithmetic mean, but it does not naturally represent annulus holes, polygon/MultiPolygon regions, Boolean difference, area-weighted centroids, or region sampling.
+
+This does not mean spherical geometry cannot support annuli. A future `spherical_annulus` variant is possible, but it would need a spherical polygon/Boolean geometry backend. Candidate libraries:
+- Google S2 Geometry: strongest general-purpose option for robust spherical polygons, containment, centroids, and Boolean operations. Main implementation is C++; Python bindings exist but are less mature than the core library.
+- `spherical-geometry`: easiest Python prototype path. It supports `SphericalPolygon.from_cone(...)`, `intersection`, `multi_intersection`, `union`, and `invert_polygon`. An annulus could be represented as `outer_cone.intersection(inner_cone.invert_polygon())`. Caveat: small circles are approximated as spherical polygons with configurable steps, so this is still a polygonal approximation on the sphere.
+- PostGIS `geography`: useful in database workflows, but `ST_Intersection` on geography is documented as using a best-fit planar projection internally, so it is not a pure exact spherical-annulus backend.
+- GeographicLib: excellent for geodesic polygon area/perimeter, but not a Boolean overlay engine, so it cannot directly replace Shapely for intersection/difference.
+
+Recommended future work: prototype `spherical_annulus` with `spherical-geometry` first, then evaluate S2 if robustness or performance matters. This would directly quantify the approximation gap between current planar `(lon, lat)` Shapely annuli and true spherical polygon operations.
 
 ### 2026-04-24 — Related Work Survey
 

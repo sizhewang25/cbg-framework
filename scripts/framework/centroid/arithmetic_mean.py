@@ -3,8 +3,8 @@
 Simple average of intersection vertex coordinates.
 
 Wraps:
-  - scripts/utils/helpers.py :: polygon_centroid()  (>2 vertices)
-  - scripts/utils/helpers.py :: get_middle_intersection()  (2 vertices)
+  - scripts/framework/geometry.py :: polygon_centroid()  (>2 vertices)
+  - scripts/framework/geometry.py :: get_middle_intersection()  (2 vertices)
 """
 
 from __future__ import annotations
@@ -12,9 +12,9 @@ from __future__ import annotations
 from typing import Optional, Tuple
 
 from scripts.framework.centroid import BaseCentroid
+from scripts.framework.geometry import get_middle_intersection, polygon_centroid
 from scripts.framework.registry import register_centroid
 from scripts.framework.types import MultilatResult
-from scripts.utils.helpers import get_middle_intersection, polygon_centroid
 
 
 @register_centroid("arithmetic_mean")

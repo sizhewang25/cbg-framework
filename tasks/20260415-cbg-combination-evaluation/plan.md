@@ -46,7 +46,7 @@ Note: `planar_annulus_weighted` is an integrated Phase 2+3 — it does both filt
 | `arithmetic_mean` | Million-Scale CBG | `polygon_centroid()` in `helpers.py:170` — simple average of intersection vertex coordinates. Operates on vertex list from `spherical_circle` |
 | `geometric_centroid` | centroid_comparison.py | Shapely `.centroid` — area-weighted center of mass of intersection polygon. Operates on Shapely geometry |
 
-Note: Octant's Monte Carlo geometric median is excluded for now (pending validation).
+Note: Octant's Monte Carlo sampled-medoid point selection is excluded for now (pending validation).
 
 ### Phase compatibility constraints
 
@@ -190,12 +190,11 @@ Two Octant features are NOT yet in the framework:
 - Only meaningful with `bounded_spline` distance (which produces annuli)
 - Framework target: new `"planar_annulus"` multilateration variant
 
-**2. Monte Carlo geometric median (centroid)**
-- Source: `octant_geolocation.py:402-477` → `sample_points_in_region()` + `geometric_median_approx()`
-- Logic: Sobol QMC rejection sampling inside the Shapely region → `geom_median.numpy.compute_geometric_median()`
+**2. Monte Carlo sampled medoid (centroid)**
+- Source: `octant_geolocation.py:402-477` → `sample_points_in_region()` plus framework sampled-medoid selection
+- Logic: Sobol QMC rejection sampling inside the Shapely region → sampled point with minimum total pairwise distance
 - Different from both `arithmetic_mean` (vertex average) and `geometric_centroid` (Shapely `.centroid` area-weighted center of mass)
-- Geometric median minimizes sum of Euclidean distances to all sampled points — more robust to outlier boundary shapes
-- Depends on `geom-median` package (already installed)
+- Sampled medoid minimizes total distance to all sampled feasible points while keeping the final estimate inside the sampled feasible region
 - Framework target: new `"monte_carlo_median"` centroid variant
 
 ### Integration plan
@@ -206,7 +205,7 @@ Two Octant features are NOT yet in the framework:
 - Returns `MultilatResult(region=shapely_geometry)`
 
 **Step 2: Add `monte_carlo_median` centroid** (`scripts/framework/centroid/monte_carlo_median.py`)
-- Wraps `sample_points_in_region()` + `geometric_median_approx()` from `octant_geolocation.py`
+- Wraps `sample_points_in_region()` from `octant_geolocation.py` and framework sampled-medoid selection
 - Input: `MultilatResult` with `.region` (Shapely geometry) — NOT compatible with vertex-only results
 - Parameters: `n_samples=5000`, `rng` seed for reproducibility
 - Returns `(lat, lon)` or `None`
@@ -233,7 +232,7 @@ Single script that:
 1. **Preserve original logic**: The Million-Scale `circle_intersections()` pipeline is the original authors' code. Wrap it, don't rewrite it. The spherical_circle intersection math must remain unchanged.
 2. **Tight coupling**: Current `run_million_scale_cbg()` and `run_vanilla_cbg()` mix all 4 phases inline. Decoupling requires careful extraction to avoid behavior changes.
 3. **Naming clarity**: Some existing function names are misleading (e.g., `circle_preprocessing` is really redundant-circle removal). Use wrapper functions with clear names.
-4. **Octant Monte Carlo excluded**: `geometric_median_approx()` via `geom_median` is excluded until validated. The geometric centroid (Shapely `.centroid`) is the alternative.
+4. **Octant Monte Carlo excluded**: sampled-medoid point selection is excluded until validated. The geometric centroid (Shapely `.centroid`) is the alternative.
 5. **Weighted planar annulus + non-Octant**: `planar_annulus_weighted` requires annular constraints (inner + outer radius). Only valid with `bounded_spline`. For MS/Vanilla (disk constraints with inner=0), the grid degenerates to `planar_circle` intersection — not meaningful to test.
 6. **Fallback behavior**: When multilateration fails (no intersection), current code falls back to closest-VP by min RTT. This fallback must be preserved consistently across all combinations.
 7. **Arithmetic mean on planar_circle geometry (Path D)**: To apply `arithmetic_mean` after planar_circle multilateration, we extract boundary vertices from the Shapely polygon. This is conceptually different from the spherical_circle intersection vertices — the vertex count and distribution differ. Flag this clearly in results.

@@ -60,6 +60,180 @@ def geo_to_cartesian(lat: float, lon: float) -> tuple[float, float, float]:
     return x, y, z
 
 
+def polygon_centroid(points: Sequence[tuple[float, float]]) -> tuple[float, float]:
+    """Return the finite-set centroid of (lat, lon) points.
+
+    This duplicates the legacy Million-Scale helper behavior: it is not an
+    area-weighted polygon centroid, just the arithmetic mean of coordinates.
+    """
+    lat_sum = 0.0
+    lon_sum = 0.0
+    for lat, lon in points:
+        lat_sum += lat
+        lon_sum += lon
+    return lat_sum / len(points), lon_sum / len(points)
+
+
+def get_middle_intersection(
+    intersections: Sequence[tuple[float, float]],
+) -> tuple[float, float]:
+    """Return the geodetic midpoint for exactly two intersection points."""
+    (lat1, lon1) = intersections[0]
+    (lat2, lon2) = intersections[1]
+
+    lon1_rad = np.radians(lon1)
+    lon2_rad = np.radians(lon2)
+    lat1_rad = np.radians(lat1)
+    lat2_rad = np.radians(lat2)
+
+    bx = np.cos(lat2_rad) * np.cos(lon2_rad - lon1_rad)
+    by = np.cos(lat2_rad) * np.sin(lon2_rad - lon1_rad)
+    lat_mid = np.arctan2(
+        np.sin(lat1_rad) + np.sin(lat2_rad),
+        np.sqrt((np.cos(lat1_rad) + bx) ** 2 + by**2),
+    )
+    lon_mid = lon1_rad + np.arctan2(by, np.cos(lat1_rad) + bx)
+
+    return float(np.degrees(lat_mid)), float(np.degrees(lon_mid))
+
+
+def _as_point_array(points: Sequence[tuple[float, float]]) -> np.ndarray:
+    """Normalize a point sequence to an (n, 2) float array of (lat, lon)."""
+    arr = np.asarray(points, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] != 2:
+        raise ValueError("points must be an array-like of (lat, lon) pairs")
+    if len(arr) == 0:
+        raise ValueError("points must not be empty")
+    return arr
+
+
+def _haversine_matrix_chunk(chunk: np.ndarray, points: np.ndarray) -> np.ndarray:
+    """Pairwise great-circle distances from chunk rows to all point rows."""
+    lat1 = np.radians(chunk[:, 0])[:, None]
+    lon1 = np.radians(chunk[:, 1])[:, None]
+    lat2 = np.radians(points[:, 0])[None, :]
+    lon2 = np.radians(points[:, 1])[None, :]
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = (
+        np.sin(dlat / 2.0) ** 2
+        + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0) ** 2
+    )
+    return EARTH_RADIUS_KM * 2 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+
+
+def sampled_medoid(
+    points: Sequence[tuple[float, float]],
+    chunk_size: int = 512,
+) -> tuple[float, float]:
+    """Return the sampled point with minimum total distance to all samples.
+
+    This matches Octant's Monte Carlo point-selection semantics: the selected
+    estimate is one of the sampled feasible points, so it remains inside the
+    sampled region by construction.
+    """
+    arr = _as_point_array(points)
+    if len(arr) == 1:
+        return float(arr[0, 0]), float(arr[0, 1])
+
+    totals = np.zeros(len(arr), dtype=float)
+    for start in range(0, len(arr), chunk_size):
+        end = min(start + chunk_size, len(arr))
+        totals[start:end] = _haversine_matrix_chunk(arr[start:end], arr).sum(axis=1)
+
+    idx = int(np.argmin(totals))
+    return float(arr[idx, 0]), float(arr[idx, 1])
+
+
+def nearest_sample_point(
+    points: Sequence[tuple[float, float]],
+    target: tuple[float, float],
+) -> tuple[float, float]:
+    """Return the sampled point nearest to target using great-circle distance."""
+    arr = _as_point_array(points)
+    target_arr = np.asarray([target], dtype=float)
+    distances = _haversine_matrix_chunk(target_arr, arr).reshape(-1)
+    idx = int(np.argmin(distances))
+    return float(arr[idx, 0]), float(arr[idx, 1])
+
+
+def continuous_geometric_median(
+    points: Sequence[tuple[float, float]],
+    tolerance: float = 1e-6,
+    max_iterations: int = 1000,
+) -> tuple[float, float]:
+    """Approximate the continuous geometric median with Weiszfeld iterations."""
+    arr = _as_point_array(points)
+    if len(arr) == 1:
+        return float(arr[0, 0]), float(arr[0, 1])
+
+    estimate = np.mean(arr, axis=0)
+    for _ in range(max_iterations):
+        deltas = arr - estimate
+        distances = np.linalg.norm(deltas, axis=1)
+
+        exact = np.where(distances < tolerance)[0]
+        if len(exact) > 0:
+            point = arr[int(exact[0])]
+            return float(point[0]), float(point[1])
+
+        weights = 1.0 / distances
+        next_estimate = np.sum(arr * weights[:, None], axis=0) / np.sum(weights)
+        if np.linalg.norm(next_estimate - estimate) < tolerance:
+            estimate = next_estimate
+            break
+        estimate = next_estimate
+
+    return float(estimate[0]), float(estimate[1])
+
+
+def sample_points_in_region(
+    region,
+    n_samples: int = 5000,
+    rng: Optional[np.random.Generator] = None,
+    max_attempts_factor: int = 20,
+) -> np.ndarray:
+    """Sample (lat, lon) points inside a Shapely region using Sobol QMC."""
+    from scipy.stats import qmc
+    from shapely.geometry import Point
+
+    if n_samples <= 0:
+        return np.empty((0, 2))
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    sobol_seed = int(rng.integers(0, np.iinfo(np.uint32).max, dtype=np.uint32))
+    try:
+        sampler = qmc.Sobol(d=2, scramble=True, rng=sobol_seed)
+    except TypeError:
+        sampler = qmc.Sobol(d=2, scramble=True, seed=sobol_seed)
+
+    minx, miny, maxx, maxy = region.bounds  # Shapely: lon/lat bounds
+    collected = []
+    max_attempts = n_samples * max_attempts_factor
+    attempts = 0
+
+    while len(collected) < n_samples and attempts < max_attempts:
+        remaining_needed = n_samples - len(collected)
+        remaining_budget = max_attempts - attempts
+        batch_size = min(max(remaining_needed * 4, 1), remaining_budget)
+        sobol_points = sampler.random(batch_size)
+        attempts += batch_size
+
+        rand_lons = minx + (maxx - minx) * sobol_points[:, 0]
+        rand_lats = miny + (maxy - miny) * sobol_points[:, 1]
+
+        for lon, lat in zip(rand_lons, rand_lats):
+            if region.contains(Point(lon, lat)):
+                collected.append((lat, lon))
+                if len(collected) >= n_samples:
+                    break
+
+    return np.array(collected) if collected else np.empty((0, 2))
+
+
 def _normalize_circles(
     circles: Iterable[Sequence[float]],
     speed_threshold: Optional[float] = None,

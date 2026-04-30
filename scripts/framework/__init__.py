@@ -34,7 +34,8 @@ Available components (string names for from_config):
     Filtering:      redundant_circle, none
     Multilateration: spherical_circle, planar_circle, planar_annulus,
                     planar_annulus_weighted
-    Centroid:       arithmetic_mean, geometric_centroid, monte_carlo_median
+    Centroid:       arithmetic_mean, geometric_centroid, monte_carlo_median,
+                    geometric_median
 """
 
 from scripts.framework.pipeline import CBGPipeline
@@ -82,6 +83,10 @@ except ImportError:
     pass
 try:
     import scripts.framework.centroid.monte_carlo_median  # noqa: F401
+except ImportError:
+    pass
+try:
+    import scripts.framework.centroid.geometric_median  # noqa: F401
 except ImportError:
     pass
 

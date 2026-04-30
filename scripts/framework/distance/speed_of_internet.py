@@ -7,7 +7,7 @@ The legacy Million-Scale evaluation filtered measurements with RTT > 100 ms.
 This wrapper leaves `max_rtt_ms` unbounded by default for controlled
 cross-variant benchmarking; set `max_rtt_ms=100.0` for strict legacy parity.
 
-Wraps: scripts/utils/helpers.py :: rtt_to_km()
+Wraps: scripts/framework/geometry.py :: rtt_to_km()
 Reference: run_million_scale_cbg() in evaluate_million_scale.py:123
 """
 
@@ -16,9 +16,9 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 
 from scripts.framework.distance import BaseDistance
+from scripts.framework.geometry import rtt_to_km
 from scripts.framework.registry import register_distance
 from scripts.framework.types import CircleConstraint
-from scripts.utils.helpers import rtt_to_km
 
 
 @register_distance("speed_of_internet")

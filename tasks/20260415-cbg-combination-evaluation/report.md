@@ -8,7 +8,7 @@
 
 Systematic evaluation of CBG geolocation pipeline combinations across four phases:
 - 3 distance models × 4 multilateration/centroid paths = 12 combinations (A1-D3)
-- Next: integrate Octant-specific multilateration (`planar_annulus`) and centroid (Monte Carlo geometric median)
+- Next: integrate Octant-specific multilateration (`planar_annulus`) and centroid (Monte Carlo sampled medoid)
 
 ## Findings
 
@@ -92,7 +92,7 @@ Compared three single-point estimation methods using their best-performing pipel
 | **Arithmetic Mean** | A3 (Spline + `spherical_circle`) | 336.8 km | 28.2% | 57.1% | 86.8% | ~0.18s |
 
 **Key takeaways**:
-- MC Median achieves the best median error (312 km, ~5% better than geometric centroid, ~7% better than arithmetic mean) but is ~130x slower due to Sobol quasi-random sampling (1000 points) + geometric median optimization per target
+- MC Median achieves the best median error (312 km, ~5% better than geometric centroid, ~7% better than arithmetic mean) but is ~130x slower due to Sobol quasi-random sampling (1000 points) + medoid-style point selection per target
 - Geometric Centroid (area-weighted via Shapely) provides the best accuracy/speed trade-off: nearly identical to MC Median at the 1000 km threshold (both 94%) for ~1/130th the compute cost
 - Arithmetic Mean is fastest but degrades significantly at the 500 km threshold (57% vs 74-77%) — likely because it does not account for region shape/area
 - MC Median is only worth the cost in offline/batch settings where the ~5% median error improvement justifies the runtime penalty

@@ -18,7 +18,7 @@ Every CBG variant can be decomposed into three phases:
 |-------|-------------|---------------|
 | **1. RTT-distance modeling** | Converts measured RTT to a distance bound per VP | 2/3c (Million-Scale), low-envelope LP fit (Vanilla CBG), bounded spline + delta band (Octant) |
 | **2. Multilateration** | Intersects per-VP constraints to form a feasible region | `spherical_circle`, `planar_circle`, `planar_annulus`, `planar_annulus_weighted` |
-| **3. Single-point estimation** | Collapses feasible region to one (lat, lon) | Arithmetic mean of vertices, geometric centroid (Shapely .centroid), Monte Carlo geometric median |
+| **3. Single-point estimation** | Collapses feasible region to one (lat, lon) | Arithmetic mean of vertices, geometric centroid (Shapely .centroid), Monte Carlo sampled medoid |
 
 The current repo (`geoloc-imc-2023`) already implements and benchmarks 18 combinations of these phases (task `20260415-cbg-combination-evaluation`). Key finding: Octant spline + `planar_annulus` + geometric centroid achieves 328 km median error at near-zero overhead; replacing geometric centroid with MC median reduces this to 312 km but at ~130x the compute cost.
 

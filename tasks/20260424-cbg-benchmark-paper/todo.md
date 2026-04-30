@@ -11,8 +11,17 @@
 - [x] Add availability metric (fraction of targets with non-null CBG estimate) per combination
 - [ ] Tabulate per-combination compute cost from evaluation logs
 - [ ] Produce final accuracy table: median error + CDF at 40/100/500/1000 km thresholds
+- [ ] Rerun MC centroid combinations after `monte_carlo_median` change from continuous `geom_median` to sampled medoid; previous G/H-path accuracy and runtime numbers may shift
 - [ ] Quantify planar_circle approximation error against spherical_circle on synthetic disk cases
 - [ ] Audit planar_annulus results as lon/lat planar approximations, not exact spherical geometry
+
+## Phase 1.5: Centroid Semantics Cleanup
+- [ ] Rename `arithmetic_mean` centroid to `boundary_vertex_mean` to make the method semantics explicit
+- [ ] Update `boundary_vertex_mean` to include interior ring vertices for `planar_annulus` / polygon holes, not only exterior vertices
+- [ ] Restrict `geometric_centroid` to polygon-region inputs only (`planar_circle`, `planar_annulus`, `planar_annulus_weighted`); exclude `spherical_circle` vertex-list inputs because unordered crossing vertices cannot reliably form a valid polygon
+- [x] Reconcile `monte_carlo_median` with Octant's original point-selection semantics: Octant selects one sampled point inside the estimated region, while the previous code used `geom_median.numpy.compute_geometric_median(...)`, which may return an unconstrained point outside the region
+- [x] Implement Octant-faithful `monte_carlo_median` as sampled medoid via minimum total pairwise distance, ensuring the final estimate is a sampled feasible point
+- [x] Add `geometric_median` centroid as the faster continuous geometric median snapped to the nearest sampled feasible point
 
 ## Phase 2: RIPE Atlas Cross-Validation
 - [ ] Extract US anchor subset from `anchors_meshed_pings` for US-only comparison
