@@ -111,6 +111,7 @@ def build_pipeline(
         filtering=spec.filtering,
         multilateration=spec.multilateration,
         centroid=spec.centroid,
+        multilateration_kwargs=spec.multilateration_kwargs,
     )
 
     if spec.needs_lp_fit:

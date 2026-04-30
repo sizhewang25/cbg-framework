@@ -113,7 +113,8 @@ def plot_rtt_error_scatter(
         if not trend.empty:
             ax.plot(
                 trend["bin_mid_ms"], trend["median_error_km"],
-                color=spec.color, linewidth=2.5, marker="o", markersize=4,
+                color=spec.color, linestyle=spec.linestyle,
+                linewidth=2.5, marker="o", markersize=4,
                 markeredgecolor="white", zorder=4,
                 label=f"{int(bin_width_ms)}ms-bin median",
             )

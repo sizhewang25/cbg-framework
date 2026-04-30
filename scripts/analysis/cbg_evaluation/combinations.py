@@ -6,14 +6,14 @@ Defines the valid pipeline configurations and ablation diff pairs.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
 class PipelineSpec:
     """One pipeline combination to evaluate."""
 
-    combo_id: str       # e.g. "A1", "C2", "D3"
+    combo_id: str       # e.g. "S1", "L2", "B4"
     label: str          # Human-readable label for plots
     distance: str       # framework registry name
     filtering: str
@@ -23,114 +23,84 @@ class PipelineSpec:
     linestyle: str      # matplotlib linestyle
     needs_lp_fit: bool = False
     needs_octant_fit: bool = False
+    multilateration_kwargs: Optional[Dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------
-# 15 combinations across 7 paths
+# 10 combinations across 4 comparison groups
 # ---------------------------------------------------------------------------
-# Path A: spherical_circle → boundary_vertex_mean       (3 distance models)
-# Path B: omitted; spherical_circle returns unordered vertices, not polygons
-# Path C: planar_circle    → boundary_vertex_mean       (3 distance models)
-# Path D: planar_circle    → geometric_centroid          (3 distance models)
-# Path E: planar_annulus   → boundary_vertex_mean       (spline only)
-# Path F: planar_annulus   → geometric_centroid          (spline only)
-# Path G: planar_annulus   → monte_carlo_median          (spline only)
-# Path H: planar_circle    → monte_carlo_median          (3 distance models)
+# S1/S2: SoI filtering ablation
+# L1/L2: LP filtering ablation
+# B1/B2/B5: Bounded-spline weighted/unweighted annulus with Monte Carlo median
+# B3/B4/B6: Bounded-spline weighted/unweighted annulus with geometric centroid
 # ---------------------------------------------------------------------------
 
 COMBINATIONS: List[PipelineSpec] = [
-    # Path A: spherical_circle + boundary_vertex_mean
+    # SoI filtering ablation
     PipelineSpec(
-        "A1", "SoI + spherical_circle + boundary_vertex_mean",
+        "S1", "SoI + redundant_circle + spherical_circle + boundary_vertex_mean",
         "speed_of_internet", "redundant_circle", "spherical_circle", "boundary_vertex_mean",
         "#0072B2", "-",
     ),
     PipelineSpec(
-        "A2", "LP + spherical_circle + boundary_vertex_mean",
+        "S2", "SoI + no filtering + spherical_circle + boundary_vertex_mean",
+        "speed_of_internet", "none", "spherical_circle", "boundary_vertex_mean",
+        "#0072B2", "--",
+    ),
+    # LP filtering ablation
+    PipelineSpec(
+        "L1", "LP + redundant_circle + spherical_circle + boundary_vertex_mean",
         "low_envelope", "redundant_circle", "spherical_circle", "boundary_vertex_mean",
         "#000000", "-",
         needs_lp_fit=True,
     ),
     PipelineSpec(
-        "A3", "Spline + spherical_circle + boundary_vertex_mean",
-        "bounded_spline", "redundant_circle", "spherical_circle", "boundary_vertex_mean",
+        "L2", "LP + no filtering + spherical_circle + boundary_vertex_mean",
+        "low_envelope", "none", "spherical_circle", "boundary_vertex_mean",
+        "#000000", "--",
+        needs_lp_fit=True,
+    ),
+    # Bounded-spline weighted/unweighted annulus, Monte Carlo median
+    PipelineSpec(
+        "B1", "Spline + planar_annulus_weighted@0.9 + monte_carlo_median",
+        "bounded_spline", "none", "planar_annulus_weighted", "monte_carlo_median",
         "#009E73", "-",
         needs_octant_fit=True,
-    ),
-    # Path C: planar_circle + boundary_vertex_mean
-    PipelineSpec(
-        "C1", "SoI + planar_circle + boundary_vertex_mean",
-        "speed_of_internet", "redundant_circle", "planar_circle", "boundary_vertex_mean",
-        "#0072B2", "-.",
+        multilateration_kwargs={"weight_threshold": 0.9},
     ),
     PipelineSpec(
-        "C2", "LP + planar_circle + boundary_vertex_mean",
-        "low_envelope", "redundant_circle", "planar_circle", "boundary_vertex_mean",
-        "#000000", "-.",
-        needs_lp_fit=True,
-    ),
-    PipelineSpec(
-        "C3", "Spline + planar_circle + boundary_vertex_mean",
-        "bounded_spline", "redundant_circle", "planar_circle", "boundary_vertex_mean",
-        "#009E73", "-.",
+        "B2", "Spline + planar_annulus + monte_carlo_median",
+        "bounded_spline", "none", "planar_annulus", "monte_carlo_median",
+        "#009E73", "--",
         needs_octant_fit=True,
     ),
-    # Path D: planar_circle + geometric_centroid
     PipelineSpec(
-        "D1", "SoI + planar_circle + geometric_centroid",
-        "speed_of_internet", "redundant_circle", "planar_circle", "geometric_centroid",
-        "#0072B2", ":",
-    ),
-    PipelineSpec(
-        "D2", "LP + planar_circle + geometric_centroid",
-        "low_envelope", "redundant_circle", "planar_circle", "geometric_centroid",
-        "#000000", ":",
-        needs_lp_fit=True,
-    ),
-    PipelineSpec(
-        "D3", "Spline + planar_circle + geometric_centroid",
-        "bounded_spline", "redundant_circle", "planar_circle", "geometric_centroid",
+        "B5", "Spline + planar_annulus_weighted@0.5 + monte_carlo_median",
+        "bounded_spline", "none", "planar_annulus_weighted", "monte_carlo_median",
         "#009E73", ":",
         needs_octant_fit=True,
+        multilateration_kwargs={"weight_threshold": 0.5},
     ),
-    # Path E: planar_annulus + boundary_vertex_mean (spline only)
+    # Bounded-spline weighted/unweighted annulus, geometric centroid
     PipelineSpec(
-        "E3", "Spline + planar_annulus + boundary_vertex_mean",
-        "bounded_spline", "none", "planar_annulus", "boundary_vertex_mean",
-        "#009E73", "-",
+        "B3", "Spline + planar_annulus_weighted@0.9 + geometric_centroid",
+        "bounded_spline", "none", "planar_annulus_weighted", "geometric_centroid",
+        "#D55E00", "-",
         needs_octant_fit=True,
+        multilateration_kwargs={"weight_threshold": 0.9},
     ),
-    # Path F: planar_annulus + geometric_centroid (spline only)
     PipelineSpec(
-        "F3", "Spline + planar_annulus + geometric_centroid",
+        "B4", "Spline + planar_annulus + geometric_centroid",
         "bounded_spline", "none", "planar_annulus", "geometric_centroid",
-        "#009E73", "-",
+        "#D55E00", "--",
         needs_octant_fit=True,
     ),
-    # Path G: planar_annulus + monte_carlo_median (spline only)
     PipelineSpec(
-        "G3", "Spline + planar_annulus + monte_carlo_median",
-        "bounded_spline", "none", "planar_annulus", "monte_carlo_median",
-        "#009E73", "-",
+        "B6", "Spline + planar_annulus_weighted@0.5 + geometric_centroid",
+        "bounded_spline", "none", "planar_annulus_weighted", "geometric_centroid",
+        "#D55E00", ":",
         needs_octant_fit=True,
-    ),
-    # Path H: planar_circle + monte_carlo_median (all 3 distance models)
-    PipelineSpec(
-        "H1", "SoI + planar_circle + monte_carlo_median",
-        "speed_of_internet", "redundant_circle", "planar_circle", "monte_carlo_median",
-        "#0072B2", "-",
-    ),
-    PipelineSpec(
-        "H2", "LP + planar_circle + monte_carlo_median",
-        "low_envelope", "redundant_circle", "planar_circle", "monte_carlo_median",
-        "#000000", "-",
-        needs_lp_fit=True,
-    ),
-    PipelineSpec(
-        "H3", "Spline + planar_circle + monte_carlo_median",
-        "bounded_spline", "redundant_circle", "planar_circle", "monte_carlo_median",
-        "#009E73", "-",
-        needs_octant_fit=True,
+        multilateration_kwargs={"weight_threshold": 0.5},
     ),
 ]
 
@@ -144,20 +114,20 @@ SPECS_BY_ID: Dict[str, PipelineSpec] = {s.combo_id: s for s in COMBINATIONS}
 # Negative delta → A is better
 
 DIFF_PAIRS: List[Tuple[str, str]] = [
-    # Distance ablation (hold spherical_circle + boundary_vertex_mean)
-    ("A1", "A2"),   # SoI vs LP
-    ("A2", "A3"),   # LP vs Spline
-    ("A1", "A3"),   # SoI vs Spline
-    # Centroid ablation (hold SoI + planar_circle)
-    ("C1", "D1"),   # boundary mean vs geom (planar_circle)
-    # Multilateration ablation (hold SoI + boundary_vertex_mean)
-    ("A1", "C1"),   # spherical_circle vs planar_circle
-    # MC median vs geometric centroid (hold SoI + planar_circle)
-    ("H1", "D1"),   # mc_median vs geom (planar_circle)
-    # MC median vs boundary vertex mean (hold SoI + planar_circle)
-    ("H1", "C1"),   # mc_median vs boundary mean (planar_circle)
-    # planar_annulus vs planar_circle (hold spline + geom)
-    ("F3", "D3"),   # planar_annulus vs planar_circle (geom, spline)
-    # planar_annulus vs planar_circle (hold spline + boundary_vertex_mean)
-    ("E3", "C3"),   # planar_annulus vs planar_circle (boundary mean, spline)
+    # Filtering ablations
+    ("S1", "S2"),   # SoI redundant filtering vs no filtering
+    ("L1", "L2"),   # LP redundant filtering vs no filtering
+    # Distance ablations, holding spherical_circle + boundary_vertex_mean
+    ("S1", "L1"),   # SoI vs LP with redundant filtering
+    ("S2", "L2"),   # SoI vs LP with no filtering
+    # Weighted-region ablations, holding centroid
+    ("B1", "B2"),   # weighted@0.9 vs unweighted annulus, Monte Carlo median
+    ("B3", "B4"),   # weighted@0.9 vs unweighted annulus, geometric centroid
+    # Weighted-threshold ablations, holding centroid
+    ("B1", "B5"),   # weighted@0.9 vs weighted@0.5, Monte Carlo median
+    ("B3", "B6"),   # weighted@0.9 vs weighted@0.5, geometric centroid
+    # Centroid ablations, holding annulus weighting
+    ("B1", "B3"),   # Monte Carlo median vs geometric centroid, weighted@0.9 annulus
+    ("B2", "B4"),   # Monte Carlo median vs geometric centroid, unweighted annulus
+    ("B5", "B6"),   # Monte Carlo median vs geometric centroid, weighted@0.5 annulus
 ]

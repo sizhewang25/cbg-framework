@@ -20,33 +20,6 @@ from scripts.analysis.cbg_evaluation.combinations import PipelineSpec
 from scripts.analysis.cbg_evaluation.evaluate import ProbeResult, get_errors
 from scripts.analysis.cbg_evaluation.reporting import format_intersection_fallback_total
 
-# Group specs by distance model for the 3-panel layout.
-# Within each panel, color distinguishes multilateration+centroid path.
-_PATH_STYLE = {
-    # (multilateration, centroid) → (color, short_label)
-    ("spherical_circle", "boundary_vertex_mean"): (
-        "#D55E00", "spherical_circle + boundary_vertex_mean",
-    ),
-    ("planar_circle", "boundary_vertex_mean"): (
-        "#009E73", "planar_circle + boundary_vertex_mean",
-    ),
-    ("planar_circle", "geometric_centroid"): (
-        "#0072B2", "planar_circle + geometric_centroid",
-    ),
-    ("planar_circle", "monte_carlo_median"): (
-        "#882255", "planar_circle + monte_carlo_median",
-    ),
-    ("planar_annulus", "boundary_vertex_mean"): (
-        "#E69F00", "planar_annulus + boundary_vertex_mean",
-    ),
-    ("planar_annulus", "geometric_centroid"): (
-        "#56B4E9", "planar_annulus + geometric_centroid",
-    ),
-    ("planar_annulus", "monte_carlo_median"): (
-        "#999933", "planar_annulus + monte_carlo_median",
-    ),
-}
-
 _DISTANCE_TITLES = {
     "speed_of_internet": "Speed-of-Internet (2/3 c)",
     "low_envelope":      "LP Lower Envelope",
@@ -93,19 +66,18 @@ def plot_error_cdf(
             errors = get_errors(all_results[spec.combo_id])
             if len(errors) == 0:
                 continue
-            key = (spec.multilateration, spec.centroid)
-            color, short_label = _PATH_STYLE.get(
-                key, ("#999999", f"{spec.multilateration}+{spec.centroid}")
-            )
             sorted_e = np.sort(errors)
             cdf = np.arange(1, len(sorted_e) + 1) / len(sorted_e)
             # median = np.median(errors)
             ax.plot(
                 sorted_e, cdf,
-                color=color, linestyle="-", linewidth=2, alpha=0.7,
-                label=f"{spec.combo_id}: {short_label}",
+                color=spec.color,
+                linestyle=spec.linestyle,
+                linewidth=2,
+                alpha=0.7,
+                label=f"{spec.combo_id}: {spec.label}",
             )
-            panel_data.append((spec, errors, color))
+            panel_data.append((spec, errors))
 
         # Threshold vertical lines (no per-combo percentages to keep panels clean)
         for thresh in thresholds:
@@ -127,7 +99,7 @@ def plot_error_cdf(
         lines = []
         header = "      count             p5   p25   p50   p75   p95"
         lines.append(header)
-        for spec, errors, _ in panel_data:
+        for spec, errors in panel_data:
             count_label = format_intersection_fallback_total(
                 all_results[spec.combo_id]
             )

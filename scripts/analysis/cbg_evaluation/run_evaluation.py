@@ -1,4 +1,4 @@
-"""CLI entry point: run all 9 pipeline combinations and generate plots.
+"""CLI entry point: run all configured pipeline combinations and generate plots.
 
 Usage:
     python scripts/analysis/cbg_evaluation/run_evaluation.py
@@ -110,6 +110,7 @@ def save_json_summary(
                 "filtering": spec.filtering,
                 "multilateration": spec.multilateration,
                 "centroid": spec.centroid,
+                "multilateration_kwargs": spec.multilateration_kwargs or {},
             },
             "n_fitted_anchors": count_fitted_anchors(
                 spec,
@@ -175,7 +176,7 @@ def main():
     # 1. Load data, fit models
     data = load_and_prepare()
 
-    # 2. Evaluate all 9 combinations
+    # 2. Evaluate all configured combinations
     logger.info("=" * 60)
     logger.info("EVALUATING ALL COMBINATIONS")
     logger.info("=" * 60)
