@@ -68,7 +68,21 @@ arXiv 2019
 
 Systematic empirical study of factors perturbing the RTT-to-distance relationship (queueing delays, non-great-circle paths). Provides theoretical grounding for why a spline model (Octant) outperforms a fixed linear model (2/3c).
 
-**Gap:** All three papers propose Phase 1 improvements independently with no cross-variant or cross-phase evaluation. Confirms the benchmark gap this paper addresses.
+### Arif et al. — GeoWeight
+**"GeoWeight: Internet Host Geolocation Based on a Probability Model for Latency Measurements"**
+ACSC 2010
+[ACM DL](https://dl.acm.org/doi/10.5555/1862219.1862232)
+
+Models RTT-distance behavior probabilistically instead of using a single deterministic delay-distance curve. GeoWeight is relevant because it is one of the Alidade-cited latency-modeling alternatives to CBG: it improves the handling of noisy latency measurements, but it is not organized as a modular CBG pipeline and does not isolate the downstream multilateration or centroid effects.
+
+### Laki et al. — Spotter
+**"Spotter: A Model Based Active Geolocation Service"**
+IEEE INFOCOM 2011
+[IEEE INFOCOM 2011](https://ieeexplore.ieee.org/document/5935225)
+
+Builds a model-based active geolocation service that estimates target locations from delay measurements against a calibrated landmark set. Spotter is another Alidade-cited active geolocation system and belongs with RTT-distance modeling work because its main contribution is a learned/model-based delay-to-location service rather than a new CBG multilateration variant. It reinforces the point that many papers improve the modeling stage without comparing CBG phase combinations.
+
+**Gap:** These papers propose Phase 1 or model-level improvements independently with no cross-variant or cross-phase evaluation. Confirms the benchmark gap this paper addresses.
 
 ---
 
@@ -91,6 +105,13 @@ ACM Transactions on Internet Technology 2021
 [ACM TOIT 2021](https://dl.acm.org/doi/10.1145/3457611)
 
 Parses rDNS hostnames to extract location hints; places ~54% of hostnames within 20 km of ground truth. Open-source (Microsoft). Effective for well-named infrastructure but silent on cloud/anycast IPs with opaque hostnames.
+
+### Guo et al. — Web-Mined Geolocation
+**"Mining the Web and the Internet for Accurate IP Address Geolocations"**
+IEEE INFOCOM 2009
+[IEEE INFOCOM 2009](https://doi.org/10.1109/INFCOM.2009.5062197)
+
+Mines web pages and network data to extract IP-to-location evidence, then combines noisy hints to improve geolocation accuracy. This is an important Alidade antecedent because Alidade similarly unifies measurement and non-measurement sources. It is complementary to our benchmark: web-mined hints can feed an end-to-end geolocation system, but they are not a CBG phase variant.
 
 ### Scheitle et al. — HLOC
 **"HLOC: Hints-Based Geolocation Leveraging Multiple Measurement Frameworks"**
@@ -224,6 +245,13 @@ IMC/WWW 2001
 
 Propagates known location labels through BGP prefixes: if any IP in a /24 is known, all IPs in that prefix are assigned the same location. Works for coarse-grained geolocation when prefixes are small and belong to a single operator. Fails for large ISP prefixes spanning multiple cities, produces silent errors (returns a location without indicating confidence), and is inapplicable to anycast IPs. Foundational work demonstrating prefix clustering as a practical fallback.
 
+### Freedman et al. — Prefix Locality
+**"Geographic Locality of IP Prefixes"**
+IMC 2005
+[ACM IMC 2005](https://doi.org/10.5555/1251086.1251099)
+
+Studies whether IP prefixes exhibit geographic locality and how reliably prefix structure can be used for geolocation. This is relevant to Alidade's full-IP-space goal because prefix-level aggregation is a natural way to propagate sparse geolocation evidence. For our work, prefix locality is an auxiliary source rather than a CBG variant, and it does not answer which latency-constraint algorithm should be used when RTT observations are available.
+
 ### Li et al. — Graph Neural Network (Street-Level ML)
 **"Connecting the Hosts: Street-Level IP Geolocation with Graph Neural Networks"**
 KDD 2022
@@ -252,6 +280,13 @@ PAM 2010
 
 Frames IP geolocation as a Naive Bayes classification problem using lightweight measurements from monitors to targets. It reports improvements over prior CBG-style baselines, but depends on learned probability densities from training data. It belongs with the supervised/statistical alternatives rather than the CBG variant set because it does not produce explicit physical feasible regions.
 
+### Eriksson et al. — Posit
+**"Posit: A Lightweight Approach for IP Geolocation"**
+ACM SIGMETRICS Performance Evaluation Review 2012
+[ACM SIGMETRICS PER 2012](https://doi.org/10.1145/2381056.2381058)
+
+Proposes a lightweight geolocation method based on a small number of measurements and probabilistic inference. Posit is useful to cite because Alidade includes it among the active/statistical geolocation lineage. Like the learning-based and statistical approaches above, it optimizes a different point in the design space: fewer measurements and probabilistic location inference rather than explicit CBG feasible-region construction and phase-level benchmarking.
+
 ### Katz-Bassett et al. — Topology-Based Geolocation
 **"Towards IP Geolocation Using Delay and Topology Measurements"**
 IMC 2006
@@ -265,6 +300,13 @@ Cybersecurity (SpringerOpen) 2019
 [Springer 2019](https://cybersecurity.springeropen.com/articles/10.1186/s42400-019-0030-2)
 
 Uses traceroutes to discover intermediate routers as secondary landmarks, which are then geolocated and used to tighten CBG constraints. Improves accuracy in landmark-sparse regions. **Scalability limitation:** Requires a traceroute (10–20 probes) per target IP. At 10M+ IPs, this represents 100M–200M probes per measurement cycle — prohibitive for operational use at ISP scale. Active measurement budgets (RIPE Atlas credits, probe bandwidth) further constrain this approach.
+
+### Gill et al. — Circumventing Measurement-Based Geolocation
+**"Dude, Where's That IP? Circumventing Measurement-Based IP Geolocation"**
+USENIX Security 2010
+[USENIX Security 2010](https://www.usenix.org/conference/19th-usenix-security-symposium/dude-wheres-ip-circumventing-measurement-based-ip-geolocation)
+
+Shows that measurement-based geolocation systems can be intentionally misled by adversarial delay manipulation. This work is not a geolocation algorithm variant, but it is an important caution for our threat model and result interpretation: CBG's physical constraints are auditable, yet RTT-derived constraints assume that targets and paths are not actively manipulating delay to appear elsewhere.
 
 ### Efficient Landmark Selection for Active Geolocation
 **"Selection of Landmarks for Efficient Active Geolocation"**
@@ -297,9 +339,12 @@ Builds a large landmark set by discovering stable live webcams with extractable 
 | Modelling of IP Geolocation | 2015/2020 | 1 | IEEE/arXiv | Phase 1 improvement only |
 | Dragoon | 2020 | 1 | arXiv | Phase 1 improvement only |
 | Delay-Distance Correlation | 2019 | 1 | arXiv | Phase 1 analysis |
+| GeoWeight | 2010 | Statistical | ACSC | Probabilistic latency model; Alidade-cited |
+| Spotter | 2011 | Active/model | INFOCOM | Model-based active geolocation service |
 | Geofeeds | 2024 | Tier 1 | ACM Networking | Motivates CBG as fallback |
 | Geofeed Adoption | 2025 | Tier 1 | IEEE/arXiv | Motivates CBG as fallback |
 | rDNS Geolocation | 2021 | Tier 1 | ACM TOIT | Motivates CBG as fallback |
+| Web-mined geolocation | 2009 | Tier 1 alt | INFOCOM | Mines web/network hints; Alidade antecedent |
 | HLOC | 2017 | Tier 1 + validation | TMA | rDNS hints validated by latency measurements |
 | Trust, But Verify | 2024 | Ground truth | arXiv | Validates operator-reported VP locations |
 | iGreedy | 2016 | Anycast | IEEE JSAC | SOTA anycast geoloc; doesn't benchmark CBG |
@@ -316,11 +361,14 @@ Builds a large landmark set by discovering stable live webcams with extractable 
 | Traceroute inconsistencies | 2025 | Topology | arXiv | Adjacent; out of scope (not scalable) |
 | GeoFINDR | 2025 | CBG-like | arXiv | Adjacent; different goal (VM compliance) |
 | Padmanabhan & Subramanian — GeoCluster | 2001 | Tier 1 alt | WWW | Prefix-based fallback; fails on large ISP prefixes |
+| Freedman et al. — Prefix Locality | 2005 | Prefix/locality | IMC | Prefix-level propagation evidence |
 | Li et al. — GNN Street-Level | 2022 | ML | KDD | SOTA supervised ML; requires labeled training data |
 | Jiang — NN + Stable Landmarks | 2016 | ML | GI/SIGCOMM | Neural network baseline; labeled data required |
 | Youn et al. — Statistical Geolocation | 2009 | Statistical | ICCCN | Probabilistic delay model; not modular CBG |
 | Eriksson et al. — Learning-Based | 2010 | ML/statistical | PAM | Naive Bayes geolocation from monitor measurements |
+| Eriksson et al. — Posit | 2012 | Statistical | SIGMETRICS PER | Lightweight probabilistic geolocation |
 | Katz-Bassett et al. — TBG | 2006 | Topology | IMC | Foundational delay+topology geolocation |
 | Topology + Intermediate Routers | 2019 | Topology | Cybersecurity | Traceroute-based; infeasible probing cost at scale |
+| Gill et al. — Circumvention | 2010 | Security | USENIX Security | Adversarial limits of measurement-based geolocation |
 | Landmark Selection (TMA 2024) | 2024 | Phase 1 | TMA | Landmark placement is first-order accuracy factor |
 | GeoCAM | 2021 | Landmarks | ToN | Large webcam landmark set; motivates VP/landmark analysis |

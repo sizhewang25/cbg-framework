@@ -350,6 +350,7 @@ def fit_rtt_distance_spline(
         raise SplineFitError(f'Spline fitting failed: {str(e)}')
 
 
+# NOTE: Maybe time consuming?
 def find_delta_for_coverage(
     rtts: np.ndarray,
     distances: np.ndarray,
