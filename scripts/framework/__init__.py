@@ -78,7 +78,7 @@ try:
 except ImportError:
     pass
 try:
-    import scripts.framework.centroid.geometric  # noqa: F401
+    import scripts.framework.centroid.geometric_centroid  # noqa: F401
 except ImportError:
     pass
 try:
