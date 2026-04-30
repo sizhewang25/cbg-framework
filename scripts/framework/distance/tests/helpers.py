@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from scripts.analysis.cbg_feasibility.rtt_model import RTTDistanceModel
-from scripts.analysis.octant.octant_model import OctantRTTModel
+
+if TYPE_CHECKING:
+    from scripts.analysis.octant.octant_model import OctantRTTModel
 
 
 ANCHOR_COORDS = {
@@ -51,6 +55,8 @@ def make_fitted_octant_model(
 
     Thus at RTT=20, the hand-derived hull bounds are 1900..2100 km.
     """
+    from scripts.analysis.octant.octant_model import OctantRTTModel
+
     lat, lon = ANCHOR_COORDS[anchor_ip]
     rtt_values = np.array([10, 20, 30, 40, 50], dtype=float)
     rtts = np.repeat(rtt_values, 2)
@@ -79,6 +85,8 @@ def make_fitted_octant_model(
 
 def make_fitted_degenerate_octant_model(anchor_ip: str = "anchor-a") -> OctantRTTModel:
     """Fit a real Octant model whose lower and upper bounds are identical."""
+    from scripts.analysis.octant.octant_model import OctantRTTModel
+
     lat, lon = ANCHOR_COORDS[anchor_ip]
     rtts = np.array([10, 20, 30, 40, 50], dtype=float)
     distances = 100.0 * rtts
@@ -103,5 +111,7 @@ def make_fitted_degenerate_octant_model(anchor_ip: str = "anchor-a") -> OctantRT
 
 def make_unfitted_octant_model(anchor_ip: str = "anchor-a") -> OctantRTTModel:
     """Build a real but unfitted Octant RTT-distance model."""
+    from scripts.analysis.octant.octant_model import OctantRTTModel
+
     lat, lon = ANCHOR_COORDS[anchor_ip]
     return OctantRTTModel(anchor_ip=anchor_ip, anchor_lat=lat, anchor_lon=lon)

@@ -41,6 +41,10 @@ from scripts.analysis.cbg_evaluation.plot_error_diff_cdf import (
 from scripts.analysis.cbg_evaluation.plot_rtt_error_scatter import (
     plot_rtt_error_scatter,
 )
+from scripts.analysis.cbg_evaluation.reporting import (
+    count_fitted_anchors,
+    count_result_outcomes,
+)
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 LOG_DIR = Path(__file__).resolve().parent / "logs"
@@ -72,7 +76,13 @@ def _setup_logging(output_dir: Path) -> None:
     logger.info("Logging to %s", log_path)
 
 
-def save_json_summary(all_results, output_path):
+def save_json_summary(
+    all_results,
+    output_path,
+    anchor_coords,
+    lp_models,
+    octant_models,
+):
     """Save per-combination statistics and diff-pair summaries as JSON."""
     summary = {
         "dataset": "vultr_pings_us_only.csv",
@@ -85,8 +95,8 @@ def save_json_summary(all_results, output_path):
     for spec in COMBINATIONS:
         errors = get_errors(all_results[spec.combo_id])
         results = all_results[spec.combo_id]
-        n_intersected = sum(1 for r in results if r.did_intersect)
-        n_fallback = sum(1 for r in results if r.fallback_used)
+        counts = count_result_outcomes(results)
+        n_fallback = counts.fallback_count
         fallback_reasons = {}
         for r in results:
             if r.fallback_used:
@@ -101,12 +111,30 @@ def save_json_summary(all_results, output_path):
                 "multilateration": spec.multilateration,
                 "centroid": spec.centroid,
             },
-            "n_probes": len(results),
-            "n_successful": len(errors),
-            "availability_rate_pct": round(len(errors) / max(len(results), 1) * 100, 1),
-            "intersection_rate_pct": round(n_intersected / max(len(results), 1) * 100, 1),
+            "n_fitted_anchors": count_fitted_anchors(
+                spec,
+                anchor_coords,
+                lp_models=lp_models,
+                octant_models=octant_models,
+            ),
+            "n_probes": counts.total_probes,
+            "estimated_count": counts.estimated_count,
+            "estimated_rate_pct": round(
+                counts.estimated_count / max(counts.total_probes, 1) * 100,
+                1,
+            ),
+            "intersection_count": counts.intersection_count,
+            "intersection_rate_pct": round(
+                counts.intersection_count / max(counts.total_probes, 1) * 100,
+                1,
+            ),
+            "multilateration_success_count": counts.multilateration_success_count,
             "fallback_count": n_fallback,
-            "fallback_rate_pct": round(n_fallback / max(len(results), 1) * 100, 1),
+            "fallback_rate_pct": round(
+                n_fallback / max(counts.total_probes, 1) * 100,
+                1,
+            ),
+            "no_estimate_count": counts.no_estimate_count,
             "fallback_reasons": fallback_reasons,
         }
         if len(errors) > 0:
@@ -213,7 +241,13 @@ def main():
         logger.error("Percentile maps failed: %s", e)
 
     # 8. JSON summary
-    save_json_summary(all_results, OUTPUT_DIR / "evaluation_summary.json")
+    save_json_summary(
+        all_results,
+        OUTPUT_DIR / "evaluation_summary.json",
+        data["anchor_coords"],
+        data["lp_models"],
+        data["octant_models"],
+    )
 
     elapsed = time.perf_counter() - total_start
     logger.info("Total runtime: %.1fs", elapsed)

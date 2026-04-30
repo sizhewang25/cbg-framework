@@ -20,6 +20,18 @@
 - Keep tests unit-sized: no ClickHouse, no external data files, no network, and
   no long-running benchmark paths.
 
+## Smoke Test Workflow
+
+- Treat `scripts/analysis/cbg_evaluation/evaluate.py` as the end-to-end smoke
+  test path for framework integration.
+- When the smoke test exposes an error, do not patch implementation code first.
+  Read the relevant framework unit tests, reproduce the bug with a focused unit
+  test, and add guardrail assertions for the expected behavior.
+- After the failing guardrail test is in place, update the implementation until
+  the new unit test and existing framework tests pass.
+- Keep smoke-test regressions covered at the lowest framework module that owns
+  the behavior, rather than adding broad end-to-end assertions for every bug.
+
 Run framework unit tests with:
 
 ```bash

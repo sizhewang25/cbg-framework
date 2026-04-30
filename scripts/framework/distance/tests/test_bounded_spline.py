@@ -27,7 +27,7 @@ class TestBoundedSplineDistance(unittest.TestCase):
     def test_estimate_creates_annular_constraints_with_weights(self):
         model = make_fitted_octant_model("anchor-a")
         distance = BoundedSplineDistance(weight_tau_ms=20.0)
-        distance.fit(models={"anchor-a": model}, delta=1.2)
+        distance.fit(models={"anchor-a": model})
 
         rtt = 20.0
         circles = distance.estimate({"anchor-a": rtt}, ANCHOR_COORDS)

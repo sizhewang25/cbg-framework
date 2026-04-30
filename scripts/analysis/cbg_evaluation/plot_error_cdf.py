@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 from scripts.analysis.cbg_evaluation.combinations import PipelineSpec
 from scripts.analysis.cbg_evaluation.evaluate import ProbeResult, get_errors
+from scripts.analysis.cbg_evaluation.reporting import format_intersection_fallback_total
 
 # Group specs by distance model for the 3-panel layout.
 # Within each panel, color distinguishes multilateration+centroid path.
@@ -102,8 +103,7 @@ def plot_error_cdf(
             ax.plot(
                 sorted_e, cdf,
                 color=color, linestyle="-", linewidth=2, alpha=0.7,
-                label=f"{spec.combo_id}: {short_label}\n"
-                      f"  (Samples: {len(errors):,})",
+                label=f"{spec.combo_id}: {short_label}",
             )
             panel_data.append((spec, errors, color))
 
@@ -118,18 +118,22 @@ def plot_error_cdf(
             fontsize=12, fontweight="bold",
         )
         ax.set_xlabel("Error Distance (km)", fontsize=11)
-        ax.legend(loc="center right", fontsize=8)
+        ax.legend(loc="upper left", fontsize=8)
         ax.grid(True, alpha=0.3)
         ax.set_xlim(0, max_x_km)
         ax.set_ylim(0, 1)
 
         # Stats text box
         lines = []
-        header = "      p5   p25   p50   p75   p95"
+        header = "      count             p5   p25   p50   p75   p95"
         lines.append(header)
         for spec, errors, _ in panel_data:
+            count_label = format_intersection_fallback_total(
+                all_results[spec.combo_id]
+            )
             lines.append(
-                f"{spec.combo_id}: {np.percentile(errors, 5):5.0f} "
+                f"{spec.combo_id}: {count_label:<16} "
+                f"{np.percentile(errors, 5):5.0f} "
                 f"{np.percentile(errors, 25):5.0f} "
                 f"{np.median(errors):5.0f} "
                 f"{np.percentile(errors, 75):5.0f} "

@@ -13,6 +13,8 @@ Coordinate convention:
 - Shapely: (lon, lat) = (x, y) at the boundary
 """
 
+from __future__ import annotations
+
 import logging
 import time
 import numpy as np
