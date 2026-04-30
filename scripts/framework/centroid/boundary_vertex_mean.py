@@ -1,6 +1,6 @@
-"""Phase 4 variant: Arithmetic Mean Centroid (Million-Scale CBG).
+"""Phase 4 variant: Boundary Vertex Mean Centroid.
 
-Simple average of intersection vertex coordinates.
+Simple average of feasible-region boundary vertices.
 
 Wraps:
   - scripts/framework/geometry.py :: polygon_centroid()  (>2 vertices)
@@ -17,16 +17,17 @@ from scripts.framework.registry import register_centroid
 from scripts.framework.types import MultilatResult
 
 
-@register_centroid("arithmetic_mean")
-class ArithmeticMeanCentroid(BaseCentroid):
-    """Arithmetic mean of intersection points.
+@register_centroid("boundary_vertex_mean")
+class BoundaryVertexMeanCentroid(BaseCentroid):
+    """Coordinate mean of boundary vertices.
 
     For vertex lists: simple coordinate average (polygon_centroid).
     For 2 vertices: geodetic midpoint (get_middle_intersection).
-    For Shapely regions: extract boundary vertices, then average.
+    For Shapely regions: extracts exterior and interior ring vertices, then
+    averages them. This is a boundary-vertex mean, not an area centroid.
     """
 
-    name = "arithmetic_mean"
+    name = "boundary_vertex_mean"
 
     def select(self, result: MultilatResult) -> Optional[Tuple[float, float]]:
         if not result.success:
@@ -53,7 +54,7 @@ class ArithmeticMeanCentroid(BaseCentroid):
 
 
 def _extract_vertex_coords(geom) -> list:
-    """Extract (lat, lon) vertex coordinates from a Shapely geometry.
+    """Extract (lat, lon) boundary vertex coordinates from a Shapely geometry.
 
     Shapely stores coordinates as (x, y) = (lon, lat).
     """
@@ -62,10 +63,24 @@ def _extract_vertex_coords(geom) -> list:
     if isinstance(geom, MultiPolygon):
         all_coords = []
         for poly in geom.geoms:
-            all_coords.extend(
-                [(lat, lon) for lon, lat in poly.exterior.coords]
-            )
+            all_coords.extend(_polygon_boundary_coords(poly))
         return all_coords
     if hasattr(geom, "exterior"):
-        return [(lat, lon) for lon, lat in geom.exterior.coords]
+        return _polygon_boundary_coords(geom)
     return []
+
+
+def _ring_coords(ring) -> list:
+    """Return ring coordinates without the duplicate closing vertex."""
+    coords = list(ring.coords)
+    if len(coords) > 1 and coords[0] == coords[-1]:
+        coords = coords[:-1]
+    return [(lat, lon) for lon, lat in coords]
+
+
+def _polygon_boundary_coords(poly) -> list:
+    """Return exterior plus interior-ring vertices for a Shapely polygon."""
+    coords = _ring_coords(poly.exterior)
+    for interior in poly.interiors:
+        coords.extend(_ring_coords(interior))
+    return coords

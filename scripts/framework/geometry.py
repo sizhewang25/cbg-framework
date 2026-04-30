@@ -64,7 +64,7 @@ def polygon_centroid(points: Sequence[tuple[float, float]]) -> tuple[float, floa
     """Return the finite-set centroid of (lat, lon) points.
 
     This duplicates the legacy Million-Scale helper behavior: it is not an
-    area-weighted polygon centroid, just the arithmetic mean of coordinates.
+    area-weighted polygon centroid, just the coordinate mean of the points.
     """
     lat_sum = 0.0
     lon_sum = 0.0

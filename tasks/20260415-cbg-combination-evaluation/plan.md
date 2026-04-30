@@ -43,14 +43,14 @@ Note: `planar_annulus_weighted` is an integrated Phase 2+3 — it does both filt
 
 | Method | Source | Description |
 |--------|--------|-------------|
-| `arithmetic_mean` | Million-Scale CBG | `polygon_centroid()` in `helpers.py:170` — simple average of intersection vertex coordinates. Operates on vertex list from `spherical_circle` |
+| `boundary_vertex_mean` | Million-Scale CBG | `polygon_centroid()` in `helpers.py:170` — simple average of boundary vertex coordinates. Operates on vertex lists and planar polygon boundary rings |
 | `geometric_centroid` | centroid_comparison.py | Shapely `.centroid` — area-weighted center of mass of intersection polygon. Operates on Shapely geometry |
 
 Note: Octant's Monte Carlo sampled-medoid point selection is excluded for now (pending validation).
 
 ### Phase compatibility constraints
 
-- `arithmetic_mean` requires vertex list → only works after `spherical_circle`
+- `boundary_vertex_mean` works after `spherical_circle` vertex lists and planar polygon boundary rings
 - `geometric_centroid` requires Shapely geometry → works after `planar_circle`, `planar_annulus`, or `planar_annulus_weighted`
 - `spherical_circle` requires circles (not annuli) → after `redundant_circle_removal` or directly from Phase 1
 - `planar_annulus_weighted` requires annular constraints → only works with `fit_bounded_spline` (Octant)
@@ -122,24 +122,24 @@ Phase 3 wrappers:
 - `multilaterate_planar_annulus_weighted(constraints)` → wraps `compute_feasible_region_weighted()` → Shapely geometry (fused Phase 2+3)
 
 Phase 4 wrappers:
-- `centroid_arithmetic_mean(vertex_list | shapely_region)` → wraps `polygon_centroid()` / `get_middle_intersection()`
+- `centroid_boundary_vertex_mean(vertex_list | shapely_region)` → wraps `polygon_centroid()` / `get_middle_intersection()`
 - `centroid_geometric_weighted(shapely_region)` → wraps Shapely `.centroid`
 
 ### Step 3: Enumerate valid combinations
 
 Compatibility rules:
-- `arithmetic_mean` needs vertex list → requires `spherical_circle` multilateration
+- `boundary_vertex_mean` works with vertex lists or Shapely polygon boundary rings
 - `geometric_centroid` needs Shapely geometry → requires `planar_circle` or `planar_annulus_weighted` multilateration
 - `planar_annulus_weighted` requires annuli → requires `bounded_spline` Phase 1
 - `planar_annulus_weighted` is fused Phase 2+3 → Phase 2 is implicitly `intersection_weighted_filtering`
 
-**Path A: spherical_circle multilateration → arithmetic_mean**
+**Path A: spherical_circle multilateration → boundary_vertex_mean**
 
 | # | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
 |---|---------|---------|---------|---------|
-| A1 | speed_of_internet | circle_removal | spherical_circle | arithmetic_mean |
-| A2 | low_envelope | circle_removal | spherical_circle | arithmetic_mean |
-| A3 | bounded_spline | circle_removal | spherical_circle | arithmetic_mean |
+| A1 | speed_of_internet | circle_removal | spherical_circle | boundary_vertex_mean |
+| A2 | low_envelope | circle_removal | spherical_circle | boundary_vertex_mean |
+| A3 | bounded_spline | circle_removal | spherical_circle | boundary_vertex_mean |
 
 **Path B: planar_circle multilateration → geometric_centroid**
 
@@ -155,28 +155,32 @@ Compatibility rules:
 |---|---------|-----------|---------|
 | C1 | bounded_spline | planar_annulus_weighted | geometric_centroid |
 
-**Path D: planar_circle multilateration → arithmetic_mean (cross-compatibility)**
+**Path D: planar_circle multilateration → boundary_vertex_mean (cross-compatibility)**
 
 | # | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
 |---|---------|---------|---------|---------|
-| D1 | speed_of_internet | circle_removal | planar_circle | arithmetic_mean |
-| D2 | low_envelope | circle_removal | planar_circle | arithmetic_mean |
-| D3 | bounded_spline | circle_removal | planar_circle | arithmetic_mean |
+| D1 | speed_of_internet | circle_removal | planar_circle | boundary_vertex_mean |
+| D2 | low_envelope | circle_removal | planar_circle | boundary_vertex_mean |
+| D3 | bounded_spline | circle_removal | planar_circle | boundary_vertex_mean |
 
-Note: Path D uses `arithmetic_mean` on geometry returned by `planar_circle` by extracting vertices from the Shapely polygon boundary. This tests whether the multilateration method matters when centroid method is held constant.
+Note: Path D uses `boundary_vertex_mean` on geometry returned by `planar_circle` by extracting vertices from the Shapely polygon boundary. This tests whether the multilateration method matters when centroid method is held constant.
 
 **Total: 10 combinations** (or 7 core + 3 cross-compatibility)
 
-### Current ID mapping (after reordering)
+### Current ID mapping (after centroid semantics cleanup)
 
 | Path | Multilateration | Centroid | Combos |
 |------|----------------|----------|--------|
-| A | spherical_circle | arithmetic_mean | A1 (SoI), A2 (LP), A3 (Spline) |
-| B | spherical_circle | geometric_centroid | B1, B2, B3 |
-| C | planar_circle | arithmetic_mean | C1, C2, C3 |
+| A | spherical_circle | boundary_vertex_mean | A1 (SoI), A2 (LP), A3 (Spline) |
+| B | omitted | omitted | `spherical_circle + geometric_centroid` is invalid because unordered crossing vertices are not polygons |
+| C | planar_circle | boundary_vertex_mean | C1, C2, C3 |
 | D | planar_circle | geometric_centroid | D1, D2, D3 |
+| E | planar_annulus | boundary_vertex_mean | E3 |
+| F | planar_annulus | geometric_centroid | F3 |
+| G | planar_annulus | monte_carlo_median | G3 |
+| H | planar_circle | monte_carlo_median | H1, H2, H3 |
 
-**12 combinations total** across 3 distance models × 4 multilateration+centroid paths.
+**15 active valid combinations total** after excluding the B path.
 
 ### Missing Octant-specific components (Phase 5 integration)
 
@@ -193,7 +197,7 @@ Two Octant features are NOT yet in the framework:
 **2. Monte Carlo sampled medoid (centroid)**
 - Source: `octant_geolocation.py:402-477` → `sample_points_in_region()` plus framework sampled-medoid selection
 - Logic: Sobol QMC rejection sampling inside the Shapely region → sampled point with minimum total pairwise distance
-- Different from both `arithmetic_mean` (vertex average) and `geometric_centroid` (Shapely `.centroid` area-weighted center of mass)
+- Different from both `boundary_vertex_mean` (boundary vertex average) and `geometric_centroid` (Shapely `.centroid` area-weighted center of mass)
 - Sampled medoid minimizes total distance to all sampled feasible points while keeping the final estimate inside the sampled feasible region
 - Framework target: new `"monte_carlo_median"` centroid variant
 
@@ -206,12 +210,12 @@ Two Octant features are NOT yet in the framework:
 
 **Step 2: Add `monte_carlo_median` centroid** (`scripts/framework/centroid/monte_carlo_median.py`)
 - Wraps `sample_points_in_region()` from `octant_geolocation.py` and framework sampled-medoid selection
-- Input: `MultilatResult` with `.region` (Shapely geometry) — NOT compatible with vertex-only results
+- Input: `MultilatResult` with `.region` (Shapely geometry) for sampling, or `.vertices` for direct sampled-medoid selection over the spherical crossing points
 - Parameters: `n_samples=5000`, `rng` seed for reproducibility
 - Returns `(lat, lon)` or `None`
 
 **Step 3: Add new combinations to `combinations.py`**
-- New paths E and F (`planar_annulus` with arith/geom/median centroids)
+- New paths E and F (`planar_annulus` with boundary-mean/geom/median centroids)
 - New centroid column for monte_carlo_median on existing planar_circle paths
 - Exact combo list TBD after Step 1-2 are working
 
@@ -235,4 +239,4 @@ Single script that:
 4. **Octant Monte Carlo excluded**: sampled-medoid point selection is excluded until validated. The geometric centroid (Shapely `.centroid`) is the alternative.
 5. **Weighted planar annulus + non-Octant**: `planar_annulus_weighted` requires annular constraints (inner + outer radius). Only valid with `bounded_spline`. For MS/Vanilla (disk constraints with inner=0), the grid degenerates to `planar_circle` intersection — not meaningful to test.
 6. **Fallback behavior**: When multilateration fails (no intersection), current code falls back to closest-VP by min RTT. This fallback must be preserved consistently across all combinations.
-7. **Arithmetic mean on planar_circle geometry (Path D)**: To apply `arithmetic_mean` after planar_circle multilateration, we extract boundary vertices from the Shapely polygon. This is conceptually different from the spherical_circle intersection vertices — the vertex count and distribution differ. Flag this clearly in results.
+7. **Boundary vertex mean on planar_circle geometry (Path D)**: To apply `boundary_vertex_mean` after planar_circle multilateration, we extract boundary vertices from the Shapely polygon. This is conceptually different from the spherical_circle intersection vertices — the vertex count and distribution differ. Flag this clearly in results.

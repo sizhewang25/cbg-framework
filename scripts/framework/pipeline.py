@@ -5,7 +5,7 @@ Usage:
         distance="speed_of_internet",
         filtering="redundant_circle",
         multilateration="spherical_circle",
-        centroid="arithmetic_mean",
+        centroid="boundary_vertex_mean",
     )
     location, circles = pipe.geolocate(measurements, anchor_coords)
 
@@ -28,6 +28,9 @@ _INCOMPATIBLE_MULTILAT_DISTANCE = {
     ("planar_annulus_weighted", "low_envelope"),
 }
 _ANNULUS_AWARE_MULTILAT = {"planar_annulus", "planar_annulus_weighted"}
+_INCOMPATIBLE_MULTILAT_CENTROID = {
+    ("spherical_circle", "geometric_centroid"),
+}
 
 
 class CBGPipeline:
@@ -154,7 +157,7 @@ class CBGPipeline:
         distance: str = "speed_of_internet",
         filtering: Optional[str] = "redundant_circle",
         multilateration: str = "spherical_circle",
-        centroid: str = "arithmetic_mean",
+        centroid: str = "boundary_vertex_mean",
         distance_kwargs: Optional[Dict[str, Any]] = None,
         filtering_kwargs: Optional[Dict[str, Any]] = None,
         multilateration_kwargs: Optional[Dict[str, Any]] = None,
@@ -190,6 +193,11 @@ class CBGPipeline:
             raise ValueError(
                 f"multilateration={multilateration!r} requires 'bounded_spline' "
                 f"distance, got {distance!r}"
+            )
+        if (multilateration, centroid) in _INCOMPATIBLE_MULTILAT_CENTROID:
+            raise ValueError(
+                f"centroid={centroid!r} requires a polygon region, but "
+                f"multilateration={multilateration!r} returns crossing vertices"
             )
         if multilateration == "planar_annulus_weighted" and filtering != "none":
             warnings.warn(

@@ -34,8 +34,8 @@ Available components (string names for from_config):
     Filtering:      redundant_circle, none
     Multilateration: spherical_circle, planar_circle, planar_annulus,
                     planar_annulus_weighted
-    Centroid:       arithmetic_mean, geometric_centroid, monte_carlo_median,
-                    geometric_median
+    Centroid:       boundary_vertex_mean, geometric_centroid,
+                    monte_carlo_median, geometric_median
 """
 
 from scripts.framework.pipeline import CBGPipeline
@@ -53,7 +53,7 @@ import scripts.framework.distance.speed_of_internet  # noqa: F401
 import scripts.framework.filtering.redundant_circle  # noqa: F401
 import scripts.framework.filtering.none  # noqa: F401
 import scripts.framework.multilateration.spherical_circle  # noqa: F401
-import scripts.framework.centroid.arithmetic_mean  # noqa: F401
+import scripts.framework.centroid.boundary_vertex_mean  # noqa: F401
 
 # Deferred imports — these have heavier dependencies (LP models, Octant, Shapely).
 # They are imported lazily to avoid import errors when dependencies are missing.

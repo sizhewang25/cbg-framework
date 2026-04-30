@@ -36,7 +36,7 @@ def plot_percentile_maps(
     """Generate circle-on-map plots at error percentiles.
 
     Args:
-        combos_to_plot: combo IDs to plot (default: A1, A2, B2)
+        combos_to_plot: combo IDs to plot (default: A1, A2, D2)
         percentiles: error percentiles to visualize
     """
     from scripts.analysis.cbg_evaluation.evaluate import build_pipeline
@@ -45,7 +45,7 @@ def plot_percentile_maps(
     )
 
     if combos_to_plot is None:
-        combos_to_plot = ["A1", "A2", "B2"]
+        combos_to_plot = ["A1", "A2", "D2"]
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

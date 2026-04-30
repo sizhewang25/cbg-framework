@@ -22,12 +22,12 @@ Implemented HF-style modular framework under `scripts/framework/` (commit `faedb
 - Distance: `speed_of_internet`, `low_envelope`, `bounded_spline`
 - Filtering: `redundant_circle`, `none`
 - Multilateration: `spherical_circle`, `planar_circle`, `planar_annulus_weighted`
-- Centroid: `arithmetic_mean`, `geometric_centroid`
+- Centroid: `boundary_vertex_mean`, `geometric_centroid`
 
 **Key design decisions**:
 - `CircleConstraint` dataclass with `to_legacy_tuple()` bridges new types to `helpers.py` functions
 - `MultilatResult` carries either `vertices` (spherical_circle) or `region` (planar Shapely geometry)
-- Both centroid methods handle both input types for maximum composability
+- `boundary_vertex_mean` handles spherical vertices and planar polygon boundaries; `geometric_centroid` is restricted to planar polygon regions
 - `planar_annulus_weighted` requires `bounded_spline` — validated in `from_config()`
 - Deferred imports (try/except) for optional heavy dependencies (Octant, LP models)
 
@@ -37,24 +37,24 @@ Implemented HF-style modular framework under `scripts/framework/` (commit `faedb
 
 Implemented evaluation harness under `scripts/analysis/cbg_evaluation/` (commit `855f45c`).
 
-**Scope change**: Removed C1 (`planar_annulus_weighted`) per user request. Renamed D-path to C-path (`planar_circle`+arith). Now 9 combinations across 3 paths.
+**Scope change**: Removed C1 (`planar_annulus_weighted`) per user request. Renamed D-path to C-path (`planar_circle` + boundary vertex mean). Now 9 combinations across 3 paths.
 
 **Results** (266 probes, AS7922, 7 anchors):
 
 | Rank | Combo | Label | Median Error (km) | Within 100km | Within 500km |
 |------|-------|-------|-------------------|-------------|-------------|
-| 1 | C1 | SoI + `planar_circle` + Arith | 333 | 30.8% | 59.0% |
-| 2 | A3 | Spline + `spherical_circle` + Arith | 337 | 28.2% | 57.1% |
+| 1 | C1 | SoI + `planar_circle` + boundary mean | 333 | 30.8% | 59.0% |
+| 2 | A3 | Spline + `spherical_circle` + boundary mean | 337 | 28.2% | 57.1% |
 | 3 | B1 | SoI + `planar_circle` + Geom | 395 | 31.6% | 56.0% |
-| 4 | C3 | Spline + `planar_circle` + Arith | 447 | 19.5% | 53.0% |
+| 4 | C3 | Spline + `planar_circle` + boundary mean | 447 | 19.5% | 53.0% |
 | 5 | B3 | Spline + `planar_circle` + Geom | 465 | 21.4% | 54.9% |
 | 6 | B2 | LP + `planar_circle` + Geom | 494 | 7.9% | 50.4% |
-| 7 | C2 | LP + `planar_circle` + Arith | 541 | 4.9% | 45.5% |
-| 8 | A2 | LP + `spherical_circle` + Arith | 602 | 4.5% | 40.2% |
-| 9 | A1 | SoI + `spherical_circle` + Arith | 687 | 28.6% | 45.1% |
+| 7 | C2 | LP + `planar_circle` + boundary mean | 541 | 4.9% | 45.5% |
+| 8 | A2 | LP + `spherical_circle` + boundary mean | 602 | 4.5% | 40.2% |
+| 9 | A1 | SoI + `spherical_circle` + boundary mean | 687 | 28.6% | 45.1% |
 
 **Key observations**:
-- Planar_circle multilateration + arithmetic centroid (Path C) consistently outperforms spherical_circle path (Path A) for same distance model
+- Planar_circle multilateration + boundary vertex mean (Path C) consistently outperforms spherical_circle path (Path A) for same distance model
 - Bounded spline (A3) is the best performer on the spherical_circle path (337 km vs A1's 687 km)
 - LP lower envelope (A2, B2, C2) consistently ranks lower than SoI and Spline variants
 - SoI has highest within-100km rate despite high median — bimodal: very accurate or very wrong
@@ -89,12 +89,12 @@ Compared three single-point estimation methods using their best-performing pipel
 |--------|------------|:------------:|:------------:|:------------:|:-------------:|:--------------------:|
 | **MC Median** | G3 (Spline + `planar_annulus`) | **312.4 km** | 20.7% | **77.4%** | **94.0%** | ~27s |
 | **Geometric Centroid** | F3 (Spline + `planar_annulus`) | 328.0 km | 21.4% | 74.4% | 94.0% | ~0.21s |
-| **Arithmetic Mean** | A3 (Spline + `spherical_circle`) | 336.8 km | 28.2% | 57.1% | 86.8% | ~0.18s |
+| **Boundary Vertex Mean** | A3 (Spline + `spherical_circle`) | 336.8 km | 28.2% | 57.1% | 86.8% | ~0.18s |
 
 **Key takeaways**:
-- MC Median achieves the best median error (312 km, ~5% better than geometric centroid, ~7% better than arithmetic mean) but is ~130x slower due to Sobol quasi-random sampling (1000 points) + medoid-style point selection per target
+- MC Median achieves the best median error (312 km, ~5% better than geometric centroid, ~7% better than boundary vertex mean) but is ~130x slower due to Sobol quasi-random sampling (1000 points) + medoid-style point selection per target
 - Geometric Centroid (area-weighted via Shapely) provides the best accuracy/speed trade-off: nearly identical to MC Median at the 1000 km threshold (both 94%) for ~1/130th the compute cost
-- Arithmetic Mean is fastest but degrades significantly at the 500 km threshold (57% vs 74-77%) — likely because it does not account for region shape/area
+- Boundary Vertex Mean is fastest but degrades significantly at the 500 km threshold (57% vs 74-77%) — likely because it does not account for region shape/area
 - MC Median is only worth the cost in offline/batch settings where the ~5% median error improvement justifies the runtime penalty
 - All three methods benefit most from the Spline distance model + planar_annulus multilateration; the centroid method choice is secondary to the upstream pipeline
 

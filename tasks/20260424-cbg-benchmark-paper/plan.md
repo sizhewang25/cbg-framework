@@ -18,9 +18,9 @@ Every CBG variant can be decomposed into three phases:
 |-------|-------------|---------------|
 | **1. RTT-distance modeling** | Converts measured RTT to a distance bound per VP | 2/3c (Million-Scale), low-envelope LP fit (Vanilla CBG), bounded spline + delta band (Octant) |
 | **2. Multilateration** | Intersects per-VP constraints to form a feasible region | `spherical_circle`, `planar_circle`, `planar_annulus`, `planar_annulus_weighted` |
-| **3. Single-point estimation** | Collapses feasible region to one (lat, lon) | Arithmetic mean of vertices, geometric centroid (Shapely .centroid), Monte Carlo sampled medoid |
+| **3. Single-point estimation** | Collapses feasible region to one (lat, lon) | `boundary_vertex_mean`, geometric centroid (Shapely .centroid), Monte Carlo sampled medoid, snapped geometric median |
 
-The current repo (`geoloc-imc-2023`) already implements and benchmarks 18 combinations of these phases (task `20260415-cbg-combination-evaluation`). Key finding: Octant spline + `planar_annulus` + geometric centroid achieves 328 km median error at near-zero overhead; replacing geometric centroid with MC median reduces this to 312 km but at ~130x the compute cost.
+The current repo (`geoloc-imc-2023`) implements 15 active valid combinations of these phases after excluding `spherical_circle + geometric_centroid`, because unordered crossing vertices are not valid polygon input. Previous benchmark numbers from task `20260415-cbg-combination-evaluation` need a rerun after the centroid semantics cleanup. Key historical finding: Octant spline + `planar_annulus` + geometric centroid achieved 328 km median error at near-zero overhead; replacing geometric centroid with MC median reduced this to 312 km but at ~130x the compute cost.
 
 ### Multi-tier geolocation pipeline (broader context)
 
@@ -56,12 +56,12 @@ All 18 CBG combinations are implemented in `scripts/framework/` and evaluated by
 ## Approach
 
 ### Phase 1: Finalize benchmark (mobile VP dataset)
-- Confirm all 18 combinations produce stable results on `vultr_pings_us_only.csv`
+- Confirm all 15 active valid combinations produce stable results on `vultr_pings_us_only.csv`
 - Add availability metric: fraction of targets where CBG produces a non-null estimate
 - Add per-combination compute cost (already partially logged)
 
 ### Phase 2: RIPE Atlas cross-validation
-- Run the same 18 combinations on `anchors_meshed_pings` (US subset) and EU subset
+- Run the same 15 active valid combinations on `anchors_meshed_pings` (US subset) and EU subset
 - Compare accuracy distributions: do rankings hold across datasets?
 - Identify any dataset-specific failure modes
 

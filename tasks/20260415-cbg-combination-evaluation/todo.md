@@ -7,8 +7,8 @@
 - [x] Audit Octant `compute_feasible_region_weighted()` to understand fused filtering+multilateration — 2026-04-15
 - [x] Define the canonical data contract for each phase boundary (Phase 1→2→3→4) — 2026-04-15
   - `CircleConstraint` dataclass bridges all phases; `MultilatResult` carries vertices or Shapely region
-- [x] Decide whether Path D (arithmetic_mean on `planar_circle` geometry) is worth including — 2026-04-15
-  - Yes: `arithmetic_mean` extracts boundary coords from Shapely geometry via `_extract_vertex_coords()`
+- [x] Decide whether Path D (`boundary_vertex_mean` on `planar_circle` geometry) is worth including — 2026-04-15
+  - Yes: `boundary_vertex_mean` extracts boundary coords from Shapely geometry via `_extract_vertex_coords()`
 - [x] Decide whether `bounded_spline + circle_removal` (A3/B3/D3) should use outer radius only or full annulus — 2026-04-15
   - Uses `radius_km` (outer) for legacy tuple conversion; `inner_radius_km` preserved in dataclass
 
@@ -19,11 +19,11 @@
 - [x] Implement Phase 1 variants: `speed_of_internet`, `low_envelope`, `bounded_spline` — 2026-04-15
 - [x] Implement Phase 2 variants: `redundant_circle`, `none` (passthrough) — 2026-04-15
 - [x] Implement Phase 3 variants: `spherical_circle`, `planar_circle`, `planar_annulus_weighted` — 2026-04-15
-- [x] Implement Phase 4 variants: `arithmetic_mean`, `geometric_centroid` — 2026-04-15
+- [x] Implement Phase 4 variants: `boundary_vertex_mean`, `geometric_centroid` — 2026-04-15
 - [x] Implement the combination runner via `CBGPipeline.geolocate()` + `geolocate_batch()` — 2026-04-15
 - [x] Add fallback logic (closest-VP by min RTT) in `CBGPipeline.geolocate()` — 2026-04-15
-- [ ] Verify: A1 (speed_of_internet + redundant_circle + spherical_circle + arithmetic_mean) matches `run_million_scale_cbg()` output exactly
-- [ ] Verify: A2 (low_envelope + redundant_circle + spherical_circle + arithmetic_mean) matches `run_vanilla_cbg()` output exactly
+- [ ] Verify: A1 (speed_of_internet + redundant_circle + spherical_circle + boundary_vertex_mean) matches `run_million_scale_cbg()` output exactly
+- [ ] Verify: A2 (low_envelope + redundant_circle + spherical_circle + boundary_vertex_mean) matches `run_vanilla_cbg()` output exactly
 
 ## Phase 2: Evaluation Harness (`scripts/analysis/cbg_evaluation/`)
 - [x] Create `combinations.py` — PipelineSpec registry (9 combos: A1-A3, B1-B3, C1-C3) + 6 diff pairs — 2026-04-15

@@ -23,14 +23,27 @@ from scripts.analysis.cbg_evaluation.evaluate import ProbeResult, get_errors
 # Within each panel, color distinguishes multilateration+centroid path.
 _PATH_STYLE = {
     # (multilateration, centroid) → (color, short_label)
-    ("spherical_circle", "arithmetic_mean"): ("#D55E00", "spherical_circle + Arith"),
-    ("spherical_circle", "geometric_centroid"): ("#CC79A7", "spherical_circle + Geom"),
-    ("planar_circle", "arithmetic_mean"): ("#009E73", "planar_circle + Arith"),
-    ("planar_circle", "geometric_centroid"): ("#0072B2", "planar_circle + Geom"),
-    ("planar_circle", "monte_carlo_median"): ("#882255", "planar_circle + MC Median"),
-    ("planar_annulus", "arithmetic_mean"): ("#E69F00", "planar_annulus + Arith"),
-    ("planar_annulus", "geometric_centroid"): ("#56B4E9", "planar_annulus + Geom"),
-    ("planar_annulus", "monte_carlo_median"): ("#999933", "planar_annulus + MC Median"),
+    ("spherical_circle", "boundary_vertex_mean"): (
+        "#D55E00", "spherical_circle + boundary_vertex_mean",
+    ),
+    ("planar_circle", "boundary_vertex_mean"): (
+        "#009E73", "planar_circle + boundary_vertex_mean",
+    ),
+    ("planar_circle", "geometric_centroid"): (
+        "#0072B2", "planar_circle + geometric_centroid",
+    ),
+    ("planar_circle", "monte_carlo_median"): (
+        "#882255", "planar_circle + monte_carlo_median",
+    ),
+    ("planar_annulus", "boundary_vertex_mean"): (
+        "#E69F00", "planar_annulus + boundary_vertex_mean",
+    ),
+    ("planar_annulus", "geometric_centroid"): (
+        "#56B4E9", "planar_annulus + geometric_centroid",
+    ),
+    ("planar_annulus", "monte_carlo_median"): (
+        "#999933", "planar_annulus + monte_carlo_median",
+    ),
 }
 
 _DISTANCE_TITLES = {

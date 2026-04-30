@@ -2,7 +2,7 @@
 
 **Status**: In Progress
 **Created**: 2026-04-24
-**Last Updated**: 2026-04-30 (geometry library note added)
+**Last Updated**: 2026-04-30 (centroid semantics cleanup)
 
 ## Summary
 
@@ -12,13 +12,13 @@ Planning stage. Scope defined based on findings from task `20260415-cbg-combinat
 
 ### 2026-04-24 — Baseline results from CBG combination evaluation
 
-From 18-combination benchmark on AS7922 Vultr mobile VP dataset (266 probes, 7 anchors):
+From the historical 18-combination benchmark on AS7922 Vultr mobile VP dataset before the centroid semantics cleanup (266 probes, 7 anchors):
 
 | Combination | Distance Model | Multilateration | Centroid | Median Error | Within 1000km | Runtime |
 |-------------|---------------|-----------------|----------|:------------:|:-------------:|:-------:|
-| G3 (best) | Octant spline | `planar_annulus` | MC median | **312 km** | 94.0% | ~27s |
-| F3 | Octant spline | `planar_annulus` | Geometric | 328 km | 94.0% | ~0.21s |
-| A3 | Octant spline | `spherical_circle` | Arith. mean | 337 km | 86.8% | ~0.18s |
+| G3 (best) | Octant spline | `planar_annulus` | `monte_carlo_median` | **312 km** | 94.0% | ~27s |
+| F3 | Octant spline | `planar_annulus` | `geometric_centroid` | 328 km | 94.0% | ~0.21s |
+| A3 | Octant spline | `spherical_circle` | `boundary_vertex_mean` | 337 km | 86.8% | ~0.18s |
 
 Key patterns established:
 - Distance model dominates: Octant spline consistently outperforms 2/3c and LP low-envelope
@@ -26,9 +26,15 @@ Key patterns established:
 - MC median adds ~5% accuracy over geometric centroid at ~130x the compute cost
 - Geometric centroid is the best accuracy/speed trade-off for production use
 
+### 2026-04-30 — Centroid semantics cleanup
+
+Active framework combinations now exclude `spherical_circle + geometric_centroid`: `spherical_circle` returns unordered crossing vertices, while `geometric_centroid` requires a Shapely polygon region. The old vertex-average centroid is now named `boundary_vertex_mean`, and for planar annuli it includes both exterior and interior-ring vertices so annulus holes are represented in the boundary mean.
+
+This changes the active benchmark set from 18 historical combinations to 15 valid combinations. The previous accuracy and runtime tables should be treated as historical until the full benchmark is rerun under the updated semantics.
+
 ### 2026-04-30 — Why Shapely is used and possible spherical alternatives
 
-Current `planar_circle` and `planar_annulus` variants use Shapely because they need filled-region geometry and Boolean set operations: intersect all outer disks, union inner disks, subtract inner exclusions, compute polygon centroids, and sample points inside feasible regions. The legacy `spherical_circle` helper does not build a filled region; it computes pairwise great-circle crossing points, filters those points against all circles, and returns a sparse vertex list. That is sufficient for disk-only CBG plus arithmetic mean, but it does not naturally represent annulus holes, polygon/MultiPolygon regions, Boolean difference, area-weighted centroids, or region sampling.
+Current `planar_circle` and `planar_annulus` variants use Shapely because they need filled-region geometry and Boolean set operations: intersect all outer disks, union inner disks, subtract inner exclusions, compute polygon centroids, and sample points inside feasible regions. The legacy `spherical_circle` helper does not build a filled region; it computes pairwise great-circle crossing points, filters those points against all circles, and returns a sparse vertex list. That is sufficient for disk-only CBG plus `boundary_vertex_mean`, but it does not naturally represent annulus holes, polygon/MultiPolygon regions, Boolean difference, area-weighted centroids, or region sampling.
 
 This does not mean spherical geometry cannot support annuli. A future `spherical_annulus` variant is possible, but it would need a spherical polygon/Boolean geometry backend. Candidate libraries:
 - Google S2 Geometry: strongest general-purpose option for robust spherical polygons, containment, centroids, and Boolean operations. Main implementation is C++; Python bindings exist but are less mature than the core library.
@@ -37,6 +43,8 @@ This does not mean spherical geometry cannot support annuli. A future `spherical
 - GeographicLib: excellent for geodesic polygon area/perimeter, but not a Boolean overlay engine, so it cannot directly replace Shapely for intersection/difference.
 
 Recommended future work: prototype `spherical_annulus` with `spherical-geometry` first, then evaluate S2 if robustness or performance matters. This would directly quantify the approximation gap between current planar `(lon, lat)` Shapely annuli and true spherical polygon operations.
+
+Reminder: the current framework uses its own sampled medoid for `monte_carlo_median` and a framework-owned Weiszfeld-style solver for `geometric_median`. If the snapped `geometric_median` path becomes a runtime bottleneck, re-evaluate integrating the `geom-median` package as an optimized continuous median backend before snapping to the nearest sampled feasible point.
 
 ### 2026-04-24 — Related Work Survey
 

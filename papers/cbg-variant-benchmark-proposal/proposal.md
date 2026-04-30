@@ -117,7 +117,7 @@ The spline model produces **annuli** rather than disks, encoding both a maximum 
 
 | Variant                 | Source       | Method                                                           | Complexity   |
 | ----------------------- | ------------ | ---------------------------------------------------------------- | ------------ |
-| **Arithmetic Mean**     | Original CBG | Average of intersection vertex coordinates                       | O(1)         |
+| **`boundary_vertex_mean`** | Original CBG | Average of boundary vertex coordinates; includes polygon holes for annuli | O(1)         |
 | **Geometric Centroid**  | —            | Area-weighted centroid of feasible polygon (Shapely `.centroid`) | O(1)         |
 | **MC Sampled Medoid**   | Octant       | 1000-point Sobol QMC sampling + sampled point with minimum total pairwise distance | O(n_samples²) |
 
@@ -129,10 +129,11 @@ The MC sampled medoid minimizes sum of distances to all sampled feasible points 
 Not all combinations are valid due to type constraints:
 
 - `planar_annulus` and `planar_annulus_weighted` require the spline distance model (annuli as input)
-- Arithmetic mean on vertex lists only works after `spherical_circle`
-- MC median and geometric centroid require a Shapely polygon
+- `boundary_vertex_mean` works on `spherical_circle` vertex lists and on planar polygon boundary rings
+- `geometric_centroid` requires a Shapely polygon; it is not valid for unordered `spherical_circle` crossing vertices
+- MC sampled medoid can operate on planar polygon samples or directly on `spherical_circle` vertex point sets
 
-We evaluated **18 valid combinations** across these constraints (see Section 6).
+We currently evaluate **15 active valid combinations** across these constraints (see Section 6). The historical 18-combination run included `spherical_circle + geometric_centroid`, which is now excluded because unordered spherical crossing vertices cannot reliably form a polygon.
 
 ---
 
@@ -148,7 +149,7 @@ When RTT constraints are noisy or the VP set is poorly chosen, the intersection 
 
 ### 4.3 Scalability vs. Accuracy Tradeoff
 
-The most accurate preliminary CBG configuration (Octant spline + `planar_annulus` + MC median) achieves 312 km median error but requires ~27s per target due to the 1000-sample Monte Carlo step. At 50M IPs, this is computationally infeasible without massive parallelism. We must characterize the entire Pareto frontier of accuracy vs. cost across all 18 combinations to identify which configurations are viable at scale.
+The most accurate preliminary CBG configuration (Octant spline + `planar_annulus` + MC median) achieved 312 km median error in the historical run but requires ~27s per target due to the 1000-sample Monte Carlo step. At 50M IPs, this is computationally infeasible without massive parallelism. We must rerun the Pareto frontier of accuracy vs. cost across the 15 active valid combinations to identify which configurations are viable at scale.
 
 ### 4.4 VP Selection and Coverage
 
@@ -246,7 +247,7 @@ RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and b
 | No systematic cross-phase CBG benchmark                                | First to decompose CBG into 3 phases and benchmark all valid combinations |
 | Phase 1 improvements proposed in isolation                             | Controlled evaluation holding other phases fixed                          |
 | Only one public CBG implementation (IMC 2023)                          | Open-source framework covering all known variants                         |
-| No accuracy-vs-scalability characterization                            | Pareto frontier of median error vs. runtime for 18 combinations           |
+| No accuracy-vs-scalability characterization                            | Pareto frontier of median error vs. runtime for 15 active valid combinations |
 | Simpler alternatives (GeoPing, GeoCluster, ML) each have critical gaps | CBG: physics-grounded, label-free, auditable, scalable to millions of IPs |
 | Commercial services opaque and inaccurate on cloud IPs                 | Auditable, reproducible CBG alternative                                   |
 
@@ -267,24 +268,24 @@ RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and b
 
 | ID     | Distance Model  | Multilateration    | Centroid    | Median Error | Within 500km | Within 1000km |
 | ------ | --------------- | ------------------ | ----------- | ------------ | ------------ | ------------- |
-| **G3** | Octant spline   | `planar_annulus`   | MC median   | **312 km**   | **77.4%**    | **94.0%**     |
-| **F3** | Octant spline   | `planar_annulus`   | Geometric   | **328 km**   | **74.4%**    | **94.0%**     |
-| E3     | Octant spline   | `planar_annulus`   | Arith. mean | 374 km       | 64.7%        | 92.9%         |
-| C1     | 2/3c            | `planar_circle`    | Arith. mean | 333 km       | 59.0%        | 82.0%         |
-| A3     | Octant spline   | `spherical_circle` | Arith. mean | 337 km       | 57.1%        | 86.8%         |
-| D1     | 2/3c            | `planar_circle`    | Geometric   | 395 km       | 56.0%        | 81.6%         |
-| H1     | 2/3c            | `planar_circle`    | MC median   | 394 km       | 56.4%        | 81.6%         |
-| A2     | LP low-envelope | `spherical_circle` | Arith. mean | 602 km       | 40.2%        | 69.2%         |
-| A1     | 2/3c            | `spherical_circle` | Arith. mean | 687 km       | 45.1%        | 59.0%         |
+| **G3** | Octant spline   | `planar_annulus`   | `monte_carlo_median` | **312 km** | **77.4%** | **94.0%** |
+| **F3** | Octant spline   | `planar_annulus`   | `geometric_centroid` | **328 km** | **74.4%** | **94.0%** |
+| E3     | Octant spline   | `planar_annulus`   | `boundary_vertex_mean` | 374 km | 64.7% | 92.9% |
+| C1     | 2/3c            | `planar_circle`    | `boundary_vertex_mean` | 333 km | 59.0% | 82.0% |
+| A3     | Octant spline   | `spherical_circle` | `boundary_vertex_mean` | 337 km | 57.1% | 86.8% |
+| D1     | 2/3c            | `planar_circle`    | `geometric_centroid` | 395 km | 56.0% | 81.6% |
+| H1     | 2/3c            | `planar_circle`    | `monte_carlo_median` | 394 km | 56.4% | 81.6% |
+| A2     | LP low-envelope | `spherical_circle` | `boundary_vertex_mean` | 602 km | 40.2% | 69.2% |
+| A1     | 2/3c            | `spherical_circle` | `boundary_vertex_mean` | 687 km | 45.1% | 59.0% |
 
 
-*All 18 combinations achieved 100% intersection rate (n=266). Full table in evaluation_summary.json.*
+*Historical run before centroid semantics cleanup; rerun required for the current 15 active valid combinations. All listed combinations achieved 100% intersection rate (n=266).*
 
 ### Error CDF
 
-Error CDF for all 18 combinations
+Error CDF for the historical combination set
 
-*Figure: Cumulative distribution of geolocation error for all 18 CBG combinations. The Octant spline + `planar_annulus` cluster (E3/F3/G3, top-left) clearly separates from all other configurations.*
+*Figure: Cumulative distribution of geolocation error for the historical CBG combinations. The Octant spline + `planar_annulus` cluster (E3/F3/G3, top-left) clearly separates from all other configurations. This figure must be regenerated for the current 15 active valid combinations.*
 
 ### Key Findings
 
@@ -308,7 +309,7 @@ Spline + `planar_annulus` + geometric centroid (F3) achieves:
 This configuration should be adopted as the practical SOTA for unicast CBG at scale.
 
 **Finding 5 — Centroid method matters little when multilateration is good; it matters more when multilateration is poor.**
-On the `planar_circle`/`spherical_circle` paths (poor multilateration), switching centroid from arithmetic mean to geometric centroid or MC median gives inconsistent and small gains. On the `planar_annulus` path (good multilateration), the centroid choice yields 5–15% median error differences. The multilateration quality provides the floor; centroid refinement operates on what remains.
+On the `planar_circle`/`spherical_circle` paths (poor multilateration), switching centroid from `boundary_vertex_mean` to geometric centroid or MC median gives inconsistent and small gains. On the `planar_annulus` path (good multilateration), the centroid choice yields 5–15% median error differences. The multilateration quality provides the floor; centroid refinement operates on what remains.
 
 ### Scalability Comparison
 
@@ -316,9 +317,9 @@ On the `planar_circle`/`spherical_circle` paths (poor multilateration), switchin
 | Configuration                             | Median Error | Runtime / target | Feasible at 50M IPs?              |
 | ----------------------------------------- | ------------ | ---------------- | --------------------------------- |
 | G3 (Spline + `planar_annulus` + MC median)         | 312 km       | ~27s             | No (requires massive parallelism) |
-| **F3 (Spline + `planar_annulus` + Geom centroid)** | **328 km**   | **~0.2s**        | **Yes**                           |
-| A3 (Spline + `spherical_circle` + Arith)    | 337 km       | ~0.18s           | Yes                               |
-| A1 (2/3c + `spherical_circle` + Arith)      | 687 km       | ~0.04s           | Yes                               |
+| **F3 (Spline + `planar_annulus` + `geometric_centroid`)** | **328 km** | **~0.2s** | **Yes** |
+| A3 (Spline + `spherical_circle` + `boundary_vertex_mean`) | 337 km | ~0.18s | Yes |
+| A1 (2/3c + `spherical_circle` + `boundary_vertex_mean`) | 687 km | ~0.04s | Yes |
 
 
 *Runtime measured on AS7922 dataset, 266 probes, single-threaded.*
@@ -331,15 +332,15 @@ On the `planar_circle`/`spherical_circle` paths (poor multilateration), switchin
 
 ### Phase 1: Finalize Unicast Benchmark (mobile VP dataset)
 
-- Confirm all 18 combinations produce stable, reproducible results
+- Confirm all 15 active valid combinations produce stable, reproducible results
 - Add memory profiling per combination (model storage + runtime peak)
 - Add availability metric: fraction of targets with non-null CBG estimate
 - Extend runtime measurements to larger target set (1K+ IPs) for reliable throughput estimates
 
 ### Phase 2: RIPE Atlas Cross-Validation
 
-- Run all 18 combinations on RIPE Atlas anchor meshed pings (US subset)
-- Run all 18 combinations on RIPE Atlas EU subset
+- Run all 15 active valid combinations on RIPE Atlas anchor meshed pings (US subset)
+- Run all 15 active valid combinations on RIPE Atlas EU subset
 - Test whether phase rankings hold across datasets and geographies
 
 ### Phase 3: VP Count Sensitivity Analysis

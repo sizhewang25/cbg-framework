@@ -3,7 +3,7 @@
 Samples points inside the feasible region via Sobol QMC rejection sampling,
 then selects the sampled point with minimum total distance to all samples.
 
-More robust than arithmetic mean or area-weighted centroid for irregular
+More robust than boundary-vertex mean or area-weighted centroid for irregular
 or elongated feasible regions. Unlike a continuous geometric median, the final
 point is guaranteed to be one of the sampled feasible points.
 
