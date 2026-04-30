@@ -1,4 +1,4 @@
-"""Phase 3 variant: Unweighted Annulus Intersection (Octant).
+"""Phase 2 variant: Unweighted Annulus Intersection (Octant).
 
 Intersects all outer disks, then subtracts all inner disks.
 Result = intersection(all outer disks) - union(all inner disks)

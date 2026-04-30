@@ -1,4 +1,4 @@
-"""Phase 3 variant: Weighted Grid (Octant — fused Phase 2+3).
+"""Phase 2 variant: Weighted Grid (Octant — fused Phase 2+3).
 
 Grid-based weight accumulation over annular constraints. Points with
 cumulative weight exceeding a threshold form the feasible region.

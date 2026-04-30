@@ -1,4 +1,4 @@
-"""Phase 2: Constraint Filtering.
+"""Optional preprocessing: Constraint Filtering.
 
 Base class for all filtering variants.
 Each variant takes a list of CircleConstraints and returns a filtered subset.

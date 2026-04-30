@@ -1,9 +1,10 @@
-"""Phase 2 variant: Redundant Circle Removal (Million-Scale CBG).
+"""Optional preprocessing variant: Redundant Circle Removal.
 
 Pairwise containment check — removes the larger circle when one fully
 contains another, keeping the tightest bound.
 
-Wraps: scripts/utils/helpers.py :: circle_preprocessing()
+Uses the framework-owned copy of the Million-Scale helper so framework
+filtering can evolve without changing legacy analysis scripts.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from typing import List
 from scripts.framework.filtering import BaseFilter
 from scripts.framework.registry import register_filtering
 from scripts.framework.types import CircleConstraint
-from scripts.utils.helpers import circle_preprocessing
+from scripts.framework.geometry import circle_preprocessing
 
 
 @register_filtering("redundant_circle")
@@ -38,7 +39,7 @@ class RedundantCircleFilter(BaseFilter):
             legacy_tuples, speed_threshold=self.speed_threshold
         )
 
-        # Match back: circle_preprocessing returns set of (lat, lon, rtt, d, r).
+        # Match back: circle_preprocessing returns (lat, lon, rtt, d, r).
         # Use (lat, lon, rtt) as composite key to identify kept constraints.
         kept_keys = {(t[0], t[1], t[2]) for t in kept_set}
         return [

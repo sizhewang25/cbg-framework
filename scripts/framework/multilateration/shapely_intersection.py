@@ -1,4 +1,4 @@
-"""Phase 3 variant: Shapely Polygon Intersection.
+"""Phase 2 variant: Shapely Polygon Intersection.
 
 Approximates circles as 100-point polygons in degree space and computes
 their intersection via Shapely. Returns a Shapely geometry.

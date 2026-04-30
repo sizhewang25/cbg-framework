@@ -103,6 +103,7 @@ def save_json_summary(all_results, output_path):
             },
             "n_probes": len(results),
             "n_successful": len(errors),
+            "availability_rate_pct": round(len(errors) / max(len(results), 1) * 100, 1),
             "intersection_rate_pct": round(n_intersected / max(len(results), 1) * 100, 1),
             "fallback_count": n_fallback,
             "fallback_rate_pct": round(n_fallback / max(len(results), 1) * 100, 1),

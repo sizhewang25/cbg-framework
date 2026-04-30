@@ -1,4 +1,4 @@
-"""Phase 3: Multilateration (Region Formation).
+"""Phase 2: Multilateration (Region Formation).
 
 Base class for all multilateration variants.
 Each variant intersects constraints to form a feasible region.
@@ -20,7 +20,7 @@ class BaseMultilateration:
         """Intersect circle constraints to form a feasible region.
 
         Args:
-            circles: Filtered list of CircleConstraint from Phase 2.
+            circles: Optionally filtered CircleConstraint list from Phase 1.
 
         Returns:
             MultilatResult with either vertices or Shapely region set.

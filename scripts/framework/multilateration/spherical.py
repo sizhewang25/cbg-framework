@@ -1,10 +1,11 @@
-"""Phase 3 variant: Spherical Circle Intersection (Million-Scale CBG).
+"""Phase 2 variant: Spherical Circle Intersection (Million-Scale CBG).
 
 Exact spherical geometry: computes pairwise great-circle crossing points
 and filters to points inside all circles. Returns a vertex list.
 
-Wraps: scripts/utils/helpers.py :: circle_intersections()
-Reference: run_million_scale_cbg() in evaluate_million_scale.py:174
+Uses the framework-owned corrected copy of the Million-Scale helper. Unlike the
+legacy helper, redundant-circle preprocessing is optional so the framework's
+filtering phase controls whether it happens.
 """
 
 from __future__ import annotations
@@ -14,31 +15,34 @@ from typing import List
 from scripts.framework.multilateration import BaseMultilateration
 from scripts.framework.registry import register_multilateration
 from scripts.framework.types import CircleConstraint, MultilatResult
-from scripts.utils.helpers import circle_intersections
+from scripts.framework.geometry import circle_intersections
 
 
 @register_multilateration("spherical")
 class SphericalMultilateration(BaseMultilateration):
     """Spherical circle intersection (IMC 2012 original).
 
-    Computes pairwise great-circle crossing points, then filters to
-    points that lie inside ALL circles. Internally calls
-    circle_preprocessing (idempotent if Phase 2 already filtered).
+    Computes pairwise great-circle crossing points, then filters to points that
+    lie inside all circles. The pipeline's filtering phase owns redundant-circle
+    removal; set `preprocess=True` only for legacy-style internal preprocessing.
     """
 
     name = "spherical"
 
-    def __init__(self, speed_threshold: float = 2 / 3):
+    def __init__(self, speed_threshold: float = 2 / 3, preprocess: bool = False):
         self.speed_threshold = speed_threshold
+        self.preprocess = preprocess
 
     def multilaterate(self, circles: List[CircleConstraint]) -> MultilatResult:
         if not circles:
             return MultilatResult(success=False)
 
         legacy_tuples = [c.to_legacy_tuple() for c in circles]
-        # circle_intersections returns (filtered_vertex_points, used_circles_set)
+        # circle_intersections returns (filtered_vertex_points, used_circles)
         points, used_set = circle_intersections(
-            legacy_tuples, speed_threshold=self.speed_threshold
+            legacy_tuples,
+            speed_threshold=self.speed_threshold,
+            preprocess=self.preprocess,
         )
 
         # Rebuild circles_used from the returned set
