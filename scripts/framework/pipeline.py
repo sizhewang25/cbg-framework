@@ -27,6 +27,7 @@ _INCOMPATIBLE_MULTILAT_DISTANCE = {
     ("weighted_grid", "speed_of_internet"),
     ("weighted_grid", "low_envelope"),
 }
+_ANNULUS_AWARE_MULTILAT = {"unweighted_annulus", "weighted_grid"}
 
 
 class CBGPipeline:
@@ -194,6 +195,17 @@ class CBGPipeline:
             warnings.warn(
                 f"weighted_grid has built-in filtering; filtering={filtering!r} "
                 f"is redundant. Consider filtering='none'.",
+                stacklevel=2,
+            )
+        if (
+            multilateration in _ANNULUS_AWARE_MULTILAT
+            and filtering == "redundant_circle"
+        ):
+            warnings.warn(
+                "redundant_circle is disk-only and ignores inner annulus "
+                f"radii; filtering={filtering!r} can invalidate "
+                f"multilateration={multilateration!r}. Consider "
+                "filtering='none'.",
                 stacklevel=2,
             )
 

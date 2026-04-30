@@ -114,21 +114,21 @@ COMBINATIONS: List[PipelineSpec] = [
     # Path E: unweighted_annulus + arithmetic_mean (spline only)
     PipelineSpec(
         "E3", "Spline + Annulus + Arith",
-        "bounded_spline", "redundant_circle", "unweighted_annulus", "arithmetic_mean",
+        "bounded_spline", "none", "unweighted_annulus", "arithmetic_mean",
         "#009E73", "-",
         needs_octant_fit=True,
     ),
     # Path F: unweighted_annulus + geometric_centroid (spline only)
     PipelineSpec(
         "F3", "Spline + Annulus + Geom",
-        "bounded_spline", "redundant_circle", "unweighted_annulus", "geometric_centroid",
+        "bounded_spline", "none", "unweighted_annulus", "geometric_centroid",
         "#009E73", "-",
         needs_octant_fit=True,
     ),
     # Path G: unweighted_annulus + monte_carlo_median (spline only)
     PipelineSpec(
         "G3", "Spline + Annulus + MC Median",
-        "bounded_spline", "redundant_circle", "unweighted_annulus", "monte_carlo_median",
+        "bounded_spline", "none", "unweighted_annulus", "monte_carlo_median",
         "#009E73", "-",
         needs_octant_fit=True,
     ),
