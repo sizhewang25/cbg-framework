@@ -71,6 +71,7 @@ def plot_benchmark_summary(
         output_dir / "benchmark_end_to_end_latency.png",
         output_dir / "benchmark_intersection_rate.png",
         output_dir / "benchmark_phase_latency_memory.png",
+        output_dir / "benchmark_phase_memory.png",
         output_dir / "benchmark_per_ip_e2e_latency_boxplot.png",
     ]
 
@@ -80,7 +81,9 @@ def plot_benchmark_summary(
     plt.close(fig)
     fig = plot_phase_latency_memory(benchmark_summary, outputs[2])
     plt.close(fig)
-    fig = plot_per_ip_e2e_latency_boxplot(benchmark_raw_path, outputs[3])
+    fig = plot_phase_memory(benchmark_summary, outputs[3])
+    plt.close(fig)
+    fig = plot_per_ip_e2e_latency_boxplot(benchmark_raw_path, outputs[4])
     plt.close(fig)
 
     return outputs
@@ -143,10 +146,9 @@ def plot_phase_latency_memory(
     benchmark_summary: Dict[str, Any],
     output_path: Path,
 ) -> plt.Figure:
-    """Plot stacked phase latency with memory lines on the same graph."""
+    """Plot stacked phase latency; filename kept for backward compatibility."""
     combo_ids = ordered_combo_ids(benchmark_summary)
     phase_seconds = extract_phase_latency_seconds(benchmark_summary, combo_ids)
-    tracemalloc_mb, rss_after_mb = extract_memory_mb(benchmark_summary, combo_ids)
     stack_totals = [
         sum(phase_seconds[phase][idx] for phase, _ in PHASE_STACK_ORDER)
         for idx in range(len(combo_ids))
@@ -157,10 +159,8 @@ def plot_phase_latency_memory(
         phase: reorder(values, ranked_indices)
         for phase, values in phase_seconds.items()
     }
-    tracemalloc_mb = reorder(tracemalloc_mb, ranked_indices)
-    rss_after_mb = reorder(rss_after_mb, ranked_indices)
 
-    fig, ax = plt.subplots(figsize=_figure_size(combo_ids, height=7.0))
+    fig, ax = plt.subplots(figsize=_figure_size(combo_ids, height=6.5))
     x = np.arange(len(combo_ids))
     bottoms = np.zeros(len(combo_ids), dtype=float)
 
@@ -182,30 +182,10 @@ def plot_phase_latency_memory(
     ax.set_xticks(x)
     ax.set_xticklabels(combo_ids)
     ax.set_ylabel("Stacked phase latency (s)")
-    ax.set_title("Phase Latency and Memory by Pipeline ID", fontweight="bold")
+    ax.set_title("Phase Latency by Pipeline ID", fontweight="bold")
     ax.grid(axis="y", alpha=0.25)
 
-    ax_mem = ax.twinx()
-    ax_mem.plot(
-        x,
-        tracemalloc_mb,
-        color="#1D3557",
-        marker="o",
-        linewidth=2.5,
-        label="max tracemalloc peak MB",
-    )
-    ax_mem.plot(
-        x,
-        rss_after_mb,
-        color="#D1495B",
-        marker="s",
-        linewidth=2.5,
-        label="max RSS after MB",
-    )
-    ax_mem.set_ylabel("Memory (MB)")
-
     bars_handles, bars_labels = ax.get_legend_handles_labels()
-    memory_handles, memory_labels = ax_mem.get_legend_handles_labels()
     ax.legend(
         bars_handles,
         bars_labels,
@@ -215,15 +195,96 @@ def plot_phase_latency_memory(
         fontsize=8,
         frameon=False,
     )
-    ax_mem.legend(
-        memory_handles,
-        memory_labels,
+
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    _save(fig, output_path)
+    return fig
+
+
+def plot_phase_memory(
+    benchmark_summary: Dict[str, Any],
+    output_path: Path,
+) -> plt.Figure:
+    """Plot phase-local Python memory bars with process max RSS line."""
+    combo_ids = ordered_combo_ids(benchmark_summary)
+    phase_memory_mb = extract_phase_memory_mb(benchmark_summary, combo_ids)
+    rss_after_mb = extract_max_rss_mb(benchmark_summary, combo_ids)
+    stack_totals = [
+        sum(phase_memory_mb[phase][idx] for phase, _ in PHASE_STACK_ORDER)
+        for idx in range(len(combo_ids))
+    ]
+    ranked_indices = rank_indices_desc(stack_totals)
+    combo_ids = reorder(combo_ids, ranked_indices)
+    phase_memory_mb = {
+        phase: reorder(values, ranked_indices)
+        for phase, values in phase_memory_mb.items()
+    }
+    rss_after_mb = reorder(rss_after_mb, ranked_indices)
+
+    fig, ax = plt.subplots(figsize=_figure_size(combo_ids, height=7.0))
+    x = np.arange(len(combo_ids))
+    bottoms = np.zeros(len(combo_ids), dtype=float)
+
+    for phase, label in PHASE_STACK_ORDER:
+        values = np.array(phase_memory_mb[phase], dtype=float)
+        if not np.any(values):
+            continue
+        ax.bar(
+            x,
+            values,
+            bottom=bottoms,
+            color=PHASE_COLORS[phase],
+            edgecolor="white",
+            linewidth=0.4,
+            label=label,
+        )
+        bottoms += values
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(combo_ids)
+    ax.set_ylabel("Stacked phase-local Python peak delta (MB)")
+    ax.set_title("Phase-Local Memory and Max RSS by Pipeline ID", fontweight="bold")
+    ax.grid(axis="y", alpha=0.25)
+
+    ax_rss = ax.twinx()
+    ax_rss.plot(
+        x,
+        rss_after_mb,
+        color="#D1495B",
+        marker="s",
+        linewidth=2.5,
+        label="max RSS after MB",
+    )
+    ax_rss.set_ylabel("Process max RSS after phase (MB)")
+
+    bars_handles, bars_labels = ax.get_legend_handles_labels()
+    rss_handles, rss_labels = ax_rss.get_legend_handles_labels()
+    ax.legend(
+        bars_handles,
+        bars_labels,
+        loc="upper left",
+        bbox_to_anchor=(0.0, -0.15),
+        ncol=4,
+        fontsize=8,
+        frameon=False,
+    )
+    ax_rss.legend(
+        rss_handles,
+        rss_labels,
         loc="upper right",
         fontsize=8,
         frameon=True,
     )
+    fig.text(
+        0.01,
+        0.01,
+        "Memory bars are per-phase tracemalloc peak deltas; "
+        "stacks are attribution aids, not concurrent RSS totals.",
+        fontsize=8,
+        color="#495057",
+    )
 
-    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    fig.tight_layout(rect=(0, 0.1, 1, 1))
     _save(fig, output_path)
     return fig
 
@@ -371,6 +432,41 @@ def extract_memory_mb(
     return tracemalloc_values, rss_after_values
 
 
+def extract_phase_memory_mb(
+    benchmark_summary: Dict[str, Any],
+    combo_ids: Iterable[str],
+) -> Dict[str, List[float]]:
+    """Extract stackable phase-local tracemalloc peak deltas as MB."""
+    combinations = benchmark_summary.get("combinations", {})
+    phase_memory: Dict[str, List[float]] = {
+        phase: [] for phase, _ in PHASE_STACK_ORDER
+    }
+    for combo_id in combo_ids:
+        phases = combinations.get(combo_id, {}).get("phases", {})
+        for phase, _ in PHASE_STACK_ORDER:
+            phase_entry = phases.get(phase, {})
+            value = _metric_or_fallback(
+                phase_entry,
+                "max_tracemalloc_phase_peak_delta_mb",
+                "max_tracemalloc_peak_mb",
+            )
+            phase_memory[phase].append(value)
+    return phase_memory
+
+
+def extract_max_rss_mb(
+    benchmark_summary: Dict[str, Any],
+    combo_ids: Iterable[str],
+) -> List[float]:
+    """Extract max RSS-after value per combo."""
+    combinations = benchmark_summary.get("combinations", {})
+    values = []
+    for combo_id in combo_ids:
+        phases = combinations.get(combo_id, {}).get("phases", {})
+        values.append(_max_metric(phases.values(), "max_rss_after_mb"))
+    return values
+
+
 def load_per_ip_e2e_latency_ms(
     benchmark_raw_path: Path,
     include_fallback: bool = False,
@@ -437,6 +533,17 @@ def _max_metric(phases: Iterable[Dict[str, Any]], metric: str) -> float:
         if phase.get(metric) is not None
     ]
     return max(values) if values else 0.0
+
+
+def _metric_or_fallback(
+    phase: Dict[str, Any],
+    metric: str,
+    fallback_metric: str,
+) -> float:
+    value = phase.get(metric)
+    if value is None:
+        value = phase.get(fallback_metric)
+    return float(value) if value is not None else 0.0
 
 
 def _csv_bool(value: Any) -> bool:

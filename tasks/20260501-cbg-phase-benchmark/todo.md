@@ -15,6 +15,10 @@
       results survive if a long run fails before final summary plotting.
 - [x] Add timestamped run output directories so repeated benchmark invocations
       do not overwrite previous results by default.
+- [x] Refine per-phase memory reporting: keep raw per-phase `tracemalloc`
+      current/peak and RSS before/after/delta, and add explicit derived
+      high-water fields only if we can label them as incremental process
+      high-water contribution rather than true phase-local memory usage.
 - [ ] Investigate pipeline optimization for scaled runs, including per-setting
       or per-probe parallelization and algorithmic improvements to expensive
       annulus/Monte Carlo/geometric-centroid paths.

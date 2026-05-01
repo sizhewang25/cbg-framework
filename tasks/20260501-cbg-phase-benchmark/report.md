@@ -22,8 +22,12 @@ The overhead bucket captures fallback plus Python glue code.
   `distance.estimate`, `filtering.filter`, `multilateration.multilaterate`,
   and `centroid.select`.
 - `total_geolocate` records total wall time and RSS snapshots. Component rows
-  record `tracemalloc` peaks; total rows intentionally skip `tracemalloc`
-  because component measurements are nested and reset phase peaks.
+  record absolute `tracemalloc` peaks plus phase-local peak deltas; total rows
+  intentionally skip `tracemalloc` because component measurements are nested
+  and reset phase peaks.
+- Memory charts are split from latency charts: phase latency remains a
+  latency-only stacked bar, while phase memory uses stacked phase-local
+  `tracemalloc` peak deltas and a separate max-RSS line.
 - `pipeline_overhead` is derived as total geolocation time minus measured
   component phase time. It covers fallback plus Python glue code.
 - Setting-level timing now uses `load_data_ms`, `fit_lp_model_ms`,

@@ -39,11 +39,16 @@ class BenchmarkRecord:
     probe_ip: str
     phase: str
     elapsed_ms: float
+    tracemalloc_before_bytes: Optional[int] = None
     tracemalloc_current_bytes: Optional[int] = None
     tracemalloc_peak_bytes: Optional[int] = None
+    tracemalloc_peak_delta_bytes: Optional[int] = None
     rss_before_bytes: Optional[int] = None
     rss_after_bytes: Optional[int] = None
     rss_delta_bytes: Optional[int] = None
+    rss_high_water_before_bytes: Optional[int] = None
+    rss_high_water_after_bytes: Optional[int] = None
+    rss_high_water_delta_bytes: Optional[int] = None
     success: Optional[bool] = None
     fallback_used: Optional[bool] = None
     fallback_reason: Optional[str] = None
@@ -72,6 +77,7 @@ class BenchmarkRecorder:
     def __init__(self):
         self.records: List[BenchmarkRecord] = []
         self._process = psutil.Process()
+        self._max_rss_seen_bytes = self._rss_bytes()
         if not tracemalloc.is_tracing():
             tracemalloc.start()
 
@@ -86,8 +92,13 @@ class BenchmarkRecorder:
     ) -> Iterator[None]:
         """Measure one phase in milliseconds with Python and RSS memory stats."""
         rss_before = self._rss_bytes()
+        rss_high_water_before = self._max_rss_seen_bytes
         if track_tracemalloc:
+            tracemalloc_before, _ = tracemalloc.get_traced_memory()
+            tracemalloc_before = int(tracemalloc_before)
             tracemalloc.reset_peak()
+        else:
+            tracemalloc_before = None
         start = time.perf_counter()
         try:
             yield
@@ -97,10 +108,18 @@ class BenchmarkRecorder:
                 current, peak = tracemalloc.get_traced_memory()
                 current = int(current)
                 peak = int(peak)
+                peak_delta = max(0, peak - int(tracemalloc_before or 0))
             else:
                 current = None
                 peak = None
+                peak_delta = None
             rss_after = self._rss_bytes()
+            rss_high_water_after = max(rss_high_water_before, rss_after)
+            rss_high_water_delta = max(
+                0,
+                rss_high_water_after - rss_high_water_before,
+            )
+            self._max_rss_seen_bytes = max(self._max_rss_seen_bytes, rss_after)
             extra = metadata() if metadata is not None else {}
             self.records.append(
                 BenchmarkRecord(
@@ -108,11 +127,16 @@ class BenchmarkRecorder:
                     probe_ip=probe_ip,
                     phase=phase,
                     elapsed_ms=float(elapsed_ms),
+                    tracemalloc_before_bytes=tracemalloc_before,
                     tracemalloc_current_bytes=current,
                     tracemalloc_peak_bytes=peak,
+                    tracemalloc_peak_delta_bytes=peak_delta,
                     rss_before_bytes=int(rss_before),
                     rss_after_bytes=int(rss_after),
                     rss_delta_bytes=int(rss_after - rss_before),
+                    rss_high_water_before_bytes=int(rss_high_water_before),
+                    rss_high_water_after_bytes=int(rss_high_water_after),
+                    rss_high_water_delta_bytes=int(rss_high_water_delta),
                     **extra,
                 )
             )
@@ -199,13 +223,19 @@ def summarize_records(records: List[BenchmarkRecord]) -> Dict[str, Any]:
 
 def _memory_summary(records: List[BenchmarkRecord]) -> Dict[str, Optional[float]]:
     peak = _values(records, "tracemalloc_peak_bytes")
+    peak_delta = _values(records, "tracemalloc_peak_delta_bytes")
     rss_delta = _values(records, "rss_delta_bytes")
     rss_after = _values(records, "rss_after_bytes")
+    rss_high_water_delta = _values(records, "rss_high_water_delta_bytes")
     return {
         "mean_tracemalloc_peak_mb": _mean_mb(peak),
         "max_tracemalloc_peak_mb": _max_mb(peak),
+        "mean_tracemalloc_phase_peak_delta_mb": _mean_mb(peak_delta),
+        "max_tracemalloc_phase_peak_delta_mb": _max_mb(peak_delta),
         "mean_rss_delta_mb": _mean_mb(rss_delta),
         "max_rss_after_mb": _max_mb(rss_after),
+        "mean_rss_high_water_delta_mb": _mean_mb(rss_high_water_delta),
+        "max_rss_high_water_delta_mb": _max_mb(rss_high_water_delta),
     }
 
 

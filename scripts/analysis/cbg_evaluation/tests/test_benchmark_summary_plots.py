@@ -10,7 +10,9 @@ from pathlib import Path
 from scripts.analysis.cbg_evaluation.plot_benchmark_summary import (
     extract_end_to_end_seconds,
     extract_intersection_rates,
+    extract_max_rss_mb,
     extract_memory_mb,
+    extract_phase_memory_mb,
     extract_phase_latency_seconds,
     load_per_ip_e2e_latency_ms,
     ordered_combo_ids,
@@ -101,6 +103,40 @@ class TestBenchmarkSummaryPlots(unittest.TestCase):
 
         self.assertEqual(tracemalloc_mb, [14.0, 0.0])
         self.assertEqual(rss_after_mb, [200.0, 300.0])
+
+    def test_extract_phase_memory_uses_phase_local_peak_delta(self):
+        summary = {
+            "combinations": {
+                "S1": {
+                    "phases": {
+                        "load_data": {
+                            "max_tracemalloc_phase_peak_delta_mb": 2.0,
+                            "max_tracemalloc_peak_mb": 20.0,
+                            "max_rss_after_mb": 100.0,
+                        },
+                        "centroid": {
+                            "max_tracemalloc_phase_peak_delta_mb": 3.5,
+                            "max_rss_after_mb": 120.0,
+                        },
+                    }
+                },
+                "B1": {
+                    "phases": {
+                        "load_data": {
+                            "max_tracemalloc_peak_mb": 7.0,
+                            "max_rss_after_mb": 300.0,
+                        },
+                    }
+                },
+            }
+        }
+
+        phase_memory = extract_phase_memory_mb(summary, ["S1", "B1"])
+        rss_mb = extract_max_rss_mb(summary, ["S1", "B1"])
+
+        self.assertEqual(phase_memory["load_data"], [2.0, 7.0])
+        self.assertEqual(phase_memory["centroid"], [3.5, 0.0])
+        self.assertEqual(rss_mb, [120.0, 300.0])
 
     def test_load_per_ip_e2e_latency_uses_total_geolocate_rows_in_ms(self):
         fieldnames = [

@@ -124,8 +124,10 @@ class TestBenchmarking(unittest.TestCase):
                 phase="distance_estimation",
                 elapsed_ms=1.0,
                 tracemalloc_peak_bytes=1_000_000,
+                tracemalloc_peak_delta_bytes=500_000,
                 rss_delta_bytes=2_000_000,
                 rss_after_bytes=10_000_000,
+                rss_high_water_delta_bytes=2_000_000,
             ),
             BenchmarkRecord(
                 combo_id="A",
@@ -133,8 +135,10 @@ class TestBenchmarking(unittest.TestCase):
                 phase="distance_estimation",
                 elapsed_ms=3.0,
                 tracemalloc_peak_bytes=3_000_000,
+                tracemalloc_peak_delta_bytes=1_500_000,
                 rss_delta_bytes=4_000_000,
                 rss_after_bytes=20_000_000,
+                rss_high_water_delta_bytes=10_000_000,
             ),
         ])
 
@@ -145,8 +149,12 @@ class TestBenchmarking(unittest.TestCase):
         self.assertEqual(phase["mean_ms"], 2.0)
         self.assertEqual(phase["median_ms"], 2.0)
         self.assertEqual(phase["mean_tracemalloc_peak_mb"], 2.0)
+        self.assertEqual(phase["mean_tracemalloc_phase_peak_delta_mb"], 1.0)
+        self.assertEqual(phase["max_tracemalloc_phase_peak_delta_mb"], 1.5)
         self.assertEqual(phase["mean_rss_delta_mb"], 3.0)
         self.assertEqual(phase["max_rss_after_mb"], 20.0)
+        self.assertEqual(phase["mean_rss_high_water_delta_mb"], 6.0)
+        self.assertEqual(phase["max_rss_high_water_delta_mb"], 10.0)
 
     def test_instrumented_evaluation_preserves_successful_result(self):
         pipe = CBGPipeline(
