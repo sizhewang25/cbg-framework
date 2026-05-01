@@ -53,6 +53,13 @@ class BenchmarkRecord:
     model_family: Optional[str] = None
     cache_key: Optional[str] = None
     cache_hit: Optional[bool] = None
+    dataset_id: Optional[str] = None
+    input_csv: Optional[str] = None
+    preselected: Optional[bool] = None
+    n_rows: Optional[int] = None
+    n_probes: Optional[int] = None
+    n_anchors: Optional[int] = None
+    selected_asns: Optional[str] = None
 
     def as_row(self) -> Dict[str, Any]:
         """Return a CSV-friendly row with stable column names."""

@@ -179,5 +179,6 @@ clickhouse_files/users.d/password_local.xml
 *.tar.gz
 *.tar
 **/outputs/*
+.snakemake/
 .DS_Store
 **/references/*

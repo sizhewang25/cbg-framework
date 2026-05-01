@@ -11,6 +11,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Any, Mapping, Optional
 
 import matplotlib
 matplotlib.use("Agg")
@@ -85,13 +86,22 @@ def save_json_summary(
     artifacts_by_combo,
     benchmark_raw_path=None,
     benchmark_summary_path=None,
+    combinations=None,
+    diff_pairs=None,
+    dataset="vultr_pings_us_only.csv",
+    asn: Optional[int] = 7922,
+    dataset_metadata: Optional[Mapping[str, Any]] = None,
+    benchmark_scope="per_setting_end_to_end",
 ):
     """Save per-combination statistics and diff-pair summaries as JSON."""
+    specs = list(COMBINATIONS if combinations is None else combinations)
+    pairs = list(DIFF_PAIRS if diff_pairs is None else diff_pairs)
     summary = {
-        "dataset": "vultr_pings_us_only.csv",
-        "asn": 7922,
-        "n_combinations": len(COMBINATIONS),
-        "benchmark_scope": "per_setting_end_to_end",
+        "dataset": dataset,
+        "asn": asn,
+        "dataset_metadata": dict(dataset_metadata or {}),
+        "n_combinations": len(specs),
+        "benchmark_scope": benchmark_scope,
         "setting_benchmark_ms": {
             combo_id: {
                 k: round(float(v), 3)
@@ -100,12 +110,12 @@ def save_json_summary(
             for combo_id, artifact in artifacts_by_combo.items()
         },
         "benchmark_raw_csv": (
-            str(benchmark_raw_path.relative_to(PROJECT_ROOT))
+            _display_path(benchmark_raw_path)
             if benchmark_raw_path is not None
             else None
         ),
         "benchmark_summary_json": (
-            str(benchmark_summary_path.relative_to(PROJECT_ROOT))
+            _display_path(benchmark_summary_path)
             if benchmark_summary_path is not None
             else None
         ),
@@ -113,7 +123,7 @@ def save_json_summary(
         "diff_pairs": {},
     }
 
-    for spec in COMBINATIONS:
+    for spec in specs:
         errors = get_errors(all_results[spec.combo_id])
         results = all_results[spec.combo_id]
         artifact = artifacts_by_combo[spec.combo_id]
@@ -173,7 +183,9 @@ def save_json_summary(
             })
         summary["combinations"][spec.combo_id] = entry
 
-    for id_a, id_b in DIFF_PAIRS:
+    for id_a, id_b in pairs:
+        if id_a not in all_results or id_b not in all_results:
+            continue
         deltas = compute_error_diff(all_results[id_a], all_results[id_b])
         if len(deltas) > 0:
             summary["diff_pairs"][f"{id_a}_vs_{id_b}"] = {
@@ -187,6 +199,13 @@ def save_json_summary(
     with open(output_path, "w") as f:
         json.dump(summary, f, indent=2)
     logger.info("Saved: %s", output_path)
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def main():

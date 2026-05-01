@@ -55,6 +55,12 @@ class PreparedEvaluationData:
     data_fingerprint: str
 
 
+DataLoader = Callable[
+    [PipelineSpec, Optional[BenchmarkRecorder], Optional[Dict[str, float]]],
+    PreparedEvaluationData,
+]
+
+
 @dataclass
 class DistanceModelState:
     """Fitted or cached distance-model state needed by one setting."""
@@ -535,6 +541,7 @@ def run_setting(
     spec: PipelineSpec,
     model_cache: Optional[DistanceModelCache] = None,
     benchmark_recorder: Optional[BenchmarkRecorder] = None,
+    data_loader: Optional[DataLoader] = None,
 ) -> SettingEvaluation:
     """Run one pipeline setting end-to-end from data loading to probe results."""
     cache = model_cache or DistanceModelCache()
@@ -550,10 +557,14 @@ def run_setting(
         benchmark_recorder,
         track_tracemalloc=False,
     ):
-        prepared = load_setting_data(
-            spec,
-            benchmark_recorder=benchmark_recorder,
-            benchmark_ms=benchmark_ms,
+        prepared = (
+            data_loader(spec, benchmark_recorder, benchmark_ms)
+            if data_loader is not None
+            else load_setting_data(
+                spec,
+                benchmark_recorder=benchmark_recorder,
+                benchmark_ms=benchmark_ms,
+            )
         )
         model_state = cache.get_for_spec(
             spec,
@@ -606,6 +617,7 @@ def evaluate_all(
     combinations: List[PipelineSpec],
     model_cache: Optional[DistanceModelCache] = None,
     benchmark_recorder: Optional[BenchmarkRecorder] = None,
+    data_loader: Optional[DataLoader] = None,
 ) -> EvaluationRun:
     """Run all combinations through per-setting end-to-end evaluation."""
     cache = model_cache or DistanceModelCache()
@@ -618,6 +630,7 @@ def evaluate_all(
             spec,
             model_cache=cache,
             benchmark_recorder=benchmark_recorder,
+            data_loader=data_loader,
         )
         results = artifact.results
         elapsed = artifact.benchmark_ms.get("setting_total_ms", 0.0) / 1000.0
