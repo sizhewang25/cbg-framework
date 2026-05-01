@@ -6,7 +6,9 @@
 
 An operator who wants to deploy Constraint-Based Geolocation (CBG) today faces a practical problem: three landmark papers have been proposed for decades, none has been benchmarked against the others in a controlled setting, and no paper characterizes compute cost at operational scale. There is no evidence-based guide for choosing a configuration.
 
-We close this gap with the **first systematic, cross-variant CBG benchmark** for unicast IP geolocation. We decompose CBG into three independent phases — RTT-to-distance modeling, multilateration, and single-point estimation — and evaluate all valid phase combinations on both **accuracy** and **runtime**, using curated RTT datasets from operational vantage points and RIPE Atlas.
+We close this gap with the **first systematic, cross-variant CBG benchmark** for unicast IP geolocation. We decompose CBG into three independent phases — RTT-to-distance modeling, multilateration, and single-point estimation — and evaluate the accuracy/runtime tradeoff of each valid configuration family using curated RTT datasets from operational vantage points and RIPE Atlas.
+
+> **Comment:** The first full-dataset experiment now supports the production-readiness argument, but it covers the default 8-combination suite over all Vultr US targets, not yet the full 15 active valid combinations. Keep this distinction explicit until the remaining combinations and RIPE cross-validation are complete.
 
 Our contributions:
 
@@ -42,7 +44,7 @@ The simplest latency-based approach, **GeoPing**, reports the nearest VP's locat
 
 **CBG** converts RTTs from multiple VPs into geographic constraints (circles or annuli) and intersects them to find the feasible region where the target must reside — aggregating independent physical evidence rather than trusting a single VP:
 
-- **More accurate** — Octant (best CBG variant) achieves **22-mile median error** [[NSDI 2007](https://www.usenix.org/conference/nsdi-07/octant-comprehensive-framework-geolocalization-internet-hosts)], 3× better than GeoPing; on our preliminary US cloud dataset, the best CBG variant reaches **328 km** vs. **687 km** for the simplest (2× improvement)
+- **More accurate** — Octant (best CBG variant) achieves **22-mile median error** [[NSDI 2007](https://www.usenix.org/conference/nsdi-07/octant-comprehensive-framework-geolocalization-internet-hosts)], 3× better than GeoPing; on our full Vultr US cloud dataset, the best practical CBG variant reaches **359.7 km median error** vs. **522.7 km** for the speed-of-Internet spherical baseline and **559.2 km** for the LP spherical baseline
 - **Auditable** — raw RTTs → explicit circles → intersection; every step is inspectable and reproducible
 - **Label-free** — works for any IP reachable from the VP set, no training data needed
 - **Tunable** — accuracy improves directly as more or better-distributed VPs are added
@@ -51,15 +53,15 @@ CBG is therefore the practical choice for operators who need high-accuracy, audi
 
 ### 2.3 Why Practitioners Cannot Choose a Variant Today
 
-**No controlled cross-variant evaluation exists.** Each CBG paper (Gueye 2004, Hu 2012, Wong 2007) evaluates only its own full pipeline on its own proprietary dataset. No paper isolates phase contributions, so practitioners cannot determine: Is it worth calibrating a per-VP spline, or does 2/3c suffice? Does `planar_annulus` multilateration justify its added complexity over `spherical_circle`? Does Monte Carlo median's 130× runtime overhead over geometric centroid deliver meaningful accuracy gains? Our preliminary results show Phase 1 alone accounts for the 2× accuracy gap — but without a controlled benchmark, there is no way to know this.
+**No controlled cross-variant evaluation exists.** Each CBG paper (Gueye 2004, Hu 2012, Wong 2007) evaluates only its own full pipeline on its own proprietary dataset. No paper isolates phase contributions, so practitioners cannot determine: Is it worth calibrating a per-VP spline, or does 2/3c suffice? Does `planar_annulus` multilateration justify its added complexity over `spherical_circle`? Does Monte Carlo sampled-medoid selection deliver meaningful accuracy gains over a geometric centroid? Does weighted-annulus geometry justify its pathological tail latency? Our first full-dataset run answers the latter two questions negatively, but a full phase-isolation grid is still required for the final paper.
 
 **Only one public CBG implementation exists.** The IMC 2023 replication codebase [[Darwich et al.](https://dl.acm.org/doi/10.1145/3618257.3624801)] covers only Million-Scale and Street-Level CBG. Original CBG and Octant have **no public code** — an operator who wants to evaluate Octant must reimplement it from scratch.
 
 ### 2.4 What the Benchmark Delivers
 
-Accuracy benchmarks alone are insufficient for deployment decisions. Despite IP geolocation being studied for over two decades, none of the foundational CBG papers report per-IP runtime or memory figures — the field has never evaluated algorithms against a deployment budget. At operational scale (10M–50M IPs), this matters: **Monte Carlo median** at ~27 s/IP requires ~15,700 CPU-years for 50M IPs; **geometric centroid** at ~0.21 s/IP requires ~3 CPU-years. A 5% accuracy gain at 130× cost is not a viable production tradeoff.
+Accuracy benchmarks alone are insufficient for deployment decisions. Despite IP geolocation being studied for over two decades, none of the foundational CBG papers report per-IP runtime or memory figures — the field has never evaluated algorithms against a deployment budget. At operational scale (10M–50M IPs), this matters: in our full Vultr run, the practical `planar_annulus + geometric_centroid` setting geolocates a target in **8.7 ms on average**, while the unweighted Monte Carlo sampled-medoid variant takes **160.1 ms on average** and is less accurate. The weighted-annulus path is more severe: it improves median error by only 2.1 km over the practical setting but spends ~40.7 minutes on one pathological target.
 
-Our benchmark provides the first Pareto frontier of median error vs. runtime per IP across all valid CBG phase combinations — a concrete, evidence-based answer to which configuration maximizes accuracy within a given compute budget, and where future phase-level investment will have the most impact.
+The final benchmark will provide the first Pareto frontier of median error vs. runtime per IP across all valid CBG phase combinations — a concrete, evidence-based answer to which configuration maximizes accuracy within a given compute budget, and where future phase-level investment will have the most impact.
 
 ---
 
@@ -133,7 +135,7 @@ Not all combinations are valid due to type constraints:
 - `geometric_centroid` requires a Shapely polygon; it is not valid for unordered `spherical_circle` crossing vertices
 - MC sampled medoid can operate on planar polygon samples or directly on `spherical_circle` vertex point sets
 
-We currently evaluate **15 active valid combinations** across these constraints (see Section 6). The historical 18-combination run included `spherical_circle + geometric_centroid`, which is now excluded because unordered spherical crossing vertices cannot reliably form a polygon.
+The framework defines **15 active valid combinations** across these constraints. The first full Vultr all-US experiment evaluates the default 8-combination suite (see Section 6); the final benchmark should run the remaining valid combinations before claiming a complete 15-way Pareto frontier. The historical 18-combination run included `spherical_circle + geometric_centroid`, which is now excluded because unordered spherical crossing vertices cannot reliably form a polygon.
 
 ---
 
@@ -149,7 +151,7 @@ When RTT constraints are noisy or the VP set is poorly chosen, the intersection 
 
 ### 4.3 Scalability vs. Accuracy Tradeoff
 
-The most accurate preliminary CBG configuration (Octant spline + `planar_annulus` + MC median) achieved 312 km median error in the historical run but requires ~27s per target due to the 1000-sample Monte Carlo step. At 50M IPs, this is computationally infeasible without massive parallelism. We must rerun the Pareto frontier of accuracy vs. cost across the 15 active valid combinations to identify which configurations are viable at scale.
+The full Vultr all-US run changes the scalability story. The most accurate evaluated setting is weighted annulus + geometric centroid (`B3`) at 357.6 km median error, but it has pathological geometry tail latency: one target spent ~40.7 minutes in multilateration. The practical setting is unweighted annulus + geometric centroid (`B4`) at 359.7 km median error and 8.7 ms mean geolocation time per target. The Monte Carlo sampled-medoid variants are dominated in this run: they are slower and less accurate than geometric centroid for both weighted and unweighted annulus paths.
 
 ### 4.4 VP Selection and Coverage
 
@@ -244,85 +246,90 @@ RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and b
 
 | Gap in Existing Literature                                             | Our Contribution                                                          |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| No systematic cross-phase CBG benchmark                                | First to decompose CBG into 3 phases and benchmark all valid combinations |
+| No systematic cross-phase CBG benchmark                                | First to decompose CBG into 3 phases and benchmark the valid combination families |
 | Phase 1 improvements proposed in isolation                             | Controlled evaluation holding other phases fixed                          |
 | Only one public CBG implementation (IMC 2023)                          | Open-source framework covering all known variants                         |
-| No accuracy-vs-scalability characterization                            | Pareto frontier of median error vs. runtime for 15 active valid combinations |
+| No accuracy-vs-scalability characterization                            | Pareto frontier of median error vs. runtime, starting with the full Vultr all-US default suite and extending to the remaining valid combinations |
 | Simpler alternatives (GeoPing, GeoCluster, ML) each have critical gaps | CBG: physics-grounded, label-free, auditable, scalable to millions of IPs |
 | Commercial services opaque and inaccurate on cloud IPs                 | Auditable, reproducible CBG alternative                                   |
 
 
 ---
 
-## 6. Preliminary Results
+## 6. First Full-Dataset Experiment
 
 ### Dataset
 
-- **RTT measurements:** AT&T mobile VPs pinging Vultr cloud endpoints, US-only subset (AS7922)
-- **Targets:** 266 Vultr probes with verified ground-truth coordinates
-- **Vantage points:** 7 RIPE Atlas anchors used as CBG landmarks
-- **Combinations evaluated:** 18 (3 distance models × 4 multilateration+centroid paths)
+- **RTT measurements:** US source probes pinging the fixed seven-anchor Vultr set
+- **Input:** `datasets/cbg_test/vultr_pings_us_only.csv`
+- **Scale:** 9,866 RTT rows, 1,423 target probes, 7 anchors
+- **Vantage points:** 7 US Vultr anchors used as CBG landmarks
+- **Combinations evaluated:** 8 default full-run settings (`S1,S2,L1,L2,B1,B2,B3,B4`)
+- **Artifacts:** `scripts/analysis/benchmark/outputs/vultr7/all_us_first_run/`
+
+> **Comment:** This is now strong enough to replace the old 266-target historical table as the headline result. The proposal should still label it as the default-suite experiment until the remaining 7 valid combinations run on the same dataset.
 
 ### Results Table
 
 
-| ID     | Distance Model  | Multilateration    | Centroid    | Median Error | Within 500km | Within 1000km |
-| ------ | --------------- | ------------------ | ----------- | ------------ | ------------ | ------------- |
-| **G3** | Octant spline   | `planar_annulus`   | `monte_carlo_median` | **312 km** | **77.4%** | **94.0%** |
-| **F3** | Octant spline   | `planar_annulus`   | `geometric_centroid` | **328 km** | **74.4%** | **94.0%** |
-| E3     | Octant spline   | `planar_annulus`   | `boundary_vertex_mean` | 374 km | 64.7% | 92.9% |
-| C1     | 2/3c            | `planar_circle`    | `boundary_vertex_mean` | 333 km | 59.0% | 82.0% |
-| A3     | Octant spline   | `spherical_circle` | `boundary_vertex_mean` | 337 km | 57.1% | 86.8% |
-| D1     | 2/3c            | `planar_circle`    | `geometric_centroid` | 395 km | 56.0% | 81.6% |
-| H1     | 2/3c            | `planar_circle`    | `monte_carlo_median` | 394 km | 56.4% | 81.6% |
-| A2     | LP low-envelope | `spherical_circle` | `boundary_vertex_mean` | 602 km | 40.2% | 69.2% |
-| A1     | 2/3c            | `spherical_circle` | `boundary_vertex_mean` | 687 km | 45.1% | 59.0% |
+| ID | Distance Model | Multilateration | Centroid | Median Error | P90 Error | Within 500km | Within 1000km | Intersection | Fallback | Runtime |
+|----|----------------|-----------------|----------|:------------:|:---------:|:------------:|:-------------:|:------------:|:--------:|:-------:|
+| S1 | Speed-of-Internet | `spherical_circle` + redundant filtering | `boundary_vertex_mean` | 522.7 km | 1659.4 km | 48.8% | 70.6% | 76.7% | 23.3% | 3.4s |
+| S2 | Speed-of-Internet | `spherical_circle` | `boundary_vertex_mean` | 522.7 km | 1666.0 km | 48.8% | 70.6% | 22.2% | 77.8% | 9.1s |
+| L1 | LP low-envelope | `spherical_circle` + redundant filtering | `boundary_vertex_mean` | 559.2 km | 1798.7 km | 45.7% | 69.1% | 70.0% | 30.0% | 3.3s |
+| L2 | LP low-envelope | `spherical_circle` | `boundary_vertex_mean` | 559.2 km | 1798.7 km | 45.7% | 69.1% | 30.1% | 69.9% | 10.0s |
+| B1 | Bounded spline | weighted `planar_annulus@0.9` | `monte_carlo_median` | 387.0 km | 1272.7 km | 60.5% | 84.7% | 92.6% | 7.4% | 48.0m |
+| B2 | Bounded spline | `planar_annulus` | `monte_carlo_median` | 380.3 km | 1283.1 km | 60.5% | 84.6% | 93.5% | 6.5% | 3.8m |
+| B3 | Bounded spline | weighted `planar_annulus@0.9` | `geometric_centroid` | **357.6 km** | **1157.0 km** | **64.3%** | **87.0%** | 92.6% | 7.4% | 45.2m |
+| B4 | Bounded spline | `planar_annulus` | `geometric_centroid` | 359.7 km | 1171.7 km | 63.5% | 86.6% | **93.5%** | **6.5%** | 14.8s |
 
-
-*Historical run before centroid semantics cleanup; rerun required for the current 15 active valid combinations. All listed combinations achieved 100% intersection rate (n=266).*
+All settings return estimates for 100% of targets because failed multilateration falls back to a non-null estimate. We therefore report both intersection rate and fallback rate: they expose whether the result came from real geometric overlap or from failure handling.
 
 ### Error CDF
 
-Error CDF for the historical combination set
+Generated figures from the full run:
 
-*Figure: Cumulative distribution of geolocation error for the historical CBG combinations. The Octant spline + `planar_annulus` cluster (E3/F3/G3, top-left) clearly separates from all other configurations. This figure must be regenerated for the current 15 active valid combinations.*
+- `error_cdf_all.png`
+- `error_diff_cdf.png`
+- `rtt_error_scatter.png`
+- `benchmark_phase_latency_memory.png`
+
+*Figure caption draft: Cumulative distribution of geolocation error for the full Vultr all-US default suite. Bounded-spline annulus configurations dominate the spherical baselines above the 500 km threshold; the practical unweighted-annulus geometric-centroid setting (`B4`) is visually close to the slightly more accurate but much slower weighted-annulus setting (`B3`).*
+
+> **Comment:** Embed the CDF once the paper figure style is settled. The CDF should include a clear note that `B3` is not the production recommendation despite its small accuracy edge.
 
 ### Key Findings
 
-**Finding 1 — Distance model is the dominant factor.**
-Switching from 2/3c (A1) to the Octant spline model (A3) while holding multilateration and centroid fixed cuts median error from 687 km to 337 km — a **2× improvement**. Pairwise comparison confirms: A3 outperforms A2 (LP low-envelope) in 78.9% of probes with a 285 km median improvement. The RTT-to-distance calibration quality has more impact on final accuracy than the choice of multilateration algorithm or centroid method.
+**Finding 1 — Bounded-spline annulus variants dominate the evaluated spherical baselines.**
+The best annulus result is 357.6 km median error (`B3`) and the practical annulus result is 359.7 km (`B4`), compared with 522.7 km for the speed-of-Internet spherical baseline (`S1`) and 559.2 km for the LP spherical baseline (`L1`). This is a 31-36% median-error reduction on the full dataset.
 
-**Finding 2 — `planar_annulus` significantly improves the tail.**
-With the same spline distance model, switching from `planar_circle` (D3: 464 km median) to `planar_annulus` (F3: 328 km median) yields a **29% median error reduction** and improves within-500km from 55% to 74%. The annulus inner radius excludes physically implausible near-VP regions, tightening the feasible region. Pairwise: E3 outperforms C3 in 68.4% of probes.
+**Finding 2 — `B4` is the current production point.**
+`B3` has the best raw accuracy, but only by 2.1 km at the median and 0.4 percentage points within 1000 km. `B4` finishes the full 1,423-target dataset in 14.8s, while `B3` takes 45.2 minutes because weighted-annulus multilateration has pathological tail latency. One target (`182.54.147.130`) spent ~40.7 minutes in multilateration.
 
-**Finding 3 — MC sampled point selection is the most accurate centroid, but geometric centroid is preferable at scale.**
-G3 (MC median) achieves 312 km vs. F3 (geometric centroid) at 328 km — only a **5% difference** in median error, identical within-1000km (94.0%). However, MC median requires ~~27s per target (1000-point Sobol sampling + medoid-style point selection) versus ~0.2s for geometric centroid — a **~~130× runtime penalty**. At 50M IPs, MC median is infeasible without massive parallelism. **Geometric centroid (F3) is the preferred production configuration.**
+**Finding 3 — MC sampled medoid is dominated in this run.**
+For unweighted annulus, MC sampled medoid (`B2`) is slower and less accurate than geometric centroid (`B4`): 380.3 km vs. 359.7 km median error, 84.6% vs. 86.6% within 1000 km, and 3.8m vs. 14.8s full-run runtime. The same pattern holds for weighted annulus (`B1` vs. `B3`). The historical claim that MC median buys accuracy no longer holds after the sampled-medoid semantics cleanup and full-dataset rerun.
 
-**Finding 4 — The Octant pipeline (F3) dominates across all metrics.**
-Spline + `planar_annulus` + geometric centroid (F3) achieves:
+**Finding 4 — Redundant filtering improves spherical feasibility and runtime.**
+Filtering improves spherical-circle intersection rates without materially changing median/threshold accuracy: `S1` vs. `S2` has 76.7% vs. 22.2% intersections and 3.4s vs. 9.1s runtime; `L1` vs. `L2` has 70.0% vs. 30.1% intersections and 3.3s vs. 10.0s runtime.
 
-- Best median error among sub-second methods: **328 km**
-- Best within-500km: **74.4%**
-- Best within-1000km (tied with G3): **94.0%**
-- Runtime: **~0.2s per target**
-
-This configuration should be adopted as the practical SOTA for unicast CBG at scale.
-
-**Finding 5 — Centroid method matters little when multilateration is good; it matters more when multilateration is poor.**
-On the `planar_circle`/`spherical_circle` paths (poor multilateration), switching centroid from `boundary_vertex_mean` to geometric centroid or MC median gives inconsistent and small gains. On the `planar_annulus` path (good multilateration), the centroid choice yields 5–15% median error differences. The multilateration quality provides the floor; centroid refinement operates on what remains.
+**Finding 5 — Availability and intersection rate must be reported separately.**
+All 8 settings produce estimates for 100% of targets because fallback is always available, but fallback usage varies sharply. Annulus variants fall back on only 6.5-7.4% of probes; unfiltered spherical baselines fall back on 69.9-77.8%. Availability alone would hide this difference.
 
 ### Scalability Comparison
 
 
-| Configuration                             | Median Error | Runtime / target | Feasible at 50M IPs?              |
-| ----------------------------------------- | ------------ | ---------------- | --------------------------------- |
-| G3 (Spline + `planar_annulus` + MC median)         | 312 km       | ~27s             | No (requires massive parallelism) |
-| **F3 (Spline + `planar_annulus` + `geometric_centroid`)** | **328 km** | **~0.2s** | **Yes** |
-| A3 (Spline + `spherical_circle` + `boundary_vertex_mean`) | 337 km | ~0.18s | Yes |
-| A1 (2/3c + `spherical_circle` + `boundary_vertex_mean`) | 687 km | ~0.04s | Yes |
+| Configuration | Median Error | Mean geolocate / target | Full-run runtime | 50M-target single-core estimate | Status |
+| ------------- | ------------ | ----------------------- | ---------------- | ------------------------------- | ------ |
+| **B4: spline + `planar_annulus` + `geometric_centroid`** | **359.7 km** | **8.7 ms** | **14.8s** | **~5 CPU-days** | Recommended production point |
+| B3: spline + weighted `planar_annulus@0.9` + `geometric_centroid` | 357.6 km | 1904.9 ms | 45.2m | ~3.0 CPU-years | Accuracy leader, tail-latency blocker |
+| B2: spline + `planar_annulus` + `monte_carlo_median` | 380.3 km | 160.1 ms | 3.8m | ~93 CPU-days | Dominated by B4 |
+| S1: speed-of-Internet + filtered `spherical_circle` | 522.7 km | 1.0 ms | 3.4s | ~13 CPU-hours | Fast baseline |
+| L1: LP low-envelope + filtered `spherical_circle` | 559.2 km | 1.3 ms | 3.3s | ~18 CPU-hours | Fast baseline |
 
 
-*Runtime measured on AS7922 dataset, 266 probes, single-threaded.*
+*Runtime measured on the full Vultr all-US dataset, 1,423 targets, single-threaded. The 50M-target estimates use mean `total_geolocate` time and exclude one-time dataset loading and model fitting.*
+
+> **Comment:** The old proposal framed MC median as an accuracy-vs-cost tradeoff. The new result is cleaner: MC sampled medoid is not on the Pareto frontier. The riskier but interesting frontier question is now `B3` vs. `B4`: can weighted-annulus geometry be made robust enough to justify its tiny accuracy edge?
 
 ---
 
@@ -330,12 +337,13 @@ On the `planar_circle`/`spherical_circle` paths (poor multilateration), switchin
 
 **Scope: Unicast IP geolocation with CBG** — anycast and topology-based methods are deferred to future work.
 
-### Phase 1: Finalize Unicast Benchmark (mobile VP dataset)
+### Phase 1: Finalize Unicast Benchmark (Vultr all-US dataset)
 
-- Confirm all 15 active valid combinations produce stable, reproducible results
-- Add memory profiling per combination (model storage + runtime peak)
-- Add availability metric: fraction of targets with non-null CBG estimate
-- Extend runtime measurements to larger target set (1K+ IPs) for reliable throughput estimates
+- Complete the remaining valid combinations on the full Vultr all-US dataset, especially `geometric_median` and any `planar_circle` variants not covered by the default suite
+- Add timeout or geometry simplification controls for weighted-annulus pathological cases before using `planar_annulus_weighted` in larger experiments
+- Summarize memory profiling already captured in `benchmark_phase_summary.json`
+- Promote generated full-run plots (`error_cdf_all.png`, latency/memory plots, scatter plots) into paper-ready figures
+- Preserve availability, intersection rate, and fallback rate as separate metrics
 
 ### Phase 2: RIPE Atlas Cross-Validation
 
@@ -354,6 +362,8 @@ On the `planar_circle`/`spherical_circle` paths (poor multilateration), switchin
 - Write paper targeting **IMC 2026** (deadline TBD)
 - Release curated datasets alongside the paper
 
+> **Comment:** The work plan should now emphasize validation and generalization rather than proving that a full-size run is possible. The full Vultr run exists; the open questions are whether `B4` stays best across the remaining combinations and whether RIPE Atlas reproduces the ranking.
+
 ---
 
 ## 8. Expected Contributions
@@ -362,4 +372,4 @@ On the `planar_circle`/`spherical_circle` paths (poor multilateration), switchin
 2. **Open-source framework**: Faithful implementations of all CBG variants (2/3c, LP, Octant spline; `spherical_circle`, `planar_circle`, `planar_annulus` multilateration; arithmetic, geometric, MC median centroid)
 3. **Benchmark dataset**: Curated RTT measurements from mobile VPs + RIPE Atlas, with verified ground truth
 4. **Scalability analysis**: First accuracy-vs-runtime Pareto characterization of CBG variants, directly applicable to production deployment decisions
-5. **Practical guidance**: F3 (Octant spline + `planar_annulus` + geometric centroid) is the recommended configuration — 328 km median error, 94% within 1000 km, ~0.2s per IP
+5. **Practical guidance**: Bounded spline + unweighted `planar_annulus` + `geometric_centroid` is the current recommended configuration on the full Vultr all-US run — 359.7 km median error, 86.6% within 1000 km, 8.7 ms mean geolocation time per target

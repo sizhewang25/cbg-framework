@@ -11,6 +11,7 @@
 - [x] Add availability metric (fraction of targets with non-null CBG estimate) per combination
 - [ ] Tabulate per-combination compute cost from evaluation logs
 - [ ] Produce final accuracy table: median error + CDF at 40/100/500/1000 km thresholds
+- [ ] Compare CBG variants against closest-VP / RIPE IPmap Single Radius performance; find an existing implementation if available, otherwise implement the baseline ourselves
 - [ ] Rerun MC centroid combinations after `monte_carlo_median` change from continuous `geom_median` to sampled medoid; previous G/H-path accuracy and runtime numbers may shift
 - [ ] Rerun the full benchmark after centroid semantics cleanup: vertex-mean centroid is now `boundary_vertex_mean`, annulus holes contribute interior vertices, and invalid `spherical_circle + geometric_centroid` combinations are excluded
 - [ ] Quantify planar_circle approximation error against spherical_circle on synthetic disk cases

@@ -201,6 +201,13 @@ Studies longitudinal changes in MaxMind snapshots and shows that database versio
 
 ## 6. Recent Adjacent Work
 
+### Trammell and Kühlewind — RTT Privacy and "Lucky" Delay Geolocation
+**"Revisiting the Privacy Implications of Two-Way Internet Latency Data"**
+PAM 2018
+[Springer PAM 2018](https://link.springer.com/chapter/10.1007/978-3-319-76481-8_6)
+
+Shows that delay-based geolocation often depends on a significant element of luck: in practice, the single closest VP can provide most of the geolocation benefit when it happens to be near the target. This result is directly relevant to our GeoPing and VP-selection discussion because it explains why closest-VP heuristics can look strong in favorable cases while remaining brittle as a general geolocation method.
+
 ### Rimlinger et al. — GeoResolver
 **"GeoResolver: An Accurate, Scalable, and Explainable Geolocation Technique Using DNS Redirection"**
 Proceedings of the ACM on Networking / CoNEXT 2025
@@ -213,7 +220,7 @@ Uses DNS redirection behavior, including EDNS Client Subnet, to infer which RIPE
 ACM SIGCOMM CCR 2020
 [ACM CCR 2020](https://doi.org/10.1145/3402413.3402415)
 
-Introduces and evaluates RIPE IPmap's single-radius active geolocation engine, including accuracy, coverage, and consistency against ground truth and commercial databases. This is important operational context for our RIPE Atlas evaluation: IPmap demonstrates that public measurement infrastructure can support active geolocation, while our work decomposes the CBG algorithmic choices that such systems can use internally.
+Introduces and evaluates RIPE IPmap's single-radius active geolocation engine, including accuracy, coverage, and consistency against ground truth and commercial databases. Single-radius operationalizes the closest-VP insight from Trammell and Kühlewind: it triggers RIPE Atlas measurements on demand and estimates a target from the Atlas probe with the lowest RTT. This is important operational context for our RIPE Atlas evaluation: IPmap demonstrates that public measurement infrastructure can support active geolocation, while our work decomposes the CBG algorithmic choices that such systems can use internally.
 
 ### "Leveraging Traceroute Inconsistencies to Improve IP Geolocation"
 arXiv 2025
