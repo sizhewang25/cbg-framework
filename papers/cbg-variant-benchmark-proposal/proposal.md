@@ -4,7 +4,7 @@
 
 ## 1. Project Objective
 
-An operator who wants to deploy Constraint-Based Geolocation (CBG) today faces a practical problem: three landmark papers have been proposed for decades, none has been benchmarked against the others in a controlled setting, and no paper characterizes compute cost at operational scale. There is no evidence-based guide for choosing a configuration.
+An operator who wants to deploy Constraint-Based Geolocation (CBG) today faces a practical problem: the academic lineage spans multiple landmark systems, industry-scale systems such as Akamai-affiliated Alidade demonstrate that CBG-style constraints are production-relevant, but none of these systems has been benchmarked against the others in a controlled setting or characterized for compute cost at operational scale. There is no evidence-based guide for choosing a configuration.
 
 We close this gap with the **first systematic, cross-variant CBG benchmark** for unicast IP geolocation. We decompose CBG into three independent phases — RTT-to-distance modeling, multilateration, and single-point estimation — and evaluate the accuracy/runtime tradeoff of each valid configuration family using curated RTT datasets from operational vantage points and RIPE Atlas.
 
@@ -54,6 +54,8 @@ CBG is therefore the practical choice for operators who need high-accuracy, audi
 ### 2.3 Why Practitioners Cannot Choose a Variant Today
 
 **No controlled cross-variant evaluation exists.** Each CBG paper (Gueye 2004, Hu 2012, Wong 2007) evaluates only its own full pipeline on its own proprietary dataset. No paper isolates phase contributions, so practitioners cannot determine: Is it worth calibrating a per-VP spline, or does 2/3c suffice? Does `planar_annulus` multilateration justify its added complexity over `spherical_circle`? Does Monte Carlo sampled-medoid selection deliver meaningful accuracy gains over a geometric centroid? Does weighted-annulus geometry justify its pathological tail latency? Our first full-dataset run answers the latter two questions negatively, but a full phase-isolation grid is still required for the final paper.
+
+**Industrial CBG-family systems are still not phase benchmarks.** Alidade, an Akamai-affiliated system, is the clearest representative of CBG ideas moving into large-scale industrial geolocation: it fuses available latency/path measurements and non-measurement hints, precomputes answers for the full IP address space, and returns both a point estimate and a geographic region. But Alidade is an end-to-end database architecture, not a controlled comparison of RTT-distance models, multilateration geometry, and point estimators. Its existence strengthens the production motivation for CBG, while also underscoring why operators still need a modular benchmark.
 
 **Only one public CBG implementation exists.** The IMC 2023 replication codebase [[Darwich et al.](https://dl.acm.org/doi/10.1145/3618257.3624801)] covers only Million-Scale and Street-Level CBG. Original CBG and Octant have **no public code** — an operator who wants to evaluate Octant must reimplement it from scratch.
 
@@ -137,6 +139,10 @@ Not all combinations are valid due to type constraints:
 
 The framework defines **15 active valid combinations** across these constraints. The first full Vultr all-US experiment evaluates the default 8-combination suite (see Section 6); the final benchmark should run the remaining valid combinations before claiming a complete 15-way Pareto frontier. The historical 18-combination run included `spherical_circle + geometric_centroid`, which is now excluded because unordered spherical crossing vertices cannot reliably form a polygon.
 
+### Industrial System Note — Alidade
+
+Alidade is best understood as a production-scale CBG-family system rather than an additional phase implementation. It adopts the constraint-region perspective of CBG/Octant, but changes the deployment model: instead of active query-time probing, it fuses already-available network measurements, registry/hostname hints, and aggregate evidence, then precomputes a joint solution for the IP address space. This makes Alidade important for our motivation: it shows that CBG-style physical constraints are relevant to large-scale commercial geolocation, especially when the system must return fast database-like answers. It is not sufficient for this paper's question because it does not isolate which Phase 1, Phase 2, or Phase 3 choice is responsible for accuracy or runtime.
+
 ---
 
 ## 4. Challenges
@@ -175,6 +181,9 @@ Replaces the linear DDR with a convex-hull spline model producing annular constr
 
 **Hu et al., "Towards geolocation of millions of IP addresses"** (IMC 2012) [[ACM](https://dl.acm.org/doi/10.1145/2398776.2398790)]
 Simplifies to the 2/3c (two-thirds speed of light) model, eliminating the need for per-landmark calibration. Introduces greedy VP selection prioritizing proximity to the target. Scales to geolocate ~35% of the IPv4 address space. The source of our 2/3c Phase 1 baseline.
+
+**Chandrasekaran et al., "Alidade: IP Geolocation without Active Probing"** (Duke technical report, 2015) [[PDF](https://balakrishnanc.github.io/papers/chandrasekaran-techrep2015.pdf)]
+Representative industry-scale CBG-family system from Duke, Akamai Technologies, Cornell, and collaborators. Alidade combines available CDN RTTs, path measurements, registry/hostname hints, and aggregate constraints to precompute geolocation database answers for IP space without issuing active probes at query time. It reports both representative points and feasible geographic regions and evaluates against commercial geolocation databases, including Akamai EdgeScape. We cite Alidade as evidence that CBG-style constraints are relevant in big-tech/CDN geolocation practice, but treat it as an end-to-end deployment architecture rather than a separate modular phase variant.
 
 **Wang et al., "Towards Street-Level Client-Independent IP Geolocation"** (NSDI 2011) [[ACM](https://dl.acm.org/doi/10.5555/1972457.1972494)]
 Three-tier refinement from CBG to street-level using landmark discovery and traceroute path analysis. Implemented in this repo; out of scope for the current benchmark (unicast CBG focus).
@@ -250,6 +259,7 @@ RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and b
 | Phase 1 improvements proposed in isolation                             | Controlled evaluation holding other phases fixed                          |
 | Only one public CBG implementation (IMC 2023)                          | Open-source framework covering all known variants                         |
 | No accuracy-vs-scalability characterization                            | Pareto frontier of median error vs. runtime, starting with the full Vultr all-US default suite and extending to the remaining valid combinations |
+| Industry systems such as Alidade validate CBG's production relevance but remain end-to-end and proprietary/data-specific | Modular benchmark showing which CBG phase choices are production-ready |
 | Simpler alternatives (GeoPing, GeoCluster, ML) each have critical gaps | CBG: physics-grounded, label-free, auditable, scalable to millions of IPs |
 | Commercial services opaque and inaccurate on cloud IPs                 | Auditable, reproducible CBG alternative                                   |
 
