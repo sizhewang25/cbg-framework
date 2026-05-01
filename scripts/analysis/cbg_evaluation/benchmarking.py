@@ -147,18 +147,22 @@ class BenchmarkRecorder:
     def write_raw_csv(self, output_path: Path) -> None:
         """Write raw per-phase rows."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = output_path.with_name(f".{output_path.name}.tmp")
         fieldnames = list(BenchmarkRecord.__dataclass_fields__.keys())
-        with open(output_path, "w", newline="") as f:
+        with open(tmp_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for record in self.records:
                 writer.writerow(record.as_row())
+        tmp_path.replace(output_path)
 
     def write_summary_json(self, output_path: Path) -> None:
         """Write aggregate phase summary grouped by combo and phase."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        tmp_path = output_path.with_name(f".{output_path.name}.tmp")
+        with open(tmp_path, "w") as f:
             json.dump(summarize_records(self.records), f, indent=2)
+        tmp_path.replace(output_path)
 
     def _rss_bytes(self) -> int:
         return int(self._process.memory_info().rss)

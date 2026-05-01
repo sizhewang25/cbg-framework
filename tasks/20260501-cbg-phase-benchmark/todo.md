@@ -11,8 +11,10 @@
 - [x] Add tests for benchmark aggregation and pipeline parity.
 - [x] Run focused tests.
 - [x] Rerun full evaluation and inspect benchmark outputs.
-- [ ] Stage/write outputs after each setting in scaled benchmark runs so partial
+- [x] Stage/write outputs after each setting in scaled benchmark runs so partial
       results survive if a long run fails before final summary plotting.
+- [x] Add timestamped run output directories so repeated benchmark invocations
+      do not overwrite previous results by default.
 - [ ] Investigate pipeline optimization for scaled runs, including per-setting
       or per-probe parallelization and algorithmic improvements to expensive
       annulus/Monte Carlo/geometric-centroid paths.

@@ -1,5 +1,7 @@
 """Snakemake workflow for scaled Vultr-7 CBG benchmarks."""
 
+from datetime import datetime, timezone
+
 configfile: "config/vultr7_smoke.yaml"
 
 DATASET_IDS = config.get("dataset_ids", [f"top{k}" for k in range(1, 11)] + ["all_us"])
@@ -7,13 +9,15 @@ COMBO_IDS = config.get("combo_ids", ["S1", "S2", "L1", "L2", "B1", "B2", "B3", "
 COMBO_IDS_CSV = ",".join(COMBO_IDS)
 INPUT_CSV = config.get("input_csv", "datasets/cbg_test/vultr_pings_us_only.csv")
 RESULTS_ROOT = config.get("results_root", "scripts/analysis/benchmark/outputs/vultr7")
+RUN_ID = config.get("run_id") or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+RUN_ROOT = f"{RESULTS_ROOT}/runs/{RUN_ID}"
 
 
 rule all:
     input:
-        expand(f"{RESULTS_ROOT}/{{dataset_id}}/evaluation_summary.json", dataset_id=DATASET_IDS),
-        f"{RESULTS_ROOT}/scaled_benchmark_summary.json",
-        f"{RESULTS_ROOT}/scaled_benchmark_summary.csv",
+        expand(f"{RUN_ROOT}/{{dataset_id}}/evaluation_summary.json", dataset_id=DATASET_IDS),
+        f"{RUN_ROOT}/scaled_benchmark_summary.json",
+        f"{RUN_ROOT}/scaled_benchmark_summary.csv",
 
 
 rule materialize_dataset:
@@ -33,29 +37,29 @@ rule run_evaluation:
         csv=f"{RESULTS_ROOT}/datasets/{{dataset_id}}.csv",
         manifest=f"{RESULTS_ROOT}/datasets/{{dataset_id}}.json",
     output:
-        summary=f"{RESULTS_ROOT}/{{dataset_id}}/evaluation_summary.json",
-        raw=f"{RESULTS_ROOT}/{{dataset_id}}/benchmark_phase_raw.csv",
-        phase=f"{RESULTS_ROOT}/{{dataset_id}}/benchmark_phase_summary.json",
+        summary=f"{RUN_ROOT}/{{dataset_id}}/evaluation_summary.json",
+        raw=f"{RUN_ROOT}/{{dataset_id}}/benchmark_phase_raw.csv",
+        phase=f"{RUN_ROOT}/{{dataset_id}}/benchmark_phase_summary.json",
     params:
-        output_dir=lambda wildcards: f"{RESULTS_ROOT}/{wildcards.dataset_id}",
+        output_dir=lambda wildcards: f"{RUN_ROOT}/{wildcards.dataset_id}",
     shell:
         "python -m scripts.analysis.benchmark.cli run-evaluation "
         "{wildcards.dataset_id} "
         "--input-csv {input.csv} "
         "--preselected "
         "--combo-ids {COMBO_IDS_CSV} "
+        "--run-id {RUN_ID} "
         "--output-dir {params.output_dir}"
 
 
 rule summarize:
     input:
-        summaries=expand(f"{RESULTS_ROOT}/{{dataset_id}}/evaluation_summary.json", dataset_id=DATASET_IDS),
+        summaries=expand(f"{RUN_ROOT}/{{dataset_id}}/evaluation_summary.json", dataset_id=DATASET_IDS),
     output:
-        json=f"{RESULTS_ROOT}/scaled_benchmark_summary.json",
-        csv=f"{RESULTS_ROOT}/scaled_benchmark_summary.csv",
+        json=f"{RUN_ROOT}/scaled_benchmark_summary.json",
+        csv=f"{RUN_ROOT}/scaled_benchmark_summary.csv",
     shell:
         "python -m scripts.analysis.benchmark.cli summarize "
-        "--results-root {RESULTS_ROOT} "
+        "--results-root {RUN_ROOT} "
         "--output-json {output.json} "
         "--output-csv {output.csv}"
-

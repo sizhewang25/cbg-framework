@@ -84,7 +84,18 @@ def run_evaluation_command(
     ] = ",".join(DEFAULT_COMBO_IDS),
     output_dir: Annotated[
         Optional[Path],
-        typer.Option(help="Evaluation output directory."),
+        typer.Option(
+            help=(
+                "Exact evaluation output directory. Defaults to "
+                "outputs/vultr7/runs/<run_id>/<dataset_id>."
+            ),
+        ),
+    ] = None,
+    run_id: Annotated[
+        Optional[str],
+        typer.Option(
+            help="Run id for default timestamped outputs. Defaults to a UTC timestamp.",
+        ),
     ] = None,
     preselected: Annotated[
         bool,
@@ -97,7 +108,6 @@ def run_evaluation_command(
 ) -> None:
     """Run selected CBG combinations for one dataset scale."""
     parsed_combo_ids = parse_combo_ids(combo_ids)
-    output_dir = output_dir or DEFAULT_OUTPUT_ROOT / dataset_id
     summary_path = run_benchmark_evaluation(
         dataset_id=dataset_id,
         input_csv=input_csv,
@@ -105,6 +115,7 @@ def run_evaluation_command(
         output_dir=output_dir,
         preselected=preselected,
         generate_maps=with_maps,
+        run_id=run_id,
     )
     typer.echo(str(summary_path))
 
