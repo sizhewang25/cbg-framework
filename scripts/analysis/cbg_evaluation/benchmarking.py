@@ -50,6 +50,9 @@ class BenchmarkRecord:
     n_input_constraints: Optional[int] = None
     n_filtered_constraints: Optional[int] = None
     region_type: Optional[str] = None
+    model_family: Optional[str] = None
+    cache_key: Optional[str] = None
+    cache_hit: Optional[bool] = None
 
     def as_row(self) -> Dict[str, Any]:
         """Return a CSV-friendly row with stable column names."""

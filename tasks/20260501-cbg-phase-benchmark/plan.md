@@ -20,8 +20,10 @@
 ## Setup Metrics
 
 - `load_data_ms`
-- `fitting_model_ms`: combined LP and Octant model fitting time
-- `total_setup_ms`
+- `fit_lp_model_ms`
+- `fit_octant_model_ms`
+- `fitting_model_ms`: combined LP and Octant model fitting time for quick comparison
+- `setting_total_ms`: end-to-end setting runtime when using the setting runner
 
 ## Outputs
 

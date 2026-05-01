@@ -10,7 +10,10 @@ from scripts.analysis.cbg_evaluation.benchmarking import (
     summarize_records,
 )
 from scripts.analysis.cbg_evaluation.combinations import PipelineSpec
-from scripts.analysis.cbg_evaluation.evaluate import evaluate_combination
+from scripts.analysis.cbg_evaluation.evaluate import (
+    DistanceModelCache,
+    evaluate_combination,
+)
 from scripts.framework.pipeline import CBGPipeline
 from scripts.framework.types import CircleConstraint, MultilatResult
 
@@ -71,6 +74,34 @@ def fake_spec() -> PipelineSpec:
         "boundary_vertex_mean",
         "#000000",
         "-",
+    )
+
+
+def fake_lp_spec() -> PipelineSpec:
+    return PipelineSpec(
+        "L1",
+        "lp combo",
+        "low_envelope",
+        "none",
+        "spherical_circle",
+        "boundary_vertex_mean",
+        "#000000",
+        "-",
+        needs_lp_fit=True,
+    )
+
+
+def fake_octant_spec() -> PipelineSpec:
+    return PipelineSpec(
+        "B1",
+        "octant combo",
+        "bounded_spline",
+        "none",
+        "planar_annulus",
+        "geometric_centroid",
+        "#000000",
+        "-",
+        needs_octant_fit=True,
     )
 
 
@@ -175,6 +206,81 @@ class TestBenchmarking(unittest.TestCase):
         self.assertTrue(total.fallback_used)
         self.assertTrue(overhead.fallback_used)
         self.assertEqual(overhead.fallback_reason, "multilateration_failed")
+
+    def test_model_cache_reuses_lp_models_by_data_fingerprint(self):
+        calls = []
+
+        def fit_lp(df_asn):
+            calls.append(df_asn)
+            return {"anchor-a": object()}
+
+        cache = DistanceModelCache(fit_lp_fn=fit_lp)
+        recorder = BenchmarkRecorder()
+        benchmark_a = {}
+        benchmark_b = {}
+
+        first = cache.get_for_spec(
+            fake_lp_spec(),
+            df_asn="same-data",
+            data_fingerprint="fingerprint-a",
+            benchmark_recorder=recorder,
+            benchmark_ms=benchmark_a,
+        )
+        second = cache.get_for_spec(
+            fake_lp_spec(),
+            df_asn="same-data",
+            data_fingerprint="fingerprint-a",
+            benchmark_recorder=recorder,
+            benchmark_ms=benchmark_b,
+        )
+
+        self.assertIs(first.lp_models, second.lp_models)
+        self.assertEqual(len(calls), 1)
+        self.assertGreaterEqual(benchmark_a["fit_lp_model_ms"], 0.0)
+        self.assertEqual(benchmark_b["fit_lp_model_ms"], 0.0)
+        lookup_rows = [
+            r for r in recorder.records
+            if r.phase == "model_cache_lookup" and r.model_family == "low_envelope"
+        ]
+        self.assertEqual([r.cache_hit for r in lookup_rows], [False, True])
+
+    def test_model_cache_reuses_octant_models_by_data_fingerprint(self):
+        calls = []
+
+        def fit_octant(df_asn, target_coverage):
+            calls.append((df_asn, target_coverage))
+            return {"anchor-a": object()}, 10.0
+
+        cache = DistanceModelCache(fit_octant_fn=fit_octant)
+        recorder = BenchmarkRecorder()
+        benchmark_a = {}
+        benchmark_b = {}
+
+        first = cache.get_for_spec(
+            fake_octant_spec(),
+            df_asn="same-data",
+            data_fingerprint="fingerprint-a",
+            benchmark_recorder=recorder,
+            benchmark_ms=benchmark_a,
+        )
+        second = cache.get_for_spec(
+            fake_octant_spec(),
+            df_asn="same-data",
+            data_fingerprint="fingerprint-a",
+            benchmark_recorder=recorder,
+            benchmark_ms=benchmark_b,
+        )
+
+        self.assertIs(first.octant_models, second.octant_models)
+        self.assertEqual(first.octant_delta, second.octant_delta)
+        self.assertEqual(calls, [("same-data", 0.80)])
+        self.assertGreaterEqual(benchmark_a["fit_octant_model_ms"], 0.0)
+        self.assertEqual(benchmark_b["fit_octant_model_ms"], 0.0)
+        lookup_rows = [
+            r for r in recorder.records
+            if r.phase == "model_cache_lookup" and r.model_family == "bounded_spline"
+        ]
+        self.assertEqual([r.cache_hit for r in lookup_rows], [False, True])
 
 
 if __name__ == "__main__":

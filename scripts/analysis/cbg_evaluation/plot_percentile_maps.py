@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import matplotlib
 matplotlib.use("Agg")
@@ -24,11 +24,7 @@ from scripts.analysis.cbg_evaluation.evaluate import ProbeResult, get_errors
 def plot_percentile_maps(
     all_results: Dict[str, List[ProbeResult]],
     specs_by_id: Dict[str, PipelineSpec],
-    lp_models: Dict,
-    octant_models: Dict,
-    octant_delta: float,
-    anchor_coords: Dict[str, Tuple[float, float]],
-    probe_targets: Dict,
+    artifacts_by_combo: Dict[str, object],
     output_dir: Path,
     combos_to_plot: Optional[List[str]] = None,
     percentiles: tuple = (5, 25, 50, 75, 95),
@@ -51,6 +47,7 @@ def plot_percentile_maps(
 
     for combo_id in combos_to_plot:
         spec = specs_by_id[combo_id]
+        artifact = artifacts_by_combo[combo_id]
         results = all_results[combo_id]
         success = [r for r in results if r.error_km is not None]
         if not success:
@@ -59,7 +56,12 @@ def plot_percentile_maps(
         errors = np.array([r.error_km for r in success])
 
         # Rebuild pipeline to re-run geolocate for selected probes
-        pipe = build_pipeline(spec, lp_models, octant_models, octant_delta)
+        pipe = build_pipeline(
+            spec,
+            artifact.lp_models,
+            artifact.octant_models,
+            artifact.octant_delta,
+        )
 
         for pct in percentiles:
             target_err = float(np.percentile(errors, pct))
@@ -67,9 +69,9 @@ def plot_percentile_maps(
             probe_ip = probe_result.probe_ip
 
             # Re-run to get circles_used
-            target = probe_targets[probe_ip]
+            target = artifact.probe_targets[probe_ip]
             location, circles_used = pipe.geolocate(
-                target["measurements"], anchor_coords
+                target["measurements"], artifact.anchor_coords
             )
 
             # Build circles_data for plot_circles_on_map: (lat, lon, radius_km)

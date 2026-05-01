@@ -30,7 +30,6 @@ from scripts.analysis.cbg_evaluation.combinations import (
 from scripts.analysis.cbg_evaluation.evaluate import (
     evaluate_all,
     get_errors,
-    load_and_prepare,
     print_statistics,
 )
 from scripts.analysis.cbg_evaluation.plot_error_cdf import plot_error_cdf
@@ -80,10 +79,7 @@ def _setup_logging(output_dir: Path) -> None:
 def save_json_summary(
     all_results,
     output_path,
-    anchor_coords,
-    lp_models,
-    octant_models,
-    setup_benchmark_ms=None,
+    artifacts_by_combo,
     benchmark_raw_path=None,
     benchmark_summary_path=None,
 ):
@@ -92,9 +88,13 @@ def save_json_summary(
         "dataset": "vultr_pings_us_only.csv",
         "asn": 7922,
         "n_combinations": len(COMBINATIONS),
-        "setup_benchmark_ms": {
-            k: round(float(v), 3)
-            for k, v in (setup_benchmark_ms or {}).items()
+        "benchmark_scope": "per_setting_end_to_end",
+        "setting_benchmark_ms": {
+            combo_id: {
+                k: round(float(v), 3)
+                for k, v in artifact.benchmark_ms.items()
+            }
+            for combo_id, artifact in artifacts_by_combo.items()
         },
         "benchmark_raw_csv": (
             str(benchmark_raw_path.relative_to(PROJECT_ROOT))
@@ -113,6 +113,7 @@ def save_json_summary(
     for spec in COMBINATIONS:
         errors = get_errors(all_results[spec.combo_id])
         results = all_results[spec.combo_id]
+        artifact = artifacts_by_combo[spec.combo_id]
         counts = count_result_outcomes(results)
         n_fallback = counts.fallback_count
         fallback_reasons = {}
@@ -132,9 +133,9 @@ def save_json_summary(
             },
             "n_fitted_anchors": count_fitted_anchors(
                 spec,
-                anchor_coords,
-                lp_models=lp_models,
-                octant_models=octant_models,
+                artifact.anchor_coords,
+                lp_models=artifact.lp_models,
+                octant_models=artifact.octant_models,
             ),
             "n_probes": counts.total_probes,
             "estimated_count": counts.estimated_count,
@@ -191,23 +192,16 @@ def main():
     _setup_logging(LOG_DIR)
     total_start = time.perf_counter()
 
-    # 1. Load data, fit models
-    data = load_and_prepare()
-
-    # 2. Evaluate all configured combinations
+    # 1. Evaluate all configured combinations end-to-end per setting
     logger.info("=" * 60)
     logger.info("EVALUATING ALL COMBINATIONS")
     logger.info("=" * 60)
     benchmark_recorder = BenchmarkRecorder()
-    all_results = evaluate_all(
+    evaluation_run = evaluate_all(
         COMBINATIONS,
-        data["lp_models"],
-        data["octant_models"],
-        data["octant_delta"],
-        data["anchor_coords"],
-        data["probe_targets"],
         benchmark_recorder=benchmark_recorder,
     )
+    all_results = evaluation_run.all_results
 
     benchmark_raw_path = OUTPUT_DIR / "benchmark_phase_raw.csv"
     benchmark_summary_path = OUTPUT_DIR / "benchmark_phase_summary.json"
@@ -216,17 +210,17 @@ def main():
     logger.info("Saved: %s", benchmark_raw_path)
     logger.info("Saved: %s", benchmark_summary_path)
 
-    # 3. Statistics table
+    # 2. Statistics table
     print_statistics(all_results, COMBINATIONS)
 
-    # 4. Error CDF
+    # 3. Error CDF
     logger.info("=" * 60)
     logger.info("GENERATING ERROR CDF")
     logger.info("=" * 60)
     fig = plot_error_cdf(all_results, COMBINATIONS, OUTPUT_DIR / "error_cdf_all.png")
     plt.close(fig)
 
-    # 5. Error-Diff CDF
+    # 4. Error-Diff CDF
     logger.info("=" * 60)
     logger.info("GENERATING ERROR-DIFF CDF")
     logger.info("=" * 60)
@@ -236,7 +230,7 @@ def main():
     )
     plt.close(fig)
 
-    # 6. RTT-Error Scatter
+    # 5. RTT-Error Scatter
     logger.info("=" * 60)
     logger.info("GENERATING RTT-ERROR SCATTER")
     logger.info("=" * 60)
@@ -245,7 +239,7 @@ def main():
     )
     plt.close(fig)
 
-    # 7. Percentile Maps
+    # 6. Percentile Maps
     logger.info("=" * 60)
     logger.info("GENERATING PERCENTILE MAPS")
     logger.info("=" * 60)
@@ -256,11 +250,7 @@ def main():
         plot_percentile_maps(
             all_results,
             SPECS_BY_ID,
-            data["lp_models"],
-            data["octant_models"],
-            data["octant_delta"],
-            data["anchor_coords"],
-            data["probe_targets"],
+            evaluation_run.artifacts_by_combo,
             OUTPUT_DIR / "maps",
         )
     except ImportError as e:
@@ -268,14 +258,11 @@ def main():
     except Exception as e:
         logger.error("Percentile maps failed: %s", e)
 
-    # 8. JSON summary
+    # 7. JSON summary
     save_json_summary(
         all_results,
         OUTPUT_DIR / "evaluation_summary.json",
-        data["anchor_coords"],
-        data["lp_models"],
-        data["octant_models"],
-        setup_benchmark_ms=data["setup_benchmark_ms"],
+        evaluation_run.artifacts_by_combo,
         benchmark_raw_path=benchmark_raw_path,
         benchmark_summary_path=benchmark_summary_path,
     )
