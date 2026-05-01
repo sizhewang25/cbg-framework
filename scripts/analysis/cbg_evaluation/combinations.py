@@ -115,19 +115,20 @@ SPECS_BY_ID: Dict[str, PipelineSpec] = {s.combo_id: s for s in COMBINATIONS}
 
 DIFF_PAIRS: List[Tuple[str, str]] = [
     # Filtering ablations
-    ("S1", "S2"),   # SoI redundant filtering vs no filtering
-    ("L1", "L2"),   # LP redundant filtering vs no filtering
+    # ("S1", "S2"),   # SoI redundant filtering vs no filtering
+    # ("L1", "L2"),   # LP redundant filtering vs no filtering
     # Distance ablations, holding spherical_circle + boundary_vertex_mean
     ("S1", "L1"),   # SoI vs LP with redundant filtering
-    ("S2", "L2"),   # SoI vs LP with no filtering
+    ("L1", "B1"),   # SoI vs LP with no filtering
+    ("S1", "B1"),   # SoI vs LP with no filtering
     # Weighted-region ablations, holding centroid
-    ("B1", "B2"),   # weighted@0.9 vs unweighted annulus, Monte Carlo median
-    ("B3", "B4"),   # weighted@0.9 vs unweighted annulus, geometric centroid
+    # ("B1", "B2"),   # weighted@0.9 vs unweighted annulus, Monte Carlo median
+    # ("B3", "B4"),   # weighted@0.9 vs unweighted annulus, geometric centroid
     # Weighted-threshold ablations, holding centroid
-    ("B1", "B5"),   # weighted@0.9 vs weighted@0.5, Monte Carlo median
-    ("B3", "B6"),   # weighted@0.9 vs weighted@0.5, geometric centroid
+    # ("B1", "B5"),   # weighted@0.9 vs weighted@0.5, Monte Carlo median
+    # ("B3", "B6"),   # weighted@0.9 vs weighted@0.5, geometric centroid
     # Centroid ablations, holding annulus weighting
-    ("B1", "B3"),   # Monte Carlo median vs geometric centroid, weighted@0.9 annulus
-    ("B2", "B4"),   # Monte Carlo median vs geometric centroid, unweighted annulus
-    ("B5", "B6"),   # Monte Carlo median vs geometric centroid, weighted@0.5 annulus
+    # ("B1", "B3"),   # Monte Carlo median vs geometric centroid, weighted@0.9 annulus
+    # ("B2", "B4"),   # Monte Carlo median vs geometric centroid, unweighted annulus
+    # ("B5", "B6"),   # Monte Carlo median vs geometric centroid, weighted@0.5 annulus
 ]

@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,6 +24,11 @@ from scripts.utils.helpers import haversine  # noqa: E402
 from scripts.analysis.cbg_evaluation.combinations import (  # noqa: E402
     COMBINATIONS,
     PipelineSpec,
+)
+from scripts.analysis.cbg_evaluation.benchmarking import (  # noqa: E402
+    BenchmarkContext,
+    BenchmarkRecorder,
+    instrument_pipeline,
 )
 
 
@@ -56,20 +62,31 @@ def load_and_prepare() -> Dict[str, Any]:
     )
     from scripts.analysis.octant.octant_evaluation import fit_octant_models
 
+    setup_start = time.perf_counter()
+    setup_benchmark_ms: Dict[str, float] = {}
+
     logger.info("=" * 60)
     logger.info("LOADING DATA")
     logger.info("=" * 60)
+    load_start = time.perf_counter()
     _, df_asn = load_data()
+    setup_benchmark_ms["load_data_ms"] = (
+        time.perf_counter() - load_start
+    ) * 1000.0
 
     logger.info("=" * 60)
     logger.info("FITTING LP MODELS")
     logger.info("=" * 60)
+    fitting_start = time.perf_counter()
     lp_models = fit_lp_models(df_asn)
 
     logger.info("=" * 60)
     logger.info("FITTING OCTANT MODELS")
     logger.info("=" * 60)
     octant_models, octant_delta = fit_octant_models(df_asn, target_coverage=0.80)
+    setup_benchmark_ms["fitting_model_ms"] = (
+        time.perf_counter() - fitting_start
+    ) * 1000.0
 
     # Build anchor_coords
     anchors = df_asn[["dst_ip", "anchor_latitude", "anchor_longitude"]].drop_duplicates()
@@ -87,6 +104,10 @@ def load_and_prepare() -> Dict[str, Any]:
             "true_lon": float(group["probe_longitude"].iloc[0]),
         }
 
+    setup_benchmark_ms["total_setup_ms"] = (
+        time.perf_counter() - setup_start
+    ) * 1000.0
+
     return {
         "df_asn": df_asn,
         "lp_models": lp_models,
@@ -94,6 +115,7 @@ def load_and_prepare() -> Dict[str, Any]:
         "octant_delta": octant_delta,
         "anchor_coords": anchor_coords,
         "probe_targets": probe_targets,
+        "setup_benchmark_ms": setup_benchmark_ms,
     }
 
 
@@ -127,41 +149,70 @@ def evaluate_combination(
     pipe,
     anchor_coords: Dict[str, Tuple[float, float]],
     probe_targets: Dict[str, Dict[str, Any]],
+    benchmark_recorder: Optional[BenchmarkRecorder] = None,
 ) -> List[ProbeResult]:
     """Run one pipeline across all probes."""
     results = []
-    for probe_ip, target in probe_targets.items():
-        geo_result = pipe.geolocate_with_metadata(
-            target["measurements"], anchor_coords
-        )
-        location = geo_result.location
-        circles_used = geo_result.circles_used
+    benchmark_context = BenchmarkContext(spec.combo_id)
+    instrumented = (
+        instrument_pipeline(pipe, benchmark_recorder, benchmark_context)
+        if benchmark_recorder is not None
+        else nullcontext()
+    )
+    with instrumented:
+        for probe_ip, target in probe_targets.items():
+            benchmark_context.probe_ip = probe_ip
+            total_meta: Dict[str, Any] = {}
+            if benchmark_recorder is not None:
+                with benchmark_recorder.measure(
+                    spec.combo_id,
+                    probe_ip,
+                    "total_geolocate",
+                    metadata=lambda: total_meta,
+                    track_tracemalloc=False,
+                ):
+                    geo_result = pipe.geolocate_with_metadata(
+                        target["measurements"], anchor_coords
+                    )
+                    total_meta.update(
+                        success=geo_result.location is not None,
+                        fallback_used=geo_result.fallback_used,
+                        fallback_reason=geo_result.fallback_reason,
+                    )
+                benchmark_recorder.record_pipeline_overhead(spec.combo_id, probe_ip)
+            else:
+                geo_result = pipe.geolocate_with_metadata(
+                    target["measurements"], anchor_coords
+                )
 
-        true = (target["true_lat"], target["true_lon"])
-        if location is not None:
-            error_km = float(haversine(location, true))
-            est_lat, est_lon = float(location[0]), float(location[1])
-        else:
-            error_km = None
-            est_lat = est_lon = None
+            location = geo_result.location
+            circles_used = geo_result.circles_used
 
-        min_rtt = float(min(target["measurements"].values()))
+            true = (target["true_lat"], target["true_lon"])
+            if location is not None:
+                error_km = float(haversine(location, true))
+                est_lat, est_lon = float(location[0]), float(location[1])
+            else:
+                error_km = None
+                est_lat = est_lon = None
 
-        results.append(
-            ProbeResult(
-                probe_ip=probe_ip,
-                true_lat=target["true_lat"],
-                true_lon=target["true_lon"],
-                estimated_lat=est_lat,
-                estimated_lon=est_lon,
-                error_km=error_km,
-                n_circles=len(circles_used),
-                min_rtt_ms=min_rtt,
-                did_intersect=geo_result.multilateration_success,
-                fallback_used=geo_result.fallback_used,
-                fallback_reason=geo_result.fallback_reason,
+            min_rtt = float(min(target["measurements"].values()))
+
+            results.append(
+                ProbeResult(
+                    probe_ip=probe_ip,
+                    true_lat=target["true_lat"],
+                    true_lon=target["true_lon"],
+                    estimated_lat=est_lat,
+                    estimated_lon=est_lon,
+                    error_km=error_km,
+                    n_circles=len(circles_used),
+                    min_rtt_ms=min_rtt,
+                    did_intersect=geo_result.multilateration_success,
+                    fallback_used=geo_result.fallback_used,
+                    fallback_reason=geo_result.fallback_reason,
+                )
             )
-        )
     return results
 
 
@@ -172,6 +223,7 @@ def evaluate_all(
     octant_delta: float,
     anchor_coords: Dict[str, Tuple[float, float]],
     probe_targets: Dict[str, Dict[str, Any]],
+    benchmark_recorder: Optional[BenchmarkRecorder] = None,
 ) -> Dict[str, List[ProbeResult]]:
     """Run all combinations, return {combo_id: [ProbeResult]}."""
     all_results: Dict[str, List[ProbeResult]] = {}
@@ -180,7 +232,13 @@ def evaluate_all(
         logger.info("Running %s: %s ...", spec.combo_id, spec.label)
         t0 = time.perf_counter()
         pipe = build_pipeline(spec, lp_models, octant_models, octant_delta)
-        results = evaluate_combination(spec, pipe, anchor_coords, probe_targets)
+        results = evaluate_combination(
+            spec,
+            pipe,
+            anchor_coords,
+            probe_targets,
+            benchmark_recorder=benchmark_recorder,
+        )
         elapsed = time.perf_counter() - t0
 
         success = [r for r in results if r.error_km is not None]

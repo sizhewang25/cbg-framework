@@ -41,6 +41,7 @@ from scripts.analysis.cbg_evaluation.plot_error_diff_cdf import (
 from scripts.analysis.cbg_evaluation.plot_rtt_error_scatter import (
     plot_rtt_error_scatter,
 )
+from scripts.analysis.cbg_evaluation.benchmarking import BenchmarkRecorder
 from scripts.analysis.cbg_evaluation.reporting import (
     count_fitted_anchors,
     count_result_outcomes,
@@ -82,12 +83,29 @@ def save_json_summary(
     anchor_coords,
     lp_models,
     octant_models,
+    setup_benchmark_ms=None,
+    benchmark_raw_path=None,
+    benchmark_summary_path=None,
 ):
     """Save per-combination statistics and diff-pair summaries as JSON."""
     summary = {
         "dataset": "vultr_pings_us_only.csv",
         "asn": 7922,
         "n_combinations": len(COMBINATIONS),
+        "setup_benchmark_ms": {
+            k: round(float(v), 3)
+            for k, v in (setup_benchmark_ms or {}).items()
+        },
+        "benchmark_raw_csv": (
+            str(benchmark_raw_path.relative_to(PROJECT_ROOT))
+            if benchmark_raw_path is not None
+            else None
+        ),
+        "benchmark_summary_json": (
+            str(benchmark_summary_path.relative_to(PROJECT_ROOT))
+            if benchmark_summary_path is not None
+            else None
+        ),
         "combinations": {},
         "diff_pairs": {},
     }
@@ -180,6 +198,7 @@ def main():
     logger.info("=" * 60)
     logger.info("EVALUATING ALL COMBINATIONS")
     logger.info("=" * 60)
+    benchmark_recorder = BenchmarkRecorder()
     all_results = evaluate_all(
         COMBINATIONS,
         data["lp_models"],
@@ -187,7 +206,15 @@ def main():
         data["octant_delta"],
         data["anchor_coords"],
         data["probe_targets"],
+        benchmark_recorder=benchmark_recorder,
     )
+
+    benchmark_raw_path = OUTPUT_DIR / "benchmark_phase_raw.csv"
+    benchmark_summary_path = OUTPUT_DIR / "benchmark_phase_summary.json"
+    benchmark_recorder.write_raw_csv(benchmark_raw_path)
+    benchmark_recorder.write_summary_json(benchmark_summary_path)
+    logger.info("Saved: %s", benchmark_raw_path)
+    logger.info("Saved: %s", benchmark_summary_path)
 
     # 3. Statistics table
     print_statistics(all_results, COMBINATIONS)
@@ -248,6 +275,9 @@ def main():
         data["anchor_coords"],
         data["lp_models"],
         data["octant_models"],
+        setup_benchmark_ms=data["setup_benchmark_ms"],
+        benchmark_raw_path=benchmark_raw_path,
+        benchmark_summary_path=benchmark_summary_path,
     )
 
     elapsed = time.perf_counter() - total_start

@@ -28,6 +28,8 @@ py-radix = "^0.10.0"
 pyasn = "^1.6.2"
 clickhouse_driver = "^0.2.2"
 python-dotenv="^0.20.0"
+cartopy = "<0.25"
+psutil = "^7.2.2"
 
 [tool.poetry.dev-dependencies]
 ipykernel = "^6.25.1"
