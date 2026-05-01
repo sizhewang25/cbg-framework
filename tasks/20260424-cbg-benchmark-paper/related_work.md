@@ -68,6 +68,27 @@ arXiv 2019
 
 Systematic empirical study of factors perturbing the RTT-to-distance relationship (queueing delays, non-great-circle paths). Provides theoretical grounding for why a spline model (Octant) outperforms a fixed linear model (2/3c).
 
+### Candela et al. — COVID-19 Latency Shift
+**"Impact of the COVID-19 pandemic on the Internet latency: A large-scale study"**
+Computer Networks 2020
+[Computer Networks 2020](https://doi.org/10.1016/j.comnet.2020.107495)
+
+Large-scale study of Internet latency changes during the COVID-19 pandemic. Relevant to CBG because it shows that RTT distributions are not stationary: load, access-network pressure, and routing changes can shift delay independently of physical distance. This motivates evaluating CBG variants on operational RTT datasets rather than relying only on small historical lab measurements.
+
+### Persistent Last-Mile Congestion
+**"Persistent Last-mile Congestion"**
+IMC 2020
+[ACM IMC 2020](https://doi.org/10.1145/3419394.3423648)
+
+Characterizes persistent congestion in access networks. This is not an IP geolocation method, but it explains a major source of excess RTT that weakens delay-distance correlation. CBG variants that use hard outer bounds, learned DDRs, or annular constraints should be evaluated under such real latency noise.
+
+### Vecchio et al. — Insularity and Latency
+**"The Cost of Insularity on Network Latency: A Case Study in the Mediterranean"**
+Internet Technology Letters 2025
+[Wiley 2025](https://doi.org/10.1002/itl2.70084)
+
+Studies island Internet connectivity and finds higher latency and more circuitous paths than mainland regions. This is useful background for VP-placement and geography-sensitivity analysis: physical proximity alone does not guarantee low RTT when routing is constrained by regional infrastructure.
+
 ### Arif et al. — GeoWeight
 **"GeoWeight: Internet Host Geolocation Based on a Probability Model for Latency Measurements"**
 ACSC 2010
@@ -106,6 +127,13 @@ ACM Transactions on Internet Technology 2021
 
 Parses rDNS hostnames to extract location hints; places ~54% of hostnames within 20 km of ground truth. Open-source (Microsoft). Effective for well-named infrastructure but silent on cloud/anycast IPs with opaque hostnames.
 
+### Luckie et al. — Router Hostname Geolocation
+**"Learning to Extract Geographic Information from Internet Router Hostnames"**
+CoNEXT 2021
+[ACM CoNEXT 2021](https://doi.org/10.1145/3485983.3494869)
+
+Learns to extract geographic information embedded in router interface hostnames, including operator-specific mnemonic codes, and constrains inferred locations with distributed delay measurements. This is adjacent to rDNS geolocation but focused on routers rather than arbitrary end hosts. It matters for our paper because router hostname inference can improve topology-aware geolocation and landmark validation, but it is still a hint-extraction method rather than a CBG phase variant.
+
 ### Guo et al. — Web-Mined Geolocation
 **"Mining the Web and the Internet for Accurate IP Address Geolocations"**
 IEEE INFOCOM 2009
@@ -119,6 +147,20 @@ TMA 2017
 [IEEE TMA 2017](https://doi.org/10.23919/TMA.2017.8002903)
 
 Extracts location hints from DNS names and validates them using latency measurements from public measurement platforms such as RIPE Atlas. HLOC is relevant because it bridges declarative rDNS evidence and measurement-based validation: unlike pure rDNS parsing, it can reject implausible hostname hints. It is complementary to our pipeline's Tier 1 sources; our CBG benchmark focuses on the empirical fallback when such hints are unavailable, ambiguous, or insufficiently trustworthy.
+
+### BGP Community Semantics
+**"Collecting Self-reported Semantics of BGP Communities and Investigating Their Consistency with Real-world Usage"**
+IMC 2024
+[ACM IMC 2024](https://doi.org/10.1145/3646547.3688414)
+
+Builds a structured dictionary of operator-published BGP community semantics and checks whether observed usage matches the published meanings. Location-related BGP communities are another form of operator-reported network metadata. This work is relevant to the broader Tier 1 evidence story: self-reported semantics can be useful, but they require validation before being trusted as geolocation evidence.
+
+### Yang et al. — WebGeoInfer
+**"WebGeoInfer: Structure-Free Multi-Stage Framework for Geolocation Inference from Exposed Device Web Interfaces"**
+WWW 2026
+[ACM WWW 2026](https://doi.org/10.1145/3774904.3792341)
+
+Infers device locations from geographic clues leaked through exposed web management interfaces, using page clustering, differential analysis, search engines, and large language models. It is a strong example of content-derived geolocation evidence. For our benchmark, it belongs outside the CBG phase taxonomy: such clues may provide labels or hints for specific exposed devices, but they do not replace a general latency-only fallback for arbitrary unicast IPs.
 
 ### Izhikevich et al. — Operator-Reported Geolocation
 **"Trust, But Verify, Operator-Reported Geolocation"**
@@ -188,6 +230,41 @@ PAM 2022
 
 Uses GPS-tagged user requests as ground truth to evaluate commercial geolocation services. Finds significant errors, especially for mobile and residential IPs.
 
+### Compliance-Oriented DB Reliability
+**"Reliability of IP Geolocation Services for Assessing the Compliance of International Data Transfers"**
+IEEE EuroS&P Workshops 2022
+[IEEE EuroS&P Workshops 2022](https://doi.org/10.1109/eurospw55150.2022.00024)
+
+Evaluates ten IP geolocation services against known ground truth and applies them to international data-transfer compliance analysis. Finds large discrepancies across services. This strengthens the compliance motivation for an auditable measurement-based layer: regulatory decisions can change depending on which opaque database is selected.
+
+### City-Delay DB Evaluation
+**"Evaluation Method of IP Geolocation Database Based on City Delay Characteristics"**
+Electronics 2023
+[Electronics 2023](https://doi.org/10.3390/electronics13010015)
+
+Uses city-level delay characteristics to construct a fusion reference database and evaluate commercial IP geolocation databases. Relevant because it explicitly uses latency as a validation signal for database quality. It is not a CBG variant, but it supports our argument that RTT measurements are a useful audit layer for non-measurement geolocation sources.
+
+### Public Geoservice Ensemble
+**"Improving the Accuracy of IP Geolocation Based on Public IP Geoservices Data"**
+Informatics and Automation 2022
+[Informatics and Automation 2022](https://doi.org/10.15622/ia.21.4.5)
+
+Compares public IP geolocation services and proposes an ensemble/coordinate-averaging approach to improve accuracy. This is a database-fusion direction: it may improve outputs when multiple services are available, but it remains dependent on opaque upstream databases and does not provide the physical constraint auditability of latency-based CBG.
+
+### Retrospective Geolocation
+**"Retrospective IP Address Geolocation for Geography-Aware Internet Services"**
+Sensors 2021
+[Sensors 2021](https://doi.org/10.3390/s21154975)
+
+Studies how to recover historical IP geolocations despite changing address assignments and incomplete historical database snapshots. This is relevant to reproducibility and longitudinal evaluation: when comparing against commercial services or public geoservices, the database snapshot date and address lifetime assumptions must be reported.
+
+### Top-AS Router Database Accuracy
+**"Top AS Router Geolocation in Databases: Performance and Techniques"**
+IEEE GLOBECOM 2023
+[IEEE GLOBECOM 2023](https://doi.org/10.1109/globecom54140.2023.10437266)
+
+Builds a ground-truth dataset for more than 12,000 router interfaces in top transit ASes and evaluates six geolocation databases. Finds poor database accuracy for many core routers, especially routers without informative hostnames. This reinforces the point that commercial databases are not a reliable ground truth for infrastructure IPs and that hostname-derived hints require validation.
+
 ### Gouel et al. — Database Stability
 **"IP Geolocation Database Stability and Implications for Network Research"**
 TMA 2021
@@ -200,6 +277,13 @@ Studies longitudinal changes in MaxMind snapshots and shows that database versio
 ---
 
 ## 6. Recent Adjacent Work
+
+### Internet Geolocation Survey
+**"A Survey on Geolocation on the Internet"**
+IEEE Communications Surveys & Tutorials 2024
+[IEEE COMST 2024](https://doi.org/10.1109/comst.2024.3518398)
+
+Recent broad survey of Internet geolocation, including IP geolocation, cloud/data geolocation, VPN/proxy challenges, and security implications. Useful as a high-level taxonomy reference. Our paper is narrower: it contributes a controlled benchmark of CBG variants rather than a general survey.
 
 ### Trammell and Kühlewind — RTT Privacy and "Lucky" Delay Geolocation
 **"Revisiting the Privacy Implications of Two-Way Internet Latency Data"**
@@ -221,6 +305,20 @@ ACM SIGCOMM CCR 2020
 [ACM CCR 2020](https://doi.org/10.1145/3402413.3402415)
 
 Introduces and evaluates RIPE IPmap's single-radius active geolocation engine, including accuracy, coverage, and consistency against ground truth and commercial databases. Single-radius operationalizes the closest-VP insight from Trammell and Kühlewind: it triggers RIPE Atlas measurements on demand and estimates a target from the Atlas probe with the lowest RTT. This is important operational context for our RIPE Atlas evaluation: IPmap demonstrates that public measurement infrastructure can support active geolocation, while our work decomposes the CBG algorithmic choices that such systems can use internally.
+
+### Cloud Interconnection Geolocation
+**"Inferring Cloud Interconnections: Validation, Geolocation, and Routing Behavior"**
+PAM 2021
+[Springer PAM 2021](https://doi.org/10.1007/978-3-030-72582-2_14)
+
+Infers, validates, and geolocates cloud interconnection points, then studies their routing behavior. This is adjacent because cloud infrastructure geolocation is a major use case for our benchmark, but the paper focuses on cloud interconnection discovery and validation rather than CBG phase choices for arbitrary target IPs.
+
+### Geographic Locality of Internet Routes
+**"A Worldwide Study on the Geographic Locality of Internet Routes"**
+Computer Networks 2021
+[Computer Networks 2021](https://doi.org/10.1016/j.comnet.2021.108555)
+
+Studies how geographically local Internet routes are at global scale. This supports our RTT-distance caveat: routing paths often diverge from geographic shortest paths, so CBG variants must tolerate inflated or asymmetric latency constraints rather than assuming straight-line propagation.
 
 ### "Leveraging Traceroute Inconsistencies to Improve IP Geolocation"
 arXiv 2025
@@ -259,12 +357,26 @@ IMC 2005
 
 Studies whether IP prefixes exhibit geographic locality and how reliably prefix structure can be used for geolocation. This is relevant to Alidade's full-IP-space goal because prefix-level aggregation is a natural way to propagate sparse geolocation evidence. For our work, prefix locality is an auxiliary source rather than a CBG variant, and it does not answer which latency-constraint algorithm should be used when RTT observations are available.
 
+### IP Leasing
+**"Sublet Your Subnet: Inferring IP Leasing in the Wild"**
+IMC 2024
+[ACM IMC 2024](https://doi.org/10.1145/3646547.3689010)
+
+Infers leased IPv4 address space and studies its routing and hosting-security implications. This matters for geolocation because IP ownership, prefix registration, and historical prefix locality become weaker signals when address space is leased or reassigned. It strengthens the case for measurement-based validation rather than relying only on prefix-level metadata.
+
 ### Li et al. — Graph Neural Network (Street-Level ML)
 **"Connecting the Hosts: Street-Level IP Geolocation with Graph Neural Networks"**
 KDD 2022
 [ACM KDD 2022](https://dl.acm.org/doi/abs/10.1145/3534678.3539049)
 
 Reframes unicast IP geolocation as node regression on attribute graphs combining network topology and RTT measurements. State-of-the-art for supervised ML approaches; achieves street-level accuracy on the evaluated datasets. **Limitation for our use case:** Requires large labeled training datasets (known ground-truth IP locations) to train the model. Not auditable (inference is a black box). Does not generalize to IPs outside the training distribution. Cannot be applied to the long tail of unlabeled IPs at Internet scale without substantial labeled data collection.
+
+### Wang et al. — NeighborGeo
+**"NeighborGeo: IP Geolocation Based on Neighbors"**
+Computer Networks 2025
+[Computer Networks 2025](https://doi.org/10.1016/j.comnet.2024.110896)
+
+Graph-structure-learning model for street-level IP geolocation that uses reparameterization and supervised contrastive learning to identify reliable neighboring landmarks and reduce the influence of distant or outlier landmarks. Evaluated on open-source datasets from New York, Los Angeles, and Shanghai, with particular emphasis on non-uniform landmark distributions. Relevant because it improves the GNN/street-level ML lineage after Li et al.; out of scope for our benchmark because it requires labeled datasets and learned graph relationships rather than explicit, auditable CBG distance constraints.
 
 ### Jiang — Neural Network with Stable Landmarks
 **"IP Geolocation Estimation using Neural Networks with Stable Landmarks"**
@@ -315,6 +427,20 @@ USENIX Security 2010
 
 Shows that measurement-based geolocation systems can be intentionally misled by adversarial delay manipulation. This work is not a geolocation algorithm variant, but it is an important caution for our threat model and result interpretation: CBG's physical constraints are auditable, yet RTT-derived constraints assume that targets and paths are not actively manipulating delay to appear elsewhere.
 
+### PARL — Adversarial Probe Mitigation
+**"IP Geolocation with Adversarial Probe Mitigation"**
+NOMS 2024
+[IEEE NOMS 2024](https://doi.org/10.1109/noms59830.2024.10575169)
+
+Proposes Probe-Adversary Resistant Localization (PARL), which assigns trust scores to probes and uses contradictions across measurements to filter malicious inputs. This is relevant for production active geolocation when measurement infrastructure itself may be compromised or unreliable. Our benchmark does not model adversarial probes, but PARL motivates future robustness experiments around VP trust and outlier handling.
+
+### TinyG
+**"TinyG: Accurate IP Geolocation Using a Tiny Number of Probers"**
+CNSM 2023
+[IEEE CNSM 2023](https://doi.org/10.23919/cnsm59352.2023.10327884)
+
+Reduces active geolocation cost by selecting a small number of probers likely to obtain a sufficiently low minimum delay to the target. TinyG is especially relevant to VP selection: it shows that finding a near-target prober can dominate active geolocation accuracy, but it optimizes probing strategy rather than comparing CBG distance models, multilateration geometries, or point estimators.
+
 ### Efficient Landmark Selection for Active Geolocation
 **"Selection of Landmarks for Efficient Active Geolocation"**
 TMA 2024
@@ -346,13 +472,19 @@ Builds a large landmark set by discovering stable live webcams with extractable 
 | Modelling of IP Geolocation | 2015/2020 | 1 | IEEE/arXiv | Phase 1 improvement only |
 | Dragoon | 2020 | 1 | arXiv | Phase 1 improvement only |
 | Delay-Distance Correlation | 2019 | 1 | arXiv | Phase 1 analysis |
+| COVID-19 latency shift | 2020 | RTT noise | Computer Networks | Operational latency is non-stationary |
+| Persistent Last-mile Congestion | 2020 | RTT noise | IMC | Access congestion inflates RTT-distance mapping |
+| Insularity and latency | 2025 | RTT/path locality | ITL | Regional routing can inflate latency |
 | GeoWeight | 2010 | Statistical | ACSC | Probabilistic latency model; Alidade-cited |
 | Spotter | 2011 | Active/model | INFOCOM | Model-based active geolocation service |
 | Geofeeds | 2024 | Tier 1 | ACM Networking | Motivates CBG as fallback |
 | Geofeed Adoption | 2025 | Tier 1 | IEEE/arXiv | Motivates CBG as fallback |
 | rDNS Geolocation | 2021 | Tier 1 | ACM TOIT | Motivates CBG as fallback |
+| Router hostname geolocation | 2021 | Tier 1 + validation | CoNEXT | Router hostname hints constrained by delay |
 | Web-mined geolocation | 2009 | Tier 1 alt | INFOCOM | Mines web/network hints; Alidade antecedent |
 | HLOC | 2017 | Tier 1 + validation | TMA | rDNS hints validated by latency measurements |
+| BGP community semantics | 2024 | Operator metadata | IMC | Self-reported semantics need validation |
+| WebGeoInfer | 2026 | Content hints | WWW | Device web-interface clues; not latency fallback |
 | Trust, But Verify | 2024 | Ground truth | arXiv | Validates operator-reported VP locations |
 | iGreedy | 2016 | Anycast | IEEE JSAC | SOTA anycast geoloc; doesn't benchmark CBG |
 | Fistful of pings | 2015 | Anycast | IEEE INFOCOM | Anycast enumeration baseline |
@@ -362,14 +494,24 @@ Builds a large landmark set by discovering stable live webcams with extractable 
 | DB accuracy | 2023 | Eval | IEEE | Motivates open alternatives |
 | DB unreliable | 2011 | Eval | ACM CCR | Motivates open alternatives |
 | GPS-based | 2022 | Eval | PAM | Motivates open alternatives |
+| Compliance DB reliability | 2022 | Eval | IEEE EuroS&P Wksp | DB choice changes compliance conclusions |
+| City-delay DB evaluation | 2023 | Eval + latency | Electronics | Latency used to audit DB reliability |
+| Public geoservice ensemble | 2022 | DB fusion | Informatics and Automation | Improves public services but remains opaque |
+| Retrospective geolocation | 2021 | Longitudinal DB | Sensors | Snapshot dates matter for historical evaluation |
+| Top-AS router DB accuracy | 2023 | Router DB eval | GLOBECOM | DBs perform poorly on core routers |
 | DB stability | 2021 | Eval | TMA | Snapshot date affects reproducibility |
+| Internet geolocation survey | 2024 | Survey | IEEE COMST | Broad taxonomy and challenge overview |
 | GeoResolver | 2025 | VP selection | PACM Networking | Scalable explainable geolocation using DNS redirection |
 | RIPE IPmap | 2020 | Active geoloc | ACM CCR | Operational active geolocation with RIPE Atlas |
+| Cloud interconnection geolocation | 2021 | Cloud/topology | PAM | Cloud interconnect validation and geolocation |
+| Geographic locality of Internet routes | 2021 | Topology/path | Computer Networks | Routes diverge from geographic shortest path |
 | Traceroute inconsistencies | 2025 | Topology | arXiv | Adjacent; out of scope (not scalable) |
 | GeoFINDR | 2025 | CBG-like | arXiv | Adjacent; different goal (VM compliance) |
 | Padmanabhan & Subramanian — GeoCluster | 2001 | Tier 1 alt | WWW | Prefix-based fallback; fails on large ISP prefixes |
 | Freedman et al. — Prefix Locality | 2005 | Prefix/locality | IMC | Prefix-level propagation evidence |
+| IP leasing | 2024 | Prefix metadata | IMC | Leasing weakens prefix/ownership geolocation signals |
 | Li et al. — GNN Street-Level | 2022 | ML | KDD | SOTA supervised ML; requires labeled training data |
+| NeighborGeo | 2025 | ML/GNN | Computer Networks | Neighbor-aware graph learning; labeled data required |
 | Jiang — NN + Stable Landmarks | 2016 | ML | GI/SIGCOMM | Neural network baseline; labeled data required |
 | Youn et al. — Statistical Geolocation | 2009 | Statistical | ICCCN | Probabilistic delay model; not modular CBG |
 | Eriksson et al. — Learning-Based | 2010 | ML/statistical | PAM | Naive Bayes geolocation from monitor measurements |
@@ -377,5 +519,7 @@ Builds a large landmark set by discovering stable live webcams with extractable 
 | Katz-Bassett et al. — TBG | 2006 | Topology | IMC | Foundational delay+topology geolocation |
 | Topology + Intermediate Routers | 2019 | Topology | Cybersecurity | Traceroute-based; infeasible probing cost at scale |
 | Gill et al. — Circumvention | 2010 | Security | USENIX Security | Adversarial limits of measurement-based geolocation |
+| PARL adversarial probe mitigation | 2024 | Security | NOMS | Filters malicious probes through trust scores |
+| TinyG | 2023 | VP/prober selection | CNSM | Reduces active probing cost; not CBG phase benchmark |
 | Landmark Selection (TMA 2024) | 2024 | Phase 1 | TMA | Landmark placement is first-order accuracy factor |
 | GeoCAM | 2021 | Landmarks | ToN | Large webcam landmark set; motivates VP/landmark analysis |

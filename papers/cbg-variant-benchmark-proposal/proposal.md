@@ -4,24 +4,33 @@
 
 ## 1. Project Objective
 
-An operator who wants to deploy Constraint-Based Geolocation (CBG) today faces a practical problem: the academic lineage spans multiple landmark systems, industry-scale systems such as Akamai-affiliated Alidade demonstrate that CBG-style constraints are production-relevant, but none of these systems has been benchmarked against the others in a controlled setting or characterized for compute cost at operational scale. There is no evidence-based guide for choosing a configuration.
+This project asks a deployment-oriented question: **which Constraint-Based Geolocation (CBG) variant is accurate, efficient, and robust enough for production unicast IP geolocation?**
 
-We close this gap with the **first systematic, cross-variant CBG benchmark** for unicast IP geolocation. We decompose CBG into three independent phases — RTT-to-distance modeling, multilateration, and single-point estimation — and evaluate the accuracy/runtime tradeoff of each valid configuration family using curated RTT datasets from operational vantage points and RIPE Atlas.
+The target users are network operators and researchers who need an auditable geolocation method for large IP populations, but who can only assume latency measurements from known vantage points (VPs). We focus on unicast IP geolocation. We exclude topology-heavy probing, supervised machine learning, commercial database fusion, and anycast-specific inference from the benchmark scope.
 
-> **Comment:** The first full-dataset experiment now supports the production-readiness argument, but it covers the default 8-combination suite over all Vultr US targets, not yet the full 15 active valid combinations. Keep this distinction explicit until the remaining combinations and RIPE cross-validation are complete.
+CBG is attractive because it converts RTT measurements into physical distance constraints, combines constraints from multiple VPs, and returns an estimate that can be checked against observed latency bounds. It is label-free, dependency-light, composable, and extensible. This structure explains why CBG ideas appear across original CBG, Octant, Million-Scale Geolocation, Street-Level Geolocation, Alidade, and later anycast localization systems such as iGreedy, MAnycast, and LACeS.
+
+Despite this influence, practitioners still cannot answer three basic questions:
+
+1. Which CBG variant is most accurate under a controlled benchmark?
+2. Which variants are practical at production scale for millions of IPs?
+3. Why is the community still missing complete, reusable implementations of the major CBG variants?
+
+We address these gaps with a composable CBG benchmark framework and a production-oriented evaluation of known CBG variants across accuracy, runtime, and memory consumption. The first full-dataset experiment already evaluates the default 8-combination suite over all Vultr US targets; the final benchmark will extend this to all 15 active valid combinations and RIPE Atlas cross-validation.
 
 Our contributions:
 
-1. A three-phase CBG taxonomy that unifies disparate prior implementations
-2. A modular open-source framework implementing all known CBG variants (original CBG and Octant have no public code)
-3. Controlled cross-variant benchmark results isolating the per-phase contribution to accuracy and runtime
-4. A Pareto frontier of median error vs. runtime per IP — the first evidence-based answer to "which CBG variant is production-ready?"
+1. The first controlled CBG-variant benchmark over curated ground-truth IP datasets, reporting accuracy, runtime, memory use, intersection rate, and fallback behavior.
+2. A composable CBG framework that decomposes prior systems into RTT-to-distance modeling, multilateration, and point-estimation phases, enabling both faithful reproduction of known variants and new valid combinations.
+3. New empirical baselines and variant rankings that identify which CBG configurations are accurate, scalable, and production-suitable.
+4. A Snowflake-backed execution path for large RTT datasets, supporting modern big-data processing requirements for production-scale CBG evaluation and deployment.
+5. An open-source release intended to support future research and improvement on latency-based IP geolocation.
 
 ---
 
 ## 2. Motivation
 
-### 2.1 Why Latency-Based Geolocation?
+### 2.1 IP Geolocation Is an Operational Primitive
 
 ISPs, CDN operators, network researchers, and security analysts need to know where Internet hosts are physically located — for traffic engineering, CDN server selection, regulatory compliance, anomaly detection, and capacity planning. No single method covers all unicast IPs with high accuracy.
 
@@ -36,9 +45,15 @@ Declarative sources (GeoFeed, rDNS) have limited coverage [[ACM 2024](https://dl
 | **Topology-based** [[Cybersecurity 2019](https://cybersecurity.springeropen.com/articles/10.1186/s42400-019-0030-2)]                             | 10–20 probes per IP × 10M targets = 100–200M probes per cycle; infeasible at ISP scale  |
 
 
-Latency-based geolocation avoids all of these barriers. It requires no labeled training data and no per-IP active probing beyond the RTT data ISPs already observe passively — PoPs and mobile core networks see round-trip times to communicating hosts as a byproduct of normal traffic. Furthermore, **any geolocation estimate can be validated against observed RTTs**: `distance ≤ RTT/2 × propagation speed` is a hard physical bound — any estimate violating it is provably wrong.
+These alternatives are valuable, but they leave operators without a universal, auditable fallback. Commercial databases and declarative hints can be stale or unavailable. Supervised models depend on labeled training data and are hard to audit. Topology-heavy systems can improve accuracy for high-value targets, but their probing cost is difficult to scale to millions of IPs.
 
-### 2.2 Why CBG Among Latency-Based Methods?
+### 2.2 Latency Is an Auditable Validation Layer
+
+Latency-based geolocation avoids many of these barriers. It requires no labeled training data and can operate on RTT data already observed by ISPs, CDNs, and mobile networks as a byproduct of normal traffic. It also provides a physical consistency check that other geolocation inputs lack: for a candidate location to be plausible, its distance from each VP must be consistent with the observed RTT and propagation-speed bound.
+
+RTT is noisy because of routing detours, queueing, congestion, and access-network effects. It is therefore not a direct ground-truth distance measurement. Its value is that it embeds an auditable distance proxy and a hard physical upper bound: an estimate that lies farther away than the RTT can physically support is invalid. This makes latency the most transparent validation layer for large-scale IP geolocation.
+
+### 2.3 CBG Is the Dominant Latency-Geolocation Framework
 
 The simplest latency-based approach, **GeoPing**, reports the nearest VP's location (lowest RTT) — a single-VP heuristic with no geometric constraint, producing a **68-mile median error** [[NSDI 2007](https://www.usenix.org/conference/nsdi-07/octant-comprehensive-framework-geolocalization-internet-hosts)] that degrades whenever no VP is co-located with the target.
 
@@ -49,9 +64,9 @@ The simplest latency-based approach, **GeoPing**, reports the nearest VP's locat
 - **Label-free** — works for any IP reachable from the VP set, no training data needed
 - **Tunable** — accuracy improves directly as more or better-distributed VPs are added
 
-CBG is therefore the practical choice for operators who need high-accuracy, auditable geolocation at scale. **But which CBG variant?** That question has never been answered.
+CBG is therefore the natural latency-based framework for production-oriented geolocation: it is systematic, label-free, dependency-light, composable, and extensible. Its influence appears in original CBG, Octant, Million-Scale Geolocation, Street-Level Geolocation, and Alidade. CBG-style constraint reasoning also appears in later anycast localization systems, including iGreedy, MAnycast, and LACeS, even though this benchmark focuses only on unicast IP geolocation.
 
-### 2.3 Why Practitioners Cannot Choose a Variant Today
+### 2.4 The Missing Piece Is Variant Assessment
 
 **No controlled cross-variant evaluation exists.** Each CBG paper (Gueye 2004, Hu 2012, Wong 2007) evaluates only its own full pipeline on its own proprietary dataset. No paper isolates phase contributions, so practitioners cannot determine: Is it worth calibrating a per-VP spline, or does 2/3c suffice? Does `planar_annulus` multilateration justify its added complexity over `spherical_circle`? Does Monte Carlo sampled-medoid selection deliver meaningful accuracy gains over a geometric centroid? Does weighted-annulus geometry justify its pathological tail latency? Our first full-dataset run answers the latter two questions negatively, but a full phase-isolation grid is still required for the final paper.
 
@@ -59,9 +74,7 @@ CBG is therefore the practical choice for operators who need high-accuracy, audi
 
 **Only one public CBG implementation exists.** The IMC 2023 replication codebase [[Darwich et al.](https://dl.acm.org/doi/10.1145/3618257.3624801)] covers only Million-Scale and Street-Level CBG. Original CBG and Octant have **no public code** — an operator who wants to evaluate Octant must reimplement it from scratch.
 
-### 2.4 What the Benchmark Delivers
-
-Accuracy benchmarks alone are insufficient for deployment decisions. Despite IP geolocation being studied for over two decades, none of the foundational CBG papers report per-IP runtime or memory figures — the field has never evaluated algorithms against a deployment budget. At operational scale (10M–50M IPs), this matters: in our full Vultr run, the practical `planar_annulus + geometric_centroid` setting geolocates a target in **8.7 ms on average**, while the unweighted Monte Carlo sampled-medoid variant takes **160.1 ms on average** and is less accurate. The weighted-annulus path is more severe: it improves median error by only 2.1 km over the practical setting but spends ~40.7 minutes on one pathological target.
+**Accuracy alone is insufficient for deployment decisions.** Despite IP geolocation being studied for over two decades, none of the foundational CBG papers report per-IP runtime or memory figures. At operational scale (10M-50M IPs), this matters: in our full Vultr run, the practical `planar_annulus + geometric_centroid` setting geolocates a target in **8.7 ms on average**, while the unweighted Monte Carlo sampled-medoid variant takes **160.1 ms on average** and is less accurate. The weighted-annulus path is more severe: it improves median error by only 2.1 km over the practical setting but spends ~40.7 minutes on one pathological target.
 
 The final benchmark will provide the first Pareto frontier of median error vs. runtime per IP across all valid CBG phase combinations — a concrete, evidence-based answer to which configuration maximizes accuracy within a given compute budget, and where future phase-level investment will have the most impact.
 
