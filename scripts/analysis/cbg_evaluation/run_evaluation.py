@@ -37,6 +37,9 @@ from scripts.analysis.cbg_evaluation.plot_error_diff_cdf import (
     compute_error_diff,
     plot_error_diff_cdf,
 )
+from scripts.analysis.cbg_evaluation.plot_benchmark_summary import (
+    plot_benchmark_summary,
+)
 from scripts.analysis.cbg_evaluation.plot_rtt_error_scatter import (
     plot_rtt_error_scatter,
 )
@@ -265,6 +268,17 @@ def main():
         evaluation_run.artifacts_by_combo,
         benchmark_raw_path=benchmark_raw_path,
         benchmark_summary_path=benchmark_summary_path,
+    )
+
+    # 8. Benchmark summary charts from the generated JSON summaries
+    logger.info("=" * 60)
+    logger.info("GENERATING BENCHMARK SUMMARY CHARTS")
+    logger.info("=" * 60)
+    plot_benchmark_summary(
+        OUTPUT_DIR / "evaluation_summary.json",
+        benchmark_summary_path,
+        benchmark_raw_path,
+        OUTPUT_DIR,
     )
 
     elapsed = time.perf_counter() - total_start
