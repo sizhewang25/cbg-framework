@@ -34,14 +34,72 @@ class TestGeometricCentroid(unittest.TestCase):
         assert_point_almost_equal(self, point, (1.0, 25.0 / 3.0))
         self.assertFalse(region.contains(Point(point[1], point[0])))
 
-    def test_vertex_lists_are_not_converted_to_polygons(self):
+    def test_unordered_vertex_list_returns_ordered_polygon_area_centroid(self):
         centroid = GeometricCentroid()
 
         point = centroid.select(
-            successful_vertices([(0.0, 0.0), (0.0, 2.0), (2.0, 0.0)])
+            successful_vertices([
+                (2.0, 4.0),
+                (0.0, 0.0),
+                (2.0, 0.0),
+                (0.0, 4.0),
+            ])
+        )
+
+        assert_point_almost_equal(self, point, (1.0, 2.0))
+
+    def test_vertex_list_deduplicates_near_identical_crossings(self):
+        centroid = GeometricCentroid(dedupe_tolerance_deg=1e-6)
+
+        point = centroid.select(
+            successful_vertices([
+                (0.0, 0.0),
+                (0.0, 2.0),
+                (2.0, 0.0),
+                (0.0, 2.0 + 1e-8),
+            ])
+        )
+
+        assert_point_almost_equal(self, point, (2.0 / 3.0, 2.0 / 3.0))
+
+    def test_two_vertex_list_returns_geodetic_midpoint(self):
+        centroid = GeometricCentroid()
+
+        point = centroid.select(successful_vertices([(0.0, 0.0), (0.0, 2.0)]))
+
+        assert_point_almost_equal(self, point, (0.0, 1.0))
+
+    def test_single_vertex_list_returns_that_vertex(self):
+        centroid = GeometricCentroid()
+
+        point = centroid.select(successful_vertices([(3.0, -7.0)]))
+
+        self.assertEqual(point, (3.0, -7.0))
+
+    def test_collinear_vertex_list_returns_none(self):
+        centroid = GeometricCentroid()
+
+        point = centroid.select(
+            successful_vertices([(0.0, 0.0), (0.0, 1.0), (0.0, 2.0)])
         )
 
         self.assertIsNone(point)
+
+    def test_dateline_vertex_list_uses_wrapped_longitude_ordering(self):
+        centroid = GeometricCentroid()
+
+        point = centroid.select(
+            successful_vertices([
+                (-1.0, 179.0),
+                (1.0, -179.0),
+                (1.0, 179.0),
+                (-1.0, -179.0),
+            ])
+        )
+
+        self.assertIsNotNone(point)
+        self.assertAlmostEqual(point[0], 0.0, places=7)
+        self.assertAlmostEqual(abs(point[1]), 180.0, places=7)
 
     def test_failed_result_returns_none(self):
         centroid = GeometricCentroid()

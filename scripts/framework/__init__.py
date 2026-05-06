@@ -13,8 +13,13 @@ Usage::
     # Million-Scale CBG (default)
     pipe = CBGPipeline.from_config()
 
-    # Vanilla CBG (LP bestline)
-    pipe = CBGPipeline.from_config(distance="low_envelope")
+    # Vanilla CBG (LP bestline + crossing-point polygon centroid)
+    pipe = CBGPipeline.from_config(
+        distance="low_envelope",
+        filtering="none",
+        multilateration="spherical_circle",
+        centroid="geometric_centroid",
+    )
     pipe.distance.fit(df_asn=df_asn)
 
     # Custom combination

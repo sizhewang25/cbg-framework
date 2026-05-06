@@ -28,9 +28,6 @@ _INCOMPATIBLE_MULTILAT_DISTANCE = {
     ("planar_annulus_weighted", "low_envelope"),
 }
 _ANNULUS_AWARE_MULTILAT = {"planar_annulus", "planar_annulus_weighted"}
-_INCOMPATIBLE_MULTILAT_CENTROID = {
-    ("spherical_circle", "geometric_centroid"),
-}
 
 
 class CBGPipeline:
@@ -193,11 +190,6 @@ class CBGPipeline:
             raise ValueError(
                 f"multilateration={multilateration!r} requires 'bounded_spline' "
                 f"distance, got {distance!r}"
-            )
-        if (multilateration, centroid) in _INCOMPATIBLE_MULTILAT_CENTROID:
-            raise ValueError(
-                f"centroid={centroid!r} requires a polygon region, but "
-                f"multilateration={multilateration!r} returns crossing vertices"
             )
         if multilateration == "planar_annulus_weighted" and filtering != "none":
             warnings.warn(
