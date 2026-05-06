@@ -52,6 +52,14 @@ class BenchmarkRecord:
     success: Optional[bool] = None
     fallback_used: Optional[bool] = None
     fallback_reason: Optional[str] = None
+    true_lat: Optional[float] = None
+    true_lon: Optional[float] = None
+    estimated_lat: Optional[float] = None
+    estimated_lon: Optional[float] = None
+    error_km: Optional[float] = None
+    min_rtt_ms: Optional[float] = None
+    did_intersect: Optional[bool] = None
+    n_circles: Optional[int] = None
     n_input_constraints: Optional[int] = None
     n_filtered_constraints: Optional[int] = None
     region_type: Optional[str] = None

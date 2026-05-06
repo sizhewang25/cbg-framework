@@ -484,6 +484,8 @@ def evaluate_combination(
         for probe_ip, target in probe_targets.items():
             benchmark_context.probe_ip = probe_ip
             total_meta: Dict[str, Any] = {}
+            true = (target["true_lat"], target["true_lon"])
+            min_rtt = float(min(target["measurements"].values()))
             if benchmark_recorder is not None:
                 with benchmark_recorder.measure(
                     spec.combo_id,
@@ -495,10 +497,25 @@ def evaluate_combination(
                     geo_result = pipe.geolocate_with_metadata(
                         target["measurements"], anchor_coords
                     )
+                    location = geo_result.location
+                    if location is not None:
+                        error_km = float(haversine(location, true))
+                        est_lat, est_lon = float(location[0]), float(location[1])
+                    else:
+                        error_km = None
+                        est_lat = est_lon = None
                     total_meta.update(
                         success=geo_result.location is not None,
                         fallback_used=geo_result.fallback_used,
                         fallback_reason=geo_result.fallback_reason,
+                        true_lat=target["true_lat"],
+                        true_lon=target["true_lon"],
+                        estimated_lat=est_lat,
+                        estimated_lon=est_lon,
+                        error_km=error_km,
+                        min_rtt_ms=min_rtt,
+                        did_intersect=geo_result.multilateration_success,
+                        n_circles=len(geo_result.circles_used),
                     )
                 benchmark_recorder.record_pipeline_overhead(spec.combo_id, probe_ip)
             else:
@@ -509,15 +526,12 @@ def evaluate_combination(
             location = geo_result.location
             circles_used = geo_result.circles_used
 
-            true = (target["true_lat"], target["true_lon"])
             if location is not None:
                 error_km = float(haversine(location, true))
                 est_lat, est_lon = float(location[0]), float(location[1])
             else:
                 error_km = None
                 est_lat = est_lon = None
-
-            min_rtt = float(min(target["measurements"].values()))
 
             results.append(
                 ProbeResult(
