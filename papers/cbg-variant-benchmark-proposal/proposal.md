@@ -119,12 +119,12 @@ The spline model produces **annuli** rather than disks, encoding both a maximum 
 ### Phase 2 — Multilateration
 
 
-| Variant                             | Source                       | Method                                                                     | Output          |
-| ----------------------------------- | ---------------------------- | -------------------------------------------------------------------------- | --------------- |
-| **`spherical_circle`**         | Original CBG / Million-Scale | Pairwise great-circle crossings on the Earth sphere; keeps points inside all circles | Vertex list     |
-| **`planar_circle`**            | —                            | Approximate circles as 100-point polygons in `(lon, lat)` degree space; sequential Shapely intersection | Shapely polygon |
-| **`planar_annulus`**           | Octant                       | `∩(outer disks) − ∪(inner disks)` in planar `(lon, lat)` degree space      | Shapely polygon |
-| **`planar_annulus_weighted`**  | Octant                       | Grid-based weight accumulation over planar annuli; fused Phase 2+3         | Shapely polygon |
+| Variant                       | Source                       | Method                                                                                                  | Output          |
+| ----------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------- | --------------- |
+| `**spherical_circle`**        | Original CBG / Million-Scale | Pairwise great-circle crossings on the Earth sphere; keeps points inside all circles                    | Vertex list     |
+| `**planar_circle**`           | —                            | Approximate circles as 100-point polygons in `(lon, lat)` degree space; sequential Shapely intersection | Shapely polygon |
+| `**planar_annulus**`          | Octant                       | `∩(outer disks) − ∪(inner disks)` in planar `(lon, lat)` degree space                                   | Shapely polygon |
+| `**planar_annulus_weighted**` | Octant                       | Grid-based weight accumulation over planar annuli; fused Phase 2+3                                      | Shapely polygon |
 
 
 `planar_annulus` is qualitatively different from `planar_circle`: by subtracting the inner exclusion zones, it removes near-VP regions that are geometrically inconsistent with the RTT constraint — producing a tighter, more accurate feasible region.
@@ -132,11 +132,11 @@ The spline model produces **annuli** rather than disks, encoding both a maximum 
 ### Phase 3 — Single-Point Estimation
 
 
-| Variant                 | Source       | Method                                                           | Complexity   |
-| ----------------------- | ------------ | ---------------------------------------------------------------- | ------------ |
-| **`boundary_vertex_mean`** | Original CBG | Average of boundary vertex coordinates; includes polygon holes for annuli | O(1)         |
-| **Geometric Centroid**  | —            | Area-weighted centroid of feasible polygon (Shapely `.centroid`) | O(1)         |
-| **MC Sampled Medoid**   | Octant       | 1000-point Sobol QMC sampling + sampled point with minimum total pairwise distance | O(n_samples²) |
+| Variant                    | Source       | Method                                                                             | Complexity    |
+| -------------------------- | ------------ | ---------------------------------------------------------------------------------- | ------------- |
+| `**boundary_vertex_mean**` | Original CBG | Average of boundary vertex coordinates; includes polygon holes for annuli          | O(1)          |
+| **Geometric Centroid**     | —            | Area-weighted centroid of feasible polygon (Shapely `.centroid`)                   | O(1)          |
+| **MC Sampled Medoid**      | Octant       | 1000-point Sobol QMC sampling + sampled point with minimum total pairwise distance | O(n_samples²) |
 
 
 The MC sampled medoid minimizes sum of distances to all sampled feasible points and returns one of those points, making it robust to irregular polygon shapes while preserving feasibility. However, it incurs a large runtime penalty versus the geometric centroid.
@@ -266,15 +266,15 @@ RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and b
 ### 5.6 Positioning Summary
 
 
-| Gap in Existing Literature                                             | Our Contribution                                                          |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| No systematic cross-phase CBG benchmark                                | First to decompose CBG into 3 phases and benchmark the valid combination families |
-| Phase 1 improvements proposed in isolation                             | Controlled evaluation holding other phases fixed                          |
-| Only one public CBG implementation (IMC 2023)                          | Open-source framework covering all known variants                         |
-| No accuracy-vs-scalability characterization                            | Pareto frontier of median error vs. runtime, starting with the full Vultr all-US default suite and extending to the remaining valid combinations |
-| Industry systems such as Alidade validate CBG's production relevance but remain end-to-end and proprietary/data-specific | Modular benchmark showing which CBG phase choices are production-ready |
-| Simpler alternatives (GeoPing, GeoCluster, ML) each have critical gaps | CBG: physics-grounded, label-free, auditable, scalable to millions of IPs |
-| Commercial services opaque and inaccurate on cloud IPs                 | Auditable, reproducible CBG alternative                                   |
+| Gap in Existing Literature                                                                                               | Our Contribution                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No systematic cross-phase CBG benchmark                                                                                  | First to decompose CBG into 3 phases and benchmark the valid combination families                                                                |
+| Phase 1 improvements proposed in isolation                                                                               | Controlled evaluation holding other phases fixed                                                                                                 |
+| Only one public CBG implementation (IMC 2023)                                                                            | Open-source framework covering all known variants                                                                                                |
+| No accuracy-vs-scalability characterization                                                                              | Pareto frontier of median error vs. runtime, starting with the full Vultr all-US default suite and extending to the remaining valid combinations |
+| Industry systems such as Alidade validate CBG's production relevance but remain end-to-end and proprietary/data-specific | Modular benchmark showing which CBG phase choices are production-ready                                                                           |
+| Simpler alternatives (GeoPing, GeoCluster, ML) each have critical gaps                                                   | CBG: physics-grounded, label-free, auditable, scalable to millions of IPs                                                                        |
+| Commercial services opaque and inaccurate on cloud IPs                                                                   | Auditable, reproducible CBG alternative                                                                                                          |
 
 
 ---
@@ -295,16 +295,17 @@ RIPE Atlas delay-based VM-scale cloud localization using DDR sectorization and b
 ### Results Table
 
 
-| ID | Distance Model | Multilateration | Centroid | Median Error | P90 Error | Within 500km | Within 1000km | Intersection | Fallback | Runtime |
-|----|----------------|-----------------|----------|:------------:|:---------:|:------------:|:-------------:|:------------:|:--------:|:-------:|
-| S1 | Speed-of-Internet | `spherical_circle` + redundant filtering | `boundary_vertex_mean` | 522.7 km | 1659.4 km | 48.8% | 70.6% | 76.7% | 23.3% | 3.4s |
-| S2 | Speed-of-Internet | `spherical_circle` | `boundary_vertex_mean` | 522.7 km | 1666.0 km | 48.8% | 70.6% | 22.2% | 77.8% | 9.1s |
-| L1 | LP low-envelope | `spherical_circle` + redundant filtering | `boundary_vertex_mean` | 559.2 km | 1798.7 km | 45.7% | 69.1% | 70.0% | 30.0% | 3.3s |
-| L2 | LP low-envelope | `spherical_circle` | `boundary_vertex_mean` | 559.2 km | 1798.7 km | 45.7% | 69.1% | 30.1% | 69.9% | 10.0s |
-| B1 | Bounded spline | weighted `planar_annulus@0.9` | `monte_carlo_median` | 387.0 km | 1272.7 km | 60.5% | 84.7% | 92.6% | 7.4% | 48.0m |
-| B2 | Bounded spline | `planar_annulus` | `monte_carlo_median` | 380.3 km | 1283.1 km | 60.5% | 84.6% | 93.5% | 6.5% | 3.8m |
-| B3 | Bounded spline | weighted `planar_annulus@0.9` | `geometric_centroid` | **357.6 km** | **1157.0 km** | **64.3%** | **87.0%** | 92.6% | 7.4% | 45.2m |
-| B4 | Bounded spline | `planar_annulus` | `geometric_centroid` | 359.7 km | 1171.7 km | 63.5% | 86.6% | **93.5%** | **6.5%** | 14.8s |
+| ID  | Distance Model    | Multilateration                          | Centroid               | Median Error | P90 Error     | Within 500km | Within 1000km | Intersection | Fallback | Runtime |
+| --- | ----------------- | ---------------------------------------- | ---------------------- | ------------ | ------------- | ------------ | ------------- | ------------ | -------- | ------- |
+| S1  | Speed-of-Internet | `spherical_circle` + redundant filtering | `boundary_vertex_mean` | 522.7 km     | 1659.4 km     | 48.8%        | 70.6%         | 76.7%        | 23.3%    | 3.4s    |
+| S2  | Speed-of-Internet | `spherical_circle`                       | `boundary_vertex_mean` | 522.7 km     | 1666.0 km     | 48.8%        | 70.6%         | 22.2%        | 77.8%    | 9.1s    |
+| L1  | LP low-envelope   | `spherical_circle` + redundant filtering | `boundary_vertex_mean` | 559.2 km     | 1798.7 km     | 45.7%        | 69.1%         | 70.0%        | 30.0%    | 3.3s    |
+| L2  | LP low-envelope   | `spherical_circle`                       | `boundary_vertex_mean` | 559.2 km     | 1798.7 km     | 45.7%        | 69.1%         | 30.1%        | 69.9%    | 10.0s   |
+| B1  | Bounded spline    | weighted `planar_annulus@0.9`            | `monte_carlo_median`   | 387.0 km     | 1272.7 km     | 60.5%        | 84.7%         | 92.6%        | 7.4%     | 48.0m   |
+| B2  | Bounded spline    | `planar_annulus`                         | `monte_carlo_median`   | 380.3 km     | 1283.1 km     | 60.5%        | 84.6%         | 93.5%        | 6.5%     | 3.8m    |
+| B3  | Bounded spline    | weighted `planar_annulus@0.9`            | `geometric_centroid`   | **357.6 km** | **1157.0 km** | **64.3%**    | **87.0%**     | 92.6%        | 7.4%     | 45.2m   |
+| B4  | Bounded spline    | `planar_annulus`                         | `geometric_centroid`   | 359.7 km     | 1171.7 km     | 63.5%        | 86.6%         | **93.5%**    | **6.5%** | 14.8s   |
+
 
 All settings return estimates for 100% of targets because failed multilateration falls back to a non-null estimate. We therefore report both intersection rate and fallback rate: they expose whether the result came from real geometric overlap or from failure handling.
 
@@ -341,13 +342,13 @@ All 8 settings produce estimates for 100% of targets because fallback is always 
 ### Scalability Comparison
 
 
-| Configuration | Median Error | Mean geolocate / target | Full-run runtime | 50M-target single-core estimate | Status |
-| ------------- | ------------ | ----------------------- | ---------------- | ------------------------------- | ------ |
-| **B4: spline + `planar_annulus` + `geometric_centroid`** | **359.7 km** | **8.7 ms** | **14.8s** | **~5 CPU-days** | Recommended production point |
-| B3: spline + weighted `planar_annulus@0.9` + `geometric_centroid` | 357.6 km | 1904.9 ms | 45.2m | ~3.0 CPU-years | Accuracy leader, tail-latency blocker |
-| B2: spline + `planar_annulus` + `monte_carlo_median` | 380.3 km | 160.1 ms | 3.8m | ~93 CPU-days | Dominated by B4 |
-| S1: speed-of-Internet + filtered `spherical_circle` | 522.7 km | 1.0 ms | 3.4s | ~13 CPU-hours | Fast baseline |
-| L1: LP low-envelope + filtered `spherical_circle` | 559.2 km | 1.3 ms | 3.3s | ~18 CPU-hours | Fast baseline |
+| Configuration                                                     | Median Error | Mean geolocate / target | Full-run runtime | 50M-target single-core estimate | Status                                |
+| ----------------------------------------------------------------- | ------------ | ----------------------- | ---------------- | ------------------------------- | ------------------------------------- |
+| **B4: spline + `planar_annulus` + `geometric_centroid`**          | **359.7 km** | **8.7 ms**              | **14.8s**        | **~5 CPU-days**                 | Recommended production point          |
+| B3: spline + weighted `planar_annulus@0.9` + `geometric_centroid` | 357.6 km     | 1904.9 ms               | 45.2m            | ~3.0 CPU-years                  | Accuracy leader, tail-latency blocker |
+| B2: spline + `planar_annulus` + `monte_carlo_median`              | 380.3 km     | 160.1 ms                | 3.8m             | ~93 CPU-days                    | Dominated by B4                       |
+| S1: speed-of-Internet + filtered `spherical_circle`               | 522.7 km     | 1.0 ms                  | 3.4s             | ~13 CPU-hours                   | Fast baseline                         |
+| L1: LP low-envelope + filtered `spherical_circle`                 | 559.2 km     | 1.3 ms                  | 3.3s             | ~18 CPU-hours                   | Fast baseline                         |
 
 
 *Runtime measured on the full Vultr all-US dataset, 1,423 targets, single-threaded. The 50M-target estimates use mean `total_geolocate` time and exclude one-time dataset loading and model fitting.*
@@ -396,3 +397,4 @@ All 8 settings produce estimates for 100% of targets because fallback is always 
 3. **Benchmark dataset**: Curated RTT measurements from mobile VPs + RIPE Atlas, with verified ground truth
 4. **Scalability analysis**: First accuracy-vs-runtime Pareto characterization of CBG variants, directly applicable to production deployment decisions
 5. **Practical guidance**: Bounded spline + unweighted `planar_annulus` + `geometric_centroid` is the current recommended configuration on the full Vultr all-US run — 359.7 km median error, 86.6% within 1000 km, 8.7 ms mean geolocation time per target
+

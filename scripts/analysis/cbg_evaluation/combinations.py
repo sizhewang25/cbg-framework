@@ -38,9 +38,21 @@ class PipelineSpec:
 COMBINATIONS: List[PipelineSpec] = [
     # Literature proposals
     PipelineSpec(
-        "Original CBG", "LP + no filtering + spherical_circle + geometric_centroid",
+        "Vanilla CBG", "LP + no filtering + spherical_circle + geometric_centroid",
         "low_envelope", "none", "spherical_circle", "geometric_centroid",
+        "#000000", "-",
+        needs_lp_fit=True,
+    ),
+    PipelineSpec(
+        "V2", "LP + no filtering + spherical_circle + boundary_vertex_mean",
+        "low_envelope", "none", "spherical_circle", "boundary_vertex_mean",
         "#000000", "--",
+        needs_lp_fit=True,
+    ),
+    PipelineSpec(
+        "V3", "LP + redundant_circle + spherical_circle + geometric_centroid",
+        "low_envelope", "redundant_circle", "spherical_circle", "geometric_centroid",
+        "#000000", ":",
         needs_lp_fit=True,
     ),
 
@@ -60,61 +72,34 @@ COMBINATIONS: List[PipelineSpec] = [
         "speed_of_internet", "redundant_circle", "spherical_circle", "geometric_centroid",
         "#0072B2", ":",
     ),
-    # # LP filtering ablation
-    # PipelineSpec(
-    #     "L1", "LP + redundant_circle + spherical_circle + boundary_vertex_mean",
-    #     "low_envelope", "redundant_circle", "spherical_circle", "boundary_vertex_mean",
-    #     "#000000", "-",
-    #     needs_lp_fit=True,
-    # ),
-    # PipelineSpec(
-    #     "L2", "LP + no filtering + spherical_circle + boundary_vertex_mean",
-    #     "low_envelope", "none", "spherical_circle", "boundary_vertex_mean",
-    #     "#000000", "--",
-    #     needs_lp_fit=True,
-    # ),
     # # Bounded-spline weighted/unweighted annulus, Monte Carlo median
-    # PipelineSpec(
-    #     "B1", "Spline + planar_annulus_weighted@0.9 + monte_carlo_median",
-    #     "bounded_spline", "none", "planar_annulus_weighted", "monte_carlo_median",
-    #     "#009E73", "-",
-    #     needs_octant_fit=True,
-    #     multilateration_kwargs={"weight_threshold": 0.9},
-    # ),
-    # PipelineSpec(
-    #     "B2", "Spline + planar_annulus + monte_carlo_median",
-    #     "bounded_spline", "none", "planar_annulus", "monte_carlo_median",
-    #     "#009E73", "--",
-    #     needs_octant_fit=True,
-    # ),
-    # PipelineSpec(
-    #     "B5", "Spline + planar_annulus_weighted@0.5 + monte_carlo_median",
-    #     "bounded_spline", "none", "planar_annulus_weighted", "monte_carlo_median",
-    #     "#009E73", ":",
-    #     needs_octant_fit=True,
-    #     multilateration_kwargs={"weight_threshold": 0.5},
-    # ),
-    # # Bounded-spline weighted/unweighted annulus, geometric centroid
-    # PipelineSpec(
-    #     "B3", "Spline + planar_annulus_weighted@0.9 + geometric_centroid",
-    #     "bounded_spline", "none", "planar_annulus_weighted", "geometric_centroid",
-    #     "#D55E00", "-",
-    #     needs_octant_fit=True,
-    #     multilateration_kwargs={"weight_threshold": 0.9},
-    # ),
-    # PipelineSpec(
-    #     "B4", "Spline + planar_annulus + geometric_centroid",
-    #     "bounded_spline", "none", "planar_annulus", "geometric_centroid",
-    #     "#D55E00", "--",
-    #     needs_octant_fit=True,
-    # ),
-    # PipelineSpec(
-    #     "B6", "Spline + planar_annulus_weighted@0.5 + geometric_centroid",
-    #     "bounded_spline", "none", "planar_annulus_weighted", "geometric_centroid",
-    #     "#D55E00", ":",
-    #     needs_octant_fit=True,
-    #     multilateration_kwargs={"weight_threshold": 0.5},
-    # ),
+    PipelineSpec(
+        "Octant", "Spline + planar_annulus_weighted@0.9 + monte_carlo_median",
+        "bounded_spline", "none", "planar_annulus_weighted", "monte_carlo_median",
+        "#009E73", "-",
+        needs_octant_fit=True,
+        multilateration_kwargs={"weight_threshold": 0.9},
+    ),
+    PipelineSpec(
+        "O2", "Spline + planar_annulus + monte_carlo_median",
+        "bounded_spline", "none", "planar_annulus", "monte_carlo_median",
+        "#009E73", "--",
+        needs_octant_fit=True,
+    ),
+    # Bounded-spline weighted/unweighted annulus, geometric centroid
+    PipelineSpec(
+        "O3", "Spline + planar_annulus_weighted@0.9 + geometric_centroid",
+        "bounded_spline", "none", "planar_annulus_weighted", "geometric_centroid",
+        "#D55E00", "-",
+        needs_octant_fit=True,
+        multilateration_kwargs={"weight_threshold": 0.9},
+    ),
+    PipelineSpec(
+        "O4", "Spline + planar_annulus + geometric_centroid",
+        "bounded_spline", "none", "planar_annulus", "geometric_centroid",
+        "#D55E00", "--",
+        needs_octant_fit=True,
+    ),
 ]
 
 SPECS_BY_ID: Dict[str, PipelineSpec] = {s.combo_id: s for s in COMBINATIONS}
