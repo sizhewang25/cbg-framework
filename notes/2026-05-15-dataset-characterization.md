@@ -15,7 +15,7 @@ All downloads landed under [`datasets/external_2026-05-15/`](../datasets/externa
 | RIPE Atlas probes (live) | `https://atlas.ripe.net/api/v2/probes/` | 53 MB | ✅ 58,678 lifetime records (14,299 currently connected) |
 | DB-IP Lite (city, 2026-05) | `https://download.db-ip.com/free/dbip-city-lite-2026-05.csv.gz` | 85 MB gz | ✅ 8.06 M rows (3.69 M IPv4 ranges, 4.37 M IPv6) |
 | TrustGeo NYC / LA / Shanghai | `github.com/ICDM-UESTC/TrustGeo` (3 ZIPs) | 580 MB unzipped | ✅ 310,870 IPs with VP RTTs + traceroutes |
-| Cho TMA-2024 vp-ls | raw URLs on `github.com/grace71/tma24-vp-ls` | 65 KB | ✅ 783 anchors + ISO-3166 lookup (Python scripts skipped to keep download to data only) |
+| Cho TMA-2024 vp-ls | raw URLs on `github.com/grace71/tma24-vp-ls` | 65 KB | ✅ 783 anchors + ISO-3166 lookup (Python scripts skipped to keep download to data only) — **NO RTT, pass** |
 
 Already present in repo (Sept-2023 snapshots, not re-downloaded): MaxMind GeoLite2-City 2023-05-16, Verfploeter hitlist `it102w-20230125`, BGP prefixes, IP-to-ASN `2022-03-28.dat`, IPInfo anchor ground truth, MaxMind anchor ground truth.
 
@@ -68,7 +68,10 @@ Connected-only stats:
 
 CSV columns: `start_ip, end_ip, continent, country, region, city, lat, lon` (no AS, no ISP at the free tier).
 
-### 4. Cho TMA-2024 vp-ls anchor list
+### 4. Cho TMA-2024 vp-ls anchor list — **NO RTT, pass**
+
+> Remarks: anchor selection metadata only (per-anchor reachability counts, no RTTs/traceroutes). Cannot be used as a benchmark input on its own — pass for CBG evaluation.
+
 
 | Field | Value |
 |---|---|
