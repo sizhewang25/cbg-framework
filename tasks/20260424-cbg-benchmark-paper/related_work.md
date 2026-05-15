@@ -48,7 +48,44 @@ The only publicly available implementation of CBG algorithms (Million-Scale + St
 
 ---
 
-## 2. RTT-Distance Modeling
+## 2. CBG Benchmark or Comparison
+
+This section explicitly lists the prior work that performs head-to-head comparisons of two or more CBG-family algorithms on a shared dataset. None of these works decompose the CBG pipeline into phases (distance model × multilateration × point estimator) or evaluate the canonical four-variant set (Gueye / Octant / Hu / Alidade) together — the gaps this paper closes.
+
+### Laki et al. — Spotter (INFOCOM 2011) — closest prior art
+Full entry: Section 3.
+Reports Spotter vs. CBG vs. Octant on PlanetLab and CAIDA COGENT, median errors **30 / 100 / 120 km**. The only published three-way active-geolocation comparison we are aware of, but treats CBG and Octant as fixed end-to-end baselines rather than configurable pipelines. Predates Million-Scale's 2/3c model and Alidade's offline polygon-fusion design, so the canonical four-variant set (Gueye / Octant / Hu / Alidade) is not benchmarked together.
+
+### Wong et al. — Octant (NSDI 2007)
+Full entry: Section 1.
+Octant vs. CBG vs. GeoPing on a shared PlanetLab dataset; median errors **22 / 89 / 68 miles**. Pairwise against two baselines; introduces a new method rather than benchmarking the CBG pipeline.
+
+### Darwich et al. — IMC 2023 Replication
+Full entry: Section 1.
+Replicates Million-Scale and Street-Level end-to-end on RIPE Atlas; reports CBG median **28 km**. Aimed at reproducibility of two systems, not at isolating which CBG phase decisions drive observed performance. Does not compare CBG variants.
+
+### Youn et al. — Statistical Geolocation (ICCCN 2009)
+Full entry: Section 8.
+Probabilistic model vs. CBG and GeoPing on shared PlanetLab data; ~20% median / ~50% mean error reduction. Single-baseline framing — introduces a probabilistic alternative rather than evaluating CBG variants against each other.
+
+### Eriksson et al. — Learning-Based Approach (PAM 2010)
+Full entry: Section 8.
+Naive Bayes geolocation vs. CBG; mean error reduction from **519 km (CBG) to 408 km**. Single-baseline framing.
+
+### Maximum Likelihood Estimation (AINA 2010)
+Three-way pairwise comparison: proposed MLE method **134 km** vs. Octant **216 km** vs. CBG **506 km** on a shared dataset. Cited in the [CAIDA IP Geolocation Bibliography](https://www.caida.org/projects/cybersecurity/geolocation/bib/) (entry P-22). Not previously cited in this related work because it is a minor pairwise comparison rather than a phase-level study.
+
+**Gap.** Across all of the above, CBG and its variants are evaluated as opaque end-to-end systems. No work:
+- Holds Phase 2 (multilateration) fixed and varies Phase 1 (distance model) across {linear DDR, Octant spline, 2/3c}.
+- Holds Phase 1 fixed and varies Phase 2 across {spherical_circle, planar_annulus, polygon}.
+- Treats Phase 3 (point estimator / centroid choice) as an isolated knob.
+- Evaluates Gueye / Octant / Hu / Alidade jointly on a single modern dataset.
+
+This benchmark paper addresses exactly that gap.
+
+---
+
+## 3. RTT-Distance Modeling
 
 ### "Modelling of IP Geolocation by use of Latency Measurements"
 IEEE 2015 / arXiv 2020
@@ -101,13 +138,15 @@ Models RTT-distance behavior probabilistically instead of using a single determi
 IEEE INFOCOM 2011
 [IEEE INFOCOM 2011](https://ieeexplore.ieee.org/document/5935225)
 
-Builds a model-based active geolocation service that estimates target locations from delay measurements against a calibrated landmark set. Spotter is another Alidade-cited active geolocation system and belongs with RTT-distance modeling work because its main contribution is a learned/model-based delay-to-location service rather than a new CBG multilateration variant. It reinforces the point that many papers improve the modeling stage without comparing CBG phase combinations.
+Builds a model-based active geolocation service that estimates target locations from delay measurements against a calibrated landmark set. Spotter is another Alidade-cited active geolocation system and belongs with RTT-distance modeling work because its main contribution is a learned/model-based delay-to-location service rather than a new CBG multilateration variant.
+
+**Closest prior work to a multi-CBG comparison.** Spotter is the only published study we are aware of that evaluates more than one CBG-family algorithm head-to-head on a shared dataset: it reports Spotter vs. CBG vs. Octant on the PlanetLab and CAIDA COGENT references, with median errors of 30 / 100 / 120 km respectively. However, CBG and Octant are still treated as single end-to-end baselines rather than as configurable pipelines, so the comparison cannot attribute the gap to Phase 1 (distance model), Phase 2 (multilateration), or Phase 3 (centroid). It also predates Million-Scale's 2/3c model and Alidade's offline polygon-fusion design, so the canonical four-variant set (Gueye / Octant / Hu / Alidade) has never been benchmarked together. Our benchmark closes both gaps: a shared modular pipeline across all four variants and explicit phase-level ablations.
 
 **Gap:** These papers propose Phase 1 or model-level improvements independently with no cross-variant or cross-phase evaluation. Confirms the benchmark gap this paper addresses.
 
 ---
 
-## 3. Official / Declarative Methods (GeoFeed, rDNS)
+## 4. Official / Declarative Methods (GeoFeed, rDNS)
 
 ### "Geofeeds: Revolutionizing IP Geolocation or Illusionary Promises?"
 ACM Proceedings on Networking 2024
@@ -173,7 +212,7 @@ Audits operator-reported geolocation for RIPE Atlas vantage points and shows tha
 
 ---
 
-## 4. Anycast Geolocation
+## 5. Anycast Geolocation
 
 ### Cai et al. — iGreedy
 **"Latency-Based Anycast Geolocation: Algorithms, Software, and Data Sets"**
@@ -210,7 +249,7 @@ Characterizes regional anycast deployment patterns and performance implications.
 
 ---
 
-## 5. Commercial Geolocation Accuracy / Criticism
+## 6. Commercial Geolocation Accuracy / Criticism
 
 ### "Accuracy and Coverage Analysis of IP Geolocation Databases"
 IEEE 2023
@@ -276,7 +315,7 @@ Studies longitudinal changes in MaxMind snapshots and shows that database versio
 
 ---
 
-## 6. Recent Adjacent Work
+## 7. Recent Adjacent Work
 
 ### Internet Geolocation Survey
 **"A Survey on Geolocation on the Internet"**
@@ -334,7 +373,7 @@ RIPE Atlas-based delay approach for VM-scale cloud instance localization in mult
 
 ---
 
-## 7. IP Geolocation Method Landscape
+## 8. IP Geolocation Method Landscape
 
 This section covers the broader landscape of unicast IP geolocation methods — necessary context for justifying why CBG is the right approach and what alternatives fail to address.
 
