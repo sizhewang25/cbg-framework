@@ -2,6 +2,7 @@
 *.fsdb
 *.pdf
 *.csv
+*.csv.gz
 *.dat
 *.tif
 *.tree
@@ -9,6 +10,10 @@
 *.json
 *.dat
 *.txt
+*.zip
+
+# external dataset downloads (reproducible from public endpoints)
+datasets/external_*/
 
 measurements/results
 clickhouse_files/data/
