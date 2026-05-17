@@ -37,6 +37,63 @@ showing per-landmark quantiles lying on the diagonal.
 | Pooled standardized μ | −0.078 | **+0.027** |
 | Pooled standardized σ | 1.035 | **0.894** |
 
+## Methodology notes
+
+### Why we bin
+
+Spotter's model is `f_d(s) = N(μ(d), σ(d)²)` — at each fixed delay `d`, the
+distribution of distances is normal with delay-dependent mean *and* spread.
+Fitting it means estimating two functions of `d`. Estimating `μ(d)` as a
+smooth function of a covariate is standard regression; estimating `σ(d)` is
+the awkward part — heteroskedastic regression that needs either joint MLE
+under a parametric form, or a moment-summary step.
+
+We take the moment-summary route:
+
+1. Slice the RTT range into 40 bins, drop bins with < 30 points.
+2. Within each bin compute empirical `mean` and `std` of distance.
+3. Fit a degree-3 polynomial to the binned means and degree-2 to the binned
+   stds.
+
+This **decouples mean and variance estimation** — within a bin both are just
+summary statistics of a sample (essentially noise-free at our scale, ~10⁵
+points/bin) — and lets you visually sanity-check the polynomial against the
+bin dots in panel (a). Without binning you'd jump straight to joint MLE,
+which requires committing to functional forms up front and can diverge if
+the `σ(d)` polynomial dips negative.
+
+### Differences from Spotter
+
+Spotter (Sec IV.A) says only *"we fitted the μ(d) and σ(d) polynomials to
+the data set"* — they don't describe binning explicitly, but Fig. 3a clearly
+shows polynomial curves of mean and std as functions of delay, which is
+exactly what the two-step binning approach produces. **Methodologically we
+are doing the same thing.**
+
+| Aspect | Spotter (2011) | Ours |
+|---|---|---|
+| Calibration source | ~100 PlanetLab nodes | ~800 anchors / ~12 k probes (Atlas) |
+| Points fit | ~40 000 | 5.85M (probes→anchors), 465k (meshed) |
+| RTT range plotted | 0–80 ms | 0–200 ms |
+| `μ(d)` shape | Near-linear (intra-continental) | Linear ≤ 125 ms, **saturates** near ~10 000 km |
+| Polynomial degrees | Not specified | deg 3 for μ, deg 2 for σ (by inspection) |
+| Bin count | Not specified | 40 |
+| Pre-aggregation | "minimal RTT for each landmark" | identical: `arrayMin(groupArray(min))` per `(src, dst)` |
+| Standardization | `z = (s − μ(d)) / σ(d)` | identical |
+| Q-Q anchor selection | "five selected landmarks…representative" (editorial) | top-5 by sample count (auto, reproducible) |
+
+Two consequential differences:
+
+1. **RTT range and saturation.** Spotter never modeled distances above
+   ~5000 km. We do, and curvature there forces a higher-degree `μ(d)`. A
+   linear `μ(d)` (the cleanest "speed-of-internet ⇒ distance" model) would
+   systematically over-estimate distance at high RTT in our data — a real
+   modeling gap their paper sidestepped by sticking to PlanetLab geography.
+2. **Anchor selection for Q-Q.** Their hand-picked "representative
+   landmarks" could be cherry-picked to agree with the diagonal. We pick
+   top-N by sample count, which is reproducible but not adversarial — could
+   be tightened by raising `--n-anchors` to 50 or random-sampling.
+
 ## Findings
 
 ### Panel (a) — delay-distance scatter
@@ -67,19 +124,112 @@ This is the load-bearing claim. On our data it does **not** hold:
 A single `μ(d), σ(d)` therefore cannot describe all anchors uniformly on this
 dataset.
 
-## Why the assumption breaks here
+## Why the assumption breaks here: PlanetLab → Atlas network shift
 
-Spotter validated on ~100 research-grade PlanetLab nodes hosted at universities
-with relatively homogeneous connectivity. `ping_10k_to_anchors` pulls min RTTs
-from ~11 k RIPE Atlas probes — consumer DSL/fiber/mobile/etc — to 783 anchors
-spread globally. Per-anchor probe populations differ systematically:
+The shift from 2010 PlanetLab to modern RIPE Atlas probes isn't cosmetic —
+it changes what the variable `d` (RTT) actually measures, and Spotter's
+model has no slack for that.
 
-- An anchor in a well-peered IXP city sees a fundamentally different probe
-  set than one served mostly via long-haul transit.
-- Access-network heterogeneity (last-mile delay, queueing) is far larger here
-  than on PlanetLab.
-- Both effects show up exactly where Spotter's Q-Q test was designed to catch
-  them.
+### Mechanism: last-mile offset as a confounding term
+
+Spotter's model implicitly assumes `d` is a proxy for great-circle distance
+plus a small *universal* additive overhead. That assumption is what licenses
+a single landmark-independent `f_d(s)`.
+
+On PlanetLab (2010) the assumption was approximately true:
+- All endpoints sat behind university LAN → NREN (Internet2 / GÉANT) →
+  IXP → NREN. Last-mile delay was a few-ms constant, near-identical across
+  nodes.
+- Routing through NRENs was direct, low-jitter, well-peered.
+- So `d ≈ k·s + ε` with `ε` small and roughly the same distribution
+  everywhere → standardize once, fit one normal, done.
+
+On modern RIPE Atlas probes the RTT decomposes very differently:
+
+```
+RTT = propagation(distance) + last_mile(probe) + transit(probe → target)
+```
+
+The `last_mile(probe)` term is the troublemaker:
+- Fiber/cable: ~5–10 ms baseline
+- DSL with interleaving: ~20–40 ms
+- 4G/5G mobile: ~30–50 ms with high jitter
+- Starlink / GEO satellite: distinctive bimodal patterns
+- Rural copper: 100 ms+
+
+And critically: **`last_mile(probe)` is essentially uncorrelated with
+distance.** A 30 ms DSL probe pinging a target 100 km away gets the same
+access overhead as one pinging across an ocean. So when you condition on
+`d`, the "distance given delay" distribution becomes a *mixture* over the
+access-technology population that produced that `d` bin — not a clean
+propagation-only distribution.
+
+### Panel-by-panel mapping
+
+Each of the three failures follows mechanically from this mixture structure,
+not from any vague "noisier data" argument:
+
+1. **σ_z = 0.894 < 1 in panel (b).** Pooled `σ(d)` is the std of a mixture
+   of last-mile populations; the mixture variance is larger than any
+   sub-population's variance. Standardize sub-populations by the pooled
+   over-wide σ and the bulk compresses inside `|z| < 1`, giving a
+   leptokurtic histogram. **σ_z < 1 isn't a failure of normality per se —
+   it's a signature of unmodeled heterogeneity.**
+
+2. **Horizontal anchor offsets in panel (c).** Each anchor's per-bin
+   distance distribution depends on *which probes* land in that bin. An
+   anchor in a fiber-rich region (Western Europe, NE US) sees its `d` bins
+   dominated by low-last-mile probes → distance-given-delay shifts higher.
+   An anchor served by DSL-heavy probe populations shifts the other way.
+   This is exactly the per-anchor mean offset observed (`173.248.145.27`
+   rightward, `91.132.8.99` near diagonal).
+
+3. **Per-anchor S-shape with slope < 1 in panel (c).** An anchor whose
+   probe population is *homogeneous* (e.g., served mostly by one large
+   fiber ISP) has narrower own-`σ(d)` than the pooled mixture σ.
+   Standardize by the wider pooled σ → quantiles compress toward zero →
+   shallow Q-Q slope. Mixed-probe-population anchors compress less.
+
+### Anchors-meshed is the controlled experiment
+
+The `anchors_meshed_pings` run isolates exactly this hypothesis. Anchors
+are hosted at IXPs, ISP cores, datacenters — uniformly well-connected with
+negligible `last_mile(anchor)` variance. Both endpoints belong to the
+"PlanetLab-like" tier.
+
+When restricted to that subset:
+- σ_z: **0.894 → 0.964** (mostly closes the gap to Spotter's 1.035).
+- Per-anchor Q-Q curves collapse onto the diagonal.
+
+If the failure had been driven by geographic spread, routing indirection,
+or sample size, anchors-meshed would have failed too — it has the same
+geography, the same routing, and 465k pairs (still 10× Spotter). It didn't.
+The only variable that changes between the two runs is access-network
+heterogeneity on the probe side.
+
+### Alternatives ruled out as primary causes
+
+- **Geographic coverage** (Atlas reaches APAC/Africa, PlanetLab didn't).
+  Would also affect anchors-meshed, but that data recovers Spotter's
+  result. Not the dominant driver.
+- **Sample size.** Larger samples make deviations easier to detect, but the
+  Q-Q signature is qualitatively S-shaped with horizontal offsets — a
+  model-mismatch signature, not a finite-sample one.
+- **Backbone improvements 2010 → 2026.** Modern backbones are *more*
+  uniform and lower-latency than 2010, which should help Spotter's model,
+  not hurt it.
+
+### Deeper takeaway
+
+Spotter's "landmark-independent normal" was never really a claim about
+Internet physics — it was a claim about the **uniformity of their
+measurement infrastructure**. The model worked on PlanetLab because the
+calibration set was implicitly preselected to one connectivity class.
+Push it into a representative cross-section of real Internet endpoints
+(what Atlas captures), and the calibration assumption is the first thing
+that breaks. **Any approach that pools per-VP behavior into a single
+model is implicitly assuming the same uniformity Spotter did.** That's
+the caution the CBG-variant benchmark should inherit.
 
 ## Implications for the CBG-variant benchmark
 
