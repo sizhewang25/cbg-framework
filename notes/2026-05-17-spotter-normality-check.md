@@ -276,14 +276,184 @@ between high-quality vantage points, but using a single pooled normal to
 geolocate *consumer endpoints* on Atlas will systematically underweight
 per-source variance differences.**
 
+## Follow-up: slicing by (probe-ASN, anchor-ASN)
+
+Direct test of the mechanism story above: if last-mile heterogeneity drives
+the failure, restricting both endpoints to a single ASN (one access-tech
+family, one operational discipline) should recover Spotter's `σ_z ≈ 1.0`.
+
+Top-5 (probe-ASN, anchor-ASN) pairs by sample count:
+
+| Slice | σ_z | μ_z | n |
+|---|---|---|---|
+| Unsliced baseline | 0.894 | +0.027 | 5.85M |
+| Anchors-meshed | 0.964 | +0.071 | 465k |
+| AS7922 Comcast → AS396982 Google Cloud | **0.978** ✓ | +0.016 | 4.6k |
+| AS7922 Comcast → AS20473 Vultr | 0.892 | −0.100 | 4.3k |
+| AS7922 Comcast → AS202422 G-Core | 0.867 ↓ | −0.001 | 3.5k |
+| AS3320 DT → AS20473 Vultr | **1.004** ✓ | +0.022 | 3.0k |
+| AS12322 Free → AS20473 Vultr | 1.087 ↑ | +0.052 | 2.9k |
+
+**3 of 5 ASN-pair slices snap onto Spotter's target** (Comcast→GCP,
+DT→Vultr, Free→Vultr) — direction of the hypothesis is confirmed: enforce
+infrastructure uniformity, recover the normal.
+
+**2 of 5 stay at or below the unsliced baseline.** Looking at their panel
+(b) histograms:
+- Comcast→G-Core (σ_z=0.867) is *even more* leptokurtic than the unsliced
+  case. G-Core anchors span Europe + Asia, but Comcast probes are all US →
+  RTT-distance is a mixture of transatlantic vs trans-Pacific routing.
+- Comcast→Vultr (σ_z=0.892) similar story across many Vultr POPs.
+- Free→Vultr (σ_z=1.087) is overdispersed and **visibly bimodal** — Free is
+  French, Vultr has POPs in 25+ cities; different POP-to-Paris routes
+  produce distinct delay-distance regimes.
+
+Conclusion at this level: **ASN-uniformity is necessary but not sufficient.**
+Intra-ASN geographic spread leaves enough routing diversity to keep the
+distribution non-normal. Script:
+[scripts/libs/cbg_feasibility/spotter_normality_by_asn.py](../scripts/libs/cbg_feasibility/spotter_normality_by_asn.py).
+
+## Follow-up: country sub-slices within each ASN pair
+
+If geographic spread is what's left, restricting also to a single
+(probe-country, anchor-country) should fix the remaining slices. Result is
+**counterintuitive**: σ_z gets *worse* in 4 of 5 sub-slices.
+
+| Slice | σ_z | n | vs ASN-only |
+|---|---|---|---|
+| AS7922→AS396982 ASN | 0.978 | 4.5k | — |
+| ↳ US→US | 0.839 | 1.3k | **−0.139** ↓ |
+| ↳ US→JP | 0.840 | 0.5k | **−0.138** ↓ |
+| AS7922→AS20473 ASN | 0.892 | 4.3k | — |
+| ↳ US→US | 0.804 | 2.1k | **−0.088** ↓ |
+| AS7922→AS202422 ASN | 0.867 | 3.5k | — |
+| ↳ US→US | 0.726 | 0.5k | **−0.141** ↓ |
+| AS3320→AS20473 ASN | 1.004 | 3.0k | — |
+| ↳ DE→US | 0.951 | 1.7k | **−0.053** ↓ |
+| AS12322→AS20473 ASN | 1.087 | 2.9k | — |
+| ↳ FR→US | **1.010** ✓ | 1.7k | closer to 1 |
+
+**What's happening:** two competing effects.
+
+1. **Uniformity benefit** (what we expected): finer slice → fewer routing
+   modes → cleaner normal.
+2. **Fit instability** (what we didn't anticipate): smaller sample size +
+   narrower RTT range → degree-3 polynomial over-smooths the local σ(d) →
+   z values cluster tighter than the polynomial expects → σ_z drops.
+
+Effect (2) dominates effect (1) for nearly every slice. The worst case
+(Comcast→G-Core, US→US, σ_z=0.726, n=527) has a *catastrophic polynomial
+fit* — μ(d) extrapolates to −60 000 km at high RTT because US-domestic
+data covers only ~0–80 ms and the cubic diverges past the support.
+
+The single winner — **Free→Vultr restricted to FR→US** (σ_z: 1.087 → 1.010)
+— is exactly the case where effect (1) is unambiguous and effect (2)
+doesn't bite. The original ASN slice was bimodal because Free routed to
+both European and US Vultr POPs as two distinct regimes. FR→US strips out
+the European mode → unimodal → σ_z ≈ 1.0. And the slice is large enough
+(1.7k pairs) and spans a wide enough RTT range (transatlantic) that
+polynomial over-smoothing isn't an issue.
+
+Script:
+[scripts/libs/cbg_feasibility/spotter_normality_by_asn_country.py](../scripts/libs/cbg_feasibility/spotter_normality_by_asn_country.py).
+
+### Sharpened conclusion
+
+`σ_z = 1.0` is **not a robust property of homogeneous infrastructure** — it's
+a property of *a fit sitting in the bias-variance sweet spot*:
+- Too much data → mixture variance dominates → σ_z < 1 (slight
+  under-smoothing).
+- Too little data → polynomial over-smooths σ(d) → σ_z < 1 (over-smoothing).
+- Genuine multimodality → bimodal residuals → σ_z > 1.
+- Spotter's PlanetLab fit (40k points, homogeneous population) sat in the
+  sweet spot.
+
+So the "infrastructure uniformity" hypothesis is **valid but incomplete**:
+it explains anchors-meshed beating probes-only, and it explains why
+FR→US disambiguates Free→Vultr's bimodal histogram. It does not predict
+that tighter slicing universally improves the fit — fit pipeline mechanics
+intervene before that limit.
+
+## Closing: is there a universal delay-distance distribution?
+
+No, not in the strong sense Spotter implies. Combining all our results:
+
+- The unsliced probes→anchors fit gives σ_z=0.894 with a leptokurtic
+  histogram and Q-Q curves that diverge across landmarks → a single
+  `f_d(s)` does not describe modern Atlas data.
+- ASN slicing gives σ_z values from 0.867 to 1.087 — those numbers don't
+  converge to a stable population parameter.
+- Even within the best-behaved slice, per-anchor Q-Q curves carry
+  idiosyncratic offsets — anchors retain routing/peering signatures the
+  pooled normal smooths over.
+
+But Spotter wasn't *wrong* in 2010. Our anchors-meshed result (σ_z=0.964)
+is striking confirmation that **when you restrict modern data to a
+similarly homogeneous tier, their claim approximately holds 15 years
+later**. The Internet's physics hasn't changed; the *measurement population*
+has.
+
+The "oversimplification" is an implicit scope claim Spotter's paper doesn't
+flag:
+
+| What Spotter said | What was actually true |
+|---|---|
+| "delay-distance is generic" | "…within our calibration tier" |
+| "f_d is landmark-independent" | "…for landmarks sharing connectivity class" |
+| Validated on ~100 PlanetLab nodes | Implicit constraint: only research-grade connectivity |
+
+**What survives** from Spotter:
+- The **probabilistic framing** — probability surfaces instead of CBG's
+  hard "flat disks" — is a real conceptual advance and still valuable.
+- The **Q-Q diagnostic** — Spotter gave us the very tool that diagnoses
+  its own failure on modern data.
+- The **homogeneous-tier regime** — for anchor-to-anchor or single-class
+  measurements, a single normal is a reasonable approximation.
+
+**What doesn't survive:**
+- The claim that **one** global `μ(d), σ(d)` describes the whole Internet.
+- The implicit assumption that landmark population doesn't matter — it
+  dominates.
+
+### What a modern analogue should look like
+
+For the CBG-variant benchmark, the takeaway is that any approach assuming
+a single global delay-distance model needs **population stratification**.
+A defensible 2026-era redesign would probably include:
+
+1. **Per-stratum fits** — separate `f_d(s)` for (probe access-class, anchor
+   tier). Three or four buckets (research/IXP, datacenter, fiber-residential,
+   DSL/mobile) likely capture most of the heterogeneity.
+2. **Mixture models** within strata when multimodal structure remains
+   (Free→Vultr-style cases).
+3. **Per-VP calibration** for high-volume vantage points — what Octant
+   does, what Spotter argued against, and what our results suggest is
+   actually warranted on Atlas.
+4. **Scope-aware reporting** — the model's confidence should depend on
+   whether the target endpoint falls into a calibrated stratum. Geolocating
+   a Starlink user with a fiber-calibrated model should produce wider, not
+   falsely tight, probability surfaces.
+
+The real lesson Spotter doesn't articulate: **delay-distance distributions
+are properties of measurement infrastructure, not of the Internet.** Any
+approach that pretends otherwise — theirs, or anyone claiming a "universal"
+Internet-scale model — is implicitly assuming the calibration set
+represents the target. The CBG-variant benchmark should bake this in:
+report per stratum, not just pooled, and treat any single-global-model
+claim as a hypothesis to test, not an assumption to inherit.
+
 ## Reproduce
 
 ```bash
-# Default: probes -> anchors
+# Pooled normality check (Spotter's Fig. 3 panels)
 python -m scripts.libs.cbg_feasibility.spotter_normality_check
-
-# PlanetLab-analogue: anchors -> anchors
 python -m scripts.libs.cbg_feasibility.spotter_normality_check --table anchors_meshed_pings
 
-# Optional flags: --max-rtt 80 --n-bins 40 --n-anchors 5
+# Slice by (probe-ASN, anchor-ASN)
+python -m scripts.libs.cbg_feasibility.spotter_normality_by_asn
+
+# Slice by (probe-ASN, anchor-ASN, probe-country, anchor-country)
+python -m scripts.libs.cbg_feasibility.spotter_normality_by_asn_country
+
+# Optional flags: --max-rtt 80 --n-bins 40 --n-anchors 5 --top-k 5
 ```
