@@ -9,7 +9,10 @@ from __future__ import annotations
 import unittest
 
 from scripts.framework.v2.ltd.speed_of_internet import SpeedOfInternetLTD
-from scripts.framework.v2.ltd.tests.helpers import ANCHOR_COORDS
+from scripts.framework.v2.ltd.tests.helpers import (
+    ANCHOR_COORDS,
+    make_low_envelope_fit_samples,
+)
 from scripts.framework.v2.types import Error, Latency, VpId
 
 
@@ -88,14 +91,81 @@ class TestSpeedOfInternetLTD(unittest.TestCase):
         self.assertEqual(failure.latency, Latency(20.0))
         self.assertIsNone(failure.tg_distance)
 
-    def test_fit_returns_success_for_stateless_model(self):
-        """SpeedOfInternetLTD is stateless; fit always succeeds."""
+    def test_fit_with_no_samples_keeps_theoretical_default(self):
+        """Empty samples → speed_threshold untouched (theoretical mode)."""
         ltd = SpeedOfInternetLTD()
+        before = ltd.speed_threshold
 
         result = ltd.fit([])
 
         self.assertTrue(result.success)
         self.assertEqual(result.method, "SpeedOfInternetLTD")
+        self.assertEqual(ltd.speed_threshold, before)
+        self.assertFalse(result.args["calibrated"])
+        self.assertEqual(result.args["samples_used"], 0)
+
+    def test_fit_skips_non_positive_rtts(self):
+        """Samples with rtt <= 0 cannot define a ratio; pure-zero input → INSUFFICIENT_DATA."""
+        ltd = SpeedOfInternetLTD()
+        coord = ANCHOR_COORDS[VpId("anchor-a")]
+        from scripts.framework.v2.ltd.base import FitSample
+
+        samples = [
+            FitSample(
+                vp_id=VpId("anchor-a"),
+                vp_coord=coord,
+                probe_coord=coord,
+                latency=Latency(0.0),
+            )
+        ]
+
+        result = ltd.fit(samples)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, Error.INSUFFICIENT_DATA)
+
+    def test_fit_calibrates_speed_threshold_from_data(self):
+        """Real samples → speed_threshold becomes the target_coverage-th quantile of d/(150·rtt).
+
+        With samples built so that latency = 0.02·distance + 5 (slower than the
+        theoretical 0.01·d at 2/3c), the empirical threshold needed to upper-bound
+        the data is below 2/3. At the worst-case sample (d=800, rtt=21), the
+        required threshold is 800/(150·21) ≈ 0.254 — the max of the sample set.
+        """
+        ltd = SpeedOfInternetLTD(target_coverage=1.0)  # exact upper bound (max)
+        samples = make_low_envelope_fit_samples(
+            "anchor-a", slope=0.02, intercept=5.0
+        )
+
+        result = ltd.fit(samples)
+
+        self.assertTrue(result.success)
+        self.assertTrue(result.args["calibrated"])
+        self.assertEqual(result.args["samples_used"], len(samples))
+        expected_max_ratio = 800.0 / (150.0 * 21.0)  # ≈ 0.254
+        self.assertAlmostEqual(
+            ltd.speed_threshold, expected_max_ratio, delta=0.01
+        )
+        self.assertLess(ltd.speed_threshold, 2 / 3)
+
+    def test_predict_uses_calibrated_threshold_after_fit(self):
+        """After fit(), predict reflects the new threshold rather than the constructor default."""
+        ltd = SpeedOfInternetLTD()  # default 2/3
+        before = ltd.predict(
+            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(10.0)
+        )
+        samples = make_low_envelope_fit_samples(
+            "anchor-a", slope=0.02, intercept=5.0
+        )
+
+        ltd.fit(samples)
+        after = ltd.predict(
+            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(10.0)
+        )
+
+        self.assertTrue(before.success and after.success)
+        self.assertAlmostEqual(before.tg_distance.upper_km, 1000.0)
+        self.assertNotAlmostEqual(after.tg_distance.upper_km, 1000.0, places=2)
 
     def test_predict_all_preserves_input_order_on_duplicates(self):
         """predict_all is dumb iteration; duplicates appear in input order."""
