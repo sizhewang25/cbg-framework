@@ -21,6 +21,7 @@ from scripts.framework.v2.ltd.base import (
     LTDModel,
     LTDResult,
 )
+from scripts.framework.v2.ltd.bounded_spline import BoundedSplineLTD
 from scripts.framework.v2.ltd.low_envelope import LowEnvelopeLTD
 from scripts.framework.v2.ltd.normal_dist import NormalDistLTD
 from scripts.framework.v2.ltd.speed_of_internet import SpeedOfInternetLTD
@@ -64,6 +65,7 @@ __all__ = [
     "FittingResult",
     "LTDModel",
     "LTDResult",
+    "BoundedSplineLTD",
     "LowEnvelopeLTD",
     "NormalDistLTD",
     "SpeedOfInternetLTD",
