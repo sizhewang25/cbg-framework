@@ -15,6 +15,20 @@ from typing import Any, Optional
 from scripts.framework.v2.types import Coord, Distance, Error, Latency, VpId
 
 
+def _require_positive_latency(latency: Latency) -> None:
+    """Guard: RTT must be strictly positive for any LTD prediction to make sense.
+
+    A zero or negative latency indicates a bug in the caller's data pipeline
+    (or an upstream parse failure), not a transient prediction failure, so we
+    raise rather than return an LTDResult(success=False). Centralized in the
+    base so every concrete wrapper inherits the same invariant.
+    """
+    if latency <= 0:
+        raise ValueError(
+            f"latency (RTT in ms) must be strictly positive, got {latency!r}"
+        )
+
+
 @dataclass(frozen=True)
 class FitSample:
     """One training observation."""
@@ -96,6 +110,7 @@ class LTDModel(ABC):
         vp_coord: Coord,
         latency: Latency,
     ) -> LTDResult:
+        _require_positive_latency(latency)
         return replace(
             self._predict(vp_id, vp_coord, latency),
             method=type(self).__name__,

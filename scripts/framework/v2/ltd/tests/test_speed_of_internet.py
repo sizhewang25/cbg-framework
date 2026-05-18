@@ -45,18 +45,15 @@ class TestSpeedOfInternetLTD(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertAlmostEqual(result.tg_distance.upper_km, 1500.0)
 
-    def test_predict_at_zero_rtt_returns_zero_distance(self):
-        """RTT=0 (probe colocated with VP) is a legal success with Distance(upper_km=0)."""
+    def test_predict_raises_on_non_positive_latency(self):
+        """Zero or negative RTT indicates a caller bug — the base guard raises."""
         ltd = SpeedOfInternetLTD()
+        vp_coord = ANCHOR_COORDS[VpId("anchor-a")]
 
-        result = ltd.predict(
-            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(0.0)
-        )
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.tg_distance.upper_km, 0.0)
-        self.assertEqual(result.tg_distance.lower_km, 0.0)
-        self.assertFalse(result.tg_distance.is_annular)
+        with self.assertRaises(ValueError):
+            ltd.predict(VpId("anchor-a"), vp_coord, Latency(0.0))
+        with self.assertRaises(ValueError):
+            ltd.predict(VpId("anchor-a"), vp_coord, Latency(-1.0))
 
     def test_predict_all_preserves_input_order_on_duplicates(self):
         """predict_all is dumb iteration; duplicates appear in input order."""
