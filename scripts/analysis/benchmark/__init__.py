@@ -1,2 +1,0 @@
-"""Scaled CBG benchmark workflows."""
-

@@ -2,7 +2,7 @@
 
 Per-anchor spline + shared delta band → annular constraints (inner, outer radius).
 
-Wraps: scripts/analysis/octant/octant_model.py :: OctantRTTModel.predict_distance_bounds()
+Wraps: scripts/libs/octant/octant_model.py :: OctantRTTModel.predict_distance_bounds()
 Reference: run_octant_cbg() in octant_evaluation.py, form_constraint() in octant_geolocation.py
 """
 
@@ -66,7 +66,7 @@ class BoundedSplineDistance(BaseDistance):
                 self.delta = delta
             return
         if df_asn is not None:
-            from scripts.analysis.octant.octant_evaluation import fit_octant_models
+            from scripts.libs.octant.octant_evaluation import fit_octant_models
 
             fitted_models, computed_delta = fit_octant_models(
                 df_asn, target_coverage=target_coverage, **kwargs

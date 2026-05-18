@@ -8,7 +8,7 @@ or elongated feasible regions. Unlike a continuous geometric median, the final
 point is guaranteed to be one of the sampled feasible points.
 
 Wraps:
-  - scripts/analysis/octant/octant_geolocation.py :: sample_points_in_region()
+  - scripts/libs/octant/octant_geolocation.py :: sample_points_in_region()
 """
 
 from __future__ import annotations

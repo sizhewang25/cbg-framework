@@ -22,7 +22,7 @@
 
 ## Smoke Test Workflow
 
-- Treat `scripts/analysis/cbg_evaluation/evaluate.py` as the end-to-end smoke
+- Treat `scripts/libs/core/evaluate.py` as the end-to-end smoke
   test path for framework integration.
 - When the smoke test exposes an error, do not patch implementation code first.
   Read the relevant framework unit tests, reproduce the bug with a focused unit

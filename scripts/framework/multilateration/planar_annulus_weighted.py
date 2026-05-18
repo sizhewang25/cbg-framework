@@ -3,7 +3,7 @@
 Grid-based weight accumulation over annular constraints. Points with
 cumulative weight exceeding a threshold form the feasible region.
 
-Wraps: scripts/analysis/octant/octant_geolocation.py :: compute_feasible_region_weighted()
+Wraps: scripts/libs/octant/octant_geolocation.py :: compute_feasible_region_weighted()
 Only compatible with bounded_spline distance (requires inner_radius_km > 0).
 """
 
@@ -14,7 +14,7 @@ from typing import List
 from scripts.framework.multilateration import BaseMultilateration
 from scripts.framework.registry import register_multilateration
 from scripts.framework.types import CircleConstraint, MultilatResult
-from scripts.analysis.octant.octant_geolocation import (
+from scripts.libs.octant.octant_geolocation import (
     AnnularConstraint,
     compute_feasible_region_weighted,
 )

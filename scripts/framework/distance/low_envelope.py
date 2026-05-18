@@ -2,7 +2,7 @@
 
 Per-anchor LP bestline inversion: radius = (rtt - intercept) / slope.
 
-Wraps: scripts/analysis/cbg_feasibility/rtt_model.py :: RTTDistanceModel
+Wraps: scripts/libs/cbg_feasibility/rtt_model.py :: RTTDistanceModel
 Reference: run_vanilla_cbg() in evaluate_million_scale.py:287
 """
 
@@ -43,7 +43,7 @@ class LowEnvelopeDistance(BaseDistance):
             self.models = models
             return
         if df_asn is not None:
-            from scripts.analysis.million_scale.evaluate_million_scale import (
+            from scripts.libs.million_scale.evaluate_million_scale import (
                 fit_lp_models,
             )
 

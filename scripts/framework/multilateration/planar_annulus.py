@@ -7,7 +7,7 @@ Unlike `planar_circle` which treats all constraints as disks (ignores
 inner_radius_km), this method uses the full annular constraint when
 inner_radius_km > 0.
 
-Wraps: scripts/analysis/octant/octant_geolocation.py :: compute_feasible_region_unweighted()
+Wraps: scripts/libs/octant/octant_geolocation.py :: compute_feasible_region_unweighted()
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import List
 from scripts.framework.multilateration import BaseMultilateration
 from scripts.framework.registry import register_multilateration
 from scripts.framework.types import CircleConstraint, MultilatResult
-from scripts.analysis.octant.octant_geolocation import (
+from scripts.libs.octant.octant_geolocation import (
     AnnularConstraint,
     compute_feasible_region_unweighted,
 )
