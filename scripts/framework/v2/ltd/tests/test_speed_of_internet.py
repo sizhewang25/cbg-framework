@@ -106,9 +106,9 @@ class TestSpeedOfInternetLTD(unittest.TestCase):
 
         results = ltd.predict_all(obs)
 
-        self.assertEqual(
-            [r.tg_distance.upper_km for r in results], [1000.0, 500.0, 2000.0]
-        )
+        self.assertEqual(len(results), 3)
+        for r, expected in zip(results, [1000.0, 500.0, 2000.0]):
+            self.assertAlmostEqual(r.tg_distance.upper_km, expected)
 
     def test_registered_in_ltd_registry(self):
         from scripts.framework.v2.registry import LTD_REGISTRY
