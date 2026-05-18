@@ -22,6 +22,7 @@ from scripts.framework.v2.ltd.base import (
     LTDResult,
 )
 from scripts.framework.v2.ltd.low_envelope import LowEnvelopeLTD
+from scripts.framework.v2.ltd.normal_dist import NormalDistLTD
 from scripts.framework.v2.ltd.speed_of_internet import SpeedOfInternetLTD
 from scripts.framework.v2.model import CBGModel, GeoResult, IncompatibleStagesError
 from scripts.framework.v2.mtl.base import (
@@ -64,6 +65,7 @@ __all__ = [
     "LTDModel",
     "LTDResult",
     "LowEnvelopeLTD",
+    "NormalDistLTD",
     "SpeedOfInternetLTD",
     # mtl
     "AnnulusMTLMethod",
