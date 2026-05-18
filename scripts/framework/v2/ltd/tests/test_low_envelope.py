@@ -66,19 +66,6 @@ class TestLowEnvelopeLTD(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.error, Error.VP_NOT_FITTED)
 
-    def test_predict_applies_rtt_cutoff(self):
-        ltd = LowEnvelopeLTD(max_rtt_ms=10.0)
-        ltd._submodels = {
-            VpId("anchor-a"): make_fitted_low_envelope_model("anchor-a")
-        }
-
-        result = ltd.predict(
-            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(10.1)
-        )
-
-        self.assertFalse(result.success)
-        self.assertEqual(result.error, Error.RTT_OUT_OF_RANGE)
-
     def test_predict_failure_echoes_vp_id_coord_and_stamps_method(self):
         ltd = self._ltd_with_submodels(
             **{"anchor-a": make_fitted_low_envelope_model("anchor-a")}

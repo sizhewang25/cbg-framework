@@ -22,7 +22,7 @@ import numpy as np
 
 from scripts.framework.v2.ltd.base import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
-from scripts.libs.cbg_feasibility.rtt_model import RTTDistanceModel
+from scripts.libs.cbg.rtt_model import RTTDistanceModel
 
 if TYPE_CHECKING:
     from scripts.libs.octant.octant_model import OctantRTTModel
@@ -57,7 +57,7 @@ def make_fitted_low_envelope_model(
     model = RTTDistanceModel(
         anchor_ip=anchor_ip, anchor_lat=coord.lat, anchor_lon=coord.lon
     )
-    ok = model.fit(distances, rtts, method="lp", bin_size_km=100.0)
+    ok = model.fit(distances, rtts)
     if not ok:
         raise AssertionError(model.fit_message)
     return model

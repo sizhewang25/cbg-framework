@@ -1,11 +1,12 @@
 """LowEnvelopeLTD — per-anchor LP best-line RTT-to-distance model (Vanilla CBG).
 
-radius_km = (rtt - intercept) / slope, fit per VP. The constructor takes only
-hyperparameters; the per-VP RTTDistanceModel submodels are built inside `_fit`
-from the FitSamples (distances computed via haversine over the sample coords).
-Upstream callers never instantiate library-level submodel objects.
+radius_km = (rtt - intercept) / slope, fit per VP. The per-VP RTTDistanceModel
+submodels are built inside `_fit` from FitSamples (distances computed via
+haversine over the sample coords). The wrapper takes no hyperparameters: the
+LP fit always tightens against the lower envelope, and predict accepts every
+RTT.
 
-Wraps scripts/libs/cbg_feasibility/rtt_model.py :: RTTDistanceModel.
+Wraps scripts/libs/cbg/rtt_model.py :: RTTDistanceModel.
 """
 
 from __future__ import annotations
@@ -23,20 +24,14 @@ from scripts.framework.v2.ltd.base import (
 )
 from scripts.framework.v2.registry import register_ltd
 from scripts.framework.v2.types import Coord, Distance, Error, Latency, VpId
-from scripts.libs.cbg_feasibility.rtt_model import RTTDistanceModel, haversine_distance
+from scripts.libs.cbg.rtt_model import RTTDistanceModel, haversine_distance
 
 
 @register_ltd("low_envelope")
 class LowEnvelopeLTD(CircleLTDModel):
     """Per-anchor LP best-line RTT-to-distance model."""
 
-    def __init__(
-        self,
-        max_rtt_ms: float = float("inf"),
-        bin_size_km: float = 100.0,
-    ) -> None:
-        self.max_rtt_ms = max_rtt_ms
-        self.bin_size_km = bin_size_km
+    def __init__(self) -> None:
         self._submodels: Dict[VpId, RTTDistanceModel] = {}
 
     def _fit(self, samples: list[FitSample]) -> FittingResult:
@@ -67,8 +62,6 @@ class LowEnvelopeLTD(CircleLTDModel):
                 model.fit(
                     distances=np.array(data["distances"], dtype=float),
                     rtts=np.array(data["rtts"], dtype=float),
-                    method="lp",
-                    bin_size_km=self.bin_size_km,
                 )
             except Exception:
                 pass  # .fitted reflects failure; we still store the model
@@ -92,14 +85,6 @@ class LowEnvelopeLTD(CircleLTDModel):
             return LTDResult(
                 success=False,
                 error=Error.VP_NOT_FITTED,
-                vp_id=vp_id,
-                vp_coord=vp_coord,
-                latency=latency,
-            )
-        if latency > self.max_rtt_ms:
-            return LTDResult(
-                success=False,
-                error=Error.RTT_OUT_OF_RANGE,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
                 latency=latency,
