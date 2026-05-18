@@ -1,10 +1,13 @@
 """Tests for NormalDistLTD — pooled-normal RTT-to-distance model.
 
 Mirrors scripts/framework/distance/tests/test_spotter.py, ported to the v2
-interface and renamed from v1's `SpotterDistance` to `NormalDistLTD` (the class
-name now emphasizes the pooled-normal technique rather than the Spotter paper).
+interface and renamed from v1's `SpotterDistance` to `NormalDistLTD`. The class
+name now emphasizes the pooled-normal technique rather than the Spotter paper.
 Weight assertions and the unknown-anchor case do not migrate: weights moved out
 of LTD; v2's caller pre-joins the VP coord so no lookup happens here.
+
+Prediction tests inject a pre-fitted SpotterRTTModel via `ltd._model`; one
+integration test exercises the real fit-from-FitSamples path.
 """
 
 from __future__ import annotations
@@ -18,15 +21,21 @@ from scripts.framework.v2.ltd.tests.helpers import (
     ANCHOR_COORDS,
     make_fitted_degenerate_spotter_model,
     make_fitted_spotter_model,
+    make_normal_dist_fit_samples,
     make_unfitted_spotter_model,
 )
 from scripts.framework.v2.types import Error, Latency, VpId
 
 
 class TestNormalDistLTD(unittest.TestCase):
+    def _ltd_with_model(self, model) -> NormalDistLTD:
+        ltd = NormalDistLTD()
+        ltd._model = model
+        return ltd
+
     def test_predict_produces_annular_constraints_with_pooled_band(self):
         """All VPs share the same (mu, sigma, k) — the pooled-normal claim."""
-        ltd = NormalDistLTD(model=make_fitted_spotter_model())
+        ltd = self._ltd_with_model(make_fitted_spotter_model())
 
         obs = [
             (VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(20.0)),
@@ -45,14 +54,15 @@ class TestNormalDistLTD(unittest.TestCase):
     def test_predict_clips_inner_radius_at_zero(self):
         """When k*sigma > mu, lower_km clamps to 0 (degenerates to disk)."""
         # mu(rtt)=20*rtt, sigma=50, k=2 → band=±100. At rtt=1: mu=20, inner_raw=-80→0; outer=120.
-        model = make_fitted_spotter_model(
-            p_mu=np.array([20.0, 0.0]),
-            p_sigma=np.array([50.0]),
-            k=2.0,
-            rtt_min=0.0,
-            rtt_max=20.0,
+        ltd = self._ltd_with_model(
+            make_fitted_spotter_model(
+                p_mu=np.array([20.0, 0.0]),
+                p_sigma=np.array([50.0]),
+                k=2.0,
+                rtt_min=0.0,
+                rtt_max=20.0,
+            )
         )
-        ltd = NormalDistLTD(model=model)
 
         result = ltd.predict(
             VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(1.0)
@@ -64,7 +74,7 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertFalse(result.tg_distance.is_annular)
 
     def test_predict_returns_degenerate_region_on_zero_width_band(self):
-        ltd = NormalDistLTD(model=make_fitted_degenerate_spotter_model())
+        ltd = self._ltd_with_model(make_fitted_degenerate_spotter_model())
 
         result = ltd.predict(
             VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(20.0)
@@ -74,7 +84,7 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertEqual(result.error, Error.DEGENERATE_REGION)
 
     def test_predict_returns_vp_not_fitted_for_unfitted_model(self):
-        ltd = NormalDistLTD(model=make_unfitted_spotter_model())
+        ltd = self._ltd_with_model(make_unfitted_spotter_model())
 
         result = ltd.predict(
             VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(20.0)
@@ -84,7 +94,7 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertEqual(result.error, Error.VP_NOT_FITTED)
 
     def test_predict_returns_vp_not_fitted_when_no_model(self):
-        """Constructor with no model — every _predict reports VP_NOT_FITTED."""
+        """Default-constructed ltd has no model — every _predict reports VP_NOT_FITTED."""
         ltd = NormalDistLTD()
 
         result = ltd.predict(
@@ -95,8 +105,9 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertEqual(result.error, Error.VP_NOT_FITTED)
 
     def test_predict_returns_rtt_out_of_range_outside_model_range(self):
-        model = make_fitted_spotter_model(rtt_min=10.0, rtt_max=60.0)
-        ltd = NormalDistLTD(model=model)
+        ltd = self._ltd_with_model(
+            make_fitted_spotter_model(rtt_min=10.0, rtt_max=60.0)
+        )
 
         below = ltd.predict(
             VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(5.0)
@@ -115,7 +126,8 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertTrue(ok.success)
 
     def test_predict_applies_max_rtt_cutoff_before_prediction(self):
-        ltd = NormalDistLTD(model=make_fitted_spotter_model(), max_rtt_ms=10.0)
+        ltd = NormalDistLTD(max_rtt_ms=10.0)
+        ltd._model = make_fitted_spotter_model()
 
         result = ltd.predict(
             VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(10.1)
@@ -125,8 +137,8 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertEqual(result.error, Error.RTT_OUT_OF_RANGE)
 
     def test_predict_failure_echoes_vp_id_coord_and_stamps_method(self):
-        unfitted = NormalDistLTD(model=make_unfitted_spotter_model())
-        fitted = NormalDistLTD(model=make_fitted_spotter_model())
+        unfitted = self._ltd_with_model(make_unfitted_spotter_model())
+        fitted = self._ltd_with_model(make_fitted_spotter_model())
 
         success = fitted.predict(
             VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(20.0)
@@ -143,21 +155,36 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertEqual(failure.latency, Latency(20.0))
         self.assertIsNone(failure.tg_distance)
 
-    def test_fit_returns_success_when_model_present(self):
-        ltd = NormalDistLTD(model=make_fitted_spotter_model())
-
-        result = ltd.fit([])
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.method, "NormalDistLTD")
-
-    def test_fit_returns_insufficient_data_when_no_model(self):
+    def test_fit_returns_insufficient_data_when_no_samples(self):
         ltd = NormalDistLTD()
 
         result = ltd.fit([])
 
         self.assertFalse(result.success)
         self.assertEqual(result.error, Error.INSUFFICIENT_DATA)
+
+    def test_fit_from_samples_then_predict_produces_annular_bounds(self):
+        """Integration: real fit(samples) → predict at known RTT yields a usable band.
+
+        Uses small n_bins / min_per_bin so the test runs on a compact sample set.
+        """
+        ltd = NormalDistLTD(n_bins=5, min_per_bin=2, deg_mu=1, deg_sigma=0)
+        samples = make_normal_dist_fit_samples(
+            "anchor-a", n_per_rtt=4, spread_km=100.0
+        )
+
+        fit_result = ltd.fit(samples)
+        pred = ltd.predict(
+            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(20.0)
+        )
+
+        self.assertTrue(fit_result.success, msg=str(fit_result.args))
+        self.assertEqual(fit_result.method, "NormalDistLTD")
+        self.assertTrue(pred.success)
+        # mu(20) ≈ 2000 from the parallel band centered at 100*rtt. Bounds depend
+        # on fit-time k calibration so we only check the band straddles the mean.
+        self.assertLess(pred.tg_distance.lower_km, 2000.0)
+        self.assertGreater(pred.tg_distance.upper_km, 2000.0)
 
     def test_registered_in_ltd_registry(self):
         from scripts.framework.v2.registry import LTD_REGISTRY

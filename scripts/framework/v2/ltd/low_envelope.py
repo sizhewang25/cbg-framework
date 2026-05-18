@@ -1,16 +1,19 @@
 """LowEnvelopeLTD — per-anchor LP best-line RTT-to-distance model (Vanilla CBG).
 
-radius_km = (rtt - intercept) / slope, fit per-VP. Constructor accepts pre-fitted
-RTTDistanceModel instances keyed by VpId. `_fit(samples)` ignores samples in
-this migration step (real fit-from-samples is a follow-up); it succeeds if any
-pre-fitted state is present and reports INSUFFICIENT_DATA otherwise.
+radius_km = (rtt - intercept) / slope, fit per VP. The constructor takes only
+hyperparameters; the per-VP RTTDistanceModel submodels are built inside `_fit`
+from the FitSamples (distances computed via haversine over the sample coords).
+Upstream callers never instantiate library-level submodel objects.
 
 Wraps scripts/libs/cbg_feasibility/rtt_model.py :: RTTDistanceModel.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from collections import defaultdict
+from typing import Dict
+
+import numpy as np
 
 from scripts.framework.v2.ltd.base import (
     CircleLTDModel,
@@ -20,7 +23,7 @@ from scripts.framework.v2.ltd.base import (
 )
 from scripts.framework.v2.registry import register_ltd
 from scripts.framework.v2.types import Coord, Distance, Error, Latency, VpId
-from scripts.libs.cbg_feasibility.rtt_model import RTTDistanceModel
+from scripts.libs.cbg_feasibility.rtt_model import RTTDistanceModel, haversine_distance
 
 
 @register_ltd("low_envelope")
@@ -29,16 +32,54 @@ class LowEnvelopeLTD(CircleLTDModel):
 
     def __init__(
         self,
-        models: Optional[dict[VpId, RTTDistanceModel]] = None,
         max_rtt_ms: float = float("inf"),
+        bin_size_km: float = 100.0,
     ) -> None:
-        self.models: dict[VpId, RTTDistanceModel] = dict(models) if models else {}
         self.max_rtt_ms = max_rtt_ms
+        self.bin_size_km = bin_size_km
+        self._submodels: Dict[VpId, RTTDistanceModel] = {}
 
     def _fit(self, samples: list[FitSample]) -> FittingResult:
-        if self.models:
-            return FittingResult(success=True, args={"models": self.models})
-        return FittingResult(success=False, error=Error.INSUFFICIENT_DATA)
+        if not samples:
+            return FittingResult(success=False, error=Error.INSUFFICIENT_DATA)
+
+        by_vp: Dict[VpId, Dict] = defaultdict(
+            lambda: {"rtts": [], "distances": [], "vp_coord": None}
+        )
+        for s in samples:
+            d = haversine_distance(
+                s.vp_coord.lat, s.vp_coord.lon, s.probe_coord.lat, s.probe_coord.lon
+            )
+            bucket = by_vp[s.vp_id]
+            bucket["rtts"].append(float(s.latency))
+            bucket["distances"].append(d)
+            bucket["vp_coord"] = s.vp_coord
+
+        new_submodels: Dict[VpId, RTTDistanceModel] = {}
+        for vp_id, data in by_vp.items():
+            vp_coord: Coord = data["vp_coord"]
+            model = RTTDistanceModel(
+                anchor_ip=str(vp_id),
+                anchor_lat=vp_coord.lat,
+                anchor_lon=vp_coord.lon,
+            )
+            try:
+                model.fit(
+                    distances=np.array(data["distances"], dtype=float),
+                    rtts=np.array(data["rtts"], dtype=float),
+                    method="lp",
+                    bin_size_km=self.bin_size_km,
+                )
+            except Exception:
+                pass  # .fitted reflects failure; we still store the model
+            new_submodels[vp_id] = model
+
+        self._submodels = new_submodels
+        fitted_vps = [vp for vp, m in new_submodels.items() if m.fitted]
+        return FittingResult(
+            success=True,
+            args={"vps_fitted": fitted_vps, "vps_attempted": list(new_submodels)},
+        )
 
     def _predict(
         self,
@@ -46,7 +87,7 @@ class LowEnvelopeLTD(CircleLTDModel):
         vp_coord: Coord,
         latency: Latency,
     ) -> LTDResult:
-        submodel = self.models.get(vp_id)
+        submodel = self._submodels.get(vp_id)
         if submodel is None or not submodel.fitted:
             return LTDResult(
                 success=False,

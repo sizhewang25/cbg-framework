@@ -1,9 +1,17 @@
 """Shared test fixtures for v2 LTD wrapper tests.
 
-Ports the factory functions from scripts/framework/distance/tests/helpers.py to
-the v2 type system (VpId, Coord). Library classes returned by the factories
-(SpotterRTTModel, OctantRTTModel, RTTDistanceModel) are unchanged — the v2
-wrappers consume them directly via constructor injection.
+Two flavors of fixture:
+
+1. `make_fitted_*_model` factories return library-level objects
+   (RTTDistanceModel / OctantRTTModel / SpotterRTTModel). The v2 wrappers
+   build these internally via _fit, but unit tests inject them directly
+   into the private attribute (`ltd._submodels`, `ltd._model`) to assert
+   prediction behavior without paying the haversine + fit roundtrip.
+
+2. `make_fit_samples_for_*` factories build list[FitSample] inputs for
+   the integration tests that exercise the real `fit(samples)` path.
+   Probes are placed along a meridian north of the VP coord, so
+   haversine(vp, probe) ~= the target distance.
 """
 
 from __future__ import annotations
@@ -12,12 +20,17 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
-from scripts.framework.v2.types import Coord, VpId
+from scripts.framework.v2.ltd.base import FitSample
+from scripts.framework.v2.types import Coord, Latency, VpId
 from scripts.libs.cbg_feasibility.rtt_model import RTTDistanceModel
 
 if TYPE_CHECKING:
     from scripts.libs.octant.octant_model import OctantRTTModel
     from scripts.libs.spotter.spotter_model import SpotterRTTModel
+
+
+# Earth radius (km) used by haversine_distance() — 1 deg of latitude ≈ this/57.296 km
+_KM_PER_DEG_LAT = 6371.0 * np.pi / 180.0  # ≈ 111.195
 
 
 ANCHOR_COORDS: dict[VpId, Coord] = {
@@ -182,3 +195,99 @@ def make_unfitted_spotter_model() -> "SpotterRTTModel":
     from scripts.libs.spotter.spotter_model import SpotterRTTModel
 
     return SpotterRTTModel()
+
+
+# ---- FitSample factories (integration tests for the real fit() path) ----
+
+
+def _probe_at_distance(vp_coord: Coord, distance_km: float) -> Coord:
+    """Place a probe `distance_km` north of vp_coord along the meridian.
+
+    haversine(vp_coord, returned_coord) == distance_km to within ~1e-6 km
+    because pure-meridian distance on a sphere is exactly R * Δlat_radians.
+    """
+    delta_lat_deg = distance_km / _KM_PER_DEG_LAT
+    return Coord(lat=vp_coord.lat + delta_lat_deg, lon=vp_coord.lon)
+
+
+def make_low_envelope_fit_samples(
+    vp_id: str = "anchor-a",
+    slope: float = 0.02,
+    intercept: float = 5.0,
+    distances_km: Optional[list[float]] = None,
+) -> list[FitSample]:
+    """Build FitSamples whose LP fit recovers (slope, intercept).
+
+    Latency = slope * distance + intercept; probes are placed at each target
+    distance along the meridian. At slope=0.02, intercept=5: RTT=25 → 1000 km.
+    """
+    if distances_km is None:
+        distances_km = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0]
+    coord = ANCHOR_COORDS[VpId(vp_id)]
+    return [
+        FitSample(
+            vp_id=VpId(vp_id),
+            vp_coord=coord,
+            probe_coord=_probe_at_distance(coord, d),
+            latency=Latency(slope * d + intercept),
+        )
+        for d in distances_km
+    ]
+
+
+def make_bounded_spline_fit_samples(
+    vp_id: str = "anchor-a",
+    rtt_values: Optional[list[float]] = None,
+) -> list[FitSample]:
+    """Build FitSamples that yield a parallel ± 100 km hull at each RTT.
+
+    For every RTT x, the sample set includes two probes:
+      lower distance = 100 * x - 100
+      upper distance = 100 * x + 100
+    so at RTT=20 the Octant hull bounds come out to [1900, 2100] km.
+    """
+    if rtt_values is None:
+        rtt_values = [10.0, 20.0, 30.0, 40.0, 50.0]
+    coord = ANCHOR_COORDS[VpId(vp_id)]
+    samples: list[FitSample] = []
+    for rtt in rtt_values:
+        for d in (100.0 * rtt - 100.0, 100.0 * rtt + 100.0):
+            samples.append(
+                FitSample(
+                    vp_id=VpId(vp_id),
+                    vp_coord=coord,
+                    probe_coord=_probe_at_distance(coord, d),
+                    latency=Latency(rtt),
+                )
+            )
+    return samples
+
+
+def make_normal_dist_fit_samples(
+    vp_id: str = "anchor-a",
+    n_per_rtt: int = 4,
+    rtt_values: Optional[list[float]] = None,
+    spread_km: float = 100.0,
+) -> list[FitSample]:
+    """Build pooled-fit samples with a parallel band of width 2 * spread_km.
+
+    For each RTT x, place n_per_rtt probes at distances evenly spread in
+    [100*x - spread_km, 100*x + spread_km]. The pooled Spotter fit then
+    sees a centered mean ≈ 100*x with spread ≈ spread_km.
+    """
+    if rtt_values is None:
+        rtt_values = list(np.linspace(5.0, 50.0, 10))
+    coord = ANCHOR_COORDS[VpId(vp_id)]
+    samples: list[FitSample] = []
+    for rtt in rtt_values:
+        center = 100.0 * rtt
+        for d in np.linspace(center - spread_km, center + spread_km, n_per_rtt):
+            samples.append(
+                FitSample(
+                    vp_id=VpId(vp_id),
+                    vp_coord=coord,
+                    probe_coord=_probe_at_distance(coord, float(d)),
+                    latency=Latency(float(rtt)),
+                )
+            )
+    return samples
