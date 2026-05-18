@@ -260,6 +260,7 @@ def fit_rtt_distance_spline(
     try:
         # k=1: boundary knots repeated k+1=2 times, n_knots interior knots strictly inside.
         interior = np.linspace(rtts[0], rtts[-1], n_knots + 2)[1:-1]
+        # Knots. Knots and data points must satisfy Schoenberg-Whitney conditions.
         t_full = np.r_[(rtts[0],) * 2, interior, (rtts[-1],) * 2]
         spline = make_lsq_spline(rtts, distances, t=t_full, k=1)
     except Exception as e:
@@ -274,7 +275,12 @@ def fit_rtt_distance_spline(
             f"{n_knots} interior knots over {len(rtts)} points)"
         )
 
-    # Enforce non-decreasing distance with RTT.
+    # Monotonicity enforcement 
+    # This is not isotonic regression (which would minimize squared error subject to a monotonicity constraint). 
+    # It's a one-pass post-hoc fix that doesn't preserve the LSQ objective. 
+    # The trade-off: cheap and predictable, but the post-fix curve is no longer the LSQ-optimal monotonic fit. 
+    # For Octant's use case — where the spline is the "best guess" inside a hull band 
+    # that will clip wild values anyway, this approximation is fine.
     for i in range(1, len(knot_dists)):
         if knot_dists[i] < knot_dists[i - 1]:
             knot_dists[i] = knot_dists[i - 1]

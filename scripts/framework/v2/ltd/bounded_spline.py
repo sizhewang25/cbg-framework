@@ -1,4 +1,4 @@
-"""BoundedSplineLTD — per-anchor Octant spline + per-VP delta band (Octant).
+"""BoundedSplineLTD — per-VP Octant spline + delta band (Octant).
 
 Per-VP `OctantRTTModel` produces annular bounds (inner, outer) for each RTT;
 a per-VP `delta` widens the spline-anchored band to a target coverage of
