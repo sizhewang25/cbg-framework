@@ -81,9 +81,11 @@ class TestSpeedOfInternetLTD(unittest.TestCase):
         )
 
         self.assertEqual(success.method, "SpeedOfInternetLTD")
+        self.assertEqual(success.latency, Latency(5.0))
         self.assertEqual(failure.method, "SpeedOfInternetLTD")
         self.assertEqual(failure.vp_id, VpId("anchor-b"))
         self.assertEqual(failure.vp_coord, ANCHOR_COORDS[VpId("anchor-b")])
+        self.assertEqual(failure.latency, Latency(20.0))
         self.assertIsNone(failure.tg_distance)
 
     def test_fit_returns_success_for_stateless_model(self):

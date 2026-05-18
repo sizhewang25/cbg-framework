@@ -60,6 +60,7 @@ class NormalDistLTD(AnnulusLTDModel):
                 error=Error.VP_NOT_FITTED,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         if latency > self.max_rtt_ms:
             return LTDResult(
@@ -67,6 +68,7 @@ class NormalDistLTD(AnnulusLTDModel):
                 error=Error.RTT_OUT_OF_RANGE,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         bounds = self.model.predict_distance_bounds(latency)
         if bounds is None:
@@ -75,6 +77,7 @@ class NormalDistLTD(AnnulusLTDModel):
                 error=Error.RTT_OUT_OF_RANGE,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         inner_km, outer_km = bounds
         if outer_km <= inner_km:
@@ -83,11 +86,13 @@ class NormalDistLTD(AnnulusLTDModel):
                 error=Error.DEGENERATE_REGION,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         return LTDResult(
             success=True,
             vp_id=vp_id,
             vp_coord=vp_coord,
+            latency=latency,
             tg_distance=Distance(
                 upper_km=float(outer_km), lower_km=float(inner_km)
             ),

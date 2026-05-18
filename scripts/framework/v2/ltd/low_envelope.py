@@ -53,6 +53,7 @@ class LowEnvelopeLTD(CircleLTDModel):
                 error=Error.VP_NOT_FITTED,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         if latency > self.max_rtt_ms:
             return LTDResult(
@@ -60,6 +61,7 @@ class LowEnvelopeLTD(CircleLTDModel):
                 error=Error.RTT_OUT_OF_RANGE,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         radius_km = submodel.predict_distance(latency)
         if radius_km is None or radius_km <= 0:
@@ -68,10 +70,12 @@ class LowEnvelopeLTD(CircleLTDModel):
                 error=Error.NUMERICAL_FAILURE,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         return LTDResult(
             success=True,
             vp_id=vp_id,
             vp_coord=vp_coord,
+            latency=latency,
             tg_distance=Distance(upper_km=float(radius_km)),
         )

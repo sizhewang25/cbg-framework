@@ -136,9 +136,11 @@ class TestNormalDistLTD(unittest.TestCase):
         )
 
         self.assertEqual(success.method, "NormalDistLTD")
+        self.assertEqual(success.latency, Latency(20.0))
         self.assertEqual(failure.method, "NormalDistLTD")
         self.assertEqual(failure.vp_id, VpId("anchor-b"))
         self.assertEqual(failure.vp_coord, ANCHOR_COORDS[VpId("anchor-b")])
+        self.assertEqual(failure.latency, Latency(20.0))
         self.assertIsNone(failure.tg_distance)
 
     def test_fit_returns_success_when_model_present(self):

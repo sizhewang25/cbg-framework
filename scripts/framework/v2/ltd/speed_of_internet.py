@@ -46,11 +46,13 @@ class SpeedOfInternetLTD(CircleLTDModel):
                 error=Error.RTT_OUT_OF_RANGE,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         radius_km = float(rtt_to_km(latency, speed_threshold=self.speed_threshold))
         return LTDResult(
             success=True,
             vp_id=vp_id,
             vp_coord=vp_coord,
+            latency=latency,
             tg_distance=Distance(upper_km=radius_km),
         )

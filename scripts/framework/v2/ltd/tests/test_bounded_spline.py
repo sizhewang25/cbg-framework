@@ -108,9 +108,11 @@ class TestBoundedSplineLTD(unittest.TestCase):
         failure = ltd.predict(VpId("unknown"), Coord(0.0, 0.0), Latency(20.0))
 
         self.assertEqual(success.method, "BoundedSplineLTD")
+        self.assertEqual(success.latency, Latency(20.0))
         self.assertEqual(failure.method, "BoundedSplineLTD")
         self.assertEqual(failure.vp_id, VpId("unknown"))
         self.assertEqual(failure.vp_coord, Coord(0.0, 0.0))
+        self.assertEqual(failure.latency, Latency(20.0))
         self.assertIsNone(failure.tg_distance)
 
     def test_fit_returns_success_when_models_present(self):

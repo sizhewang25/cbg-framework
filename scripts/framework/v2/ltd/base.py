@@ -44,6 +44,9 @@ class LTDResult:
 
     When success is True, vp_id / vp_coord / tg_distance are populated.
     When success is False, error is set and the geometry fields may be None.
+    `latency` is echoed from the call on both paths so downstream stages
+    (e.g. MTL weight = exp(-rtt/tau)) don't have to thread the input
+    latency separately through the pipeline.
     `method` is auto-stamped by LTDModel.predict with the concrete class name.
     """
 
@@ -51,6 +54,7 @@ class LTDResult:
     error: Optional[Error] = None
     vp_id: Optional[VpId] = None
     vp_coord: Optional[Coord] = None
+    latency: Optional[Latency] = None
     tg_distance: Optional[Distance] = None
     method: Optional[str] = None
 

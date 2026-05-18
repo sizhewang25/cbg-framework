@@ -80,9 +80,11 @@ class TestLowEnvelopeLTD(unittest.TestCase):
         failure = ltd.predict(VpId("unknown"), Coord(0.0, 0.0), Latency(25.0))
 
         self.assertEqual(success.method, "LowEnvelopeLTD")
+        self.assertEqual(success.latency, Latency(25.0))
         self.assertEqual(failure.method, "LowEnvelopeLTD")
         self.assertEqual(failure.vp_id, VpId("unknown"))
         self.assertEqual(failure.vp_coord, Coord(0.0, 0.0))
+        self.assertEqual(failure.latency, Latency(25.0))
         self.assertIsNone(failure.tg_distance)
 
     def test_fit_returns_success_when_models_present(self):

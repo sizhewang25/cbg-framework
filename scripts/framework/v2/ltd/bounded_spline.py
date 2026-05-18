@@ -65,6 +65,7 @@ class BoundedSplineLTD(AnnulusLTDModel):
                 error=Error.VP_NOT_FITTED,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         if latency > self.max_rtt_ms:
             return LTDResult(
@@ -72,6 +73,7 @@ class BoundedSplineLTD(AnnulusLTDModel):
                 error=Error.RTT_OUT_OF_RANGE,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         try:
             inner_km, outer_km = submodel.predict_distance_bounds(
@@ -89,6 +91,7 @@ class BoundedSplineLTD(AnnulusLTDModel):
                 error=Error.NUMERICAL_FAILURE,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         inner_km = max(0.0, float(inner_km))
         outer_km = max(0.0, float(outer_km))
@@ -98,10 +101,12 @@ class BoundedSplineLTD(AnnulusLTDModel):
                 error=Error.DEGENERATE_REGION,
                 vp_id=vp_id,
                 vp_coord=vp_coord,
+                latency=latency,
             )
         return LTDResult(
             success=True,
             vp_id=vp_id,
             vp_coord=vp_coord,
+            latency=latency,
             tg_distance=Distance(upper_km=outer_km, lower_km=inner_km),
         )
