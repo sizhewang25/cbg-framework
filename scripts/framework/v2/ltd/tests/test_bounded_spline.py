@@ -37,7 +37,7 @@ class TestBoundedSplineLTD(unittest.TestCase):
         return ltd
 
     def test_predict_creates_annular_constraints(self):
-        """At RTT=20 the hand-derived hull bounds are [1900, 2100] km."""
+        """At RTT=20 the hand-derived hull bounds are [900, 1100] km."""
         ltd = self._ltd_with_submodels(
             **{"anchor-a": make_fitted_octant_model("anchor-a")}
         )
@@ -47,8 +47,8 @@ class TestBoundedSplineLTD(unittest.TestCase):
         )
 
         self.assertTrue(result.success)
-        self.assertAlmostEqual(result.tg_distance.lower_km, 1900.0)
-        self.assertAlmostEqual(result.tg_distance.upper_km, 2100.0)
+        self.assertAlmostEqual(result.tg_distance.lower_km, 900.0)
+        self.assertAlmostEqual(result.tg_distance.upper_km, 1100.0)
         self.assertTrue(result.tg_distance.is_annular)
 
     def test_predict_returns_degenerate_region_on_zero_bounds(self):
@@ -131,12 +131,7 @@ class TestBoundedSplineLTD(unittest.TestCase):
         self.assertEqual(result.error, Error.INSUFFICIENT_DATA)
 
     def test_fit_from_samples_then_predict_recovers_hull_bounds(self):
-        """Integration: fit(samples) → predict at RTT=20 recovers ~[1900, 2100].
-
-        Uses sample_coverage=0.8 because the 10-point parallel band only
-        admits discrete coverage steps {0, 0.2, 0.4, 0.6, 0.8, 1.0}; 0.9 sits
-        between two steps and would make per-VP δ search fail by default.
-        """
+        """Integration: fit(samples) → predict at RTT=20 recovers ~[900, 1100]."""
         ltd = BoundedSplineLTD(
             sample_coverage=0.8,
             cutoff_min_points=1,
@@ -155,10 +150,10 @@ class TestBoundedSplineLTD(unittest.TestCase):
         # Per-VP δ search runs against this VP's own data and spline.
         self.assertIn(VpId("anchor-a"), fit_result.args["deltas"])
         self.assertTrue(pred.success)
-        # The parallel ±100 km band at RTT=20 yields hull bounds near [1900, 2100].
+        # The parallel ±100 km band at RTT=20 yields hull bounds near [900, 1100].
         # Allow some slop for the spline/delta interaction.
-        self.assertLess(pred.tg_distance.lower_km, 2000.0)
-        self.assertGreater(pred.tg_distance.upper_km, 2000.0)
+        self.assertLess(pred.tg_distance.lower_km, 1000.0)
+        self.assertGreater(pred.tg_distance.upper_km, 1000.0)
 
     def test_registered_in_ltd_registry(self):
         from scripts.framework.v2.registry import LTD_REGISTRY

@@ -79,10 +79,12 @@ def make_fitted_octant_model(
     """Fit a real Octant model with an easily checked parallel distance band.
 
     For every RTT x, the training set contains two points:
-      lower distance = 100 * x - 100
-      upper distance = 100 * x + 100
+      lower distance = 50 * x - 100
+      upper distance = 50 * x + 100
 
-    Thus at RTT=20, the hand-derived hull bounds are 1900..2100 km.
+    Thus at RTT=20, the hand-derived hull bounds are 900..1100 km. The
+    50 km/ms slope sits well below the 100 km/ms speed-of-internet ceiling,
+    so every probe survives the baseline filter in `OctantRTTModel.fit`.
     """
     from scripts.libs.octant_simple.octant_model import OctantRTTModel
 
@@ -90,7 +92,7 @@ def make_fitted_octant_model(
     rtt_values = np.array([10, 20, 30, 40, 50], dtype=float)
     rtts = np.repeat(rtt_values, 2)
     distances = np.ravel(
-        [[100.0 * rtt - 100.0, 100.0 * rtt + 100.0] for rtt in rtt_values]
+        [[50.0 * rtt - 100.0, 50.0 * rtt + 100.0] for rtt in rtt_values]
     )
     model = OctantRTTModel(
         anchor_ip=anchor_ip,
@@ -240,16 +242,17 @@ def make_bounded_spline_fit_samples(
     """Build FitSamples that yield a parallel ± 100 km hull at each RTT.
 
     For every RTT x, the sample set includes two probes:
-      lower distance = 100 * x - 100
-      upper distance = 100 * x + 100
-    so at RTT=20 the Octant hull bounds come out to [1900, 2100] km.
+      lower distance = 50 * x - 100
+      upper distance = 50 * x + 100
+    so at RTT=20 the Octant hull bounds come out to [900, 1100] km. The
+    50 km/ms slope keeps every probe above the 2/3·c speed-of-internet line.
     """
     if rtt_values is None:
         rtt_values = [10.0, 20.0, 30.0, 40.0, 50.0]
     coord = ANCHOR_COORDS[VpId(vp_id)]
     samples: list[FitSample] = []
     for rtt in rtt_values:
-        for d in (100.0 * rtt - 100.0, 100.0 * rtt + 100.0):
+        for d in (50.0 * rtt - 100.0, 50.0 * rtt + 100.0):
             samples.append(
                 FitSample(
                     vp_id=VpId(vp_id),

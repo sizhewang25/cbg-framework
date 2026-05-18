@@ -23,20 +23,23 @@ from scripts.libs.octant_simple.octant_model import (
 )
 
 
-# Hand-built parallel ±100 km band: for every RTT x in {10..50}, two probes at
-# distance 100·x − 100 and 100·x + 100. So at RTT=20, hull is [1900, 2100].
+# Hand-built parallel ±100 km band at 50 km/ms slope: for every RTT x in
+# {10..50}, two probes at distance 50·x − 100 and 50·x + 100. So at RTT=20,
+# hull is [900, 1100]. The 50 km/ms slope keeps every probe above the
+# 2/3·c speed-of-internet line so OctantRTTModel.fit's baseline filter
+# leaves the data intact.
 def _band_samples():
     rtt_values = np.array([10, 20, 30, 40, 50], dtype=float)
     rtts = np.repeat(rtt_values, 2)
     distances = np.ravel(
-        [[100.0 * rtt - 100.0, 100.0 * rtt + 100.0] for rtt in rtt_values]
+        [[50.0 * rtt - 100.0, 50.0 * rtt + 100.0] for rtt in rtt_values]
     )
     return rtts, distances
 
 
 class TestComputeConvexHullBounds(unittest.TestCase):
     def test_chains_enclose_the_parallel_band(self):
-        """Hull at rtt=20 must bracket the data points (1900, 2100)."""
+        """Hull at rtt=20 must bracket the data points (900, 1100)."""
         rtts, distances = _band_samples()
         hull = compute_convex_hull_bounds(
             rtts, distances, cutoff_min_points=1, bin_size_ms=1000
@@ -50,8 +53,8 @@ class TestComputeConvexHullBounds(unittest.TestCase):
             20.0, hull["hull_lower_rtts"], hull["hull_lower_distances"],
             cutoff_rtt=hull["cutoff_rtt"],
         )
-        self.assertAlmostEqual(upper_at_20, 2100.0)
-        self.assertAlmostEqual(lower_at_20, 1900.0)
+        self.assertAlmostEqual(upper_at_20, 1100.0)
+        self.assertAlmostEqual(lower_at_20, 900.0)
 
     def test_returns_failure_when_too_few_points(self):
         hull = compute_convex_hull_bounds(np.array([10.0]), np.array([100.0]))
@@ -161,18 +164,17 @@ class TestFitRttDistanceSpline(unittest.TestCase):
 
 class TestFindDeltaForCoverage(unittest.TestCase):
     def test_recovers_delta_for_parallel_band(self):
-        # Centered spline dist = 100·rtt; band at ±100 km → δ slightly above 1.
-        # At rtt=20 (dist 2000), need δ such that 2000/δ ≤ 1900 and 2000·δ ≥ 2100,
-        # i.e. δ >= 21/20 = 1.05.
+        # Centered spline dist = 50·rtt; band at ±100 km. The hardest probe to
+        # cover is (rtt=10, dist=400): need 500/δ ≤ 400 → δ ≥ 1.25.
         rtts, distances = _band_samples()
         spline_rtts = np.linspace(10.0, 50.0, 5)
-        spline_dists = 100.0 * spline_rtts
+        spline_dists = 50.0 * spline_rtts
         delta, meta = find_delta_for_coverage(
             rtts, distances, spline_rtts, spline_dists,
             sample_coverage=1.0, tolerance=0.0,
         )
-        # δ must be at least 1.05 to enclose every band edge.
-        self.assertGreaterEqual(delta, 1.05 - 1e-6)
+        # δ must be at least 1.25 to enclose every band edge.
+        self.assertGreaterEqual(delta, 1.25 - 1e-6)
         self.assertAlmostEqual(meta["actual_coverage"], 1.0)
 
     def test_raises_when_target_unreachable_with_invalid_spline(self):
@@ -222,6 +224,26 @@ class TestOctantRTTModelFit(unittest.TestCase):
         self.assertIsNotNone(m.spline_rtt_knots)
         self.assertIsNotNone(m.spline_dist_knots)
 
+    def test_fit_drops_sub_baseline_rows(self):
+        """Rows below the speed-of-internet line are dropped before fitting.
+
+        Physical bound: rtt >= 0.01 ms/km · distance at 2/3·c. A probe at
+        10 ms claiming 10000 km away implies signal speed > c — must be
+        a mislabeled coordinate or measurement artifact.
+        """
+        rtts, distances = _band_samples()
+        # Splice in one sub-baseline outlier: rtt=10 with dist=10000.
+        bad_rtts = np.append(rtts, 10.0)
+        bad_dists = np.append(distances, 10000.0)
+        m = OctantRTTModel(anchor_ip="x")
+        ok = m.fit(
+            bad_rtts, bad_dists,
+            cutoff_min_points=1, fit_spline=True, spline_n_knots=4, bin_size_ms=1000,
+        )
+        self.assertTrue(ok)
+        # 10 band points kept; the (10, 10000) outlier dropped.
+        self.assertEqual(m.n_measurements, 10)
+
 
 class TestPredictDistanceBounds(unittest.TestCase):
     def _fitted(self) -> OctantRTTModel:
@@ -237,8 +259,8 @@ class TestPredictDistanceBounds(unittest.TestCase):
     def test_returns_hull_bounds_when_delta_is_none(self):
         m = self._fitted()
         inner, outer = m.predict_distance_bounds(20.0, delta=None)
-        self.assertAlmostEqual(inner, 1900.0)
-        self.assertAlmostEqual(outer, 2100.0)
+        self.assertAlmostEqual(inner, 900.0)
+        self.assertAlmostEqual(outer, 1100.0)
 
     def test_returns_hull_bounds_above_cutoff_even_with_delta(self):
         m = self._fitted()
@@ -249,10 +271,10 @@ class TestPredictDistanceBounds(unittest.TestCase):
     def test_delta_band_clipped_by_hull(self):
         m = self._fitted()
         inner, outer = m.predict_distance_bounds(20.0, delta=1.2)
-        # Spline at RTT=20 ≈ 2000; band would be [2000/1.2, 2000·1.2]≈[1666, 2400];
-        # clipped to hull [1900, 2100].
-        self.assertGreaterEqual(inner, 1900.0 - 1e-6)
-        self.assertLessEqual(outer, 2100.0 + 1e-6)
+        # Spline at RTT=20 ≈ 1000; band would be [1000/1.2, 1000·1.2]≈[833, 1200];
+        # clipped to hull [900, 1100].
+        self.assertGreaterEqual(inner, 900.0 - 1e-6)
+        self.assertLessEqual(outer, 1100.0 + 1e-6)
 
     def test_raises_when_unfitted(self):
         m = OctantRTTModel(anchor_ip="x")

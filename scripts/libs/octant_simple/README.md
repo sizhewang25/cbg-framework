@@ -144,7 +144,9 @@ if fit_spline:
         self.fit_message = f"hull OK, spline failed: {e}"
 ```
 
-Three notable choices:
+Four notable choices:
+
+**Sub-baseline rows filtered before anything else.** The validity mask at the top of `fit` drops rows where `rtt < baseline_slope · distance` — physically impossible at 2/3·c, almost certainly a mislabeled coordinate or a measurement artifact. Both the hull and the spline then see the same baseline-clean data. This filter is unconditional; there's no flag to disable it.
 
 **Data masked to `≤ cutoff_rtt`.** The spline only fits the "trusted region" — points above `cutoff_rtt` are sparse-data outliers that would distort the spline. Above the cutoff, prediction switches to baseline-slope extension.
 

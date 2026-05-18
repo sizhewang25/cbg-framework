@@ -465,19 +465,24 @@ class OctantRTTModel:
 
         rtts_arr = np.asarray(rtts, dtype=float)
         dists_arr = np.asarray(distances, dtype=float)
+        # Filter NaN / non-positive rows AND rows below the speed-of-internet line
+        # (rtt < baseline_slope · distance is physically impossible at 2/3·c — those
+        # rows are mislabeled coordinates or measurement artifacts and would distort
+        # both the hull and the spline).
         valid = (
             (rtts_arr > 0)
             & (dists_arr > 0)
             & np.isfinite(rtts_arr)
             & np.isfinite(dists_arr)
+            & (rtts_arr >= self.baseline_slope * dists_arr)
         )
         valid_rtts = rtts_arr[valid]
         valid_dists = dists_arr[valid]
         self.n_measurements = int(len(valid_rtts))
 
         hull = compute_convex_hull_bounds(
-            rtts_arr,
-            dists_arr,
+            valid_rtts,
+            valid_dists,
             cutoff_min_points=cutoff_min_points,
             bin_size_ms=bin_size_ms,
         )
