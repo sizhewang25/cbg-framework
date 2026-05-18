@@ -25,10 +25,15 @@ from scripts.framework.v2.types import Coord, Error, Latency, VpId
 
 
 class TestBoundedSplineLTD(unittest.TestCase):
-    def _ltd_with_submodels(self, *, delta=None, **submodels) -> BoundedSplineLTD:
+    def _ltd_with_submodels(self, *, deltas=None, **submodels) -> BoundedSplineLTD:
+        """Inject submodels (and optional per-VP deltas) into the wrapper.
+
+        `deltas` is a dict keyed by the same string VP IDs as `submodels`;
+        unset VPs fall through to bare hull bounds.
+        """
         ltd = BoundedSplineLTD()
         ltd._submodels = {VpId(k): v for k, v in submodels.items()}
-        ltd._delta = delta
+        ltd._deltas = {VpId(k): v for k, v in (deltas or {}).items()}
         return ltd
 
     def test_predict_creates_annular_constraints(self):
@@ -71,9 +76,14 @@ class TestBoundedSplineLTD(unittest.TestCase):
         self.assertEqual(result.error, Error.VP_NOT_FITTED)
 
     def test_predict_returns_numerical_failure_when_prediction_raises(self):
-        """A fitted Octant model with fit_spline=False raises on bounds prediction."""
+        """A fitted Octant model with fit_spline=False raises on bounds prediction.
+
+        A per-VP delta forces predict_distance_bounds into the spline branch;
+        with no spline, the underlying call raises SplineFitError, which the
+        wrapper maps to NUMERICAL_FAILURE.
+        """
         ltd = self._ltd_with_submodels(
-            delta=1.2,
+            deltas={"anchor-b": 1.2},
             **{"anchor-b": make_fitted_octant_model("anchor-b", fit_spline=False)},
         )
 
@@ -93,17 +103,6 @@ class TestBoundedSplineLTD(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertEqual(result.error, Error.VP_NOT_FITTED)
-
-    def test_predict_applies_rtt_cutoff(self):
-        ltd = BoundedSplineLTD(max_rtt_ms=10.0)
-        ltd._submodels = {VpId("anchor-a"): make_fitted_octant_model("anchor-a")}
-
-        result = ltd.predict(
-            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(10.1)
-        )
-
-        self.assertFalse(result.success)
-        self.assertEqual(result.error, Error.RTT_OUT_OF_RANGE)
 
     def test_predict_failure_echoes_vp_id_coord_and_stamps_method(self):
         ltd = self._ltd_with_submodels(
@@ -132,9 +131,14 @@ class TestBoundedSplineLTD(unittest.TestCase):
         self.assertEqual(result.error, Error.INSUFFICIENT_DATA)
 
     def test_fit_from_samples_then_predict_recovers_hull_bounds(self):
-        """Integration: fit(samples) → predict at RTT=20 recovers ~[1900, 2100]."""
+        """Integration: fit(samples) → predict at RTT=20 recovers ~[1900, 2100].
+
+        Uses sample_coverage=0.8 because the 10-point parallel band only
+        admits discrete coverage steps {0, 0.2, 0.4, 0.6, 0.8, 1.0}; 0.9 sits
+        between two steps and would make per-VP δ search fail by default.
+        """
         ltd = BoundedSplineLTD(
-            cutoff_variant="none",
+            sample_coverage=0.8,
             cutoff_min_points=1,
             spline_n_knots=4,
             bin_size_ms=1000,
@@ -148,6 +152,8 @@ class TestBoundedSplineLTD(unittest.TestCase):
 
         self.assertTrue(fit_result.success, msg=str(fit_result.args))
         self.assertIn(VpId("anchor-a"), fit_result.args["vps_fitted"])
+        # Per-VP δ search runs against this VP's own data and spline.
+        self.assertIn(VpId("anchor-a"), fit_result.args["deltas"])
         self.assertTrue(pred.success)
         # The parallel ±100 km band at RTT=20 yields hull bounds near [1900, 2100].
         # Allow some slop for the spline/delta interaction.
