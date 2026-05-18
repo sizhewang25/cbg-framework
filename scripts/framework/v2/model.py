@@ -10,18 +10,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from scripts.framework.v2.ctr.base import CTRMethod
+from scripts.framework.v2.ctr.base import CTRMethod, CTRResult
 from scripts.framework.v2.ltd.base import (
     AnnulusLTDModel,
     CircleLTDModel,
     FitSample,
     FittingResult,
     LTDModel,
+    LTDResult,
 )
 from scripts.framework.v2.mtl.base import (
     AnnulusMTLMethod,
     CircleMTLMethod,
     MTLMethod,
+    MTLResult,
 )
 from scripts.framework.v2.registry import CTR_REGISTRY, LTD_REGISTRY, MTL_REGISTRY
 from scripts.framework.v2.types import Coord, Error, GeoStatus, Latency, VpId
@@ -41,11 +43,18 @@ class GeoResult:
                        location. `error` documents the failure that
                        triggered the fallback.
     status == ERROR:    no coord. `error` describes why.
+
+    The per-stage results (`ltd_results`, `mtl_result`, `ctr_result`) are
+    retained for inspection on every status. Stages that didn't run (e.g.
+    CTR when MTL failed) are left as their default empty/None values.
     """
 
     coord: Optional[Coord]
     status: GeoStatus
     error: Optional[Error] = None
+    ltd_results: tuple[LTDResult, ...] = ()
+    mtl_result: Optional[MTLResult] = None
+    ctr_result: Optional[CTRResult] = None
 
 
 class CBGModel:
@@ -87,16 +96,23 @@ class CBGModel:
 
         Each entry of `obs` is (vp_id, vp_coord, measured_latency).
         """
-        ltd_results = self.ltd.predict_all(obs)
+        ltd_results = tuple(self.ltd.predict_all(obs))
         ok = [r for r in ltd_results if r.success]
 
         last_error: Optional[Error] = None
+        ctr_result: Optional[CTRResult] = None
 
         mtl_result = self.mtl.multilaterate(ok)
         if mtl_result.success:
             ctr_result = self.ctr.select_centroid(mtl_result)
             if ctr_result.success and ctr_result.tg_coord is not None:
-                return GeoResult(coord=ctr_result.tg_coord, status=GeoStatus.SUCCESS)
+                return GeoResult(
+                    coord=ctr_result.tg_coord,
+                    status=GeoStatus.SUCCESS,
+                    ltd_results=ltd_results,
+                    mtl_result=mtl_result,
+                    ctr_result=ctr_result,
+                )
             last_error = ctr_result.error
         else:
             last_error = mtl_result.error
@@ -107,12 +123,18 @@ class CBGModel:
                 coord=nearest[1],
                 status=GeoStatus.FALLBACK,
                 error=last_error,
+                ltd_results=ltd_results,
+                mtl_result=mtl_result,
+                ctr_result=ctr_result,
             )
 
         return GeoResult(
             coord=None,
             status=GeoStatus.ERROR,
             error=last_error or Error.ALL_PHASES_FAILED,
+            ltd_results=ltd_results,
+            mtl_result=mtl_result,
+            ctr_result=ctr_result,
         )
 
     @classmethod

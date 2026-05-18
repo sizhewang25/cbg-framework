@@ -9,7 +9,7 @@ bases to validate compatibility with the multilateration stage.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from scripts.framework.v2.types import Coord, Distance, Error, Latency, VpId
@@ -29,11 +29,13 @@ class FitSample:
 class FittingResult:
     """Outcome of LTDModel.fit. `args` carries fitted parameters (shape is
     model-specific: a per-VP dict for CircleLTDModel/AnnulusLTDModel
-    partitioning by VP, a single struct for a future global model)."""
+    partitioning by VP, a single struct for a future global model).
+    `method` is auto-stamped by LTDModel.fit with the concrete class name."""
 
     success: bool
     error: Optional[Error] = None
     args: Optional[dict] = None
+    method: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,7 @@ class LTDResult:
 
     When success is True, vp_id / vp_coord / tg_distance are populated.
     When success is False, error is set and the geometry fields may be None.
+    `method` is auto-stamped by LTDModel.predict with the concrete class name.
     """
 
     success: bool
@@ -49,6 +52,7 @@ class LTDResult:
     vp_id: Optional[VpId] = None
     vp_coord: Optional[Coord] = None
     tg_distance: Optional[Distance] = None
+    method: Optional[str] = None
 
 
 class LTDModel(ABC):
@@ -60,21 +64,38 @@ class LTDModel(ABC):
 
     Concrete classes choose. Callers don't need to know which.
 
+    Subclasses implement `_fit` and `_predict`; the public `fit` / `predict`
+    wrappers stamp `method=type(self).__name__` onto the returned result.
+
     Do not subclass LTDModel directly. Subclass CircleLTDModel or
     AnnulusLTDModel so that compatibility with the multilateration stage
     is expressed in the type system.
     """
 
     @abstractmethod
-    def fit(self, samples: list[FitSample]) -> FittingResult: ...
+    def _fit(self, samples: list[FitSample]) -> FittingResult: ...
 
     @abstractmethod
-    def predict(
+    def _predict(
         self,
         vp_id: VpId,
         vp_coord: Coord,
         latency: Latency,
     ) -> LTDResult: ...
+
+    def fit(self, samples: list[FitSample]) -> FittingResult:
+        return replace(self._fit(samples), method=type(self).__name__)
+
+    def predict(
+        self,
+        vp_id: VpId,
+        vp_coord: Coord,
+        latency: Latency,
+    ) -> LTDResult:
+        return replace(
+            self._predict(vp_id, vp_coord, latency),
+            method=type(self).__name__,
+        )
 
     def predict_all(
         self,

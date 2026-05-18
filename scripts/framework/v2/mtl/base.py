@@ -8,7 +8,7 @@ CBGModel validates the pairing against LTDModel at composition time.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, Union
 
 from shapely.geometry.base import BaseGeometry
@@ -24,15 +24,22 @@ Intersection = Union[BaseGeometry, list[Coord], None]
 
 @dataclass(frozen=True)
 class MTLResult:
-    """Outcome of multilateration over a set of distance constraints."""
+    """Outcome of multilateration over a set of distance constraints.
+
+    `method` is auto-stamped by MTLMethod.multilaterate with the concrete
+    class name."""
 
     success: bool
     error: Optional[Error] = None
     intersection: Intersection = None
+    method: Optional[str] = None
 
 
 class MTLMethod(ABC):
     """Abstract multilateration method.
+
+    Subclasses implement `_multilaterate`; the public `multilaterate`
+    wrapper stamps `method=type(self).__name__` onto the returned result.
 
     Do not subclass MTLMethod directly. Subclass CircleMTLMethod or
     AnnulusMTLMethod so that the compatibility requirement against the
@@ -40,7 +47,10 @@ class MTLMethod(ABC):
     """
 
     @abstractmethod
-    def multilaterate(self, results: list[LTDResult]) -> MTLResult: ...
+    def _multilaterate(self, results: list[LTDResult]) -> MTLResult: ...
+
+    def multilaterate(self, results: list[LTDResult]) -> MTLResult:
+        return replace(self._multilaterate(results), method=type(self).__name__)
 
 
 class CircleMTLMethod(MTLMethod, ABC):
