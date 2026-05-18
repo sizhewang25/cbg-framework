@@ -31,6 +31,24 @@ from scripts.libs.octant_simple.octant_model import OctantRTTModel
 # ---------------------------------------------------------------------------
 
 
+def _hull_segment_to_cutoff(
+    hull_rtts, hull_dists, cutoff: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Hull vertices with RTT ≤ cutoff, plus an interpolated endpoint at cutoff."""
+    rtts_arr = np.asarray(hull_rtts, dtype=float)
+    dists_arr = np.asarray(hull_dists, dtype=float)
+    if cutoff <= 0 or rtts_arr.size == 0:
+        return rtts_arr, dists_arr
+    mask = rtts_arr <= cutoff
+    r_in = rtts_arr[mask]
+    d_in = dists_arr[mask]
+    if rtts_arr[-1] > cutoff and (r_in.size == 0 or r_in[-1] < cutoff):
+        d_at = float(np.interp(cutoff, rtts_arr, dists_arr))
+        r_in = np.append(r_in, cutoff)
+        d_in = np.append(d_in, d_at)
+    return r_in, d_in
+
+
 def plot_rtt_distance(
     ax: Axes,
     distances: np.ndarray,
@@ -56,25 +74,42 @@ def plot_rtt_distance(
     rtt_max = float(rtts.max()) if rtts.size else 1.0
     rtt_axis = np.linspace(0.0, rtt_max, 100)
     ax.plot(
-        rtt_axis, rtt_axis / THEORETICAL_SLOPE, "k--", linewidth=1.5, alpha=0.6,
+        rtt_axis, rtt_axis / THEORETICAL_SLOPE, "--", color="gray",
+        linewidth=1.5, alpha=0.6,
         label=f"2/3·c baseline ({THEORETICAL_SLOPE:.4f} ms/km)",
     )
 
     if submodel is not None and submodel.fitted:
-        # `hull_upper_*` = upper envelope in (rtt, distance) space = outer
-        # distance bound for a given RTT (top edge of the scatter with RTT
-        # on x and distance on y). `hull_lower_*` = inner distance bound.
-        # Labels match the predict_distance_bounds `(inner_km, outer_km)` API.
+        cutoff = submodel.cutoff_rtt
+        # Hulls truncated at cutoff. Beyond cutoff the model falls back to a
+        # 2/3·c extension anchored at the hull value at cutoff — plot that
+        # extension in the same color as the hull it continues.
         if submodel.hull_upper_distances:
-            ax.plot(
-                submodel.hull_upper_rtts, submodel.hull_upper_distances,
-                "g-", linewidth=1.8, alpha=0.85, label="Outer hull (max dist)",
+            r_hull, d_hull = _hull_segment_to_cutoff(
+                submodel.hull_upper_rtts, submodel.hull_upper_distances, cutoff
             )
+            ax.plot(r_hull, d_hull, color="red", linewidth=1.8, alpha=0.9,
+                    label="Outer hull (max dist)")
         if submodel.hull_lower_distances:
-            ax.plot(
-                submodel.hull_lower_rtts, submodel.hull_lower_distances,
-                "g--", linewidth=1.8, alpha=0.85, label="Inner hull (min dist)",
+            r_hull, d_hull = _hull_segment_to_cutoff(
+                submodel.hull_lower_rtts, submodel.hull_lower_distances, cutoff
             )
+            ax.plot(r_hull, d_hull, color="blue", linewidth=1.8, alpha=0.9,
+                    label="Inner hull (min dist)")
+        if cutoff > 0 and rtt_max > cutoff:
+            rtt_ext = np.linspace(cutoff, rtt_max, 50)
+            d_up = float(np.interp(
+                cutoff, submodel.hull_upper_rtts, submodel.hull_upper_distances
+            ))
+            d_lo = float(np.interp(
+                cutoff, submodel.hull_lower_rtts, submodel.hull_lower_distances
+            ))
+            ax.plot(rtt_ext, d_up + (rtt_ext - cutoff) / THEORETICAL_SLOPE,
+                    color="red", linewidth=1.5, alpha=0.7,
+                    label="2/3·c extension (upper)")
+            ax.plot(rtt_ext, d_lo + (rtt_ext - cutoff) / THEORETICAL_SLOPE,
+                    color="blue", linewidth=1.5, alpha=0.7,
+                    label="2/3·c extension (lower)")
 
         has_spline = (
             submodel.spline_rtt_knots is not None
@@ -82,23 +117,22 @@ def plot_rtt_distance(
         )
         if has_spline:
             rtt_lo = float(min(submodel.spline_rtt_knots))
-            data_max = float(rtts.max()) if rtts.size else 0.0
-            spline_hi = (
-                submodel.cutoff_rtt
-                if submodel.cutoff_rtt > 0
-                else data_max
-            )
+            spline_hi = cutoff if cutoff > 0 else rtt_max
             spline_grid = np.linspace(rtt_lo, max(spline_hi, rtt_lo + 1e-6), 200)
             centers = np.array(
                 [submodel.predict_distance(float(r)) for r in spline_grid]
             )
-            ax.plot(
-                spline_grid, centers, color="darkorange", linewidth=2.0,
-                label="Spline center",
-            )
+            ax.plot(spline_grid, centers, color="darkorange", linestyle="--",
+                    linewidth=1.8, label="Spline center")
 
             if delta is not None:
-                band_hi = max(data_max, spline_hi)
+                ax.plot(spline_grid, centers * delta, color="darkorange",
+                        linewidth=1.6,
+                        label=f"Spline·δ (δ={delta:.3f}, coverage≈0.9)")
+                ax.plot(spline_grid, centers / delta, color="darkorange",
+                        linewidth=1.6, label="Spline/δ")
+
+                band_hi = max(rtt_max, spline_hi)
                 rtt_grid = np.linspace(rtt_lo, max(band_hi, rtt_lo + 1e-6), 200)
                 inner = np.empty_like(rtt_grid)
                 outer = np.empty_like(rtt_grid)
@@ -106,18 +140,12 @@ def plot_rtt_distance(
                     inner[i], outer[i] = submodel.predict_distance_bounds(
                         float(r), delta=delta
                     )
-                ax.fill_between(
-                    rtt_grid, inner, outer,
-                    color="darkorange", alpha=0.20,
-                    label=f"δ-band (δ={delta:.3f}, coverage≈0.9)",
-                )
+                ax.fill_between(rtt_grid, inner, outer, color="darkorange",
+                                alpha=0.35)
 
-        if submodel.cutoff_rtt > 0:
-            ax.axvline(
-                submodel.cutoff_rtt, color="purple", linestyle=":",
-                linewidth=1.0, alpha=0.6,
-                label=f"cutoff_rtt = {submodel.cutoff_rtt:.1f} ms",
-            )
+        if cutoff > 0:
+            ax.axvline(cutoff, color="purple", linestyle=":", linewidth=1.0,
+                       alpha=0.6, label=f"cutoff_rtt = {cutoff:.1f} ms")
 
     ax.set_xlabel("RTT (ms)")
     ax.set_ylabel("Distance (km)")
