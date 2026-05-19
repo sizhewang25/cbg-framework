@@ -16,10 +16,11 @@ notes/2026-05-17-spotter-normality-check.md:
        would be wrong by ~12 %).
 
     3. SpotterRTTModel.predict_distance_bounds(rtt) -> (inner, outer)
-       Symmetric annulus: [max(0, mu - k*sigma), max(0, mu + k*sigma)].
-       Returns None outside the calibration RTT range -- the deg-3 mu(d)
-       and deg-2 sigma(d) polynomials are not safe to extrapolate (see
-       note section "Methodology notes / Differences from Spotter").
+       Symmetric annulus [max(0, mu - k*sigma), max(0, mu + k*sigma)],
+       with the outer bound clipped by the 2/3*c speed-of-internet line
+       (signal can't travel faster than light). Above `cutoff_rtt` the
+       polynomial extrapolation is unsafe, so mu and sigma are held flat
+       at their cutoff value -- Octant-style graceful degradation.
 
 CAVEAT (load-bearing). On ping_10k_to_anchors the landmark-independence
 claim FAILS: per-anchor Q-Q curves S-off the diagonal due to probe-side
@@ -33,6 +34,37 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import numpy as np
+
+
+SPEED_OF_LIGHT_KM_MS = 300.0
+THEORETICAL_SLOPE = 2.0 / (SPEED_OF_LIGHT_KM_MS * (2.0 / 3.0))  # ~ 0.01 ms/km
+
+
+def compute_cutoff_rtt(
+    rtts: np.ndarray,
+    bin_size_ms: float = 5.0,
+    cutoff_min_points: int = 30,
+) -> float:
+    """Right edge of the last RTT bin that contains >= cutoff_min_points.
+
+    Mirrors the cutoff scan in octant_simple/octant_model.py. Scans bins
+    left-to-right; clamped to max(rtts). Returns 0.0 on empty input. When no
+    bin meets the threshold cutoff_rtt stays at min(rtts), then is clamped to
+    max(rtts) -- so it is always finite and within the data range.
+    """
+    rtts = np.asarray(rtts, dtype=float)
+    if rtts.size == 0:
+        return 0.0
+    min_rtt = float(rtts.min())
+    max_rtt = float(rtts.max())
+    cutoff_rtt = min_rtt
+    for bin_start in np.arange(min_rtt, max_rtt, bin_size_ms):
+        bin_count = int(
+            np.sum((rtts >= bin_start) & (rtts < bin_start + bin_size_ms))
+        )
+        if bin_count >= cutoff_min_points:
+            cutoff_rtt = bin_start + bin_size_ms
+    return min(cutoff_rtt, max_rtt)
 
 
 def fit_mu_sigma(
@@ -104,9 +136,11 @@ class SpotterRTTModel:
     """Pooled Spotter RTT->distance model.
 
     One (p_mu, p_sigma, k) shared across all anchors. predict_distance_bounds
-    produces a symmetric annulus [mu(d) - k*sigma(d), mu(d) + k*sigma(d)],
-    clipped at 0. Outside the calibration RTT range, returns None rather than
-    extrapolate the polynomials.
+    produces a symmetric annulus [mu(d) - k*sigma(d), mu(d) + k*sigma(d)]
+    clipped at 0 on the inner side and at the 2/3*c baseline on the outer.
+    Above `cutoff_rtt` the polynomial is held flat at the cutoff -- the
+    extrapolation is not safe, so the model falls back to a constant-width
+    band rather than letting deg-3 mu / deg-2 sigma diverge.
     """
 
     p_mu: Optional[np.ndarray] = None
@@ -114,6 +148,7 @@ class SpotterRTTModel:
     k: float = 0.0
     rtt_min: float = 0.0
     rtt_max: float = 0.0
+    cutoff_rtt: float = 0.0
     fitted: bool = False
     fit_message: str = ""
     metadata: dict = field(default_factory=dict)
@@ -127,14 +162,26 @@ class SpotterRTTModel:
         deg_mu: int = 3,
         deg_sigma: int = 2,
         target_coverage: float = 0.95,
+        bin_size_ms: float = 5.0,
+        cutoff_min_points: int = 30,
     ) -> bool:
         """Fit the pooled mu(d), sigma(d) polynomials and calibrate k.
 
-        Returns True on success; on failure sets fit_message and returns False.
+        Drops physically impossible rows (rtt < THEORETICAL_SLOPE * dist)
+        before binning. Computes a per-fit `cutoff_rtt` (right edge of the
+        last dense bin) so prediction can stop extrapolating into the sparse
+        tail. Returns True on success; on failure sets fit_message and
+        returns False.
         """
         rtt = np.asarray(rtt, dtype=float)
         dist = np.asarray(dist, dtype=float)
-        valid = np.isfinite(rtt) & np.isfinite(dist) & (rtt > 0)
+        valid = (
+            np.isfinite(rtt)
+            & np.isfinite(dist)
+            & (rtt > 0)
+            & (dist > 0)
+            & (rtt >= THEORETICAL_SLOPE * dist)
+        )
         rtt = rtt[valid]
         dist = dist[valid]
         if len(rtt) < max(min_per_bin, deg_mu + 1, deg_sigma + 1):
@@ -166,10 +213,14 @@ class SpotterRTTModel:
         self.k = calibrate_k(rtt, dist, p_mu, p_sigma, target_coverage=target_coverage)
         self.rtt_min = float(rtt.min())
         self.rtt_max = float(rtt.max())
+        self.cutoff_rtt = compute_cutoff_rtt(
+            rtt, bin_size_ms=bin_size_ms, cutoff_min_points=cutoff_min_points
+        )
         self.metadata = {
             "n_pairs": int(len(rtt)),
             "n_bins_used": int(len(centers)),
             "target_coverage": float(target_coverage),
+            "cutoff_rtt": float(self.cutoff_rtt),
         }
         self.fitted = True
         self.fit_message = "ok"
@@ -188,17 +239,51 @@ class SpotterRTTModel:
     ) -> Optional[Tuple[float, float]]:
         """Symmetric annulus (inner, outer) = mu(rtt) +/- k*sigma(rtt).
 
-        Returns None when rtt is outside [rtt_min, rtt_max] -- the polynomial
-        fits are not safe to extrapolate (see note section "Methodology notes").
-        Inner is clamped at 0; outer is clamped at 0 as a safety net for
-        pathological polynomials.
+        Three regimes, mirroring octant_simple's hull conventions:
+
+        - Below `rtt_min`: line through origin. inner = 0; outer scales
+          linearly from 0 at rtt=0 to outer(rtt_min) at rtt=rtt_min. The
+          polynomial isn't safe to extrapolate below the calibration
+          range, but the line-through-origin gives a usable bound.
+        - Above `cutoff_rtt` (when set): mu and sigma held flat at the
+          cutoff value -- the deg-3 / deg-2 polynomials are not safe to
+          extrapolate into the sparse tail. Inner stays at inner(cutoff);
+          outer extends along the 2/3*c slope from outer(cutoff).
+        - Otherwise: plain polynomial evaluation.
+
+        The outer bound is always clipped by the 2/3*c speed-of-internet
+        line (rtt / THEORETICAL_SLOPE). If mu already exceeds that line
+        in the polynomial regime, outer < inner and the caller sees the
+        band as degenerate -- the right signal that the polynomial is in
+        the unphysical regime at this RTT.
+
+        Returns None when the model is unfitted, or when cutoff_rtt is
+        unset (==0) and rtt > rtt_max (legacy gate for hand-constructed
+        test fixtures).
         """
         if not self.fitted or self.p_mu is None or self.p_sigma is None:
             return None
-        if rtt < self.rtt_min or rtt > self.rtt_max:
-            return None
-        mu = float(np.polyval(self.p_mu, rtt))
-        sigma = float(np.polyval(self.p_sigma, rtt))
+        if rtt < self.rtt_min:
+            if self.rtt_min <= 0:
+                return None
+            mu_min = float(np.polyval(self.p_mu, self.rtt_min))
+            sigma_min = float(np.polyval(self.p_sigma, self.rtt_min))
+            outer_at_min = min(
+                max(0.0, mu_min + self.k * sigma_min),
+                self.rtt_min / THEORETICAL_SLOPE,
+            )
+            return 0.0, (outer_at_min / self.rtt_min) * rtt
+        if self.cutoff_rtt > 0:
+            eval_rtt = min(rtt, self.cutoff_rtt)
+        else:
+            if rtt > self.rtt_max:
+                return None
+            eval_rtt = rtt
+        mu = float(np.polyval(self.p_mu, eval_rtt))
+        sigma = float(np.polyval(self.p_sigma, eval_rtt))
         inner = max(0.0, mu - self.k * sigma)
         outer = max(0.0, mu + self.k * sigma)
+        if self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
+            outer = outer + (rtt - self.cutoff_rtt) / THEORETICAL_SLOPE
+        outer = min(outer, rtt / THEORETICAL_SLOPE)
         return inner, outer

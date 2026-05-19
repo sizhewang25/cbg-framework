@@ -45,13 +45,13 @@ class BoundedSplineLTD(AnnulusLTDModel):
 
     def __init__(
         self,
-        sample_coverage: float = 0.9,
+        target_coverage: float = 0.9,
         cutoff_min_points: int = 5,
         fit_spline: bool = True,
         spline_n_knots: int = 4,
         bin_size_ms: float = 5.0,
     ) -> None:
-        self.sample_coverage = sample_coverage
+        self.target_coverage = target_coverage
         self.cutoff_min_points = cutoff_min_points
         self.fit_spline = fit_spline
         self.spline_n_knots = spline_n_knots
@@ -107,7 +107,7 @@ class BoundedSplineLTD(AnnulusLTDModel):
                         dists,
                         np.array(model.spline_rtt_knots),
                         np.array(model.spline_dist_knots),
-                        sample_coverage=self.sample_coverage,
+                        target_coverage=self.target_coverage,
                     )
                     new_deltas[vp_id] = delta
                 except Exception as exc:

@@ -154,16 +154,23 @@ def make_fitted_spotter_model(
     k: float = 2.0,
     rtt_min: float = 0.0,
     rtt_max: float = 100.0,
+    cutoff_rtt: float = 0.0,
 ) -> "SpotterRTTModel":
     """Build a hand-constructed fitted Spotter model with a parallel +/- k*sigma band.
 
-    Defaults: mu(d) = 100 * d, sigma(d) = 50, k = 2 -> band of width 200 km.
-    At RTT=20: inner=1900, outer=2100. At RTT=30: inner=2900, outer=3100.
+    Defaults: mu(d) = 50 * d, sigma(d) = 50, k = 2 -> band of width 200 km.
+    At RTT=20: inner=900, outer=1100. At RTT=30: inner=1400, outer=1600. The 50
+    km/ms slope keeps every probe below the 2/3*c speed-of-internet line, so the
+    new baseline clip in predict_distance_bounds is a no-op at these RTTs.
+
+    `cutoff_rtt=0.0` (the default) preserves the legacy `rtt > rtt_max -> None`
+    gate for tests that exercise that branch; set `cutoff_rtt > 0` to test the
+    new flat-extension regime.
     """
     from scripts.libs.spotter.spotter_model import SpotterRTTModel
 
     if p_mu is None:
-        p_mu = np.array([100.0, 0.0])
+        p_mu = np.array([50.0, 0.0])
     if p_sigma is None:
         p_sigma = np.array([50.0])
     return SpotterRTTModel(
@@ -172,6 +179,7 @@ def make_fitted_spotter_model(
         k=k,
         rtt_min=rtt_min,
         rtt_max=rtt_max,
+        cutoff_rtt=cutoff_rtt,
         fitted=True,
     )
 
@@ -181,7 +189,7 @@ def make_fitted_degenerate_spotter_model() -> "SpotterRTTModel":
     from scripts.libs.spotter.spotter_model import SpotterRTTModel
 
     return SpotterRTTModel(
-        p_mu=np.array([100.0, 0.0]),
+        p_mu=np.array([50.0, 0.0]),
         p_sigma=np.array([0.0]),
         k=2.0,
         rtt_min=0.0,
@@ -273,15 +281,17 @@ def make_normal_dist_fit_samples(
     """Build pooled-fit samples with a parallel band of width 2 * spread_km.
 
     For each RTT x, place n_per_rtt probes at distances evenly spread in
-    [100*x - spread_km, 100*x + spread_km]. The pooled Spotter fit then
-    sees a centered mean ≈ 100*x with spread ≈ spread_km.
+    [50*x - spread_km, 50*x + spread_km]. The pooled Spotter fit then sees a
+    centered mean ≈ 50*x with spread ≈ spread_km. The 50 km/ms slope keeps
+    every probe below the 2/3*c speed-of-internet line so all rows survive
+    the baseline filter in SpotterRTTModel.fit.
     """
     if rtt_values is None:
         rtt_values = list(np.linspace(5.0, 50.0, 10))
     coord = ANCHOR_COORDS[VpId(vp_id)]
     samples: list[FitSample] = []
     for rtt in rtt_values:
-        center = 100.0 * rtt
+        center = 50.0 * rtt
         for d in np.linspace(center - spread_km, center + spread_km, n_per_rtt):
             samples.append(
                 FitSample(

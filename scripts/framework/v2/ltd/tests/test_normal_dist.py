@@ -46,14 +46,15 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertEqual(len(results), 2)
         for r in results:
             self.assertTrue(r.success)
-            # mu(20)=2000, k*sigma=100 -> [1900, 2100]
-            self.assertAlmostEqual(r.tg_distance.lower_km, 1900.0)
-            self.assertAlmostEqual(r.tg_distance.upper_km, 2100.0)
+            # mu(20)=1000, k*sigma=100 -> [900, 1100]
+            self.assertAlmostEqual(r.tg_distance.lower_km, 900.0)
+            self.assertAlmostEqual(r.tg_distance.upper_km, 1100.0)
             self.assertTrue(r.tg_distance.is_annular)
 
     def test_predict_clips_inner_radius_at_zero(self):
         """When k*sigma > mu, lower_km clamps to 0 (degenerates to disk)."""
-        # mu(rtt)=20*rtt, sigma=50, k=2 → band=±100. At rtt=1: mu=20, inner_raw=-80→0; outer=120.
+        # mu(rtt)=20*rtt, sigma=50, k=2 → band=±100. At rtt=1: mu=20, inner_raw=-80→0;
+        # raw outer=120, baseline cap = 1/THEORETICAL_SLOPE = 100 -> outer=100.
         ltd = self._ltd_with_model(
             make_fitted_spotter_model(
                 p_mu=np.array([20.0, 0.0]),
@@ -70,7 +71,7 @@ class TestNormalDistLTD(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(result.tg_distance.lower_km, 0.0)
-        self.assertAlmostEqual(result.tg_distance.upper_km, 120.0)
+        self.assertAlmostEqual(result.tg_distance.upper_km, 100.0)
         self.assertFalse(result.tg_distance.is_annular)
 
     def test_predict_returns_degenerate_region_on_zero_width_band(self):
@@ -104,14 +105,14 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.error, Error.VP_NOT_FITTED)
 
-    def test_predict_returns_rtt_out_of_range_outside_model_range(self):
+    def test_predict_returns_rtt_out_of_range_above_rtt_max_when_no_cutoff(self):
+        """With cutoff_rtt unset (=0), the legacy rtt > rtt_max gate maps
+        to RTT_OUT_OF_RANGE. Below rtt_min the model now linearly scales
+        the bounds toward the origin — no rejection."""
         ltd = self._ltd_with_model(
             make_fitted_spotter_model(rtt_min=10.0, rtt_max=60.0)
         )
 
-        below = ltd.predict(
-            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(5.0)
-        )
         above = ltd.predict(
             VpId("anchor-b"), ANCHOR_COORDS[VpId("anchor-b")], Latency(80.0)
         )
@@ -119,22 +120,49 @@ class TestNormalDistLTD(unittest.TestCase):
             VpId("anchor-c"), ANCHOR_COORDS[VpId("anchor-c")], Latency(30.0)
         )
 
-        self.assertFalse(below.success)
-        self.assertEqual(below.error, Error.RTT_OUT_OF_RANGE)
         self.assertFalse(above.success)
         self.assertEqual(above.error, Error.RTT_OUT_OF_RANGE)
         self.assertTrue(ok.success)
 
-    def test_predict_applies_max_rtt_cutoff_before_prediction(self):
-        ltd = NormalDistLTD(max_rtt_ms=10.0)
-        ltd._model = make_fitted_spotter_model()
-
-        result = ltd.predict(
-            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(10.1)
+    def test_predict_succeeds_below_rtt_min_with_origin_line(self):
+        """Below rtt_min the inner collapses to 0; outer scales linearly
+        from outer(rtt_min) down to 0 at rtt=0. At rtt=0 the wrapper sees
+        outer == inner == 0 and reports DEGENERATE_REGION."""
+        ltd = self._ltd_with_model(
+            make_fitted_spotter_model(rtt_min=10.0, rtt_max=60.0)
         )
 
-        self.assertFalse(result.success)
-        self.assertEqual(result.error, Error.RTT_OUT_OF_RANGE)
+        below = ltd.predict(
+            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(5.0)
+        )
+
+        self.assertTrue(below.success)
+        # outer(10) = min(50*10 + 100, 1000) = 600. Scaled: (600/10) * 5 = 300.
+        self.assertEqual(below.tg_distance.lower_km, 0.0)
+        self.assertAlmostEqual(below.tg_distance.upper_km, 300.0)
+
+    def test_predict_extends_outer_at_baseline_slope_above_cutoff(self):
+        """Above cutoff_rtt: inner is held flat at inner(cutoff); outer
+        extends along the 2/3·c slope from outer(cutoff). No RTT_OUT_OF_RANGE
+        rejection — the Octant broader-hull convention."""
+        # mu(rtt)=50*rtt, sigma=50, k=2 -> band=±100. cutoff_rtt=30 -> at
+        # rtt=80: inner stays at inner(30)=1400; outer = outer(30) + 50/0.01
+        # = 1600 + 5000 = 6600 (baseline at 80 is 8000, no clip).
+        ltd = self._ltd_with_model(
+            make_fitted_spotter_model(
+                rtt_min=0.0,
+                rtt_max=100.0,
+                cutoff_rtt=30.0,
+            )
+        )
+
+        result = ltd.predict(
+            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(80.0)
+        )
+
+        self.assertTrue(result.success)
+        self.assertAlmostEqual(result.tg_distance.lower_km, 1400.0)
+        self.assertAlmostEqual(result.tg_distance.upper_km, 6600.0)
 
     def test_predict_failure_echoes_vp_id_coord_and_stamps_method(self):
         unfitted = self._ltd_with_model(make_unfitted_spotter_model())
@@ -167,8 +195,13 @@ class TestNormalDistLTD(unittest.TestCase):
         """Integration: real fit(samples) → predict at known RTT yields a usable band.
 
         Uses small n_bins / min_per_bin so the test runs on a compact sample set.
+        cutoff_min_points is also small so the sparse fixture clears the new
+        Octant-style cutoff scan.
         """
-        ltd = NormalDistLTD(n_bins=5, min_per_bin=2, deg_mu=1, deg_sigma=0)
+        ltd = NormalDistLTD(
+            n_bins=5, min_per_bin=2, deg_mu=1, deg_sigma=0,
+            cutoff_min_points=1,
+        )
         samples = make_normal_dist_fit_samples(
             "anchor-a", n_per_rtt=4, spread_km=100.0
         )
@@ -180,11 +213,12 @@ class TestNormalDistLTD(unittest.TestCase):
 
         self.assertTrue(fit_result.success, msg=str(fit_result.args))
         self.assertEqual(fit_result.method, "NormalDistLTD")
+        self.assertIn("cutoff_rtt", fit_result.args)
         self.assertTrue(pred.success)
-        # mu(20) ≈ 2000 from the parallel band centered at 100*rtt. Bounds depend
+        # mu(20) ≈ 1000 from the parallel band centered at 50*rtt. Bounds depend
         # on fit-time k calibration so we only check the band straddles the mean.
-        self.assertLess(pred.tg_distance.lower_km, 2000.0)
-        self.assertGreater(pred.tg_distance.upper_km, 2000.0)
+        self.assertLess(pred.tg_distance.lower_km, 1000.0)
+        self.assertGreater(pred.tg_distance.upper_km, 1000.0)
 
     def test_registered_in_ltd_registry(self):
         from scripts.framework.v2.registry import LTD_REGISTRY

@@ -381,4 +381,8 @@ def circle_intersections(
         if inside_all:
             filtered_points.append(point_geo)
 
+    #  The feasible region's vertices are exactly the crossings that satisfy every other disk
+    # list[(lat, lon)] of feasible-region vertices. 
+    # Empty if no pairwise crossing lies inside all caps (i.e. caps don't have a common intersection).
+    # the same circle tuples after normalization/preprocessing, so callers know which disks actually contributed.
     return filtered_points, used_circles
