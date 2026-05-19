@@ -8,7 +8,7 @@ import scripts.framework.v2  # noqa: F401  # Triggers v2 ctr registration import
 from scripts.framework.v2.ctr.boundary_vertex_mean import BoundaryVertexMeanCTR
 from scripts.framework.v2.ctr.geometric_centroid import GeometricCentroidCTR
 from scripts.framework.v2.ctr.geometric_median import GeometricMedianCTR
-from scripts.framework.v2.ctr.monte_carlo_median import MonteCarloMedianCTR
+from scripts.framework.v2.ctr.monte_carlo_medoid import MonteCarloMedoidCTR
 from scripts.framework.v2.registry import CTR_REGISTRY
 
 
@@ -17,7 +17,7 @@ class TestCTRRegistry(unittest.TestCase):
         expected = {
             "boundary_vertex_mean",
             "geometric_centroid",
-            "monte_carlo_median",
+            "monte_carlo_medoid",
             "geometric_median",
         }
 
@@ -28,7 +28,7 @@ class TestCTRRegistry(unittest.TestCase):
         self.assertIs(CTR_REGISTRY["boundary_vertex_mean"], BoundaryVertexMeanCTR)
         self.assertIs(CTR_REGISTRY["geometric_centroid"], GeometricCentroidCTR)
         self.assertIs(CTR_REGISTRY["geometric_median"], GeometricMedianCTR)
-        self.assertIs(CTR_REGISTRY["monte_carlo_median"], MonteCarloMedianCTR)
+        self.assertIs(CTR_REGISTRY["monte_carlo_medoid"], MonteCarloMedoidCTR)
 
 
 if __name__ == "__main__":

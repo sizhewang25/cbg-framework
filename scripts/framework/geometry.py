@@ -208,6 +208,7 @@ def sample_points_in_region(
     if rng is None:
         rng = np.random.default_rng()
 
+    # Sobol gives better coverage uniformity with fewer points, compared to uniform sampling
     sobol_seed = int(rng.integers(0, np.iinfo(np.uint32).max, dtype=np.uint32))
     try:
         sampler = qmc.Sobol(d=2, scramble=True, rng=sobol_seed)

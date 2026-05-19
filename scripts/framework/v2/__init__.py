@@ -16,7 +16,7 @@ from scripts.framework.v2.ctr.base import CTRMethod, CTRResult
 from scripts.framework.v2.ctr.boundary_vertex_mean import BoundaryVertexMeanCTR
 from scripts.framework.v2.ctr.geometric_centroid import GeometricCentroidCTR
 from scripts.framework.v2.ctr.geometric_median import GeometricMedianCTR
-from scripts.framework.v2.ctr.monte_carlo_median import MonteCarloMedianCTR
+from scripts.framework.v2.ctr.monte_carlo_medoid import MonteCarloMedoidCTR
 from scripts.framework.v2.ltd.base import (
     AnnulusLTDModel,
     CircleLTDModel,
@@ -93,7 +93,7 @@ __all__ = [
     "BoundaryVertexMeanCTR",
     "GeometricCentroidCTR",
     "GeometricMedianCTR",
-    "MonteCarloMedianCTR",
+    "MonteCarloMedoidCTR",
     # composition
     "CBGModel",
     "GeoResult",
