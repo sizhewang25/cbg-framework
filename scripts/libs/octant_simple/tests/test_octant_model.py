@@ -171,7 +171,7 @@ class TestFindDeltaForCoverage(unittest.TestCase):
         spline_dists = 50.0 * spline_rtts
         delta, meta = find_delta_for_coverage(
             rtts, distances, spline_rtts, spline_dists,
-            sample_coverage=1.0, tolerance=0.0,
+            target_coverage=1.0, tolerance=0.0,
         )
         # δ must be at least 1.25 to enclose every band edge.
         self.assertGreaterEqual(delta, 1.25 - 1e-6)
@@ -184,7 +184,7 @@ class TestFindDeltaForCoverage(unittest.TestCase):
                 np.array([10.0]), np.array([100.0]),
                 spline_rtt_knots=np.array([]),
                 spline_dist_knots=np.array([]),
-                sample_coverage=0.9,
+                target_coverage=0.9,
             )
 
 

@@ -133,7 +133,7 @@ class TestBoundedSplineLTD(unittest.TestCase):
     def test_fit_from_samples_then_predict_recovers_hull_bounds(self):
         """Integration: fit(samples) → predict at RTT=20 recovers ~[900, 1100]."""
         ltd = BoundedSplineLTD(
-            sample_coverage=0.8,
+            target_coverage=0.8,
             cutoff_min_points=1,
             spline_n_knots=4,
             bin_size_ms=1000,

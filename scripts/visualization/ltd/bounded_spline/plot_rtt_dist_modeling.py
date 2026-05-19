@@ -2,7 +2,7 @@
 
 Six layers on every plot: the RTT-vs-distance scatter, the theoretical 2/3·c
 baseline, the per-VP upper and lower convex hulls, the per-VP spline center,
-and the per-VP δ-band tuned for `sample_coverage = 0.9`.
+and the per-VP δ-band tuned for `target_coverage = 0.9`.
 
 Run as a script to validate on `vultr_pings_us_only.csv` — fits one
 BoundedSplineLTD across all anchors (each `dst_ip` is a VP) and writes one
@@ -253,7 +253,7 @@ def main() -> None:
     print(f"Loaded {len(samples)} samples across "
           f"{len({s.vp_id for s in samples})} anchors")
 
-    model = BoundedSplineLTD(sample_coverage=0.9)
+    model = BoundedSplineLTD(target_coverage=0.9)
     result = model.fit(samples)
     if not result.success:
         raise RuntimeError(f"fit failed: {result.error}")

@@ -313,17 +313,17 @@ def find_delta_for_coverage(
     distances: np.ndarray,
     spline_rtt_knots: np.ndarray,
     spline_dist_knots: np.ndarray,
-    sample_coverage: float,
+    target_coverage: float,
     tolerance: float = 0.01,
     max_iterations: int = 100,
     timeout_seconds: float = 10.0,
     delta_min: float = 1.0,
 ) -> Tuple[float, Dict[str, Any]]:
-    """Binary-search δ ≥ 1 so that `sample_coverage` of points lie within
+    """Binary-search δ ≥ 1 so that `target_coverage` of points lie within
     `(spline(rtt)/δ, spline(rtt)·δ)`.
 
     Returns `(delta, metadata)`. Raises `DeltaSearchError` if no δ in
-    [delta_min, 1e10] reaches `sample_coverage`, or `DeltaSearchTimeout`
+    [delta_min, 1e10] reaches `target_coverage`, or `DeltaSearchTimeout`
     if wall time exceeds `timeout_seconds`.
     """
     if spline_rtt_knots is None or len(spline_rtt_knots) < 2:
@@ -347,7 +347,7 @@ def find_delta_for_coverage(
     # Double δ until the band covers enough.
     delta_max = delta_min
     cov_max = coverage(delta_max)
-    while cov_max < sample_coverage:
+    while cov_max < target_coverage:
         if time.time() - start > timeout_seconds:
             raise DeltaSearchTimeout(
                 f"timeout finding delta_max after {time.time() - start:.2f}s"
@@ -356,13 +356,13 @@ def find_delta_for_coverage(
         cov_max = coverage(delta_max)
         if delta_max > 1e10:
             raise DeltaSearchError(
-                f"cannot achieve {sample_coverage:.1%} coverage at delta={delta_max:.0f}"
+                f"cannot achieve {target_coverage:.1%} coverage at delta={delta_max:.0f}"
             )
 
     lo, hi = delta_min, delta_max
     best_delta = delta_max
     best_cov = cov_max
-    best_diff = abs(best_cov - sample_coverage)
+    best_diff = abs(best_cov - target_coverage)
 
     for i in range(max_iterations):
         if time.time() - start > timeout_seconds:
@@ -371,14 +371,14 @@ def find_delta_for_coverage(
             )
         mid = (lo + hi) / 2
         cov = coverage(mid)
-        diff = abs(cov - sample_coverage)
+        diff = abs(cov - target_coverage)
         if diff < best_diff:
             best_delta = mid
             best_cov = cov
             best_diff = diff
         if diff <= tolerance:
             return mid, {"actual_coverage": cov, "iterations": i + 1, "converged": True}
-        if cov < sample_coverage:
+        if cov < target_coverage:
             lo = mid
         else:
             hi = mid
@@ -387,7 +387,7 @@ def find_delta_for_coverage(
 
     if best_diff > tolerance:
         raise DeltaSearchError(
-            f"could not achieve {sample_coverage:.1%} within tolerance {tolerance:.1%}; "
+            f"could not achieve {target_coverage:.1%} within tolerance {tolerance:.1%}; "
             f"best delta={best_delta:.4f} cov={best_cov:.3f}"
         )
 

@@ -57,7 +57,7 @@ def plot_rtt_distance(
         plot_d, plot_r = distances, rtts
 
     ax.scatter(
-        plot_d, plot_r, s=14, alpha=0.35, c="gray", edgecolors="none",
+        plot_r, plot_d, s=14, alpha=0.35, c="gray", edgecolors="none",
         label=f"Measurements (n={len(plot_d)})",
     )
 
@@ -65,27 +65,27 @@ def plot_rtt_distance(
     d_grid = np.linspace(0.0, d_max, 100)
 
     ax.plot(
-        d_grid, THEORETICAL_SLOPE * d_grid, "k--", linewidth=1.5, alpha=0.6,
+        THEORETICAL_SLOPE * d_grid, d_grid, "k--", linewidth=1.5, alpha=0.6,
         label=f"2/3·c baseline ({THEORETICAL_SLOPE:.4f} ms/km)",
     )
 
     if submodel is not None and submodel.fitted:
         line = submodel.slope * d_grid + submodel.intercept
         ax.plot(
-            d_grid, line, "r-", linewidth=2.0,
+            line, d_grid, "r-", linewidth=2.0,
             label=(
                 f"Low envelope: {submodel.slope:.4f}·d "
                 f"+ {submodel.intercept:.2f}"
             ),
         )
 
-    ax.set_xlabel("Distance (km)")
-    ax.set_ylabel("RTT (ms)")
+    ax.set_xlabel("RTT (ms)")
+    ax.set_ylabel("Distance (km)")
     if title:
         ax.set_title(title)
-    ax.set_xlim(0.0, d_max * 1.05)
+    ax.set_ylim(0.0, d_max * 1.05)
     if max_rtt_ms is not None:
-        ax.set_ylim(0.0, max_rtt_ms)
+        ax.set_xlim(0.0, max_rtt_ms)
     ax.grid(alpha=0.3)
     ax.legend(loc="upper left", fontsize=9)
     return ax

@@ -29,8 +29,8 @@ class SphericalCircleMTL(CircleMTLMethod):
     filtering to handle that.
     """
 
-    def __init__(self, speed_threshold: float = 2 / 3, preprocess: bool = False) -> None:
-        self.speed_threshold = speed_threshold
+    def __init__(self, speed_ratio: float = 2 / 3, preprocess: bool = False) -> None:
+        self.speed_ratio = speed_ratio
         self.preprocess = preprocess
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
@@ -38,13 +38,11 @@ class SphericalCircleMTL(CircleMTLMethod):
             return MTLResult(success=False, error=Error.INSUFFICIENT_DATA)
 
         # circle_intersections wants (lat, lon, rtt_ms, radius_km, radius_rad)
-        # tuples. rtt_ms is only used for speed-of-internet sanity checks inside
-        # the helper; v2 LTD has already gated on RTT, so 0.0 is safe.
         legacy_tuples = [
             (
                 r.vp_coord.lat,
                 r.vp_coord.lon,
-                0.0,
+                r.latency,
                 r.tg_distance.upper_km,
                 r.tg_distance.upper_km / EARTH_RADIUS_KM,
             )
@@ -52,7 +50,7 @@ class SphericalCircleMTL(CircleMTLMethod):
         ]
         points, _used = circle_intersections(
             legacy_tuples,
-            speed_threshold=self.speed_threshold,
+            speed_threshold=self.speed_ratio,
             preprocess=self.preprocess,
         )
 
