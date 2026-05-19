@@ -158,12 +158,15 @@ def _circle_to_shapely(
     """Convert a geographic circle to a Shapely polygon.
 
     Uses degree-based approximation accounting for latitude.
+    center_lat and center_lon are in degrees, while radius_km is in kilometers.
+    We need a km → degree conversion per axis, because a degree of longitude is shorter than a degree of latitude (except at the equator).
     Shapely coordinates are (lon, lat) = (x, y).
     """
     # Shapely polygons need nonzero radius to avoid collapsing exact matches
     # into degenerate geometries during region intersection.
     radius_km = max(radius_km, SHAPELY_RADIUS_EPSILON_KM)
 
+    # This treats a small patch of Earth as flat with locally constant km_per_deg_* values
     km_per_deg_lat = 111.0
     km_per_deg_lon = 111.0 * np.cos(np.radians(center_lat))
     km_per_deg_lon = max(km_per_deg_lon, 1.0)  # avoid division by zero near poles
@@ -171,6 +174,8 @@ def _circle_to_shapely(
     r_lat = radius_km / km_per_deg_lat
     r_lon = radius_km / km_per_deg_lon
 
+    # In km space this traces a true circle of radius radius_km. 
+    # In degree space (which is what Shapely sees) it traces an ellipse — wider in longitude than latitude when cos φ < 1
     angles = np.linspace(0, 2 * np.pi, n_pts, endpoint=False)
     lons = center_lon + r_lon * np.cos(angles)
     lats = center_lat + r_lat * np.sin(angles)
