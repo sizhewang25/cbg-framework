@@ -10,7 +10,7 @@ from __future__ import annotations
 from shapely.geometry import MultiPolygon
 from shapely.geometry.base import BaseGeometry
 
-from scripts.framework.geometry import get_middle_intersection, polygon_centroid
+from scripts.framework.geometry import arithmetic_mean_centroid
 from scripts.framework.v2.ctr.base import CTRMethod, CTRResult
 from scripts.framework.v2.mtl.base import MTLResult
 from scripts.framework.v2.registry import register_ctr
@@ -21,8 +21,7 @@ from scripts.framework.v2.types import Coord, Error
 class BoundaryVertexMeanCTR(CTRMethod):
     """Coordinate mean of boundary vertices.
 
-    For vertex lists: simple coordinate average (polygon_centroid).
-    For 2 vertices: geodetic midpoint (get_middle_intersection).
+    Always the finite-set arithmetic mean of vertices, independent of count.
     For Shapely regions: extracts exterior and interior ring vertices, then
     averages them. This is a boundary-vertex mean, not an area centroid.
     """
@@ -39,20 +38,14 @@ class BoundaryVertexMeanCTR(CTRMethod):
             coords = _extract_vertex_coords(intersection)
             if not coords:
                 return CTRResult(success=False, error=Error.EMPTY_REGION)
-            lat, lon = polygon_centroid(coords)
+            lat, lon = arithmetic_mean_centroid(coords)
             return CTRResult(success=True, tg_coord=Coord(lat, lon))
 
         if isinstance(intersection, list):
-            n = len(intersection)
-            if n == 0:
+            if not intersection:
                 return CTRResult(success=False, error=Error.EMPTY_REGION)
             verts = [(c.lat, c.lon) for c in intersection]
-            if n == 1:
-                lat, lon = verts[0]
-            elif n == 2:
-                lat, lon = get_middle_intersection(verts)
-            else:
-                lat, lon = polygon_centroid(verts)
+            lat, lon = arithmetic_mean_centroid(verts)
             return CTRResult(success=True, tg_coord=Coord(lat, lon))
 
         return CTRResult(success=False, error=Error.EMPTY_REGION)

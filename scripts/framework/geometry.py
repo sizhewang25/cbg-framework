@@ -60,11 +60,15 @@ def geo_to_cartesian(lat: float, lon: float) -> tuple[float, float, float]:
     return x, y, z
 
 
-def polygon_centroid(points: Sequence[tuple[float, float]]) -> tuple[float, float]:
-    """Return the finite-set centroid of (lat, lon) points.
+def arithmetic_mean_centroid(
+    points: Sequence[tuple[float, float]],
+) -> tuple[float, float]:
+    """Arithmetic mean of a finite set of (lat, lon) points.
 
-    This duplicates the legacy Million-Scale helper behavior: it is not an
-    area-weighted polygon centroid, just the coordinate mean of the points.
+    Implements the finite-set centroid from
+    https://en.wikipedia.org/wiki/Centroid#Of_a_finite_set_of_points: the
+    coordinate-wise mean. Not an area-weighted polygon centroid. Matches the
+    legacy Million-Scale helper `scripts.utils.helpers.polygon_centroid`.
     """
     lat_sum = 0.0
     lon_sum = 0.0

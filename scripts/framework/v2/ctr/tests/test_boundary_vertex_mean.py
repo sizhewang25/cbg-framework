@@ -31,7 +31,7 @@ class TestBoundaryVertexMeanCTR(unittest.TestCase):
         self.assertIsNone(result.error)
         assert_coord_almost_equal(self, result.tg_coord, (2.0, 4.0))
 
-    def test_two_vertices_use_geodetic_midpoint(self):
+    def test_two_vertices_use_arithmetic_mean(self):
         ctr = BoundaryVertexMeanCTR()
 
         result = ctr.select_centroid(successful_vertices([(0.0, 0.0), (0.0, 2.0)]))

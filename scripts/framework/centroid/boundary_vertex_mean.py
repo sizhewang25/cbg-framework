@@ -3,7 +3,7 @@
 Simple average of feasible-region boundary vertices.
 
 Wraps:
-  - scripts/framework/geometry.py :: polygon_centroid()  (>2 vertices)
+  - scripts/framework/geometry.py :: arithmetic_mean_centroid()  (>2 vertices)
   - scripts/framework/geometry.py :: get_middle_intersection()  (2 vertices)
 """
 
@@ -12,7 +12,10 @@ from __future__ import annotations
 from typing import Optional, Tuple
 
 from scripts.framework.centroid import BaseCentroid
-from scripts.framework.geometry import get_middle_intersection, polygon_centroid
+from scripts.framework.geometry import (
+    arithmetic_mean_centroid,
+    get_middle_intersection,
+)
 from scripts.framework.registry import register_centroid
 from scripts.framework.types import MultilatResult
 
@@ -21,7 +24,7 @@ from scripts.framework.types import MultilatResult
 class BoundaryVertexMeanCentroid(BaseCentroid):
     """Coordinate mean of boundary vertices.
 
-    For vertex lists: simple coordinate average (polygon_centroid).
+    For vertex lists: simple coordinate average (arithmetic_mean_centroid).
     For 2 vertices: geodetic midpoint (get_middle_intersection).
     For Shapely regions: extracts exterior and interior ring vertices, then
     averages them. This is a boundary-vertex mean, not an area centroid.
@@ -37,7 +40,7 @@ class BoundaryVertexMeanCentroid(BaseCentroid):
         if result.vertices is not None:
             n = len(result.vertices)
             if n > 2:
-                return polygon_centroid(result.vertices)
+                return arithmetic_mean_centroid(result.vertices)
             if n == 2:
                 return get_middle_intersection(result.vertices)
             if n == 1:
@@ -48,7 +51,7 @@ class BoundaryVertexMeanCentroid(BaseCentroid):
         if result.region is not None:
             coords = _extract_vertex_coords(result.region)
             if coords:
-                return polygon_centroid(coords)
+                return arithmetic_mean_centroid(coords)
 
         return None
 
