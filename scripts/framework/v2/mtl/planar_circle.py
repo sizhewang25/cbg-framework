@@ -72,6 +72,10 @@ class PlanarCircleMTL(CircleMTLMethod):
 
         # Chained pairwise intersection
         # Output is a Shapely geometry
+        # Since intersection is associative and commutative, 
+        # the final geometry is the set of points contained in every polygon
+        # - the common intersection of all disks.
+        # If any pairwise step produces an empty geometry, all subsequent intersections stay empty
         region = reduce(lambda a, b: a.intersection(b), polys)
 
         if region.is_empty:
