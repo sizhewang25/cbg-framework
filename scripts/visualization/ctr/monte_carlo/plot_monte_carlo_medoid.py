@@ -1,17 +1,22 @@
 """Visualizations of MonteCarloMedoidCTR.
 
-Renders three PNGs into `outputs/`:
+Renders four PNGs into `outputs/`:
 
-1. concept_polygon.png         — Shapely-region input path. Shows a 3-disk
+1. concept_polygon.png            — Shapely-region input path. Shows a 3-disk
    planar intersection, the Sobol-QMC rejection samples inside it (colored by
    sum-of-distances to every other sample), the chosen medoid (the sample with
    minimum total distance), and the Shapely area centroid for contrast.
-2. concept_vertex_list.png     — list[Coord] input path. The vertices ARE the
-   point set — no sampling. The medoid is the vertex with smallest total
+2. concept_vertex_list.png        — list[Coord] input path. The vertices ARE
+   the point set — no sampling. The medoid is the vertex with smallest total
    distance to the others.
-3. sample_convergence.png      — Same feasible region sampled at increasing
+3. sample_convergence.png         — Same feasible region sampled at increasing
    n_samples (20, 100, 500, 2000) to show how the medoid stabilizes as the
    Sobol-QMC samples densify.
+4. discrete_polygon_feasibility.png — A hand-defined non-convex L-shape
+   polygon. Sobol-QMC samples inside the L → medoid stays inside by
+   construction (it IS one of the samples). The Shapely area centroid falls
+   into the L's notch — outside the polygon — showing why the medoid is the
+   safer choice on irregular feasible regions.
 
 Run as a script:
     python -m scripts.visualization.ctr.monte_carlo.plot_monte_carlo_medoid
@@ -23,6 +28,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from shapely.geometry import Point, Polygon as ShapelyPolygon
 
 from scripts.framework.geometry import sample_points_in_region, sampled_medoid
 from scripts.framework.v2.ctr.monte_carlo_medoid import MonteCarloMedoidCTR
@@ -302,11 +308,104 @@ def plot_sample_convergence(out_path: Path) -> None:
     plt.close()
 
 
+# ---------------------------------------------------------------------------
+# Figure 4 — discrete polygon, sample-and-medoid, feasibility highlight
+# ---------------------------------------------------------------------------
+def _l_shape_polygon() -> ShapelyPolygon:
+    """Non-convex L-shape; its area centroid lies *outside* the polygon."""
+    return ShapelyPolygon([
+        (0.0, 0.0),
+        (5.0, 0.0),
+        (5.0, 1.5),
+        (1.5, 1.5),
+        (1.5, 5.0),
+        (0.0, 5.0),
+    ])
+
+
+def plot_discrete_polygon_feasibility(out_path: Path) -> None:
+    _, ax = plt.subplots(figsize=(9, 8))
+
+    region = _l_shape_polygon()
+    xs, ys = region.exterior.xy
+    ax.fill(xs, ys, color="gold", alpha=0.30, zorder=2)
+    ax.plot(xs, ys, color="darkgoldenrod", lw=1.8, zorder=3)
+    for vx, vy in zip(xs[:-1], ys[:-1]):
+        ax.plot(vx, vy, "o", color="darkgoldenrod", markersize=6, zorder=4)
+
+    rng = np.random.default_rng(0)
+    n_samples = 800
+    samples = sample_points_in_region(region, n_samples=n_samples, rng=rng)
+    totals = _total_distances(samples)
+
+    sc = ax.scatter(
+        samples[:, 1],
+        samples[:, 0],
+        c=totals,
+        cmap="viridis_r",
+        s=12,
+        zorder=4,
+        label=f"Sobol-QMC samples (n={len(samples)})",
+    )
+    cbar = plt.colorbar(sc, ax=ax, shrink=0.75, pad=0.02)
+    cbar.set_label("Σ distance to every other sample (lower = more central)")
+
+    medoid_lat, medoid_lon = sampled_medoid(samples)
+    medoid_inside = region.contains(Point(medoid_lon, medoid_lat))
+    ax.plot(
+        medoid_lon,
+        medoid_lat,
+        marker="*",
+        color="crimson",
+        markersize=26,
+        markeredgecolor="black",
+        zorder=6,
+        label=(
+            f"MonteCarloMedoidCTR  ({medoid_lat:.2f}, {medoid_lon:.2f})\n"
+            f"inside polygon? {medoid_inside}"
+        ),
+    )
+
+    area_centroid = region.centroid
+    centroid_inside = region.contains(area_centroid)
+    ax.plot(
+        area_centroid.x,
+        area_centroid.y,
+        marker="P",
+        color="purple",
+        markersize=14,
+        markeredgecolor="white",
+        zorder=6,
+        label=(
+            f"Shapely area centroid  ({area_centroid.y:.2f}, {area_centroid.x:.2f})\n"
+            f"inside polygon? {centroid_inside}"
+        ),
+    )
+
+    ax.set_aspect("equal")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title(
+        "MonteCarloMedoidCTR on a non-convex L-shape polygon.\n"
+        "Sobol-QMC samples uniformly cover the L; the medoid is one of them,\n"
+        "so it's guaranteed inside. The area centroid lands in the notch — outside."
+    )
+    ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
+    ax.grid(alpha=0.25)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=130, bbox_inches="tight")
+    plt.close()
+
+
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     plot_concept_polygon(OUT_DIR / "concept_polygon.png")
     plot_concept_vertex_list(OUT_DIR / "concept_vertex_list.png")
     plot_sample_convergence(OUT_DIR / "sample_convergence.png")
+    plot_discrete_polygon_feasibility(
+        OUT_DIR / "discrete_polygon_feasibility.png"
+    )
     print("Wrote:")
     for f in sorted(OUT_DIR.iterdir()):
         print(" ", f)
