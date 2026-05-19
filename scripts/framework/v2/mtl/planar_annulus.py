@@ -15,10 +15,13 @@ from __future__ import annotations
 
 from scripts.framework.v2.ltd.base import LTDResult
 from scripts.framework.v2.mtl.base import AnnulusMTLMethod, MTLResult
+from scripts.framework.v2.mtl._annulus_common import (
+    annular_constraint_from_ltd,
+    wrap_region_as_mtl_result,
+)
 from scripts.framework.v2.registry import register_mtl
 from scripts.framework.v2.types import Error
 from scripts.libs.octant_simple.octant_geolocation import (
-    AnnularConstraint,
     compute_feasible_region_unweighted,
 )
 
@@ -35,23 +38,9 @@ class PlanarAnnulusMTL(AnnulusMTLMethod):
             return MTLResult(success=False, error=Error.INSUFFICIENT_DATA)
 
         constraints = [
-            AnnularConstraint(
-                landmark_lat=r.vp_coord.lat,
-                landmark_lon=r.vp_coord.lon,
-                landmark_ip=str(r.vp_id) if r.vp_id is not None else "",
-                rtt_ms=0.0,
-                inner_radius_km=r.tg_distance.lower_km,
-                outer_radius_km=r.tg_distance.upper_km,
-                weight=1.0,
-            )
+            annular_constraint_from_ltd(r, rtt_ms=0.0, weight=1.0)
             for r in results
         ]
 
         region = compute_feasible_region_unweighted(constraints, n_pts=self.n_pts)
-
-        if region is None or region.is_empty:
-            return MTLResult(success=False, error=Error.EMPTY_REGION)
-        if region.geom_type not in ("Polygon", "MultiPolygon"):
-            return MTLResult(success=False, error=Error.DEGENERATE_REGION)
-
-        return MTLResult(success=True, intersection=region)
+        return wrap_region_as_mtl_result(region)

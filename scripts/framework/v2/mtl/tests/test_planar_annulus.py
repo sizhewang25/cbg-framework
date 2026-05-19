@@ -58,6 +58,41 @@ class TestPlanarAnnulusMTL(unittest.TestCase):
         self.assertFalse(result.intersection.contains(Point(0.0, 0.0)))
         self.assertTrue(result.intersection.contains(Point(2.5, 0.0)))
 
+    def test_bridge_cut_inner_disks_produce_multipolygon(self):
+        """A union of inner disks can bridge the outer overlap and split the
+        result into disconnected pieces.
+
+        The wrapper's contract accepts both Polygon and MultiPolygon — this
+        pins the MultiPolygon branch that no other test exercises.
+
+        Setup: one anchor constraint defines a 4° outer disk at the origin.
+        Three additional constraints have huge outer radii (so they don't
+        shrink the outer intersection) but inner disks at lon ∈ {-3, 0, 3},
+        each r=2.5°. Their union is a horizontal band that fully crosses the
+        outer disk, splitting it into a top crescent and a bottom crescent.
+        """
+        R_KM = 111.0  # km per degree at the equator
+        result = PlanarAnnulusMTL().multilaterate([
+            # Defines the outer overlap (4° disk at origin).
+            ltd_result("outer", lat=0.0, lon=0.0, upper_km=4.0 * R_KM),
+            # Huge outers (no effect on intersection); inner disks form the band.
+            ltd_result("inner_left", lat=0.0, lon=-3.0,
+                       upper_km=100.0 * R_KM, lower_km=2.5 * R_KM),
+            ltd_result("inner_mid", lat=0.0, lon=0.0,
+                       upper_km=100.0 * R_KM, lower_km=2.5 * R_KM),
+            ltd_result("inner_right", lat=0.0, lon=3.0,
+                       upper_km=100.0 * R_KM, lower_km=2.5 * R_KM),
+        ])
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.intersection.geom_type, "MultiPolygon")
+        self.assertEqual(len(result.intersection.geoms), 2)
+        # The horizontal band is removed → no result at the equator.
+        self.assertFalse(result.intersection.contains(Point(0.0, 0.0)))
+        # Top crescent (above the band) and bottom crescent (below).
+        self.assertTrue(result.intersection.contains(Point(0.0, 3.5)))
+        self.assertTrue(result.intersection.contains(Point(0.0, -3.5)))
+
     def test_inner_radius_covering_outer_disk_fails(self):
         # Distance() rejects lower_km > upper_km, so use lower_km == upper_km
         # (a degenerate annulus that the wrapped function should treat as empty).
