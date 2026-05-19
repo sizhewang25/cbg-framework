@@ -29,9 +29,9 @@ class SphericalCircleMTL(CircleMTLMethod):
     filtering to handle that.
     """
 
-    def __init__(self, speed_ratio: float = 2 / 3, preprocess: bool = False) -> None:
+    def __init__(self, speed_ratio: float = 2 / 3, enable_circle_filter: bool = False) -> None:
         self.speed_ratio = speed_ratio
-        self.preprocess = preprocess
+        self.enable_circle_filter = enable_circle_filter
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
         if not results:
@@ -51,7 +51,7 @@ class SphericalCircleMTL(CircleMTLMethod):
         points, _used = circle_intersections(
             legacy_tuples,
             speed_threshold=self.speed_ratio,
-            preprocess=self.preprocess,
+            preprocess=self.enable_circle_filter,
         )
 
         if not points:

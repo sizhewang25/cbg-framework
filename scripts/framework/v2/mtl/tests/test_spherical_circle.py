@@ -77,6 +77,35 @@ class TestSphericalCircleMTL(unittest.TestCase):
         self.assertEqual(result.error, Error.NO_INTERSECTION)
         self.assertIsNone(result.intersection)
 
+    def test_filter_disabled_keeps_redundant_outer_and_yields_no_crossings(self):
+        # Small disk fully inside a much larger disk: boundaries never cross,
+        # so without preprocessing the pairwise loop produces no points.
+        nested = [
+            ltd_result("inner", lat=0.0, lon=0.0, upper_km=111.0),
+            ltd_result("outer", lat=0.0, lon=0.5, upper_km=500.0),
+        ]
+        result = SphericalCircleMTL(enable_circle_filter=False).multilaterate(nested)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, Error.NO_INTERSECTION)
+
+    def test_filter_enabled_drops_redundant_outer_circle(self):
+        # Same nested pair as above. With the filter on, the redundant outer
+        # disk is removed and the surviving inner disk returns its 4 cardinals.
+        nested = [
+            ltd_result("inner", lat=0.0, lon=0.0, upper_km=111.0),
+            ltd_result("outer", lat=0.0, lon=0.5, upper_km=500.0),
+            ltd_result("outer", lat=0.0, lon=-0.5, upper_km=1000.0),
+        ]
+        result = SphericalCircleMTL(enable_circle_filter=True).multilaterate(nested)
+
+        self.assertTrue(result.success)
+        self.assertEqual(len(result.intersection), 4)
+        expected = [(0.0, 0.997), (0.997, 0.0), (0.0, -0.997), (-0.997, 0.0)]
+        for actual, want in zip(result.intersection, expected):
+            self.assertAlmostEqual(actual.lat, want[0], places=3)
+            self.assertAlmostEqual(actual.lon, want[1], places=3)
+
     def test_registered_in_mtl_registry(self):
         self.assertIn("spherical_circle", MTL_REGISTRY)
         self.assertIs(MTL_REGISTRY["spherical_circle"], SphericalCircleMTL)
