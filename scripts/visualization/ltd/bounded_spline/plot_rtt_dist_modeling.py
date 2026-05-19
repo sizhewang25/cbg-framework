@@ -137,6 +137,16 @@ def plot_rtt_distance(
                 # spline/δ multiplication is NOT plotted because the model
                 # never returns those un-clipped values.
                 rtt_grid = np.linspace(rtt_lo, max(rtt_max, rtt_lo + 1e-6), 200)
+                # Force the inner-bound discontinuity at cutoff_rtt to render
+                # as a near-vertical snap: at rtt = cutoff the model still
+                # uses spline/δ (clipped above hull_lower); just past cutoff
+                # it falls to bare hull_lower(cutoff). Without inserting
+                # explicit points across the boundary, the linspace's ~1 ms
+                # spacing smears the snap into a slanted segment.
+                if cutoff > rtt_lo and cutoff < rtt_grid[-1]:
+                    rtt_grid = np.sort(np.concatenate(
+                        [rtt_grid, [cutoff, cutoff + 1e-6]]
+                    ))
                 inner = np.empty_like(rtt_grid)
                 outer = np.empty_like(rtt_grid)
                 for i, r in enumerate(rtt_grid):

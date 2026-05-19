@@ -165,8 +165,10 @@ def hull_outer_distance(
 
     - Below the leftmost vertex: line through origin (physical bound — all
       training RTTs already respect the speed-of-internet constraint).
-    - Above `cutoff_rtt`: pin to the hull at `cutoff_rtt`, extend with the
-      baseline (2/3·c) slope.
+    - Strictly above `cutoff_rtt`: pin to the hull at `cutoff_rtt`, extend
+      with the baseline (2/3·c) slope. The cutoff itself uses plain
+      interpolation — only RTTs strictly larger than the cutoff are in the
+      extension regime, matching `predict_distance_bounds`'s gate.
     - Otherwise: linear interpolation between adjacent hull vertices.
 
     `compute_convex_hull_bounds` clamps `cutoff_rtt ≤ max(data_rtt)`, so the
@@ -178,7 +180,7 @@ def hull_outer_distance(
     hull_rtts_arr = np.array(hull_rtts)
     hull_dists_arr = np.array(hull_distances)
 
-    if rtt >= cutoff_rtt and cutoff_rtt > 0:
+    if rtt > cutoff_rtt and cutoff_rtt > 0:
         cutoff_dist = _interpolate_in_hull(cutoff_rtt, hull_rtts_arr, hull_dists_arr)
         return cutoff_dist + (rtt - cutoff_rtt) / baseline_slope
 
@@ -200,7 +202,10 @@ def hull_inner_distance(
     """Lower hull boundary distance at `rtt`.
 
     - Below the leftmost vertex: 0 (no useful lower constraint at very low RTT).
-    - Above `cutoff_rtt`: hold flat at the hull's value at `cutoff_rtt`.
+    - Strictly above `cutoff_rtt`: hold flat at the hull's value at
+      `cutoff_rtt`. The cutoff itself uses plain interpolation — only RTTs
+      strictly larger than the cutoff are in the flat regime, matching
+      `predict_distance_bounds`'s gate.
     - Otherwise: linear interpolation between adjacent hull vertices.
 
     Takes no `baseline_slope` — the inner bound never extends, only holds flat.
@@ -211,7 +216,7 @@ def hull_inner_distance(
     hull_rtts_arr = np.array(hull_rtts)
     hull_dists_arr = np.array(hull_distances)
 
-    if rtt >= cutoff_rtt and cutoff_rtt > 0:
+    if rtt > cutoff_rtt and cutoff_rtt > 0:
         return max(0.0, _interpolate_in_hull(cutoff_rtt, hull_rtts_arr, hull_dists_arr))
 
     if rtt < hull_rtts_arr[0]:
