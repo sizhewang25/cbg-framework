@@ -13,6 +13,10 @@ Subclass one of the family bases when implementing a new stage:
 """
 
 from scripts.framework.v2.ctr.base import CTRMethod, CTRResult
+from scripts.framework.v2.ctr.boundary_vertex_mean import BoundaryVertexMeanCTR
+from scripts.framework.v2.ctr.geometric_centroid import GeometricCentroidCTR
+from scripts.framework.v2.ctr.geometric_median import GeometricMedianCTR
+from scripts.framework.v2.ctr.monte_carlo_median import MonteCarloMedianCTR
 from scripts.framework.v2.ltd.base import (
     AnnulusLTDModel,
     CircleLTDModel,
@@ -86,6 +90,10 @@ __all__ = [
     # ctr
     "CTRMethod",
     "CTRResult",
+    "BoundaryVertexMeanCTR",
+    "GeometricCentroidCTR",
+    "GeometricMedianCTR",
+    "MonteCarloMedianCTR",
     # composition
     "CBGModel",
     "GeoResult",
