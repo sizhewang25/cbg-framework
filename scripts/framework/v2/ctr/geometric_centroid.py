@@ -122,6 +122,11 @@ def _dedupe_vertices(
 def _local_project(
     vertices: list[Tuple[float, float]],
 ) -> tuple[list[Tuple[float, float]], float, float, float]:
+    """
+    Given an unordered convex point set, 
+    sorting by polar angle around the centroid produces a valid Counter-clockwise polygon.
+    Assumption: vanilla-CBG circle crossings form a convex-ish ring.
+    """
     lat0 = sum(lat for lat, _ in vertices) / len(vertices)
     lon0 = _circular_mean_longitude([lon for _, lon in vertices])
     lon_scale = abs(cos(radians(lat0)))
@@ -136,6 +141,9 @@ def _local_project(
 
 
 def _circular_mean_longitude(lons: list[float]) -> float:
+    """
+    Averages unit vectors on the longitude circle so points near ±180° don't get a nonsense mean of 0°
+    """
     sin_sum = sum(sin(radians(lon)) for lon in lons)
     cos_sum = sum(cos(radians(lon)) for lon in lons)
     if abs(sin_sum) < 1e-15 and abs(cos_sum) < 1e-15:
