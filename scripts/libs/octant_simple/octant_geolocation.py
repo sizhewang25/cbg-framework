@@ -300,7 +300,7 @@ def compute_feasible_region_unweighted(
 
 def compute_feasible_region_weighted(
     constraints: List[AnnularConstraint],
-    weight_threshold: float = 0.5,
+    weight_threshold: float = 0.9,
     n_pts: int = 64,
 ) -> Optional[Any]:
     """Compute weighted feasible region by face decomposition (Wong et al.).
