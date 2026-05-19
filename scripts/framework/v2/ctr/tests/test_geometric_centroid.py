@@ -68,7 +68,7 @@ class TestGeometricCentroidCTR(unittest.TestCase):
         self.assertTrue(result.success)
         assert_coord_almost_equal(self, result.tg_coord, (2.0 / 3.0, 2.0 / 3.0))
 
-    def test_two_vertex_list_returns_geodetic_midpoint(self):
+    def test_two_vertex_list_returns_local_planar_midpoint(self):
         ctr = GeometricCentroidCTR()
 
         result = ctr.select_centroid(successful_vertices([(0.0, 0.0), (0.0, 2.0)]))

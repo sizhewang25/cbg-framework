@@ -11,9 +11,9 @@ from __future__ import annotations
 from math import atan2, cos, degrees, radians, sin
 from typing import Optional, Tuple
 
+from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
-from scripts.framework.geometry import get_middle_intersection
 from scripts.framework.v2.ctr.base import CTRMethod, CTRResult
 from scripts.framework.v2.mtl.base import MTLResult
 from scripts.framework.v2.registry import register_ctr
@@ -79,22 +79,23 @@ def _centroid_from_vertices(
         return None, Error.EMPTY_REGION
     if len(unique) == 1:
         return unique[0], None
-    if len(unique) == 2:
-        return get_middle_intersection(unique), None
 
     local_points, lat0, lon0, lon_scale = _local_project(unique)
     if lon_scale < _MIN_LON_SCALE:
         return None, Error.DEGENERATE_REGION
 
-    ordered = sorted(local_points, key=lambda p: atan2(p[1], p[0]))
+    if len(unique) == 2:
+        geometry = LineString(local_points)
+    else:
+        ordered = sorted(local_points, key=lambda p: atan2(p[1], p[0]))
+        from shapely.geometry import Polygon
 
-    from shapely.geometry import Polygon
+        polygon = Polygon(ordered)
+        if polygon.is_empty or not polygon.is_valid or abs(polygon.area) <= area_epsilon:
+            return None, Error.DEGENERATE_REGION
+        geometry = polygon
 
-    polygon = Polygon(ordered)
-    if polygon.is_empty or not polygon.is_valid or abs(polygon.area) <= area_epsilon:
-        return None, Error.DEGENERATE_REGION
-
-    centroid = polygon.centroid
+    centroid = geometry.centroid
     if centroid.is_empty:
         return None, Error.NUMERICAL_FAILURE
 
