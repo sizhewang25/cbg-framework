@@ -1,8 +1,9 @@
-"""PlanarAnnulusWeightedMTL — Octant weighted grid accumulation (fused 2+3).
+"""PlanarAnnulusWeightedMTL — Octant weighted face decomposition.
 
-Each constraint contributes `exp(-rtt_ms / weight_tau_ms)` to grid points
-inside its annulus. Points whose accumulated weight clears
-`weight_threshold * max_weight` form the feasible region.
+Each constraint contributes `exp(-rtt_ms / weight_tau_ms)` to faces of the
+planar arrangement of all annulus boundaries. The top-weighted faces are
+unioned until their cumulative weight clears `weight_threshold * Σwᵢ`,
+yielding the feasible region.
 
 The original RTT is required for the exponential weight. v2's `LTDResult`
 does not yet carry latency; this wrapper reads `getattr(r, "latency", None)`
@@ -10,7 +11,7 @@ so it stays forward-compatible. Once `LTDResult.latency` lands, the happy
 path works without further code changes. Until then, the wrapper short-
 circuits with `Error.INSUFFICIENT_DATA` whenever any result lacks latency.
 
-Wraps scripts/libs/octant/octant_geolocation.compute_feasible_region_weighted.
+Wraps scripts/libs/octant_simple/octant_geolocation.compute_feasible_region_weighted.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from scripts.framework.v2.ltd.base import LTDResult
 from scripts.framework.v2.mtl.base import AnnulusMTLMethod, MTLResult
 from scripts.framework.v2.registry import register_mtl
 from scripts.framework.v2.types import Error
-from scripts.libs.octant.octant_geolocation import (
+from scripts.libs.octant_simple.octant_geolocation import (
     AnnularConstraint,
     compute_feasible_region_weighted,
 )
@@ -29,16 +30,14 @@ from scripts.libs.octant.octant_geolocation import (
 
 @register_mtl("planar_annulus_weighted")
 class PlanarAnnulusWeightedMTL(AnnulusMTLMethod):
-    """Octant weighted grid feasible region."""
+    """Octant weighted feasible region via planar face decomposition."""
 
     def __init__(
         self,
         weight_threshold: float = 0.5,
-        grid_resolution_deg: float = 0.25,
         weight_tau_ms: float = 50.0,
     ) -> None:
         self.weight_threshold = weight_threshold
-        self.grid_resolution_deg = grid_resolution_deg
         self.weight_tau_ms = weight_tau_ms
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
@@ -65,7 +64,6 @@ class PlanarAnnulusWeightedMTL(AnnulusMTLMethod):
         region = compute_feasible_region_weighted(
             constraints,
             weight_threshold=self.weight_threshold,
-            grid_resolution_deg=self.grid_resolution_deg,
         )
 
         if region is None or region.is_empty:

@@ -40,23 +40,26 @@ class TestPlanarAnnulusWeightedMTL(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.error, Error.INSUFFICIENT_DATA)
 
-    def test_zero_threshold_returns_manual_grid_union(self):
-        """Mirrors v1 test_zero_threshold_returns_manual_grid_union.
+    def test_zero_threshold_returns_full_disk_face(self):
+        """Single annulus → one face (the whole disk) carrying all the weight.
 
-        latency=0 → weight=exp(0)=1.0, matching the v1 fixture's weight=1.0.
+        latency=0 → weight=exp(0)=1.0. Σw=1.0; threshold 0.0 → target 0.
+        The top-and-only face clears 0 immediately, so the full disk is
+        returned. With the legacy grid algorithm this used to assert a 4-cell
+        grid union; the face-decomposition algorithm returns the disk polygon.
         """
-        result = PlanarAnnulusWeightedMTL(
-            weight_threshold=0.0,
-            grid_resolution_deg=1.0,
-        ).multilaterate([
+        result = PlanarAnnulusWeightedMTL(weight_threshold=0.0).multilaterate([
             ltd_result_with_latency(
                 "a", lat=0.0, lon=0.0, upper_km=111.0, lower_km=0.0, latency=0.0
             ),
         ])
 
         self.assertTrue(result.success)
-        self.assertEqual(result.intersection.bounds, (-1.5, -1.5, 0.5, 0.5))
-        self.assertAlmostEqual(result.intersection.area, 4.0, places=6)
+        self.assertEqual(result.intersection.geom_type, "Polygon")
+        # 64-vertex polygon inscribed in the unit circle at the equator.
+        self.assertEqual(result.intersection.bounds, (-1.0, -1.0, 1.0, 1.0))
+        # Inscribed 64-gon area: (n/2)·sin(2π/n) ≈ 3.1365 for n=64.
+        self.assertAlmostEqual(result.intersection.area, 3.1365, places=3)
 
     def test_registered_in_mtl_registry(self):
         self.assertIn("planar_annulus_weighted", MTL_REGISTRY)
