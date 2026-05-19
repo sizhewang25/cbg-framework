@@ -1,0 +1,63 @@
+"""SphericalCircleMTL — exact spherical multilateration (Million-Scale CBG / IMC 2012).
+
+Computes pairwise great-circle crossing points of the outer disks, then filters
+to points that lie inside every disk. Returns vertices as `list[Coord]`.
+
+Annular `tg_distance.lower_km` from the LTD stage is ignored: this method is
+disk-only (CircleMTLMethod). Use a planar-annulus method when the LTD produces
+annuli.
+
+Wraps scripts/framework/geometry.circle_intersections (unchanged from v1).
+"""
+
+from __future__ import annotations
+
+from scripts.framework.geometry import circle_intersections
+from scripts.framework.types import EARTH_RADIUS_KM
+from scripts.framework.v2.ltd.base import LTDResult
+from scripts.framework.v2.mtl.base import CircleMTLMethod, MTLResult
+from scripts.framework.v2.registry import register_mtl
+from scripts.framework.v2.types import Coord, Error
+
+
+@register_mtl("spherical_circle")
+class SphericalCircleMTL(CircleMTLMethod):
+    """`spherical_circle` intersection (IMC 2012 original).
+
+    `preprocess=True` enables the legacy redundant-circle preprocessing inside
+    `circle_intersections`. The default is False because v2 expects upstream
+    filtering to handle that.
+    """
+
+    def __init__(self, speed_threshold: float = 2 / 3, preprocess: bool = False) -> None:
+        self.speed_threshold = speed_threshold
+        self.preprocess = preprocess
+
+    def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
+        if not results:
+            return MTLResult(success=False, error=Error.INSUFFICIENT_DATA)
+
+        # circle_intersections wants (lat, lon, rtt_ms, radius_km, radius_rad)
+        # tuples. rtt_ms is only used for speed-of-internet sanity checks inside
+        # the helper; v2 LTD has already gated on RTT, so 0.0 is safe.
+        legacy_tuples = [
+            (
+                r.vp_coord.lat,
+                r.vp_coord.lon,
+                0.0,
+                r.tg_distance.upper_km,
+                r.tg_distance.upper_km / EARTH_RADIUS_KM,
+            )
+            for r in results
+        ]
+        points, _used = circle_intersections(
+            legacy_tuples,
+            speed_threshold=self.speed_threshold,
+            preprocess=self.preprocess,
+        )
+
+        if not points:
+            return MTLResult(success=False, error=Error.NO_INTERSECTION)
+
+        vertices = [Coord(lat=lat, lon=lon) for lat, lon in points]
+        return MTLResult(success=True, intersection=vertices)

@@ -33,6 +33,10 @@ from scripts.framework.v2.mtl.base import (
     MTLMethod,
     MTLResult,
 )
+from scripts.framework.v2.mtl.planar_annulus import PlanarAnnulusMTL
+from scripts.framework.v2.mtl.planar_annulus_weighted import PlanarAnnulusWeightedMTL
+from scripts.framework.v2.mtl.planar_circle import PlanarCircleMTL
+from scripts.framework.v2.mtl.spherical_circle import SphericalCircleMTL
 from scripts.framework.v2.registry import (
     CTR_REGISTRY,
     LTD_REGISTRY,
@@ -75,6 +79,10 @@ __all__ = [
     "Intersection",
     "MTLMethod",
     "MTLResult",
+    "PlanarAnnulusMTL",
+    "PlanarAnnulusWeightedMTL",
+    "PlanarCircleMTL",
+    "SphericalCircleMTL",
     # ctr
     "CTRMethod",
     "CTRResult",
