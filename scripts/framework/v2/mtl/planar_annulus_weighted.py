@@ -39,9 +39,11 @@ class PlanarAnnulusWeightedMTL(AnnulusMTLMethod):
         self,
         weight_threshold: float = 0.5,
         weight_tau_ms: float = 50.0,
+        n_pts: int = 64,
     ) -> None:
         self.weight_threshold = weight_threshold
         self.weight_tau_ms = weight_tau_ms
+        self.n_pts = n_pts
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
         if not results:
@@ -63,5 +65,6 @@ class PlanarAnnulusWeightedMTL(AnnulusMTLMethod):
         region = compute_feasible_region_weighted(
             constraints,
             weight_threshold=self.weight_threshold,
+            n_pts=self.n_pts,
         )
         return wrap_region_as_mtl_result(region)
