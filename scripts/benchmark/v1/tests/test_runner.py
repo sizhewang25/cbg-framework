@@ -7,8 +7,8 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts.benchmark.dataset import CSVDataLoader
-from scripts.benchmark.runner import (
+from scripts.benchmark.v1.dataset import CSVDataLoader
+from scripts.benchmark.v1.runner import (
     collect_summaries,
     default_run_output_dir,
     make_run_id,

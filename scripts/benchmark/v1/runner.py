@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.benchmark.dataset import (  # noqa: E402
+from scripts.benchmark.v1.dataset import (  # noqa: E402
     CSVDataLoader,
     DEFAULT_INPUT_CSV,
     DEFAULT_OUTPUT_ROOT,

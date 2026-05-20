@@ -28,7 +28,7 @@ By default, each `run-evaluation` invocation writes to a fresh timestamped
 directory:
 
 ```text
-scripts/benchmark/outputs/vultr7/runs/<run_id>/<dataset_id>/
+scripts/benchmark/v1/outputs/vultr7/runs/<run_id>/<dataset_id>/
 ```
 
 Use `--run-id <id>` to group or resume deterministic outputs. Use
@@ -44,26 +44,26 @@ To evaluate all combinations on the legacy `million_scale.load_data()` source
 poetry run python -m scripts.benchmark.run_evaluation
 ```
 
-Outputs land in `scripts/benchmark/outputs/single_shot/`.
+Outputs land in `scripts/benchmark/v1/outputs/single_shot/`.
 
 ## Snakemake
 
 Run a dry-run first:
 
 ```bash
-poetry run snakemake -n -s scripts/benchmark/Snakefile \
-  --configfile scripts/benchmark/config/vultr7_smoke.yaml
+poetry run snakemake -n -s scripts/benchmark/v1/Snakefile \
+  --configfile scripts/benchmark/v1/config/vultr7_smoke.yaml
 ```
 
 Run the full configured workflow:
 
 ```bash
-poetry run snakemake -s scripts/benchmark/Snakefile \
-  --configfile scripts/benchmark/config/vultr7_smoke.yaml
+poetry run snakemake -s scripts/benchmark/v1/Snakefile \
+  --configfile scripts/benchmark/v1/config/vultr7_smoke.yaml
 ```
 
 Outputs are written under
-`scripts/benchmark/outputs/vultr7/runs/<run_id>/`. If `run_id` is not
+`scripts/benchmark/v1/outputs/vultr7/runs/<run_id>/`. If `run_id` is not
 set in the config or via `--config run_id=<id>`, the Snakefile creates a fresh
 UTC timestamp run id for the invocation.
 

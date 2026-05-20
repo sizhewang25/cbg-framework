@@ -8,13 +8,13 @@ from typing import Annotated, Optional
 
 import typer
 
-from scripts.benchmark.dataset import (
+from scripts.benchmark.v1.dataset import (
     DEFAULT_INPUT_CSV,
     DEFAULT_OUTPUT_ROOT,
     build_dataset_specs,
     materialize_dataset,
 )
-from scripts.benchmark.runner import (
+from scripts.benchmark.v1.runner import (
     DEFAULT_COMBO_IDS,
     parse_combo_ids,
     run_benchmark_evaluation,
@@ -87,7 +87,7 @@ def run_evaluation_command(
         typer.Option(
             help=(
                 "Exact evaluation output directory. Defaults to "
-                "outputs/vultr7/runs/<run_id>/<dataset_id>."
+                "v1/outputs/vultr7/runs/<run_id>/<dataset_id>."
             ),
         ),
     ] = None,

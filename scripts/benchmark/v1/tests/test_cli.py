@@ -7,9 +7,9 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from scripts.benchmark.cli import app
-from scripts.benchmark.runner import parse_combo_ids
-from scripts.benchmark.tests.test_dataset import _sample_df
+from scripts.benchmark.v1.cli import app
+from scripts.benchmark.v1.runner import parse_combo_ids
+from scripts.benchmark.v1.tests.test_dataset import _sample_df
 
 
 class BenchmarkCliTests(unittest.TestCase):

@@ -1,0 +1,32 @@
+# Smoke configuration for the v2 CBG benchmark.
+#
+# Drives one source × one small slice × three diverse combos. Fast enough to
+# run in a few seconds end-to-end; useful as a CI/dev sanity check before
+# launching the full grid.
+#
+# Run with:
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile scripts/benchmark/v2/config/smoke.yaml -j 4
+
+run_id: smoke-001
+source: vultr_csv
+slices: [top1]
+
+enable_fallback: true
+
+combos:
+  # Native Circle baseline
+  - combo_id: soi__planar_circle__centroid
+    ltd: speed_of_internet
+    mtl: planar_circle
+    ctr: geometric_centroid
+  # Native Circle with vertex-based centroid
+  - combo_id: low_envelope__spherical_circle__median
+    ltd: low_envelope
+    mtl: spherical_circle
+    ctr: geometric_median
+  # Native Annulus
+  - combo_id: normal_dist__planar_annulus__medoid
+    ltd: normal_dist
+    mtl: planar_annulus
+    ctr: monte_carlo_medoid

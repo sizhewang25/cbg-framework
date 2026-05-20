@@ -1,0 +1,219 @@
+"""Per-combo runner — one (LTD, MTL, CTR) triple over one (source, slice).
+
+Inputs:
+  - materialized parquets at inputs/<source>/<slice>/
+  - combo identifier + the three stage names (+ optional kwargs)
+
+Outputs (written to <run_dir>):
+  - run.json           : combo metadata + fit stats + run-level memory
+  - targets.parquet    : one row per eval target with full forensics
+  - fit_checkpoint.pkl : pickled LTD (or .stateless marker for stateless LTDs)
+
+The runner is what `cli.py run-combo` invokes. Snakemake fans out (source,
+slice, combo) triples across this entry point.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+from shapely.geometry.base import BaseGeometry
+from shapely.geometry.multipolygon import MultiPolygon
+from shapely.geometry.polygon import Polygon
+
+from scripts.benchmark.v2 import schema as bench_schema
+from scripts.benchmark.v2.checkpoint import save_ltd_checkpoint
+from scripts.benchmark.v2.inputs import (
+    load_eval_targets_parquet,
+    load_fit_samples_parquet,
+)
+from scripts.benchmark.v2.instrument import (
+    TimingMemoryInstrument,
+    measure_block,
+    peak_rss_bytes,
+)
+from scripts.framework.v2 import CBGModel, GeoStatus
+from scripts.framework.v2.ltd.base import LTDResult
+from scripts.framework.v2.mtl.base import MTLResult
+from scripts.framework.v2.types import Coord, Error
+from scripts.libs.cbg.rtt_model import haversine_distance
+
+
+@dataclass(frozen=True)
+class ComboSpec:
+    """A single (LTD, MTL, CTR) triple to evaluate."""
+    combo_id: str
+    ltd: str
+    mtl: str
+    ctr: str
+    ltd_kwargs: dict[str, Any]
+    mtl_kwargs: dict[str, Any]
+    ctr_kwargs: dict[str, Any]
+
+
+def run_one_combo(
+    spec: ComboSpec,
+    *,
+    inputs_dir: Path,
+    out_dir: Path,
+    run_id: str,
+    source_name: str,
+    slice_name: str,
+    enable_fallback: bool = True,
+) -> Path:
+    """Fit + geolocate every eval target for one combo. Write run outputs."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rss_start = peak_rss_bytes()
+
+    # --- 1. Load inputs ------------------------------------------------------
+    fit_samples = load_fit_samples_parquet(inputs_dir / "fit_samples.parquet")
+    eval_targets = load_eval_targets_parquet(inputs_dir / "eval_observations.parquet")
+
+    # --- 2. Construct + fit model -------------------------------------------
+    model = CBGModel.from_config(
+        ltd=spec.ltd, mtl=spec.mtl, ctr=spec.ctr,
+        ltd_kwargs=spec.ltd_kwargs or None,
+        mtl_kwargs=spec.mtl_kwargs or None,
+        ctr_kwargs=spec.ctr_kwargs or None,
+        enable_fallback=enable_fallback,
+    )
+    with measure_block("fit") as fit_meas:
+        fit_result = model.fit(fit_samples)
+    save_ltd_checkpoint(model.ltd, fit_result, combo_dir=out_dir)
+
+    # --- 3. Loop targets, geolocate with instrumentation --------------------
+    target_rows: list[dict] = []
+    status_counts = {"SUCCESS": 0, "FALLBACK": 0, "ERROR": 0}
+    for target in eval_targets:
+        instr = TimingMemoryInstrument()
+        result = model.geolocate(target.obs, instrument=instr)
+        status_counts[result.status.name] += 1
+        target_rows.append(_build_target_row(target, result, instr))
+
+    # --- 4. Write targets.parquet -------------------------------------------
+    targets_table = _rows_to_table(target_rows)
+    pq.write_table(targets_table, out_dir / "targets.parquet")
+
+    # --- 5. Write run.json ---------------------------------------------------
+    rss_end = peak_rss_bytes()
+    run_meta = {
+        "run_id": run_id,
+        "source": source_name,
+        "slice": slice_name,
+        "combo_id": spec.combo_id,
+        "ltd": spec.ltd,
+        "mtl": spec.mtl,
+        "ctr": spec.ctr,
+        "ltd_kwargs": spec.ltd_kwargs,
+        "mtl_kwargs": spec.mtl_kwargs,
+        "ctr_kwargs": spec.ctr_kwargs,
+        "enable_fallback": enable_fallback,
+        "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "n_fit_samples": len(fit_samples),
+        "n_targets": len(eval_targets),
+        "status_counts": status_counts,
+        "fit_success": fit_result.success,
+        "fit_error": fit_result.error.name if fit_result.error else None,
+        "fit_ms": fit_meas["duration_ns"] / 1e6,
+        "fit_peak_bytes": fit_meas["peak_bytes"],
+        "rss_bytes_start": rss_start,
+        "rss_bytes_end": rss_end,
+        "run_peak_rss_bytes": max(rss_start, rss_end),
+    }
+    (out_dir / "run.json").write_text(json.dumps(run_meta, indent=2) + "\n")
+    return out_dir
+
+
+# ---- per-target row construction --------------------------------------------
+
+def _build_target_row(target, geo_result, instr: TimingMemoryInstrument) -> dict:
+    """Flatten a (target, GeoResult, instrument) triple into a TARGETS_SCHEMA row."""
+    ltd_rec = instr.get("ltd")
+    mtl_rec = instr.get("mtl")
+    ctr_rec = instr.get("ctr")
+
+    # Per-VP LTD prediction forensics — nested list-of-struct column.
+    ltd_predictions: list[dict] = []
+    for r in geo_result.ltd_results:
+        ltd_predictions.append({
+            "vp_id": str(r.vp_id) if r.vp_id is not None else "",
+            "success": r.success,
+            "error": r.error.name if r.error else None,
+            "upper_km": (r.tg_distance.upper_km if r.tg_distance else None),
+            "lower_km": (r.tg_distance.lower_km if r.tg_distance else None),
+        })
+
+    pred_lat, pred_lon = (None, None)
+    error_km = None
+    if geo_result.coord is not None:
+        pred_lat = geo_result.coord.lat
+        pred_lon = geo_result.coord.lon
+        error_km = haversine_distance(
+            target.true_coord.lat, target.true_coord.lon,
+            pred_lat, pred_lon,
+        )
+
+    mtl_result: Optional[MTLResult] = geo_result.mtl_result
+    ctr_result = geo_result.ctr_result
+
+    return {
+        "target_id": target.target_id,
+        "target_lat": target.true_coord.lat,
+        "target_lon": target.true_coord.lon,
+        "n_obs": len(target.obs),
+        "pred_lat": pred_lat,
+        "pred_lon": pred_lon,
+        "status": geo_result.status.name,
+        "error": geo_result.error.name if geo_result.error else None,
+        "error_km": error_km,
+        "ltd_ms": (ltd_rec.duration_ns / 1e6) if ltd_rec else 0.0,
+        "ltd_peak_bytes": ltd_rec.peak_bytes if ltd_rec else 0,
+        "mtl_ms": (mtl_rec.duration_ns / 1e6) if mtl_rec else None,
+        "mtl_peak_bytes": mtl_rec.peak_bytes if mtl_rec else None,
+        "ctr_ms": (ctr_rec.duration_ns / 1e6) if ctr_rec else None,
+        "ctr_peak_bytes": ctr_rec.peak_bytes if ctr_rec else None,
+        "n_ltd_success": sum(1 for r in geo_result.ltd_results if r.success),
+        "ltd_predictions": ltd_predictions,
+        "mtl_success": mtl_result.success if mtl_result else None,
+        "mtl_error": (mtl_result.error.name if mtl_result and mtl_result.error else None),
+        "mtl_intersection_kind": _intersection_kind(mtl_result),
+        "ctr_success": ctr_result.success if ctr_result else None,
+        "ctr_error": (ctr_result.error.name if ctr_result and ctr_result.error else None),
+    }
+
+
+def _intersection_kind(mtl: Optional[MTLResult]) -> Optional[str]:
+    if mtl is None or mtl.intersection is None:
+        return None if mtl is None else "none"
+    inter = mtl.intersection
+    if isinstance(inter, MultiPolygon):
+        return "multipolygon"
+    if isinstance(inter, Polygon):
+        return "polygon"
+    if isinstance(inter, BaseGeometry):
+        return type(inter).__name__.lower()
+    # list[Coord] from spherical methods
+    if isinstance(inter, list):
+        return "vertex_list"
+    return "unknown"
+
+
+def _rows_to_table(rows: list[dict]) -> pa.Table:
+    if not rows:
+        # Empty input — still emit a schema-valid empty table so consumers
+        # don't have to special-case "no targets".
+        return pa.table(
+            {field.name: [] for field in bench_schema.TARGETS_SCHEMA},
+            schema=bench_schema.TARGETS_SCHEMA,
+        )
+    columns: dict[str, list] = {field.name: [] for field in bench_schema.TARGETS_SCHEMA}
+    for row in rows:
+        for name in columns:
+            columns[name].append(row.get(name))
+    return pa.table(columns, schema=bench_schema.TARGETS_SCHEMA)

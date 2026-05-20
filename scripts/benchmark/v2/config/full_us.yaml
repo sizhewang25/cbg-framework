@@ -1,0 +1,59 @@
+# Full Vultr-US run — every probe ASN, 8 combos spanning the LTD × MTL × CTR axes.
+#
+# Spherical-circle MTL is intentionally absent: at all_us scale (1422 VPs ×
+# 7 anchor targets) the legacy circle_intersections path is O(n²) and
+# dominates runtime. Add it explicitly if you need that comparison.
+#
+# Run with:
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile scripts/benchmark/v2/config/full_us.yaml -j 4
+
+run_id: full-us-001
+source: vultr_csv
+slices: [all_us]
+
+enable_fallback: true
+
+combos:
+  # ---- Native Circle (CircleLTD × CircleMTL) ---------------------------
+  - combo_id: soi__planar_circle__centroid
+    ltd: speed_of_internet
+    mtl: planar_circle
+    ctr: geometric_centroid
+
+  - combo_id: soi__planar_circle__median
+    ltd: speed_of_internet
+    mtl: planar_circle
+    ctr: geometric_median
+
+  - combo_id: low_envelope__planar_circle__centroid
+    ltd: low_envelope
+    mtl: planar_circle
+    ctr: geometric_centroid
+
+  - combo_id: low_envelope__planar_circle__boundary_vertex_mean
+    ltd: low_envelope
+    mtl: planar_circle
+    ctr: boundary_vertex_mean
+
+  # ---- Native Annulus (AnnulusLTD × AnnulusMTL) ------------------------
+  - combo_id: normal_dist__planar_annulus__centroid
+    ltd: normal_dist
+    mtl: planar_annulus
+    ctr: geometric_centroid
+
+  - combo_id: normal_dist__planar_annulus_weighted__medoid
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+
+  - combo_id: bounded_spline__planar_annulus__centroid
+    ltd: bounded_spline
+    mtl: planar_annulus
+    ctr: geometric_centroid
+
+  # ---- Degraded (AnnulusLTD through CircleMTL — inner bound discarded) -
+  - combo_id: normal_dist__planar_circle__centroid_degraded
+    ltd: normal_dist
+    mtl: planar_circle
+    ctr: geometric_centroid

@@ -1,0 +1,94 @@
+# Snakemake workflow for the v2 CBG benchmark.
+#
+# Run with:
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile scripts/benchmark/v2/config/smoke.yaml -j 4
+#
+# The config file declares the run grid (source × slices × combos).
+# Snakemake fans out across combo cells; cells already on disk are skipped.
+
+import json
+from pathlib import Path
+
+# ---- Resolve config ---------------------------------------------------------
+RUN_ID  = config.get("run_id",  "default")
+SOURCE  = config["source"]                       # required
+SLICES  = config.get("slices", ["all_us"] if SOURCE == "vultr_csv" else ["all_anchors"])
+COMBOS  = config["combos"]                       # required: list of dicts
+INPUTS_ROOT  = Path(config.get("inputs_root",  "scripts/benchmark/v2/inputs"))
+OUTPUTS_ROOT = Path(config.get("outputs_root", "scripts/benchmark/v2/outputs"))
+ENABLE_FALLBACK = bool(config.get("enable_fallback", True))
+
+# Build a name → combo dict so we can dispatch by combo_id in the run-combo rule.
+def _combo_id(c):
+    return c.get("combo_id") or f"{c['ltd']}__{c['mtl']}__{c['ctr']}"
+
+COMBOS_BY_ID = {_combo_id(c): c for c in COMBOS}
+COMBO_IDS = list(COMBOS_BY_ID)
+
+CLI = "python -m scripts.benchmark.v2.cli"
+
+# ---- Targets ----------------------------------------------------------------
+rule all:
+    input:
+        f"{OUTPUTS_ROOT}/{RUN_ID}/summary.parquet"
+
+# ---- Materialize one (source, slice) ----------------------------------------
+rule materialize:
+    output:
+        manifest = INPUTS_ROOT / SOURCE / "{slice}" / "manifest.json",
+    params:
+        source = SOURCE,
+        inputs_root = str(INPUTS_ROOT),
+    shell:
+        CLI + " materialize-inputs"
+        " --source {params.source}"
+        " --slice {wildcards.slice}"
+        " --inputs-root {params.inputs_root}"
+
+# ---- Run one (slice, combo) -------------------------------------------------
+rule run_combo:
+    input:
+        manifest = INPUTS_ROOT / SOURCE / "{slice}" / "manifest.json",
+    output:
+        targets = OUTPUTS_ROOT / RUN_ID / SOURCE / "{slice}" / "{combo_id}" / "targets.parquet",
+        run_meta = OUTPUTS_ROOT / RUN_ID / SOURCE / "{slice}" / "{combo_id}" / "run.json",
+    params:
+        source = SOURCE,
+        run_id = RUN_ID,
+        inputs_root = str(INPUTS_ROOT),
+        outputs_root = str(OUTPUTS_ROOT),
+        enable_fallback = "--enable-fallback" if ENABLE_FALLBACK else "--no-enable-fallback",
+        ltd = lambda wc: COMBOS_BY_ID[wc.combo_id]["ltd"],
+        mtl = lambda wc: COMBOS_BY_ID[wc.combo_id]["mtl"],
+        ctr = lambda wc: COMBOS_BY_ID[wc.combo_id]["ctr"],
+        ltd_kwargs = lambda wc: json.dumps(COMBOS_BY_ID[wc.combo_id].get("ltd_kwargs", {})),
+        mtl_kwargs = lambda wc: json.dumps(COMBOS_BY_ID[wc.combo_id].get("mtl_kwargs", {})),
+        ctr_kwargs = lambda wc: json.dumps(COMBOS_BY_ID[wc.combo_id].get("ctr_kwargs", {})),
+    shell:
+        CLI + " run-combo"
+        " --source {params.source} --slice {wildcards.slice}"
+        " --ltd {params.ltd} --mtl {params.mtl} --ctr {params.ctr}"
+        " --combo-id {wildcards.combo_id}"
+        " --run-id {params.run_id}"
+        " --ltd-kwargs '{params.ltd_kwargs}'"
+        " --mtl-kwargs '{params.mtl_kwargs}'"
+        " --ctr-kwargs '{params.ctr_kwargs}'"
+        " --inputs-root {params.inputs_root}"
+        " --outputs-root {params.outputs_root}"
+        " {params.enable_fallback}"
+
+# ---- Summarize once all combos are done -------------------------------------
+rule summarize:
+    input:
+        expand(
+            str(OUTPUTS_ROOT / RUN_ID / SOURCE / "{slice}" / "{combo_id}" / "targets.parquet"),
+            slice=SLICES, combo_id=COMBO_IDS,
+        ),
+    output:
+        OUTPUTS_ROOT / RUN_ID / "summary.parquet",
+    params:
+        run_id = RUN_ID,
+        outputs_root = str(OUTPUTS_ROOT),
+    shell:
+        CLI + " summarize --run-id {params.run_id} --outputs-root {params.outputs_root}"

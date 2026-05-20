@@ -1,7 +1,7 @@
 """CLI entry point: run all configured pipeline combinations and generate plots.
 
 Usage:
-    python -m scripts.benchmark.run_evaluation
+    python -m scripts.benchmark.v1.run_evaluation
 """
 
 from __future__ import annotations

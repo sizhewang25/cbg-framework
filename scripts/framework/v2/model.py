@@ -7,8 +7,9 @@ If fallback is disabled or there are no observations, returns status=ERROR.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, ContextManager, Optional
 
 from scripts.framework.v2.ctr.base import CTRMethod, CTRResult
 from scripts.framework.v2.ltd.base import (
@@ -25,6 +26,18 @@ from scripts.framework.v2.mtl.base import (
 )
 from scripts.framework.v2.registry import CTR_REGISTRY, LTD_REGISTRY, MTL_REGISTRY
 from scripts.framework.v2.types import Coord, Error, GeoStatus, Latency, VpId
+
+# Instrumentation hook contract for CBGModel.geolocate.
+#
+# `instrument(stage)` returns a context manager wrapping the call to the
+# stage-named method. Benchmarks plug timing / memory profilers in here without
+# the framework taking a dependency on either.
+#
+# Stage names (load-bearing — benchmarks dispatch on them):
+#   "ltd" — wraps self.ltd.predict_all(obs)
+#   "mtl" — wraps self.mtl.multilaterate(ok_ltd_results)
+#   "ctr" — wraps self.ctr.select_centroid(mtl_result); only entered if MTL succeeded
+StageInstrument = Callable[[str], ContextManager[None]]
 
 
 class IncompatibleStagesError(TypeError):
@@ -99,20 +112,32 @@ class CBGModel:
     def geolocate(
         self,
         obs: list[tuple[VpId, Coord, Latency]],
+        *,
+        instrument: Optional[StageInstrument] = None,
     ) -> GeoResult:
         """Run the three-stage pipeline on one probe's observations.
 
         Each entry of `obs` is (vp_id, vp_coord, measured_latency).
+
+        `instrument`, if provided, is called as `instrument(stage_name)` for
+        each stage that actually runs. The returned context manager wraps the
+        call. See StageInstrument above for the stage-name contract. Default
+        (None) is a no-op nullcontext, so this is fully backward-compatible.
         """
-        ltd_results = tuple(self.ltd.predict_all(obs))
+        cm: StageInstrument = instrument if instrument is not None else (lambda _stage: nullcontext())
+
+        with cm("ltd"):
+            ltd_results = tuple(self.ltd.predict_all(obs))
         ok = [r for r in ltd_results if r.success]
 
         last_error: Optional[Error] = None
         ctr_result: Optional[CTRResult] = None
 
-        mtl_result = self.mtl.multilaterate(ok)
+        with cm("mtl"):
+            mtl_result = self.mtl.multilaterate(ok)
         if mtl_result.success:
-            ctr_result = self.ctr.select_centroid(mtl_result)
+            with cm("ctr"):
+                ctr_result = self.ctr.select_centroid(mtl_result)
             if ctr_result.success and ctr_result.tg_coord is not None:
                 return GeoResult(
                     coord=ctr_result.tg_coord,

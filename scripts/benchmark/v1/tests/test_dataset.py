@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.benchmark.dataset import (
+from scripts.benchmark.v1.dataset import (
     CSVDataLoader,
     build_dataset_specs,
     materialize_dataset,

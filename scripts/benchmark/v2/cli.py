@@ -1,0 +1,207 @@
+"""Typer CLI — three commands wired for Snakemake fan-out.
+
+    python -m scripts.benchmark.v2.cli materialize-inputs --source vultr_csv --slice top1
+    python -m scripts.benchmark.v2.cli run-combo \
+        --source vultr_csv --slice top1 \
+        --ltd speed_of_internet --mtl planar_circle --ctr geometric_centroid \
+        --run-id smoke-001
+    python -m scripts.benchmark.v2.cli summarize --run-id smoke-001
+
+Each command performs one unit of work — Snakemake's rule graph orchestrates
+the (source × slice × combo) cross product.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Optional
+
+import pyarrow.parquet as pq
+import typer
+
+from scripts.benchmark.v2 import schema as bench_schema
+from scripts.benchmark.v2.inputs import DEFAULT_INPUTS_ROOT, materialize_inputs
+from scripts.benchmark.v2.runner import ComboSpec, run_one_combo
+from scripts.benchmark.v2.sources import SOURCES
+
+app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="v2 CBG benchmark CLI (LTD/MTL/CTR sweeps with per-stage instrumentation).",
+)
+
+DEFAULT_OUTPUTS_ROOT = Path(__file__).resolve().parent / "outputs"
+
+
+# ---- materialize-inputs ------------------------------------------------------
+
+@app.command("materialize-inputs")
+def cmd_materialize_inputs(
+    source: str = typer.Option(..., help=f"Data source name. One of: {sorted(SOURCES)}"),
+    slice: str = typer.Option(..., help="Slice identifier (source-specific, e.g. 'top1' / 'all_anchors')."),
+    inputs_root: Path = typer.Option(
+        DEFAULT_INPUTS_ROOT,
+        help="Root directory for materialized inputs. Output goes to <root>/<source>/<slice>/.",
+    ),
+    force: bool = typer.Option(False, help="Re-materialize even if manifest already exists."),
+) -> None:
+    """Pull data from a DataSource into vp_configs / fit_samples / eval_observations parquet."""
+    if source not in SOURCES:
+        typer.echo(f"Unknown source {source!r}. Available: {sorted(SOURCES)}", err=True)
+        raise typer.Exit(code=2)
+
+    out_dir = inputs_root / source / slice
+    manifest_path = out_dir / "manifest.json"
+    if manifest_path.exists() and not force:
+        typer.echo(f"Already materialized at {out_dir} (use --force to overwrite).")
+        return
+
+    source_cls = SOURCES[source]
+    src = source_cls(slice=slice)
+    written = materialize_inputs(src, root=inputs_root)
+    typer.echo(f"Materialized {written}")
+
+
+# ---- run-combo ---------------------------------------------------------------
+
+@app.command("run-combo")
+def cmd_run_combo(
+    source: str = typer.Option(..., help="Source name (must already be materialized)."),
+    slice: str = typer.Option(..., help="Slice id (matches materialize step)."),
+    ltd: str = typer.Option(..., help="LTD model name (e.g. speed_of_internet)."),
+    mtl: str = typer.Option(..., help="MTL method name (e.g. planar_circle)."),
+    ctr: str = typer.Option(..., help="CTR method name (e.g. geometric_centroid)."),
+    run_id: str = typer.Option(..., help="Run identifier — groups combos into one output tree."),
+    combo_id: Optional[str] = typer.Option(
+        None,
+        help="Override combo id used in the output path. Defaults to '<ltd>__<mtl>__<ctr>'.",
+    ),
+    ltd_kwargs: str = typer.Option("{}", help="JSON dict forwarded to the LTD constructor."),
+    mtl_kwargs: str = typer.Option("{}", help="JSON dict forwarded to the MTL constructor."),
+    ctr_kwargs: str = typer.Option("{}", help="JSON dict forwarded to the CTR constructor."),
+    inputs_root: Path = typer.Option(DEFAULT_INPUTS_ROOT, help="Root containing <source>/<slice>/*.parquet."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root for run outputs."),
+    enable_fallback: bool = typer.Option(True, help="Enable nearest-VP fallback on pipeline failure."),
+) -> None:
+    """Fit + geolocate one (LTD, MTL, CTR) combo over a materialized slice."""
+    inputs_dir = inputs_root / source / slice
+    if not (inputs_dir / "eval_observations.parquet").exists():
+        typer.echo(
+            f"No inputs at {inputs_dir}. Run 'materialize-inputs --source {source} --slice {slice}' first.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    cid = combo_id or f"{ltd}__{mtl}__{ctr}"
+    spec = ComboSpec(
+        combo_id=cid,
+        ltd=ltd, mtl=mtl, ctr=ctr,
+        ltd_kwargs=json.loads(ltd_kwargs),
+        mtl_kwargs=json.loads(mtl_kwargs),
+        ctr_kwargs=json.loads(ctr_kwargs),
+    )
+    out_dir = outputs_root / run_id / source / slice / cid
+    run_one_combo(
+        spec,
+        inputs_dir=inputs_dir,
+        out_dir=out_dir,
+        run_id=run_id,
+        source_name=source,
+        slice_name=slice,
+        enable_fallback=enable_fallback,
+    )
+    typer.echo(f"Combo done: {out_dir}")
+
+
+# ---- summarize ---------------------------------------------------------------
+
+@app.command("summarize")
+def cmd_summarize(
+    run_id: str = typer.Option(..., help="Run id to summarize."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root containing <run_id>/."),
+) -> None:
+    """Aggregate every combo's targets.parquet into summary.parquet (one row per combo)."""
+    run_root = outputs_root / run_id
+    if not run_root.exists():
+        typer.echo(f"No such run dir: {run_root}", err=True)
+        raise typer.Exit(code=2)
+
+    rows: list[dict] = []
+    for run_json in run_root.glob("*/*/*/run.json"):
+        rows.append(_summarize_combo(run_json))
+    if not rows:
+        typer.echo(f"No combos found under {run_root}", err=True)
+        raise typer.Exit(code=1)
+
+    import pyarrow as pa
+    columns: dict[str, list] = {field.name: [] for field in bench_schema.SUMMARY_SCHEMA}
+    for row in rows:
+        for name in columns:
+            columns[name].append(row.get(name))
+    table = pa.table(columns, schema=bench_schema.SUMMARY_SCHEMA)
+    out_path = run_root / "summary.parquet"
+    pq.write_table(table, out_path)
+    typer.echo(f"Wrote {out_path} ({table.num_rows} combos)")
+
+
+_STAT_QUANTILES = {"p5": 0.05, "p25": 0.25, "p50": 0.50, "p75": 0.75, "p95": 0.95}
+
+
+def _stat_block(series) -> dict[str, float | None]:
+    """Compute the uniform 7-stat block (p5/p25/p50/p75/p95/mean/std) for a
+    pandas Series. Returns None for every stat if the series is empty —
+    keeps the parquet shape stable when a combo had no successful targets
+    or a stage never ran."""
+    s = series.dropna()
+    if s.empty:
+        return {stat: None for stat in bench_schema.SUMMARY_STATS}
+    out: dict[str, float | None] = {
+        stat: float(s.quantile(q)) for stat, q in _STAT_QUANTILES.items()
+    }
+    out["mean"] = float(s.mean())
+    # pandas std with n=1 returns NaN; coerce to None for parquet hygiene.
+    std = s.std()
+    out["std"] = None if std != std else float(std)
+    return out
+
+
+def _summarize_combo(run_json: Path) -> dict:
+    """Read run.json + targets.parquet for one combo and produce a SUMMARY_SCHEMA row."""
+    meta = json.loads(run_json.read_text())
+    combo_dir = run_json.parent
+    table = pq.read_table(combo_dir / "targets.parquet")
+    df = table.to_pandas()
+
+    sc = meta.get("status_counts", {})
+
+    row: dict = {
+        "run_id": meta["run_id"],
+        "source": meta["source"],
+        "slice": meta["slice"],
+        "combo_id": meta["combo_id"],
+        "ltd": meta["ltd"],
+        "mtl": meta["mtl"],
+        "ctr": meta["ctr"],
+        "n_targets": int(meta["n_targets"]),
+        "n_success": int(sc.get("SUCCESS", 0)),
+        "n_fallback": int(sc.get("FALLBACK", 0)),
+        "n_error": int(sc.get("ERROR", 0)),
+        "fit_ms": float(meta.get("fit_ms", 0.0)),
+        "fit_peak_bytes": int(meta.get("fit_peak_bytes", 0)),
+        "run_peak_rss_bytes": int(meta["run_peak_rss_bytes"]),
+    }
+    # Aggregate every per-target metric over the SUCCESS+FALLBACK subset.
+    # error_km is naturally NaN on ERROR rows, so dropna in _stat_block does
+    # the right thing for that one even before filtering.
+    completed = df[df["status"].isin(["SUCCESS", "FALLBACK"])]
+    for metric in bench_schema.SUMMARY_METRICS:
+        series = completed[metric] if metric in completed.columns else df[metric][:0]
+        for stat, value in _stat_block(series).items():
+            row[f"{metric}_{stat}"] = value
+    return row
+
+
+if __name__ == "__main__":
+    app()

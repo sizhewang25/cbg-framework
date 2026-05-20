@@ -15,7 +15,7 @@ COMBO_IDS = config.get(
 )
 COMBO_IDS_CSV = ",".join(COMBO_IDS)
 INPUT_CSV = config.get("input_csv", "datasets/cbg_test/vultr_pings_us_only.csv")
-RESULTS_ROOT = config.get("results_root", "scripts/benchmark/outputs/vultr7")
+RESULTS_ROOT = config.get("results_root", "scripts/benchmark/v1/outputs/vultr7")
 RUN_ID = config.get("run_id") or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 RUN_ROOT = f"{RESULTS_ROOT}/runs/{RUN_ID}"
 
@@ -32,7 +32,7 @@ rule materialize_dataset:
         csv=f"{RESULTS_ROOT}/datasets/{{dataset_id}}.csv",
         manifest=f"{RESULTS_ROOT}/datasets/{{dataset_id}}.json",
     shell:
-        "python -m scripts.benchmark.cli materialize-dataset "
+        "python -m scripts.benchmark.v1.cli materialize-dataset "
         "{wildcards.dataset_id} "
         "--input-csv {INPUT_CSV} "
         "--output {output.csv} "
@@ -50,7 +50,7 @@ rule run_evaluation:
     params:
         output_dir=lambda wildcards: f"{RUN_ROOT}/{wildcards.dataset_id}",
     shell:
-        "python -m scripts.benchmark.cli run-evaluation "
+        "python -m scripts.benchmark.v1.cli run-evaluation "
         "{wildcards.dataset_id} "
         "--input-csv {input.csv} "
         "--preselected "
@@ -66,7 +66,7 @@ rule summarize:
         json=f"{RUN_ROOT}/scaled_benchmark_summary.json",
         csv=f"{RUN_ROOT}/scaled_benchmark_summary.csv",
     shell:
-        "python -m scripts.benchmark.cli summarize "
+        "python -m scripts.benchmark.v1.cli summarize "
         "--results-root {RUN_ROOT} "
         "--output-json {output.json} "
         "--output-csv {output.csv}"
