@@ -1,0 +1,97 @@
+# Snakemake workflow for the v2 CBG analysis plots.
+#
+# Run with:
+#   snakemake -s scripts/analysis/Snakefile \
+#       --configfile scripts/analysis/config/smoke-003.yaml -j 3
+#
+# Consumes the parquets written by scripts/benchmark/v2/Snakefile and
+# produces three PNGs per (source, setup, slice):
+#   plot_error_cdf.png        – CDF of error_km, optionally panelled by LTD
+#   plot_error_diff_cdf.png   – pairwise per-target error_A − error_B CDF
+#   plot_phase_memory.png     – stacked LTD/MTL/CTR (+ FIT) peak memory
+
+from pathlib import Path
+
+# ---- Resolve config ---------------------------------------------------------
+RUN_ID = config["run_id"]                          # required
+SOURCE = config["source"]                          # required
+SETUP  = config.get("setup", "probes_to_anchors")  # or "anchors_to_probes"
+SLICES = config["slices"]                          # required: list[str]
+
+V2_OUTPUTS_ROOT = Path(config.get("v2_outputs_root", "scripts/benchmark/v2/outputs"))
+ANALYSIS_ROOT   = Path(config.get("analysis_root",   "scripts/analysis/outputs"))
+
+# Plot knobs
+GROUP_BY   = config.get("group_by", "ltd")  # "ltd" | "none"
+PHASE_STAT = config.get("phase_stat", "p95")  # p5/p25/p50/p75/p95/mean
+INCLUDE_FIT = bool(config.get("include_fit", True))
+# Diff pairs: list of [A, B] combo_id pairs. Required for the diff plot.
+DIFF_PAIRS = config.get("diff_pairs", [])
+
+CLI = "python -m scripts.analysis"
+
+RUN_DIR = V2_OUTPUTS_ROOT / RUN_ID
+SLICE_OUT = ANALYSIS_ROOT / RUN_ID / SOURCE / SETUP / "{slice}"
+
+_PLOTS = ["plot_error_cdf", "plot_phase_memory"]
+if DIFF_PAIRS:
+    _PLOTS.append("plot_error_diff_cdf")
+
+# ---- Targets ----------------------------------------------------------------
+rule all:
+    input:
+        expand(str(SLICE_OUT / "{plot}.png"), slice=SLICES, plot=_PLOTS)
+
+# ---- Plots ------------------------------------------------------------------
+rule error_cdf:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = SLICE_OUT / "plot_error_cdf.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        group_by = GROUP_BY,
+    shell:
+        CLI + ".plot_error_cdf"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --slice {wildcards.slice}"
+        " --group-by {params.group_by}"
+        " --out {output.png}"
+
+rule phase_memory:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = SLICE_OUT / "plot_phase_memory.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        stat = PHASE_STAT,
+        fit_flag = "" if INCLUDE_FIT else "--no-fit",
+    shell:
+        CLI + ".plot_phase_memory"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --slice {wildcards.slice}"
+        " --stat {params.stat}"
+        " {params.fit_flag}"
+        " --out {output.png}"
+
+rule error_diff_cdf:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = SLICE_OUT / "plot_error_diff_cdf.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        pair_args = " ".join(f"--pair {a} {b}" for a, b in DIFF_PAIRS),
+    shell:
+        CLI + ".plot_error_diff_cdf"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --slice {wildcards.slice}"
+        " {params.pair_args}"
+        " --out {output.png}"
