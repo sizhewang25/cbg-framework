@@ -3,9 +3,10 @@
 Computes pairwise great-circle crossing points of the outer disks, then filters
 to points that lie inside every disk. Returns vertices as `list[Coord]`.
 
-Annular `tg_distance.lower_km` from the LTD stage is ignored: this method is
-disk-only (CircleMTLMethod). Use a planar-annulus method when the LTD produces
-annuli.
+Annular `tg_distance.lower_km` from the LTD stage is silently ignored — this
+is a CircleMTLMethod and only consumes the outer radius. An AnnulusLTDModel
+can be paired with it (CBGModel allows the degraded composition), but the
+inner-bound information is lost. Use a planar-annulus method to preserve it.
 
 Wraps scripts/framework/geometry.circle_intersections (unchanged from v1).
 """

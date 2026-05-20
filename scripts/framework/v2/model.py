@@ -13,7 +13,6 @@ from typing import Optional
 from scripts.framework.v2.ctr.base import CTRMethod, CTRResult
 from scripts.framework.v2.ltd.base import (
     AnnulusLTDModel,
-    CircleLTDModel,
     FitSample,
     FittingResult,
     LTDModel,
@@ -21,7 +20,6 @@ from scripts.framework.v2.ltd.base import (
 )
 from scripts.framework.v2.mtl.base import (
     AnnulusMTLMethod,
-    CircleMTLMethod,
     MTLMethod,
     MTLResult,
 )
@@ -30,8 +28,15 @@ from scripts.framework.v2.types import Coord, Error, GeoStatus, Latency, VpId
 
 
 class IncompatibleStagesError(TypeError):
-    """Raised when a CBGModel is constructed from stages whose Circle/Annulus
-    families don't match."""
+    """Raised when a CBGModel pairs an AnnulusMTLMethod with a non-annulus LTD.
+
+    The Annulus → Circle direction (AnnulusLTDModel feeding a CircleMTLMethod)
+    is permitted: Circle MTLs only read `tg_distance.upper_km`, so the inner
+    bound is silently discarded — annular constraints degrade cleanly to disks.
+    The Circle LTD → Annulus MTL direction is still rejected because annular
+    MTLs are designed for inner-bound information their LTD partner doesn't
+    produce; allowing it would mask an LTD selection error.
+    """
 
 
 @dataclass(frozen=True)
@@ -74,15 +79,18 @@ class CBGModel:
 
     @staticmethod
     def _validate_family_pairing(ltd: LTDModel, mtl: MTLMethod) -> None:
+        """Reject only the unsafe direction.
+
+        AnnulusMTLMethod needs annular semantics from its LTD partner — pairing
+        it with a CircleLTDModel would silently degrade to a disk MTL and mask
+        the LTD selection. CircleMTLMethod is permissive: it consumes only
+        `tg_distance.upper_km`, so an AnnulusLTDModel can feed it (the inner
+        bound is discarded, the pipeline still runs).
+        """
         if isinstance(mtl, AnnulusMTLMethod) and not isinstance(ltd, AnnulusLTDModel):
             raise IncompatibleStagesError(
                 f"{type(mtl).__name__} requires an AnnulusLTDModel; "
                 f"{type(ltd).__name__} produces disk constraints only"
-            )
-        if isinstance(mtl, CircleMTLMethod) and not isinstance(ltd, CircleLTDModel):
-            raise IncompatibleStagesError(
-                f"{type(mtl).__name__} consumes disk constraints; "
-                f"{type(ltd).__name__} produces annular constraints"
             )
 
     def fit(self, samples: list[FitSample]) -> FittingResult:

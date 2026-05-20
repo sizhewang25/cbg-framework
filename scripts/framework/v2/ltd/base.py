@@ -124,8 +124,19 @@ class LTDModel(ABC):
 
 
 class CircleLTDModel(LTDModel, ABC):
-    """Produces disk constraints (Distance.lower_km is always 0)."""
+    """Produces disk constraints (Distance.lower_km is always 0).
+
+    Pairs with CircleMTLMethod. Cannot pair with AnnulusMTLMethod —
+    annular MTLs are designed around an inner bound this family doesn't
+    produce, and CBGModel rejects the pairing.
+    """
 
 
 class AnnulusLTDModel(LTDModel, ABC):
-    """Produces possibly-annular constraints (Distance.lower_km may be > 0)."""
+    """Produces possibly-annular constraints (Distance.lower_km may be > 0).
+
+    Pairs natively with AnnulusMTLMethod. Also pairs with CircleMTLMethod
+    in a degraded mode: Circle MTLs read only `tg_distance.upper_km`, so
+    the inner bound is silently discarded. CBGModel allows this so
+    Annulus LTDs can be benchmarked against Circle MTL baselines.
+    """
