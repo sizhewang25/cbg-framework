@@ -26,6 +26,7 @@ from scripts.benchmark.v2.inputs import (
     DEFAULT_INPUTS_ROOT,
     inputs_dir_for,
     materialize_inputs,
+    outputs_combo_dir,
 )
 from scripts.benchmark.v2.runner import ComboSpec, run_one_combo
 from scripts.benchmark.v2.sources import SOURCES
@@ -135,7 +136,7 @@ def cmd_run_combo(
         ctr_kwargs=json.loads(ctr_kwargs),
         base_seed=seed,
     )
-    out_dir = outputs_root / run_id / source / setup / slice / cid
+    out_dir = outputs_combo_dir(outputs_root, run_id, src, cid)
     run_one_combo(
         spec,
         inputs_dir=inputs_dir,

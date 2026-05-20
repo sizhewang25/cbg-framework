@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from scripts.benchmark.v2.inputs import materialize_inputs
+from scripts.benchmark.v2.inputs import materialize_inputs, outputs_combo_dir
 from scripts.benchmark.v2.runner import ComboSpec, run_one_combo
 from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource
 
@@ -37,8 +37,9 @@ class TestRunOneCombo(unittest.TestCase):
         self.csv_path = root / "synth.csv"
         self.csv_path.write_text(_SYNTH_CSV)
         src = VultrCSVSource(slice="all_us", csv_path=self.csv_path)
+        self.src = src
         self.inputs_dir = materialize_inputs(src, root=root / "inputs")
-        self.out_dir = root / "outputs" / "test-run" / src.name / src.slice_id() / "combo1"
+        self.out_dir = outputs_combo_dir(root / "outputs", "test-run", src, "combo1")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -99,8 +100,8 @@ class TestRunOneCombo(unittest.TestCase):
             mtl_kwargs={}, ctr_kwargs={"n_samples": 256},
             base_seed=42,
         )
-        out_a = self.out_dir.parent / "mc_a"
-        out_b = self.out_dir.parent / "mc_b"
+        out_a = outputs_combo_dir(self.out_dir.parents[3], "test-run", self.src, "mc_a")
+        out_b = outputs_combo_dir(self.out_dir.parents[3], "test-run", self.src, "mc_b")
         run_one_combo(
             spec, inputs_dir=self.inputs_dir, out_dir=out_a,
             run_id="seed-test", source_name="vultr_csv", slice_name="all_us",
@@ -132,7 +133,7 @@ class TestRunOneCombo(unittest.TestCase):
             ltd_kwargs={}, mtl_kwargs={}, ctr_kwargs={},
             base_seed=None,
         )
-        out_dir = self.out_dir.parent / "mc_no_seed"
+        out_dir = outputs_combo_dir(self.out_dir.parents[3], "no-seed-test", self.src, "mc_no_seed")
         run_one_combo(
             spec, inputs_dir=self.inputs_dir, out_dir=out_dir,
             run_id="no-seed-test", source_name="vultr_csv", slice_name="all_us",
@@ -148,7 +149,7 @@ class TestRunOneCombo(unittest.TestCase):
             ltd="low_envelope", mtl="planar_circle", ctr="geometric_centroid",
             ltd_kwargs={}, mtl_kwargs={}, ctr_kwargs={},
         )
-        out_dir = self.out_dir.parent / "combo_le"
+        out_dir = outputs_combo_dir(self.out_dir.parents[3], "test-run", self.src, "combo_le")
         run_one_combo(
             spec, inputs_dir=self.inputs_dir, out_dir=out_dir,
             run_id="test-run", source_name="vultr_csv", slice_name="all_us",

@@ -41,6 +41,29 @@ def inputs_dir_for(source: DataSource, root: Path = DEFAULT_INPUTS_ROOT) -> Path
     return root / source.name / source.setup_id() / source.slice_id()
 
 
+def outputs_combo_dir(
+    outputs_root: Path,
+    run_id: str,
+    source: DataSource,
+    combo_id: str,
+) -> Path:
+    """Canonical outputs-dir path for one (run, combo) cell.
+
+    Layout: `<outputs_root>/<run_id>/<source.name>/<setup_id>/<slice_id>/<combo_id>/`.
+    Mirrors `inputs_dir_for` so swapping `setup` keeps inputs and outputs
+    in parallel trees — no chance of two configurations writing run.json
+    into the same directory.
+    """
+    return (
+        outputs_root
+        / run_id
+        / source.name
+        / source.setup_id()
+        / source.slice_id()
+        / combo_id
+    )
+
+
 def materialize_inputs(
     source: DataSource,
     *,
