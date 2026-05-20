@@ -22,6 +22,7 @@ runtime_stat: p50              # plot_phase_runtime bars — median per-stage
 # Pairs for the error-diff CDF. Each pair plots a CDF of (error_A − error_B);
 # negative deltas = A is better. Here vanilla_cbg is the baseline.
 diff_pairs:
+  # ---- vs the vanilla CBG baseline ------------------------------------------
   - [million_scale_cbg,        vanilla_cbg]
   - [octant_cbg,               vanilla_cbg]
   - [octant_weighted_cbg,      vanilla_cbg]
@@ -29,9 +30,21 @@ diff_pairs:
   - [octant_hull_weighted_cbg, vanilla_cbg]
   - [spotter_cbg,              vanilla_cbg]
   - [spotter_cbg_weighted,     vanilla_cbg]
-  # Spotter (pooled) vs Octant (per-VP) — isolates the LTD choice.
+
+  # ---- LTD ablation: Spotter (pooled) vs Octant (per-VP) --------------------
   - [spotter_cbg,              octant_cbg]
   - [spotter_cbg_weighted,     octant_weighted_cbg]
-  # Octant spline+δ vs hull-only — isolates the spline/δ contribution.
+
+  # ---- LTD ablation: Octant spline+δ vs raw hull bounds ---------------------
   - [octant_cbg,               octant_hull_cbg]
   - [octant_weighted_cbg,      octant_hull_weighted_cbg]
+
+  # ---- CTR ablation: geometric_centroid vs combo's default CTR --------------
+  - [vanilla_cbg_centroid,         vanilla_cbg]            # vs boundary_vertex_mean
+  - [million_scale_cbg_centroid,   million_scale_cbg]      # vs boundary_vertex_mean
+  - [octant_cbg_centroid,          octant_cbg]             # vs monte_carlo_medoid
+  - [spotter_cbg_centroid,         spotter_cbg]            # vs monte_carlo_medoid
+
+  # ---- MTL ablation: planar_circle vs spherical_circle (CTR held constant) -
+  - [vanilla_cbg_planar_centroid,       vanilla_cbg_centroid]
+  - [million_scale_cbg_planar_centroid, million_scale_cbg_centroid]
