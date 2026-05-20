@@ -1,59 +1,86 @@
-# Full Vultr-US run — every probe ASN, 8 combos spanning the LTD × MTL × CTR axes.
-#
-# Spherical-circle MTL is intentionally absent: at all_us scale (1422 VPs ×
-# 7 anchor targets) the legacy circle_intersections path is O(n²) and
-# dominates runtime. Add it explicitly if you need that comparison.
+# Full Vultr-US configuration — same four combos as smoke.yaml, scaled to the
+# full all_us slice. anchors_to_probes setup (anchors are VPs, probes are
+# eval targets — pressure test).
 #
 # Run with:
 #   snakemake -s scripts/benchmark/v2/Snakefile \
 #       --configfile scripts/benchmark/v2/config/full_us.yaml -j 4
 
-run_id: full-us-001
+run_id: full-us-002
 source: vultr_csv
+setup: anchors_to_probes
 slices: [all_us]
 
 enable_fallback: true
 
+# Run-level RNG seed. Per-target seeds are derived as
+# numpy.random.SeedSequence([seed, target_index]) and applied to any
+# stochastic stage (monte_carlo_medoid here). Override per-combo via a
+# `seed:` key on the combo entry. Without a seed, MonteCarloMedoidCTR
+# uses its own random seed (predictions vary run-to-run).
+seed: 42
+
 combos:
-  # ---- Native Circle (CircleLTD × CircleMTL) ---------------------------
-  - combo_id: soi__planar_circle__centroid
-    ltd: speed_of_internet
-    mtl: planar_circle
-    ctr: geometric_centroid
-
-  - combo_id: soi__planar_circle__median
-    ltd: speed_of_internet
-    mtl: planar_circle
-    ctr: geometric_median
-
-  - combo_id: low_envelope__planar_circle__centroid
+  # ---- Circle family ---------------------------------------------------------
+  # Vanilla CBG: per-VP min-RTT-fit (low_envelope) + spherical intersection +
+  # mean of feasible-region vertices. low_envelope takes no kwargs.
+  - combo_id: vanilla_cbg
     ltd: low_envelope
-    mtl: planar_circle
-    ctr: geometric_centroid
-
-  - combo_id: low_envelope__planar_circle__boundary_vertex_mean
-    ltd: low_envelope
-    mtl: planar_circle
+    mtl: spherical_circle
     ctr: boundary_vertex_mean
+    mtl_kwargs:
+      speed_ratio: 0.6667           # 2/3 c — Internet speed-of-light fraction
+      enable_circle_filter: true    # redundant-circle preprocessing (IMC 2012)
 
-  # ---- Native Annulus (AnnulusLTD × AnnulusMTL) ------------------------
-  - combo_id: normal_dist__planar_annulus__centroid
-    ltd: normal_dist
-    mtl: planar_annulus
-    ctr: geometric_centroid
+  # Million-scale variant: same skeleton as vanilla but the LTD is a closed-form
+  # disk of radius (RTT/2) * speed. Pair the LTD and MTL speed_ratio for
+  # self-consistency — both should describe the same physical bound.
+  - combo_id: million_scale_cbg
+    ltd: speed_of_internet
+    mtl: spherical_circle
+    ctr: boundary_vertex_mean
+    ltd_kwargs:
+      speed_ratio: 0.6667
+    mtl_kwargs:
+      speed_ratio: 0.6667
+      enable_circle_filter: true
 
-  - combo_id: normal_dist__planar_annulus_weighted__medoid
-    ltd: normal_dist
-    mtl: planar_annulus_weighted
-    ctr: monte_carlo_medoid
-
-  - combo_id: bounded_spline__planar_annulus__centroid
+  # ---- Annulus family --------------------------------------------------------
+  # Octant: per-VP RTT-to-distance learned as a (lower, upper) band; planar
+  # intersection of those annuli; Monte Carlo Sobol sampling inside the
+  # feasible region; sampled L1-medoid as the centroid.
+  - combo_id: octant_cbg
     ltd: bounded_spline
     mtl: planar_annulus
-    ctr: geometric_centroid
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9          # band width target: ~90% of training pairs covered
+      cutoff_min_points: 5          # min samples per VP before fitting a spline
+      fit_spline: true              # else use per-bucket envelope only
+      spline_n_knots: 4
+      bin_size_ms: 5.0              # RTT bucket width for spline knots
+    mtl_kwargs:
+      n_pts: 64                     # circle discretization for Shapely intersection
+    ctr_kwargs:
+      n_samples: 1024               # power of 2 — Sobol sampler likes that
 
-  # ---- Degraded (AnnulusLTD through CircleMTL — inner bound discarded) -
-  - combo_id: normal_dist__planar_circle__centroid_degraded
-    ltd: normal_dist
-    mtl: planar_circle
-    ctr: geometric_centroid
+  # Octant-weighted: same LTD + CTR as octant, but the MTL down-weights
+  # high-RTT VPs (their RTT noise floor is wider, so their constraint is
+  # less informative). weight = exp(-rtt / weight_tau_ms); constraints with
+  # weight < weight_threshold are dropped entirely.
+  - combo_id: octant_weighted_cbg
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64                     # vertices per annulus polygon approximation
+      weight_threshold: 0.9         # union covers ≥ this fraction of Σwᵢ (higher = larger region)
+      weight_tau_ms: 50.0           # exp-decay scale on RTT: rtt=tau → constraint weight=0.37
+    ctr_kwargs:
+      n_samples: 1024

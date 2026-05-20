@@ -1,23 +1,19 @@
-# Analysis-plots config for the smoke-003 benchmark run.
-#
-# Reproduces the three PNGs we wrote by hand against
-# scripts/benchmark/v2/outputs/smoke-003/, but driven by Snakemake so the same
-# config style as scripts/benchmark/v2/config/smoke.yaml carries over.
+# Analysis-plots config for the full-us-002 benchmark run.
 #
 # Run with:
 #   snakemake -s scripts/analysis/Snakefile \
-#       --configfile scripts/analysis/config/smoke-003.yaml -j 3
+#       --configfile scripts/analysis/config/full-us-002.yaml -j 3
 
-run_id: smoke-003
+run_id: full-us-002
 source: vultr_csv
-setup: anchors_to_probes       # match the benchmark run's setup_id
-slices: [top1]
+setup: anchors_to_probes
+slices: [all_us]
 
 # Plot knobs
 group_by: ltd                  # "ltd" = one CDF panel per LTD model; "none" = single panel
 phase_stat: p95                # which per-stage summary stat to stack: p5/p25/p50/p75/p95/mean
 include_fit: true              # add a FIT bar from each combo's run.json
-runtime_stat: p50              # plot_phase_runtime bars — median per-stage
+runtime_stat: p50              # plot_phase_runtime bars — median per-stage (sequential, so stack ≈ total)
 
 # Pairs for the error-diff CDF. Each pair plots a CDF of (error_A − error_B);
 # negative deltas = A is better. Here vanilla_cbg is the baseline.

@@ -5,10 +5,11 @@
 #       --configfile scripts/analysis/config/smoke-003.yaml -j 3
 #
 # Consumes the parquets written by scripts/benchmark/v2/Snakefile and
-# produces three PNGs per (source, setup, slice):
+# produces four PNGs per (source, setup, slice):
 #   plot_error_cdf.png        – CDF of error_km, optionally panelled by LTD
 #   plot_error_diff_cdf.png   – pairwise per-target error_A − error_B CDF
 #   plot_phase_memory.png     – stacked LTD/MTL/CTR (+ FIT) peak memory
+#   plot_phase_runtime.png    – stacked LTD/MTL/CTR per-target runtime + total line
 
 from pathlib import Path
 
@@ -25,6 +26,7 @@ ANALYSIS_ROOT   = Path(config.get("analysis_root",   "scripts/analysis/outputs")
 GROUP_BY   = config.get("group_by", "ltd")  # "ltd" | "none"
 PHASE_STAT = config.get("phase_stat", "p95")  # p5/p25/p50/p75/p95/mean
 INCLUDE_FIT = bool(config.get("include_fit", True))
+RUNTIME_STAT = config.get("runtime_stat", "p50")  # bars on plot_phase_runtime — default median
 # Diff pairs: list of [A, B] combo_id pairs. Required for the diff plot.
 DIFF_PAIRS = config.get("diff_pairs", [])
 
@@ -33,7 +35,7 @@ CLI = "python -m scripts.analysis"
 RUN_DIR = V2_OUTPUTS_ROOT / RUN_ID
 SLICE_OUT = ANALYSIS_ROOT / RUN_ID / SOURCE / SETUP / "{slice}"
 
-_PLOTS = ["plot_error_cdf", "plot_phase_memory"]
+_PLOTS = ["plot_error_cdf", "plot_phase_memory", "plot_phase_runtime"]
 if DIFF_PAIRS:
     _PLOTS.append("plot_error_diff_cdf")
 
@@ -77,6 +79,23 @@ rule phase_memory:
         " --slice {wildcards.slice}"
         " --stat {params.stat}"
         " {params.fit_flag}"
+        " --out {output.png}"
+
+rule phase_runtime:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = SLICE_OUT / "plot_phase_runtime.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        stat = RUNTIME_STAT,
+    shell:
+        CLI + ".plot_phase_runtime"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --slice {wildcards.slice}"
+        " --stat {params.stat}"
         " --out {output.png}"
 
 rule error_diff_cdf:
