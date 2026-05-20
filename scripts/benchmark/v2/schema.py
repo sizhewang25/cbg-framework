@@ -95,6 +95,11 @@ TARGETS_SCHEMA = pa.schema([
     pa.field("mtl_intersection_kind", pa.string(), nullable=True),  # polygon|multipolygon|vertex_list|none
     pa.field("ctr_success", pa.bool_(), nullable=True),
     pa.field("ctr_error", pa.string(), nullable=True),
+
+    # Per-target RNG seed actually applied to stochastic stages (currently only
+    # MonteCarloMedoidCTR). NULL when the combo wasn't run with a base_seed,
+    # so deterministic combos don't carry a meaningless column value.
+    pa.field("seed", pa.int64(), nullable=True),
 ])
 
 # Uniform per-metric stat block: p5, p25, p50, p75, p95, mean, std. All stats

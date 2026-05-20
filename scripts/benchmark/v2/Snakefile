@@ -65,6 +65,13 @@ rule run_combo:
         ltd_kwargs = lambda wc: json.dumps(COMBOS_BY_ID[wc.combo_id].get("ltd_kwargs", {})),
         mtl_kwargs = lambda wc: json.dumps(COMBOS_BY_ID[wc.combo_id].get("mtl_kwargs", {})),
         ctr_kwargs = lambda wc: json.dumps(COMBOS_BY_ID[wc.combo_id].get("ctr_kwargs", {})),
+        # Per-combo seed wins over the run-level default; both are optional.
+        # An empty seed_flag means: let the CTR use its built-in randomization.
+        seed_flag = lambda wc: (
+            f"--seed {COMBOS_BY_ID[wc.combo_id]['seed']}"
+            if "seed" in COMBOS_BY_ID[wc.combo_id]
+            else (f"--seed {config['seed']}" if "seed" in config else "")
+        ),
     shell:
         CLI + " run-combo"
         " --source {params.source} --slice {wildcards.slice}"
@@ -77,6 +84,7 @@ rule run_combo:
         " --inputs-root {params.inputs_root}"
         " --outputs-root {params.outputs_root}"
         " {params.enable_fallback}"
+        " {params.seed_flag}"
 
 # ---- Summarize once all combos are done -------------------------------------
 rule summarize:

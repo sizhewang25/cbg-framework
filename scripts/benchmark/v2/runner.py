@@ -16,11 +16,12 @@ slice, combo) triples across this entry point.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from shapely.geometry.base import BaseGeometry
@@ -38,16 +39,21 @@ from scripts.benchmark.v2.instrument import (
     measure_block,
     peak_rss_bytes,
 )
-from scripts.framework.v2 import CBGModel, GeoStatus
-from scripts.framework.v2.ltd.base import LTDResult
+from scripts.framework.v2 import CBGModel
 from scripts.framework.v2.mtl.base import MTLResult
-from scripts.framework.v2.types import Coord, Error
 from scripts.libs.cbg.rtt_model import haversine_distance
 
 
 @dataclass(frozen=True)
 class ComboSpec:
-    """A single (LTD, MTL, CTR) triple to evaluate."""
+    """A single (LTD, MTL, CTR) triple to evaluate.
+
+    `base_seed`, when non-None, makes stochastic stages deterministic:
+    a per-target seed is derived from (base_seed, target_index) via
+    numpy.random.SeedSequence and applied to any stage exposing an `rng`
+    attribute (today, only MonteCarloMedoidCTR). Recorded in the row's
+    `seed` column so a single (combo, target) can be replayed exactly.
+    """
     combo_id: str
     ltd: str
     mtl: str
@@ -55,6 +61,7 @@ class ComboSpec:
     ltd_kwargs: dict[str, Any]
     mtl_kwargs: dict[str, Any]
     ctr_kwargs: dict[str, Any]
+    base_seed: Optional[int] = None
 
 
 def run_one_combo(
@@ -88,17 +95,25 @@ def run_one_combo(
     save_ltd_checkpoint(model.ltd, fit_result, combo_dir=out_dir)
 
     # --- 3. Loop targets, geolocate with instrumentation --------------------
-    target_rows: list[dict] = []
+    # Streaming writer: one row group per target. Each writer.write_table call
+    # flushes a row group to disk, so the data behind every completed target
+    # is durable. Parquet's footer is still only written on close(), so a hard
+    # crash leaves a footer-less file — recoverable but not directly readable.
     status_counts = {"SUCCESS": 0, "FALLBACK": 0, "ERROR": 0}
-    for target in eval_targets:
-        instr = TimingMemoryInstrument()
-        result = model.geolocate(target.obs, instrument=instr)
-        status_counts[result.status.name] += 1
-        target_rows.append(_build_target_row(target, result, instr))
+    targets_path = out_dir / "targets.parquet"
+    has_stochastic_ctr = hasattr(model.ctr, "rng")
+    with pq.ParquetWriter(str(targets_path), bench_schema.TARGETS_SCHEMA) as writer:
+        for target_index, target in enumerate(eval_targets):
+            target_seed = _derive_target_seed(spec.base_seed, target_index)
+            if has_stochastic_ctr and target_seed is not None:
+                model.ctr.rng = np.random.default_rng(target_seed)
 
-    # --- 4. Write targets.parquet -------------------------------------------
-    targets_table = _rows_to_table(target_rows)
-    pq.write_table(targets_table, out_dir / "targets.parquet")
+            instr = TimingMemoryInstrument()
+            result = model.geolocate(target.obs, instrument=instr)
+            status_counts[result.status.name] += 1
+
+            row = _build_target_row(target, result, instr, seed=target_seed)
+            writer.write_table(_row_to_table(row))
 
     # --- 5. Write run.json ---------------------------------------------------
     rss_end = peak_rss_bytes()
@@ -113,6 +128,7 @@ def run_one_combo(
         "ltd_kwargs": spec.ltd_kwargs,
         "mtl_kwargs": spec.mtl_kwargs,
         "ctr_kwargs": spec.ctr_kwargs,
+        "base_seed": spec.base_seed,
         "enable_fallback": enable_fallback,
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "n_fit_samples": len(fit_samples),
@@ -132,7 +148,25 @@ def run_one_combo(
 
 # ---- per-target row construction --------------------------------------------
 
-def _build_target_row(target, geo_result, instr: TimingMemoryInstrument) -> dict:
+def _derive_target_seed(base_seed: Optional[int], target_index: int) -> Optional[int]:
+    """Per-target seed via SeedSequence. None passes through unchanged.
+
+    SeedSequence is the documented way to spawn deterministic child seeds
+    from a base — avoids hash-collision risk and decouples targets from
+    each other (target N's RNG is independent of target N-1's state)."""
+    if base_seed is None:
+        return None
+    state = np.random.SeedSequence([int(base_seed), int(target_index)]).generate_state(1, dtype=np.uint32)
+    return int(state[0])
+
+
+def _build_target_row(
+    target,
+    geo_result,
+    instr: TimingMemoryInstrument,
+    *,
+    seed: Optional[int] = None,
+) -> dict:
     """Flatten a (target, GeoResult, instrument) triple into a TARGETS_SCHEMA row."""
     ltd_rec = instr.get("ltd")
     mtl_rec = instr.get("mtl")
@@ -185,6 +219,7 @@ def _build_target_row(target, geo_result, instr: TimingMemoryInstrument) -> dict
         "mtl_intersection_kind": _intersection_kind(mtl_result),
         "ctr_success": ctr_result.success if ctr_result else None,
         "ctr_error": (ctr_result.error.name if ctr_result and ctr_result.error else None),
+        "seed": seed,
     }
 
 
@@ -204,16 +239,11 @@ def _intersection_kind(mtl: Optional[MTLResult]) -> Optional[str]:
     return "unknown"
 
 
-def _rows_to_table(rows: list[dict]) -> pa.Table:
-    if not rows:
-        # Empty input — still emit a schema-valid empty table so consumers
-        # don't have to special-case "no targets".
-        return pa.table(
-            {field.name: [] for field in bench_schema.TARGETS_SCHEMA},
-            schema=bench_schema.TARGETS_SCHEMA,
-        )
-    columns: dict[str, list] = {field.name: [] for field in bench_schema.TARGETS_SCHEMA}
-    for row in rows:
-        for name in columns:
-            columns[name].append(row.get(name))
+def _row_to_table(row: dict) -> pa.Table:
+    """Wrap a single TARGETS_SCHEMA-shaped row dict as a 1-row pa.Table.
+
+    Streaming writes go one row at a time so each target survives a crash
+    as a complete row group on disk.
+    """
+    columns = {field.name: [row.get(field.name)] for field in bench_schema.TARGETS_SCHEMA}
     return pa.table(columns, schema=bench_schema.TARGETS_SCHEMA)

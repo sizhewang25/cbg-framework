@@ -81,6 +81,14 @@ def cmd_run_combo(
     ltd_kwargs: str = typer.Option("{}", help="JSON dict forwarded to the LTD constructor."),
     mtl_kwargs: str = typer.Option("{}", help="JSON dict forwarded to the MTL constructor."),
     ctr_kwargs: str = typer.Option("{}", help="JSON dict forwarded to the CTR constructor."),
+    seed: Optional[int] = typer.Option(
+        None,
+        help=(
+            "Base RNG seed for deterministic re-runs. Per-target seeds are derived "
+            "via numpy.random.SeedSequence([seed, target_index]) and applied to any "
+            "stochastic stage (currently MonteCarloMedoidCTR). Recorded in targets.parquet."
+        ),
+    ),
     inputs_root: Path = typer.Option(DEFAULT_INPUTS_ROOT, help="Root containing <source>/<slice>/*.parquet."),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root for run outputs."),
     enable_fallback: bool = typer.Option(True, help="Enable nearest-VP fallback on pipeline failure."),
@@ -101,6 +109,7 @@ def cmd_run_combo(
         ltd_kwargs=json.loads(ltd_kwargs),
         mtl_kwargs=json.loads(mtl_kwargs),
         ctr_kwargs=json.loads(ctr_kwargs),
+        base_seed=seed,
     )
     out_dir = outputs_root / run_id / source / slice / cid
     run_one_combo(

@@ -85,6 +85,63 @@ class TestRunOneCombo(unittest.TestCase):
             self.assertTrue(pred["success"])
             self.assertGreater(pred["upper_km"], 0)
 
+    def test_seed_recorded_and_makes_stochastic_combo_deterministic(self) -> None:
+        """Same base_seed → byte-identical predictions on a stochastic combo."""
+        from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource as _Src
+
+        # Need a richer fixture: MonteCarloMedoidCTR over PlanarAnnulusMTL
+        # requires an annular feasible region. Use the NormalDist LTD which
+        # fits per-VP normals.
+        spec = ComboSpec(
+            combo_id="mc_combo",
+            ltd="normal_dist", mtl="planar_annulus", ctr="monte_carlo_medoid",
+            ltd_kwargs={"cutoff_min_points": 1, "min_per_bin": 1, "n_bins": 2},
+            mtl_kwargs={}, ctr_kwargs={"n_samples": 256},
+            base_seed=42,
+        )
+        out_a = self.out_dir.parent / "mc_a"
+        out_b = self.out_dir.parent / "mc_b"
+        run_one_combo(
+            spec, inputs_dir=self.inputs_dir, out_dir=out_a,
+            run_id="seed-test", source_name="vultr_csv", slice_name="all_us",
+        )
+        run_one_combo(
+            spec, inputs_dir=self.inputs_dir, out_dir=out_b,
+            run_id="seed-test", source_name="vultr_csv", slice_name="all_us",
+        )
+
+        # seed column populated (one row per target).
+        ta = pq.read_table(out_a / "targets.parquet").to_pylist()
+        tb = pq.read_table(out_b / "targets.parquet").to_pylist()
+        self.assertEqual(len(ta), 1)
+        self.assertIsNotNone(ta[0]["seed"])
+        # Determinism: identical seed → identical prediction (status, coord).
+        self.assertEqual(ta[0]["status"], tb[0]["status"])
+        if ta[0]["status"] == "SUCCESS":
+            self.assertEqual(ta[0]["pred_lat"], tb[0]["pred_lat"])
+            self.assertEqual(ta[0]["pred_lon"], tb[0]["pred_lon"])
+
+        # base_seed echoed into run.json.
+        meta_a = json.loads((out_a / "run.json").read_text())
+        self.assertEqual(meta_a["base_seed"], 42)
+
+    def test_seed_none_leaves_column_null(self) -> None:
+        spec = ComboSpec(
+            combo_id="mc_no_seed",
+            ltd="speed_of_internet", mtl="planar_circle", ctr="geometric_centroid",
+            ltd_kwargs={}, mtl_kwargs={}, ctr_kwargs={},
+            base_seed=None,
+        )
+        out_dir = self.out_dir.parent / "mc_no_seed"
+        run_one_combo(
+            spec, inputs_dir=self.inputs_dir, out_dir=out_dir,
+            run_id="no-seed-test", source_name="vultr_csv", slice_name="all_us",
+        )
+        rows = pq.read_table(out_dir / "targets.parquet").to_pylist()
+        self.assertEqual(rows[0]["seed"], None)
+        meta = json.loads((out_dir / "run.json").read_text())
+        self.assertIsNone(meta["base_seed"])
+
     def test_stateful_ltd_writes_pickle_checkpoint(self) -> None:
         spec = ComboSpec(
             combo_id="combo_le",

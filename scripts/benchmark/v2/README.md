@@ -96,6 +96,31 @@ Per the spec, every row of `targets.parquet` carries:
 Run-level: `fit_ms`, `fit_peak_bytes`, `run_peak_rss_bytes` live in `run.json`
 and roll into `summary.parquet`.
 
+## Reproducibility
+
+Pass `--seed N` to `run-combo` (or set `seed: N` on a Snakemake combo entry)
+to make stochastic stages deterministic. The runner derives a per-target seed
+via `numpy.random.SeedSequence([seed, target_index])` and resets the CTR's
+internal RNG before each `geolocate` call. The realized per-target seed is
+saved in the `seed` column of `targets.parquet`, and the base seed appears as
+`base_seed` in `run.json` — replaying any (combo, target) cell reproduces the
+exact prediction byte-for-byte.
+
+Without `--seed`, the `seed` column stays NULL and stochastic combos
+(currently only `monte_carlo_medoid` CTR) use their built-in random seed.
+
+## Per-target durability
+
+`targets.parquet` is written via a streaming `pq.ParquetWriter`: each target
+becomes its own row group, flushed to disk before the next target's
+`geolocate` runs. A crash 600 targets into a 723-target sweep leaves 600
+completed row groups on disk — Parquet's footer is still only written at
+clean close, so the partial file isn't directly readable by `pq.read_table`,
+but the row-group data is recoverable.
+
+`fit_checkpoint.pkl` is written before the target loop even starts, so the
+fitted LTD is always durable independent of the per-target loop.
+
 ## Tests
 
 ```bash
