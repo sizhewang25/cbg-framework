@@ -30,6 +30,17 @@ from scripts.framework.v2 import FitSample
 DEFAULT_INPUTS_ROOT = Path(__file__).resolve().parent / "inputs"
 
 
+def inputs_dir_for(source: DataSource, root: Path = DEFAULT_INPUTS_ROOT) -> Path:
+    """Canonical inputs-dir path for one source configuration.
+
+    Layout: `<root>/<source.name>/<setup_id>/<slice_id>/`. The setup_id
+    sits between source and slice so the two role assignments
+    (probes_to_anchors vs anchors_to_probes) get parallel directory
+    trees instead of colliding under the same slice name.
+    """
+    return root / source.name / source.setup_id() / source.slice_id()
+
+
 def materialize_inputs(
     source: DataSource,
     *,
@@ -38,7 +49,7 @@ def materialize_inputs(
     """Write source's VPs, fit samples, and eval observations to parquet.
 
     Returns the output directory path."""
-    out_dir = root / source.name / source.slice_id()
+    out_dir = inputs_dir_for(source, root)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     n_vps = _write_vp_configs(source.iter_vp_configs(), out_dir / "vp_configs.parquet")
@@ -49,6 +60,7 @@ def materialize_inputs(
 
     manifest = {
         "source": source.name,
+        "setup": source.setup_id(),
         "slice": source.slice_id(),
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "n_vps": n_vps,

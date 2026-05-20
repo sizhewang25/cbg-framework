@@ -50,8 +50,18 @@ class VultrCSVSource(DataSource):
 
     name = "vultr_csv"
 
-    def __init__(self, slice: str = "all_us", csv_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        slice: str = "all_us",
+        setup: str = DataSource.PROBES_TO_ANCHORS,
+        csv_path: Optional[Path] = None,
+    ) -> None:
+        if setup not in DataSource.ALLOWED_SETUPS:
+            raise ValueError(
+                f"unknown setup {setup!r}; expected one of {DataSource.ALLOWED_SETUPS}"
+            )
         self._slice = slice
+        self._setup = setup
         self._csv_path = Path(csv_path) if csv_path is not None else DEFAULT_CSV
         self._df: Optional[pd.DataFrame] = None  # lazy-loaded
 
@@ -60,47 +70,84 @@ class VultrCSVSource(DataSource):
     def slice_id(self) -> str:
         return self._slice
 
+    def setup_id(self) -> str:
+        return self._setup
+
     def iter_vp_configs(self) -> Iterator[VpConfig]:
         df = self._load()
-        for _, row in df.drop_duplicates("prb_id").iterrows():
-            yield VpConfig(
-                vp_id=str(int(row["prb_id"])),
-                lat=float(row["probe_latitude"]),
-                lon=float(row["probe_longitude"]),
-                asn=int(row["probe_asn"]) if pd.notna(row["probe_asn"]) else None,
-                country=str(row["probe_country"]) if pd.notna(row["probe_country"]) else None,
-            )
+        if self._setup == DataSource.PROBES_TO_ANCHORS:
+            for _, row in df.drop_duplicates("prb_id").iterrows():
+                yield VpConfig(
+                    vp_id=str(int(row["prb_id"])),
+                    lat=float(row["probe_latitude"]),
+                    lon=float(row["probe_longitude"]),
+                    asn=int(row["probe_asn"]) if pd.notna(row["probe_asn"]) else None,
+                    country=str(row["probe_country"]) if pd.notna(row["probe_country"]) else None,
+                )
+        else:  # ANCHORS_TO_PROBES: anchors are VPs
+            for _, row in df.drop_duplicates("dst_ip").iterrows():
+                yield VpConfig(
+                    vp_id=str(row["dst_ip"]),
+                    lat=float(row["anchor_latitude"]),
+                    lon=float(row["anchor_longitude"]),
+                    asn=int(row["anchor_asn"]) if pd.notna(row["anchor_asn"]) else None,
+                    country=str(row["anchor_country"]) if pd.notna(row["anchor_country"]) else None,
+                )
 
     def iter_fit_samples(self) -> Iterator[FitSample]:
         df = self._load()
         for row in df.itertuples(index=False):
-            yield FitSample(
-                vp_id=VpId(str(int(row.prb_id))),
-                vp_coord=Coord(lat=float(row.probe_latitude), lon=float(row.probe_longitude)),
-                probe_coord=Coord(lat=float(row.anchor_latitude), lon=float(row.anchor_longitude)),
-                latency=Latency(float(row.min_rtt)),
-            )
+            if self._setup == DataSource.PROBES_TO_ANCHORS:
+                yield FitSample(
+                    vp_id=VpId(str(int(row.prb_id))),
+                    vp_coord=Coord(lat=float(row.probe_latitude), lon=float(row.probe_longitude)),
+                    probe_coord=Coord(lat=float(row.anchor_latitude), lon=float(row.anchor_longitude)),
+                    latency=Latency(float(row.min_rtt)),
+                )
+            else:  # ANCHORS_TO_PROBES
+                yield FitSample(
+                    vp_id=VpId(str(row.dst_ip)),
+                    vp_coord=Coord(lat=float(row.anchor_latitude), lon=float(row.anchor_longitude)),
+                    probe_coord=Coord(lat=float(row.probe_latitude), lon=float(row.probe_longitude)),
+                    latency=Latency(float(row.min_rtt)),
+                )
 
     def iter_eval_targets(self) -> Iterator[EvalTarget]:
         df = self._load()
-        # Group by target anchor IP. Anchor coordinates are constant within a
-        # group (same anchor across all probes), so we read true_coord from the
-        # first row of each group.
-        for dst_ip, group in df.groupby("dst_ip", sort=True):
-            first = group.iloc[0]
-            true_coord = Coord(
-                lat=float(first["anchor_latitude"]),
-                lon=float(first["anchor_longitude"]),
-            )
-            obs: list[tuple[VpId, Coord, Latency]] = [
-                (
-                    VpId(str(int(r.prb_id))),
-                    Coord(lat=float(r.probe_latitude), lon=float(r.probe_longitude)),
-                    Latency(float(r.min_rtt)),
+        if self._setup == DataSource.PROBES_TO_ANCHORS:
+            # Group by anchor IP — each anchor is one target. Anchor coords
+            # are constant within a group; read true_coord from the first row.
+            for dst_ip, group in df.groupby("dst_ip", sort=True):
+                first = group.iloc[0]
+                true_coord = Coord(
+                    lat=float(first["anchor_latitude"]),
+                    lon=float(first["anchor_longitude"]),
                 )
-                for r in group.itertuples(index=False)
-            ]
-            yield EvalTarget(target_id=str(dst_ip), true_coord=true_coord, obs=obs)
+                obs: list[tuple[VpId, Coord, Latency]] = [
+                    (
+                        VpId(str(int(r.prb_id))),
+                        Coord(lat=float(r.probe_latitude), lon=float(r.probe_longitude)),
+                        Latency(float(r.min_rtt)),
+                    )
+                    for r in group.itertuples(index=False)
+                ]
+                yield EvalTarget(target_id=str(dst_ip), true_coord=true_coord, obs=obs)
+        else:  # ANCHORS_TO_PROBES — each probe is one target
+            for prb_id, group in df.groupby("prb_id", sort=True):
+                first = group.iloc[0]
+                true_coord = Coord(
+                    lat=float(first["probe_latitude"]),
+                    lon=float(first["probe_longitude"]),
+                )
+                obs = [
+                    (
+                        VpId(str(r.dst_ip)),
+                        Coord(lat=float(r.anchor_latitude), lon=float(r.anchor_longitude)),
+                        Latency(float(r.min_rtt)),
+                    )
+                    for r in group.itertuples(index=False)
+                ]
+                yield EvalTarget(target_id=str(int(prb_id)), true_coord=true_coord, obs=obs)
 
     # ---- internals -----------------------------------------------------------
 

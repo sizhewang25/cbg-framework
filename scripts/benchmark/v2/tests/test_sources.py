@@ -74,6 +74,28 @@ class TestVultrCSVSource(unittest.TestCase):
         self.assertAlmostEqual(sample.vp_coord.lat, 40.0)
         self.assertAlmostEqual(sample.vp_coord.lon, -100.0)
 
+    def test_anchors_to_probes_setup_swaps_roles(self) -> None:
+        """anchors_to_probes: anchors become VPs, probes become targets."""
+        src = VultrCSVSource(
+            slice="all_us", setup="anchors_to_probes", csv_path=self.csv_path,
+        )
+        self.assertEqual(src.setup_id(), "anchors_to_probes")
+
+        # 5 unique probes in the synthetic CSV → 5 EvalTargets.
+        targets = list(src.iter_eval_targets())
+        self.assertEqual(len(targets), 5)
+        # 2 unique anchors → 2 VPs.
+        vps = list(src.iter_vp_configs())
+        self.assertEqual(len(vps), 2)
+        # FitSample.vp_coord must now be the anchor side.
+        sample = next(iter(src.iter_fit_samples()))
+        self.assertAlmostEqual(sample.vp_coord.lat, 33.0)  # first row's anchor
+        self.assertAlmostEqual(sample.probe_coord.lat, 40.0)  # first row's probe
+
+    def test_unknown_setup_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            VultrCSVSource(slice="all_us", setup="bogus", csv_path=self.csv_path)
+
 
 class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
     def test_load_coords_from_synthetic_json(self) -> None:
@@ -101,6 +123,37 @@ class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
             self.assertAlmostEqual(src._coords_by_ip["1.1.1.1"].lat, 33.0)
             self.assertAlmostEqual(src._coords_by_ip["1.1.1.1"].lon, -84.0)
             self.assertEqual(src._anchor_ips, {"1.1.1.1"})
+
+    def test_anchors_to_probes_setup_transposes_groups(self) -> None:
+        """In anchors_to_probes mode, EvalTargets are probes, not anchors."""
+        import json as _json
+        with tempfile.TemporaryDirectory() as tmp:
+            probes_json = Path(tmp) / "probes_and_anchors.json"
+            probes_json.write_text(_json.dumps([
+                {"address_v4": "1.1.1.1", "asn_v4": 7922, "country_code": "US",
+                 "geometry": {"coordinates": [-84.0, 33.0]}, "is_anchor": True},
+                {"address_v4": "vp-a", "asn_v4": 7922, "country_code": "US",
+                 "geometry": {"coordinates": [-100.0, 40.0]}, "is_anchor": False},
+                {"address_v4": "vp-b", "asn_v4": 7922, "country_code": "US",
+                 "geometry": {"coordinates": [-101.0, 41.0]}, "is_anchor": False},
+            ]))
+            src = RipeAtlasSource(
+                slice="all_anchors", setup="anchors_to_probes",
+                probes_and_anchors_file=probes_json,
+            )
+            with mock.patch(
+                "scripts.analysis.analysis.compute_rtts_per_dst_src",
+                return_value={"1.1.1.1": {"vp-a": [10.0], "vp-b": [12.0]}},
+            ):
+                targets = list(src.iter_eval_targets())
+        # 1 anchor × 2 probes → 2 EvalTargets (one per probe), each with the
+        # single anchor as a VP.
+        self.assertEqual(len(targets), 2)
+        target_ids = {t.target_id for t in targets}
+        self.assertEqual(target_ids, {"vp-a", "vp-b"})
+        for t in targets:
+            self.assertEqual(len(t.obs), 1)
+            self.assertEqual(str(t.obs[0][0]), "1.1.1.1")
 
     def test_iter_eval_targets_groups_by_anchor(self) -> None:
         """Mock out compute_rtts_per_dst_src so the test doesn't require ClickHouse."""

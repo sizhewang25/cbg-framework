@@ -72,6 +72,7 @@ def run_one_combo(
     run_id: str,
     source_name: str,
     slice_name: str,
+    setup_name: str = "probes_to_anchors",
     enable_fallback: bool = True,
 ) -> Path:
     """Fit + geolocate every eval target for one combo. Write run outputs."""
@@ -120,6 +121,7 @@ def run_one_combo(
     run_meta = {
         "run_id": run_id,
         "source": source_name,
+        "setup": setup_name,
         "slice": slice_name,
         "combo_id": spec.combo_id,
         "ltd": spec.ltd,

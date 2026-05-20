@@ -130,6 +130,7 @@ SUMMARY_SCHEMA = pa.schema(
     [
         pa.field("run_id", pa.string(), nullable=False),
         pa.field("source", pa.string(), nullable=False),
+        pa.field("setup", pa.string(), nullable=False),
         pa.field("slice", pa.string(), nullable=False),
         pa.field("combo_id", pa.string(), nullable=False),
         pa.field("ltd", pa.string(), nullable=False),

@@ -40,13 +40,19 @@ class RipeAtlasSource(DataSource):
     def __init__(
         self,
         slice: str = "all_anchors",
+        setup: str = DataSource.PROBES_TO_ANCHORS,
         *,
         probes_and_anchors_file: Optional[Path] = None,
         ping_table: Optional[str] = None,
         threshold: int = _DEFAULT_THRESHOLD,
         filter_clause: str = _DEFAULT_FILTER,
     ) -> None:
+        if setup not in DataSource.ALLOWED_SETUPS:
+            raise ValueError(
+                f"unknown setup {setup!r}; expected one of {DataSource.ALLOWED_SETUPS}"
+            )
         self._slice = slice
+        self._setup = setup
         self._probes_and_anchors_file = (
             Path(probes_and_anchors_file)
             if probes_and_anchors_file is not None
@@ -69,22 +75,25 @@ class RipeAtlasSource(DataSource):
     def slice_id(self) -> str:
         return self._slice
 
+    def setup_id(self) -> str:
+        return self._setup
+
     def iter_vp_configs(self) -> Iterator[VpConfig]:
         self._ensure_loaded()
-        # Only emit VPs that actually appear in at least one RTT row — i.e.
-        # ones the eval will actually use. Avoids polluting the parquet with
-        # 10k+ probes that contributed no measurements.
-        active_vp_ips: set[str] = set()
-        for measurements in (self._rtts_by_anchor or {}).values():
-            active_vp_ips.update(measurements.keys())
-        for ip in sorted(active_vp_ips):
-            coord = self._coords_by_ip.get(ip) if self._coords_by_ip else None
+        assert self._coords_by_ip is not None and self._rtts_by_anchor is not None
+        if self._setup == DataSource.PROBES_TO_ANCHORS:
+            # VPs are probes that appear in at least one RTT row.
+            active_ips: set[str] = set()
+            for measurements in self._rtts_by_anchor.values():
+                active_ips.update(measurements.keys())
+        else:  # ANCHORS_TO_PROBES — VPs are the anchors themselves
+            active_ips = set(self._rtts_by_anchor.keys())
+        for ip in sorted(active_ips):
+            coord = self._coords_by_ip.get(ip)
             if coord is None:
-                continue  # RTT row referenced a probe missing from coords JSON
+                continue
             yield VpConfig(
-                vp_id=ip,
-                lat=coord.lat,
-                lon=coord.lon,
+                vp_id=ip, lat=coord.lat, lon=coord.lon,
                 asn=self._asn_by_ip.get(ip),
                 country=self._country_by_ip.get(ip),
             )
@@ -92,37 +101,68 @@ class RipeAtlasSource(DataSource):
     def iter_fit_samples(self) -> Iterator[FitSample]:
         self._ensure_loaded()
         assert self._rtts_by_anchor is not None and self._coords_by_ip is not None
+        # The training pair is (vp_known_coord, target_known_coord, rtt).
+        # The setup decides which side gets called the VP.
         for anchor_ip, vp_rtts in self._rtts_by_anchor.items():
             anchor_coord = self._coords_by_ip.get(anchor_ip)
             if anchor_coord is None:
-                continue  # anchor coord missing — skip
-            for vp_ip, rtt in vp_rtts.items():
-                vp_coord = self._coords_by_ip.get(vp_ip)
-                if vp_coord is None or rtt <= 0:
+                continue
+            for probe_ip, rtt in vp_rtts.items():
+                probe_coord = self._coords_by_ip.get(probe_ip)
+                if probe_coord is None or rtt <= 0:
                     continue
-                yield FitSample(
-                    vp_id=VpId(vp_ip),
-                    vp_coord=vp_coord,
-                    probe_coord=anchor_coord,
-                    latency=Latency(float(rtt)),
-                )
+                if self._setup == DataSource.PROBES_TO_ANCHORS:
+                    yield FitSample(
+                        vp_id=VpId(probe_ip),
+                        vp_coord=probe_coord,
+                        probe_coord=anchor_coord,
+                        latency=Latency(float(rtt)),
+                    )
+                else:  # ANCHORS_TO_PROBES
+                    yield FitSample(
+                        vp_id=VpId(anchor_ip),
+                        vp_coord=anchor_coord,
+                        probe_coord=probe_coord,
+                        latency=Latency(float(rtt)),
+                    )
 
     def iter_eval_targets(self) -> Iterator[EvalTarget]:
         self._ensure_loaded()
         assert self._rtts_by_anchor is not None and self._coords_by_ip is not None
-        for anchor_ip in sorted(self._rtts_by_anchor.keys()):
-            anchor_coord = self._coords_by_ip.get(anchor_ip)
-            if anchor_coord is None:
-                continue
-            obs: list[tuple[VpId, Coord, Latency]] = []
-            for vp_ip, rtt in self._rtts_by_anchor[anchor_ip].items():
-                vp_coord = self._coords_by_ip.get(vp_ip)
-                if vp_coord is None or rtt <= 0:
+        if self._setup == DataSource.PROBES_TO_ANCHORS:
+            for anchor_ip in sorted(self._rtts_by_anchor.keys()):
+                anchor_coord = self._coords_by_ip.get(anchor_ip)
+                if anchor_coord is None:
                     continue
-                obs.append((VpId(vp_ip), vp_coord, Latency(float(rtt))))
-            if not obs:
-                continue
-            yield EvalTarget(target_id=anchor_ip, true_coord=anchor_coord, obs=obs)
+                obs: list[tuple[VpId, Coord, Latency]] = []
+                for probe_ip, rtt in self._rtts_by_anchor[anchor_ip].items():
+                    probe_coord = self._coords_by_ip.get(probe_ip)
+                    if probe_coord is None or rtt <= 0:
+                        continue
+                    obs.append((VpId(probe_ip), probe_coord, Latency(float(rtt))))
+                if obs:
+                    yield EvalTarget(target_id=anchor_ip, true_coord=anchor_coord, obs=obs)
+        else:  # ANCHORS_TO_PROBES — transpose: one EvalTarget per probe
+            # First build {probe_ip: [(anchor_ip, anchor_coord, rtt), ...]}
+            probe_obs: dict[str, list[tuple[str, Coord, float]]] = {}
+            for anchor_ip, probe_rtts in self._rtts_by_anchor.items():
+                anchor_coord = self._coords_by_ip.get(anchor_ip)
+                if anchor_coord is None:
+                    continue
+                for probe_ip, rtt in probe_rtts.items():
+                    if rtt <= 0:
+                        continue
+                    probe_obs.setdefault(probe_ip, []).append((anchor_ip, anchor_coord, rtt))
+            for probe_ip in sorted(probe_obs):
+                probe_coord = self._coords_by_ip.get(probe_ip)
+                if probe_coord is None:
+                    continue
+                obs = [
+                    (VpId(a), c, Latency(float(r)))
+                    for a, c, r in probe_obs[probe_ip]
+                ]
+                if obs:
+                    yield EvalTarget(target_id=probe_ip, true_coord=probe_coord, obs=obs)
 
     # ---- internals -----------------------------------------------------------
 

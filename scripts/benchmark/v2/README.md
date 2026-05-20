@@ -66,6 +66,26 @@ DataSource ──→ inputs/<source>/<slice>/{vp_configs,fit_samples,eval_observ
 Both adapters yield the same shape (VPs, FitSamples, EvalTargets), so a combo
 spec can be moved between sources by changing one flag.
 
+### Setup (role assignment)
+
+Every CLI command (and the Snakefile config) takes a `--setup` axis that picks
+which side of the (probe, anchor) pair is treated as the vantage point:
+
+- `probes_to_anchors` *(default)* — probes are VPs, anchors are targets. Matches
+  IMC 2023's primary eval direction. `all_us` slice gives 1422 VPs × 7 targets;
+  `all_anchors` slice gives ~10K VPs × 723 hard-GT targets.
+- `anchors_to_probes` — anchors are VPs, probes are targets (the pressure test
+  from the memory entry). `all_us` slice flips to 7 VPs × 1422 targets;
+  `all_anchors` flips to 723 VPs × ~12K hard-GT targets.
+
+The setup is part of the inputs/outputs path so the two configurations never
+collide:
+
+```
+inputs/<source>/<setup>/<slice>/{vp_configs,fit_samples,eval_observations}.parquet
+outputs/<run_id>/<source>/<setup>/<slice>/<combo_id>/{run.json, targets.parquet, fit_checkpoint.pkl}
+```
+
 ## Stage instrumentation
 
 `CBGModel.geolocate(obs, instrument=...)` accepts a callable that returns a

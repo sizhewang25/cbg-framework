@@ -60,7 +60,7 @@ class TestCLI(unittest.TestCase):
         ])
         self.assertEqual(result.exit_code, 0, msg=result.output)
         combo_dir = (
-            self.outputs_root / "cli-test" / "vultr_csv" / "all_us"
+            self.outputs_root / "cli-test" / "vultr_csv" / "probes_to_anchors" / "all_us"
             / "speed_of_internet__planar_circle__geometric_centroid"
         )
         self.assertTrue((combo_dir / "run.json").exists())

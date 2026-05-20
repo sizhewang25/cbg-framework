@@ -57,6 +57,11 @@ class DataSource(ABC):
 
     name: str  # short identifier — also the subdirectory name under inputs/
 
+    # Allowed values for the `setup` axis. Subclasses must accept both.
+    PROBES_TO_ANCHORS = "probes_to_anchors"
+    ANCHORS_TO_PROBES = "anchors_to_probes"
+    ALLOWED_SETUPS = (PROBES_TO_ANCHORS, ANCHORS_TO_PROBES)
+
     @abstractmethod
     def iter_vp_configs(self) -> Iterator[VpConfig]: ...
 
@@ -71,3 +76,11 @@ class DataSource(ABC):
         """Short identifier of the dataset slice this source represents
         (e.g. 'top1', 'all_us', '723_anchors'). Used as the inputs/output
         directory name so different slices don't collide."""
+
+    @abstractmethod
+    def setup_id(self) -> str:
+        """Which side of the (probe, anchor) pair is treated as the
+        vantage point. One of `PROBES_TO_ANCHORS` (default, the IMC 2023
+        primary direction) or `ANCHORS_TO_PROBES` (anchors-as-VPs pressure
+        test). Becomes a directory level in inputs/outputs paths so the
+        two configurations never collide."""

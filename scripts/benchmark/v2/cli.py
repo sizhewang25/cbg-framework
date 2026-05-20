@@ -22,9 +22,14 @@ import pyarrow.parquet as pq
 import typer
 
 from scripts.benchmark.v2 import schema as bench_schema
-from scripts.benchmark.v2.inputs import DEFAULT_INPUTS_ROOT, materialize_inputs
+from scripts.benchmark.v2.inputs import (
+    DEFAULT_INPUTS_ROOT,
+    inputs_dir_for,
+    materialize_inputs,
+)
 from scripts.benchmark.v2.runner import ComboSpec, run_one_combo
 from scripts.benchmark.v2.sources import SOURCES
+from scripts.benchmark.v2.sources.base import DataSource as _DataSource
 
 app = typer.Typer(
     add_completion=False,
@@ -41,9 +46,18 @@ DEFAULT_OUTPUTS_ROOT = Path(__file__).resolve().parent / "outputs"
 def cmd_materialize_inputs(
     source: str = typer.Option(..., help=f"Data source name. One of: {sorted(SOURCES)}"),
     slice: str = typer.Option(..., help="Slice identifier (source-specific, e.g. 'top1' / 'all_anchors')."),
+    setup: str = typer.Option(
+        _DataSource.PROBES_TO_ANCHORS,
+        help=(
+            "Role assignment for the (probe, anchor) pair. "
+            f"One of: {list(_DataSource.ALLOWED_SETUPS)}. "
+            "'probes_to_anchors' = probes are VPs, anchors are targets (IMC 2023 primary). "
+            "'anchors_to_probes' = anchors are VPs, probes are targets (pressure test)."
+        ),
+    ),
     inputs_root: Path = typer.Option(
         DEFAULT_INPUTS_ROOT,
-        help="Root directory for materialized inputs. Output goes to <root>/<source>/<slice>/.",
+        help="Root directory for materialized inputs. Output goes to <root>/<source>/<setup>/<slice>/.",
     ),
     force: bool = typer.Option(False, help="Re-materialize even if manifest already exists."),
 ) -> None:
@@ -52,14 +66,13 @@ def cmd_materialize_inputs(
         typer.echo(f"Unknown source {source!r}. Available: {sorted(SOURCES)}", err=True)
         raise typer.Exit(code=2)
 
-    out_dir = inputs_root / source / slice
-    manifest_path = out_dir / "manifest.json"
-    if manifest_path.exists() and not force:
+    source_cls = SOURCES[source]
+    src = source_cls(slice=slice, setup=setup)
+    out_dir = inputs_dir_for(src, inputs_root)
+    if (out_dir / "manifest.json").exists() and not force:
         typer.echo(f"Already materialized at {out_dir} (use --force to overwrite).")
         return
 
-    source_cls = SOURCES[source]
-    src = source_cls(slice=slice)
     written = materialize_inputs(src, root=inputs_root)
     typer.echo(f"Materialized {written}")
 
@@ -70,6 +83,10 @@ def cmd_materialize_inputs(
 def cmd_run_combo(
     source: str = typer.Option(..., help="Source name (must already be materialized)."),
     slice: str = typer.Option(..., help="Slice id (matches materialize step)."),
+    setup: str = typer.Option(
+        _DataSource.PROBES_TO_ANCHORS,
+        help=f"Role assignment (one of {list(_DataSource.ALLOWED_SETUPS)}). Must match the materialize step.",
+    ),
     ltd: str = typer.Option(..., help="LTD model name (e.g. speed_of_internet)."),
     mtl: str = typer.Option(..., help="MTL method name (e.g. planar_circle)."),
     ctr: str = typer.Option(..., help="CTR method name (e.g. geometric_centroid)."),
@@ -94,10 +111,17 @@ def cmd_run_combo(
     enable_fallback: bool = typer.Option(True, help="Enable nearest-VP fallback on pipeline failure."),
 ) -> None:
     """Fit + geolocate one (LTD, MTL, CTR) combo over a materialized slice."""
-    inputs_dir = inputs_root / source / slice
+    if source not in SOURCES:
+        typer.echo(f"Unknown source {source!r}. Available: {sorted(SOURCES)}", err=True)
+        raise typer.Exit(code=2)
+    # Construct only to derive canonical inputs/outputs paths — no I/O happens
+    # until iter_* is called, so this is cheap even for RipeAtlasSource.
+    src = SOURCES[source](slice=slice, setup=setup)
+    inputs_dir = inputs_dir_for(src, inputs_root)
     if not (inputs_dir / "eval_observations.parquet").exists():
         typer.echo(
-            f"No inputs at {inputs_dir}. Run 'materialize-inputs --source {source} --slice {slice}' first.",
+            f"No inputs at {inputs_dir}. Run 'materialize-inputs --source {source} "
+            f"--slice {slice} --setup {setup}' first.",
             err=True,
         )
         raise typer.Exit(code=2)
@@ -111,7 +135,7 @@ def cmd_run_combo(
         ctr_kwargs=json.loads(ctr_kwargs),
         base_seed=seed,
     )
-    out_dir = outputs_root / run_id / source / slice / cid
+    out_dir = outputs_root / run_id / source / setup / slice / cid
     run_one_combo(
         spec,
         inputs_dir=inputs_dir,
@@ -119,6 +143,7 @@ def cmd_run_combo(
         run_id=run_id,
         source_name=source,
         slice_name=slice,
+        setup_name=setup,
         enable_fallback=enable_fallback,
     )
     typer.echo(f"Combo done: {out_dir}")
@@ -138,7 +163,9 @@ def cmd_summarize(
         raise typer.Exit(code=2)
 
     rows: list[dict] = []
-    for run_json in run_root.glob("*/*/*/run.json"):
+    # New layout: <run_id>/<source>/<setup>/<slice>/<combo>/run.json (4 levels
+    # under the run dir). rglob covers any future re-organization too.
+    for run_json in run_root.rglob("run.json"):
         rows.append(_summarize_combo(run_json))
     if not rows:
         typer.echo(f"No combos found under {run_root}", err=True)
@@ -188,6 +215,8 @@ def _summarize_combo(run_json: Path) -> dict:
     row: dict = {
         "run_id": meta["run_id"],
         "source": meta["source"],
+        # Fallback for run.jsons written before `setup` existed.
+        "setup": meta.get("setup", "probes_to_anchors"),
         "slice": meta["slice"],
         "combo_id": meta["combo_id"],
         "ltd": meta["ltd"],
