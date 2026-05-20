@@ -5,11 +5,14 @@
 #       --configfile scripts/analysis/config/smoke-003.yaml -j 3
 #
 # Consumes the parquets written by scripts/benchmark/v2/Snakefile and
-# produces four PNGs per (source, setup, slice):
-#   plot_error_cdf.png        – CDF of error_km, optionally panelled by LTD
-#   plot_error_diff_cdf.png   – pairwise per-target error_A − error_B CDF
-#   plot_phase_memory.png     – stacked LTD/MTL/CTR (+ FIT) peak memory
-#   plot_phase_runtime.png    – stacked LTD/MTL/CTR per-target runtime + total line
+# produces PNGs per (source, setup, slice):
+#   plot_error_cdf.png              – CDF of error_km (SUCCESS+FALLBACK), panelled by LTD
+#   plot_error_cdf_for_success.png  – same, but SUCCESS-only; count = "<succ>/<total>"
+#   plot_error_diff_cdf.png         – pairwise per-target error_A − error_B CDF
+#   plot_phase_memory.png           – stacked LTD/MTL/CTR (+ FIT) peak memory
+#   plot_phase_runtime.png          – stacked LTD/MTL/CTR per-target runtime + total line
+# Both error-CDF plots overlay a nearest-ping VP baseline read from
+# inputs/<source>/<setup>/<slice>/eval_observations.parquet.
 
 from pathlib import Path
 
@@ -20,6 +23,7 @@ SETUP  = config.get("setup", "probes_to_anchors")  # or "anchors_to_probes"
 SLICES = config["slices"]                          # required: list[str]
 
 V2_OUTPUTS_ROOT = Path(config.get("v2_outputs_root", "scripts/benchmark/v2/outputs"))
+V2_INPUTS_ROOT  = Path(config.get("v2_inputs_root",  "scripts/benchmark/v2/inputs"))
 ANALYSIS_ROOT   = Path(config.get("analysis_root",   "scripts/analysis/outputs"))
 
 # Plot knobs
@@ -34,8 +38,14 @@ CLI = "python -m scripts.analysis"
 
 RUN_DIR = V2_OUTPUTS_ROOT / RUN_ID
 SLICE_OUT = ANALYSIS_ROOT / RUN_ID / SOURCE / SETUP / "{slice}"
+INPUTS_DIR = V2_INPUTS_ROOT / SOURCE / SETUP / "{slice}"
 
-_PLOTS = ["plot_error_cdf", "plot_phase_memory", "plot_phase_runtime"]
+_PLOTS = [
+    "plot_error_cdf",
+    "plot_error_cdf_for_success",
+    "plot_phase_memory",
+    "plot_phase_runtime",
+]
 if DIFF_PAIRS:
     _PLOTS.append("plot_error_diff_cdf")
 
@@ -48,18 +58,42 @@ rule all:
 rule error_cdf:
     input:
         summary = RUN_DIR / "summary.parquet",
+        eval_obs = INPUTS_DIR / "eval_observations.parquet",
     output:
         png = SLICE_OUT / "plot_error_cdf.png",
     params:
         run_dir = str(RUN_DIR),
         source = SOURCE,
         group_by = GROUP_BY,
+        inputs_dir = str(INPUTS_DIR),
     shell:
         CLI + ".plot_error_cdf"
         " --run-dir {params.run_dir}"
         " --source {params.source}"
         " --slice {wildcards.slice}"
         " --group-by {params.group_by}"
+        " --inputs-dir {params.inputs_dir}"
+        " --out {output.png}"
+
+rule error_cdf_success:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+        eval_obs = INPUTS_DIR / "eval_observations.parquet",
+    output:
+        png = SLICE_OUT / "plot_error_cdf_for_success.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        group_by = GROUP_BY,
+        inputs_dir = str(INPUTS_DIR),
+    shell:
+        CLI + ".plot_error_cdf"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --slice {wildcards.slice}"
+        " --group-by {params.group_by}"
+        " --inputs-dir {params.inputs_dir}"
+        " --success-only"
         " --out {output.png}"
 
 rule phase_memory:
