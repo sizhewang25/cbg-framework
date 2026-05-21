@@ -10,7 +10,7 @@ post-hoc forensic analysis.
 |---|---|
 | [cli.py](cli.py) | Typer commands: `materialize-inputs`, `run-combo`, `summarize` |
 | [Snakefile](Snakefile) | Parameterizes the (source × slice × combo) grid |
-| [sources/](sources/) | DataSource adapters — [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py) |
+| [sources/](sources/) | DataSource adapters — [generic_csv.py](sources/generic_csv.py), [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py). See [sources/README.md](sources/README.md) for the contract + how to add your own. |
 | [inputs.py](inputs.py) | Materializes a DataSource into three parquets |
 | [runner.py](runner.py) | Per-combo fit + geolocate loop with instrumentation |
 | [checkpoint.py](checkpoint.py) | Picks LTD checkpoint snapshot (or `.stateless` marker) |
@@ -18,9 +18,27 @@ post-hoc forensic analysis.
 | [schema.py](schema.py) | PyArrow schemas — single source of truth for all parquets |
 | [config/](config/) | Snakemake configs (smoke, full, ...) |
 
+## Install
+
+```bash
+# From the repo root. Python ≥ 3.11.
+poetry install
+```
+
+This pulls every runtime dep declared in [pyproject.toml](../../../pyproject.toml)
+(numpy / pandas / pyarrow / shapely / snakemake / typer / matplotlib / …) plus
+dev tools (pytest). Verified clean from a fresh checkout — see the test suite
+below.
+
 ## Quick start
 
 ```bash
+# 0. Easiest path for your own data — point generic_csv at a CSV that has the
+#    required columns (vp_id, vp_lat, vp_lon, target_id, target_lat,
+#    target_lon, rtt_ms). See sources/README.md.
+poetry run python -m scripts.benchmark.v2.cli materialize-inputs \
+    --source generic_csv --slice all
+
 # 1. Smoke run via Snakemake (recommended)
 poetry run snakemake -s scripts/benchmark/v2/Snakefile \
     --configfile scripts/benchmark/v2/config/smoke.yaml -j 4
@@ -144,5 +162,7 @@ fitted LTD is always durable independent of the per-target loop.
 ## Tests
 
 ```bash
-poetry run python -m unittest discover -s scripts/benchmark/v2/tests -t .
+poetry run pytest scripts/framework/v2/tests scripts/benchmark/v2/tests
 ```
+
+46/46 pass on a fresh `poetry install` against this commit.
