@@ -9,12 +9,14 @@ via `--source`.
 from __future__ import annotations
 
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, VpConfig
+from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
 from scripts.benchmark.v2.sources.ripe_atlas import RipeAtlasSource
 from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource
 
 SOURCES: dict[str, type[DataSource]] = {
     VultrCSVSource.name: VultrCSVSource,
     RipeAtlasSource.name: RipeAtlasSource,
+    GenericCSVSource.name: GenericCSVSource,
 }
 
 __all__ = [
@@ -23,5 +25,6 @@ __all__ = [
     "VpConfig",
     "VultrCSVSource",
     "RipeAtlasSource",
+    "GenericCSVSource",
     "SOURCES",
 ]
