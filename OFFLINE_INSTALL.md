@@ -1,8 +1,11 @@
 # Offline install — ship geoscale to an air-gapped Linux machine
 
-Two scripts, one tarball. Assumes the target has Python 3.12 installed and the
-build host is a connected Linux machine with the **same** distro major
-version / glibc / CPU arch as the target.
+Two scripts, one tarball. The bundle ships a **fully pip-installed `.venv/`**
+so the target needs no network and no pip resolution at all.
+
+Constraint: build host and target must agree on **Linux distro major
+version, glibc, CPU arch, and Python 3.12.x patch level**. Any of those
+differing breaks the venv.
 
 ## Build (connected Linux host)
 
@@ -13,31 +16,33 @@ version / glibc / CPU arch as the target.
 
 What it does:
 
-1. Reads `[project.dependencies]` from `pyproject.toml` and writes
-   `requirements.txt`.
-2. Runs `pip wheel` to build a wheel for every dep (downloads sdists where
-   no wheel is published and compiles them locally).
-3. Tars the repo + `wheels/` + `requirements.txt` into
-   `geoscale-offline-<timestamp>.tar.gz`, excluding heavy or build-artifact
-   directories.
+1. Reads `[project.dependencies]` from `pyproject.toml` → `requirements.txt`.
+2. Creates a fresh `.venv/` with `python3.12 -m venv --copies` (the
+   `--copies` flag is what makes `.venv/bin/python` a real binary instead
+   of a symlink to the host's `/usr/bin/python3.12`).
+3. `pip install -r requirements.txt` into the venv.
+4. Tars repo + `.venv/` into `geoscale-offline-<timestamp>.tar.gz`,
+   excluding heavy / regenerable directories.
 
-Typical bundle size: **300–500 MB** (most of it the numpy/scipy/matplotlib
-wheels). Add a tighter `--exclude` to `package_offline.sh` if your bundle
-needs to fit a particular size budget.
+Typical bundle size: **~1 GB** (most of it is numpy / scipy / matplotlib /
+cartopy / pillow inside `.venv/`). Use the wheels-based approach (see git
+history before this commit) if you need a smaller bundle and don't mind
+running `pip install` on the target.
 
 ## Excluded from the bundle
 
 - `datasets/` — bring data over separately (`scp` the specific files you need).
-- `clickhouse_files/` and `.snakemake/` — runtime state.
-- `analysis/results/`, `analysis/figures/`, every `outputs/` directory and
+- `clickhouse_files/`, `.snakemake/`, `tasks/` — runtime state.
+- `analysis/results/`, `analysis/figures/`, every `outputs/` directory,
   `scripts/benchmark/v2/inputs/` — regenerable.
-- `.git`, `__pycache__/`, `venv`, `.venv` — derived state.
+- `.git`, `__pycache__/`, `*.pyc` — derived state.
 
 ## Transfer
 
-`scp`, `rsync`, USB, signed S3 link — whatever the target environment allows.
+`scp`, `rsync`, USB — whatever the target environment allows. The tarball
+is one file.
 
-## Install (air-gapped target)
+## Install (target)
 
 ```bash
 tar -xzf geoscale-offline-*.tar.gz
@@ -47,69 +52,44 @@ cd <extracted-dir>
 
 What it does:
 
-1. Creates `.venv/` with the target's `python3.12`.
-2. `pip install --no-index --find-links wheels/ -r requirements.txt`
-   (network never contacted).
-3. Imports the heavy modules to surface any wheel-mismatch issues
-   immediately.
-4. Runs both unit suites (`scripts/framework/v2/tests`, `scripts/benchmark/v2/tests`).
+1. **Validates `pyvenv.cfg`** — confirms the base Python path the venv
+   was built against still resolves on this host. If not, it tells you
+   exactly which line to edit.
+2. **Rewrites shebangs** in `.venv/bin/*` to point at this extraction's
+   `python`. The entry-point scripts (`snakemake`, `pip`, `jupyter`, …)
+   have the build host's absolute path baked in; this fixes them so they
+   work from the new location.
+3. **Smoke-imports** the heavy modules and runs both unit suites
+   (22 + 24 tests). Exits non-zero on any failure.
 
-If all four steps succeed you have a working install. Run things via the
-venv directly — no `poetry`, no shell activation:
+Run things via the venv's python (no activation needed):
 
 ```bash
 ./.venv/bin/python -m scripts.benchmark.v2.cli --help
 ./.venv/bin/snakemake -s scripts/benchmark/v2/Snakefile --configfile <your-config.yaml> -j 4
 ```
 
+## When things go sideways
+
+- **`pyvenv.cfg` check fails** — `python3.12` isn't where the venv expects
+  it on the target. Either install it at the right path or update
+  `pyvenv.cfg`'s `home = …` line (the script prints the exact `sed` for
+  you).
+- **`./.venv/bin/python` segfaults / "wrong ELF class"** — build host
+  arch ≠ target arch (x86_64 vs aarch64), or glibc too old / too new.
+  No fix beyond rebuilding on a matching host.
+- **`ImportError` on a specific module** — usually CPython minor mismatch
+  (e.g. built on 3.12.7, target has 3.12.3). Match the minor.
+- **`/`-style paths in shebang still wrong** — re-run `install_offline.sh`;
+  it's idempotent.
+
 ## Customising
 
 - **Different Python**: set `PYTHON=python3.12.5` (or any 3.12.x binary)
-  before running either script. The build host's interpreter must match
-  the target's interpreter at minor-version level for wheel ABIs to line up.
+  before running `package_offline.sh`. The target's Python minor version
+  must match.
 - **Adding a dataset**: copy the specific CSV / parquet to the right path
   under `datasets/` on the target after extraction.
 - **Including your own DataSource**: it's already in the bundle if you
   committed it before running `package_offline.sh`; if not, copy it over
   manually.
-
-## Target with an enterprise pip registry
-
-If your "air-gapped" target actually has an internal Nexus / Artifactory /
-devpi mirror, you usually don't need the bundle at all — set
-`PIP_INDEX_URL` and `install_offline.sh` will resolve from the registry,
-falling back to `wheels/` only for deps the registry can't serve:
-
-```bash
-PIP_INDEX_URL=https://your-registry.example.com/simple/ ./install_offline.sh
-```
-
-When `PIP_INDEX_URL` is set, the script:
-1. Uses `--index-url <url>` for the primary lookup.
-2. Adds `--find-links wheels/` as a fallback (only if `wheels/` exists in
-   the extracted bundle).
-
-If your registry has _every_ runtime dep, you can skip
-`package_offline.sh` entirely on the build side — just `scp` the source
-tree and `requirements.txt` over, then on the target:
-
-```bash
-python3.12 -m venv .venv
-./.venv/bin/pip install --index-url https://your-registry.example.com/simple/ -r requirements.txt
-```
-
-If your policy only permits installs from the internal registry, upload
-the wheels there once (via `twine upload --repository ...` or whatever
-your registry's tooling expects), then standard
-`pip install -r requirements.txt` resolves them.
-
-## When wheel mismatches bite
-
-If `install_offline.sh` errors on `pip install` with "no matching distribution":
-
-1. Different glibc on target — rebuild on a host with the older glibc.
-2. Different CPython minor version (3.12.3 vs 3.12.7 is fine; 3.11 vs 3.12 is not).
-3. CPU arch mismatch (aarch64 wheels won't load on x86_64).
-
-The error message names the offending package; rebuild that specific wheel
-on a matching host and drop it into `wheels/` to retry.

@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # Build an offline-installable bundle of geoscale.
 #
-# Run on a connected Linux host with the same arch/glibc as the air-gapped
-# target. Produces wheels via `pip wheel` (compiles from sdist when no wheel
-# is published) so the target needs no compiler / no network.
+# Run on a connected Linux host with the same Linux distro / glibc / CPU
+# arch / Python 3.12.x patch level as the air-gapped target. The build
+# materializes the venv into ./.venv/ and then tars the repo + venv,
+# excluding datasets/, .git, and other regenerable state.
 #
 # Requirements on this build host:
 #   - python3.12 (matching the target)
-#   - python3.12 -m pip available
+#   - python3.12 -m pip + network access (this is the only step that fetches)
 #   - GNU tar (for --exclude)
-#
-# Output: geoscale-offline-YYYYMMDD-HHMMSS.tar.gz in the repo root.
 
 set -euo pipefail
 
@@ -21,31 +20,27 @@ cd "$REPO_ROOT"
 command -v "$PYTHON" >/dev/null || { echo "ERROR: $PYTHON not on PATH"; exit 1; }
 
 # 1. Extract runtime deps from [project.dependencies] in pyproject.toml.
-#    Uses tomllib (stdlib in 3.11+), so no extra deps on the build host.
 "$PYTHON" - <<'PY' > requirements.txt
 import tomllib
 with open("pyproject.toml", "rb") as f:
     pyproject = tomllib.load(f)
 for dep in pyproject["project"]["dependencies"]:
-    # Strip the parenthesized spec form pip accepts; "numpy (>=1.26)" → "numpy>=1.26"
     print(dep.replace(" (", "").rstrip(")").replace(" ", ""))
 PY
 echo "✔ requirements.txt written ($(wc -l < requirements.txt) deps)"
 
-# 2. Build wheels for the current platform. `pip wheel` compiles sdists locally
-#    so the target gets pure-wheel installs (no build toolchain needed).
-rm -rf wheels
-mkdir -p wheels
-"$PYTHON" -m pip wheel \
-    --wheel-dir wheels/ \
-    -r requirements.txt
-echo "✔ wheels in $(pwd)/wheels ($(ls wheels/ | wc -l) files)"
+# 2. Build a fresh venv at .venv/ with --copies so the python binary is a
+#    real file (not a symlink to the host's system python). pip-install
+#    every dep into it.
+rm -rf .venv
+"$PYTHON" -m venv --copies .venv
+./.venv/bin/pip install --upgrade pip
+./.venv/bin/pip install -r requirements.txt
+echo "✔ venv at $(pwd)/.venv ($(du -sh .venv | cut -f1))"
 
-# 3. Tarball the repo + wheels, excluding heavy / build-artifact dirs.
+# 3. Tar the repo + .venv, excluding heavy / regenerable directories.
 TARBALL="geoscale-offline-$(date -u +%Y%m%d-%H%M%S).tar.gz"
 tar --exclude='./.git' \
-    --exclude='./.venv' \
-    --exclude='./venv' \
     --exclude='./datasets' \
     --exclude='./clickhouse_files' \
     --exclude='./.snakemake' \
@@ -64,4 +59,4 @@ tar --exclude='./.git' \
 
 echo "✔ Bundle: $TARBALL  ($(du -h "$TARBALL" | cut -f1))"
 echo
-echo "Transfer this tarball to the target, then run install_offline.sh."
+echo "Transfer to the target, extract, and run install_offline.sh."
