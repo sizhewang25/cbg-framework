@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Install geoscale on an air-gapped Linux machine from the bundled wheels.
+# Install geoscale on a Linux machine from the bundled wheels.
 #
-# Run this inside the extracted bundle directory. No network is contacted —
-# pip resolves every dep from ./wheels/.
+# Run this inside the extracted bundle directory.
+#
+# Source-selection knobs (env vars):
+#   PIP_INDEX_URL=<url>   — also pull from this enterprise/internal pip registry.
+#                           When set, wheels/ acts as a fallback (--find-links).
+#   PIP_NO_INDEX=1        — force air-gapped mode (wheels/ only, no index).
+#                           This is the default when PIP_INDEX_URL is unset.
 
 set -euo pipefail
 
@@ -11,24 +16,32 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_ROOT"
 
 command -v "$PYTHON" >/dev/null || { echo "ERROR: $PYTHON not on PATH"; exit 1; }
-[[ -d wheels ]] || { echo "ERROR: wheels/ directory missing"; exit 1; }
 [[ -f requirements.txt ]] || { echo "ERROR: requirements.txt missing"; exit 1; }
+
+# Decide pip's resolution strategy.
+PIP_ARGS=()
+if [[ -n "${PIP_INDEX_URL:-}" ]]; then
+    PIP_ARGS+=( --index-url "$PIP_INDEX_URL" )
+    echo "→ using pip index: $PIP_INDEX_URL"
+    if [[ -d wheels ]]; then
+        PIP_ARGS+=( --find-links wheels/ )
+        echo "→ wheels/ as fallback ($(ls wheels/ 2>/dev/null | wc -l) wheels)"
+    fi
+else
+    [[ -d wheels ]] || { echo "ERROR: wheels/ missing and no PIP_INDEX_URL set"; exit 1; }
+    PIP_ARGS+=( --no-index --find-links wheels/ )
+    echo "→ air-gapped mode; resolving from wheels/ only"
+fi
 
 # 1. Fresh venv at .venv/ (collocated with the repo, easy to delete).
 rm -rf .venv
 "$PYTHON" -m venv .venv
 echo "✔ venv at $(pwd)/.venv"
 
-# 2. Install everything from the local wheelhouse.
-./.venv/bin/pip install \
-    --no-index \
-    --find-links wheels/ \
-    --upgrade pip
-./.venv/bin/pip install \
-    --no-index \
-    --find-links wheels/ \
-    -r requirements.txt
-echo "✔ deps installed from wheels/"
+# 2. Install everything.
+./.venv/bin/pip install "${PIP_ARGS[@]}" --upgrade pip
+./.venv/bin/pip install "${PIP_ARGS[@]}" -r requirements.txt
+echo "✔ deps installed"
 
 # 3. Smoke-check imports + run the unit suites.
 ./.venv/bin/python -c "

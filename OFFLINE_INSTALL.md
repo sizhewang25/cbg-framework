@@ -73,6 +73,36 @@ venv directly — no `poetry`, no shell activation:
   committed it before running `package_offline.sh`; if not, copy it over
   manually.
 
+## Target with an enterprise pip registry
+
+If your "air-gapped" target actually has an internal Nexus / Artifactory /
+devpi mirror, you usually don't need the bundle at all — set
+`PIP_INDEX_URL` and `install_offline.sh` will resolve from the registry,
+falling back to `wheels/` only for deps the registry can't serve:
+
+```bash
+PIP_INDEX_URL=https://your-registry.example.com/simple/ ./install_offline.sh
+```
+
+When `PIP_INDEX_URL` is set, the script:
+1. Uses `--index-url <url>` for the primary lookup.
+2. Adds `--find-links wheels/` as a fallback (only if `wheels/` exists in
+   the extracted bundle).
+
+If your registry has _every_ runtime dep, you can skip
+`package_offline.sh` entirely on the build side — just `scp` the source
+tree and `requirements.txt` over, then on the target:
+
+```bash
+python3.12 -m venv .venv
+./.venv/bin/pip install --index-url https://your-registry.example.com/simple/ -r requirements.txt
+```
+
+If your policy only permits installs from the internal registry, upload
+the wheels there once (via `twine upload --repository ...` or whatever
+your registry's tooling expects), then standard
+`pip install -r requirements.txt` resolves them.
+
 ## When wheel mismatches bite
 
 If `install_offline.sh` errors on `pip install` with "no matching distribution":
