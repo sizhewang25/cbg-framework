@@ -11,7 +11,6 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from scripts.benchmark.v2.sources import SOURCES
 from scripts.benchmark.v2.sources.ripe_atlas import RipeAtlasSource
@@ -140,12 +139,9 @@ class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
             src = RipeAtlasSource(
                 slice="all_anchors", setup="anchors_to_probes",
                 probes_and_anchors_file=probes_json,
+                rtt_query=lambda *a, **kw: {"1.1.1.1": {"vp-a": [10.0], "vp-b": [12.0]}},
             )
-            with mock.patch(
-                "scripts.analysis.analysis.compute_rtts_per_dst_src",
-                return_value={"1.1.1.1": {"vp-a": [10.0], "vp-b": [12.0]}},
-            ):
-                targets = list(src.iter_eval_targets())
+            targets = list(src.iter_eval_targets())
         # 1 anchor × 2 probes → 2 EvalTargets (one per probe), each with the
         # single anchor as a VP.
         self.assertEqual(len(targets), 2)
@@ -156,7 +152,7 @@ class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
             self.assertEqual(str(t.obs[0][0]), "1.1.1.1")
 
     def test_iter_eval_targets_groups_by_anchor(self) -> None:
-        """Mock out compute_rtts_per_dst_src so the test doesn't require ClickHouse."""
+        """Inject a fake rtt_query so the test doesn't require ClickHouse."""
         import json as _json
         with tempfile.TemporaryDirectory() as tmp:
             probes_json = Path(tmp) / "probes_and_anchors.json"
@@ -168,12 +164,12 @@ class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
                 {"address_v4": "vp-b", "asn_v4": 7922, "country_code": "US",
                  "geometry": {"coordinates": [-101.0, 41.0]}, "is_anchor": False},
             ]))
-            src = RipeAtlasSource(slice="all_anchors", probes_and_anchors_file=probes_json)
-            with mock.patch(
-                "scripts.analysis.analysis.compute_rtts_per_dst_src",
-                return_value={"1.1.1.1": {"vp-a": [10.0], "vp-b": [12.0]}},
-            ):
-                targets = list(src.iter_eval_targets())
+            src = RipeAtlasSource(
+                slice="all_anchors",
+                probes_and_anchors_file=probes_json,
+                rtt_query=lambda *a, **kw: {"1.1.1.1": {"vp-a": [10.0], "vp-b": [12.0]}},
+            )
+            targets = list(src.iter_eval_targets())
         self.assertEqual(len(targets), 1)
         self.assertEqual(targets[0].target_id, "1.1.1.1")
         self.assertEqual(len(targets[0].obs), 2)

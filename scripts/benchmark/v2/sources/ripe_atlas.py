@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 import default
 
@@ -46,6 +46,7 @@ class RipeAtlasSource(DataSource):
         ping_table: Optional[str] = None,
         threshold: int = _DEFAULT_THRESHOLD,
         filter_clause: str = _DEFAULT_FILTER,
+        rtt_query: Optional[Callable[..., dict[str, dict[str, list[float]]]]] = None,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
@@ -61,6 +62,10 @@ class RipeAtlasSource(DataSource):
         self._ping_table = ping_table if ping_table is not None else default.PROBES_TO_ANCHORS_PING_TABLE
         self._threshold = threshold
         self._filter_clause = filter_clause
+        # Tests inject a fake here; production keeps it None and we
+        # lazy-import compute_rtts_per_dst_src so importing this module
+        # doesn't pull in ClickHouse / the v1 analysis module.
+        self._rtt_query = rtt_query
 
         # Lazily populated caches; first iter_*() call triggers loading.
         self._coords_by_ip: Optional[dict[str, Coord]] = None
@@ -196,10 +201,14 @@ class RipeAtlasSource(DataSource):
 
     def _load_rtts(self) -> None:
         # Imported lazily so importing this module doesn't require ClickHouse
-        # to be reachable (tests/CI can mock-load fixtures).
-        from scripts.analysis.analysis import compute_rtts_per_dst_src
+        # to be reachable. Tests pass `rtt_query=` instead.
+        if self._rtt_query is not None:
+            query = self._rtt_query
+        else:
+            from scripts.analysis.analysis import compute_rtts_per_dst_src
+            query = compute_rtts_per_dst_src
 
-        raw = compute_rtts_per_dst_src(
+        raw = query(
             self._ping_table,
             self._filter_clause,
             self._threshold,
