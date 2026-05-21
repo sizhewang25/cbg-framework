@@ -52,8 +52,8 @@ packages = [
     { include = "scripts" },
 ]
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.0.0"
+# Tests use stdlib `unittest` — no test-runner dep needed. Run with
+#   python -m unittest discover -s scripts/<pkg>/tests -t .
 
 [build-system]
 requires = ["poetry-core>=2.0.0"]

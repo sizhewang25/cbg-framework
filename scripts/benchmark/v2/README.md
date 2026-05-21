@@ -161,8 +161,26 @@ fitted LTD is always durable independent of the per-target loop.
 
 ## Tests
 
+Tests are stdlib `unittest` — no extra dep needed. Run from the repo root:
+
 ```bash
-poetry run pytest scripts/framework/v2/tests scripts/benchmark/v2/tests
+poetry run python -m unittest discover -s scripts/framework/v2/tests -t .
+poetry run python -m unittest discover -s scripts/benchmark/v2/tests -t .
 ```
 
-46/46 pass on a fresh `poetry install` against this commit.
+The `-t .` flag pins the top-level dir to the repo root so the `from scripts.…`
+imports inside the tests resolve. 22 + 24 = 46 tests pass on a fresh
+`poetry install` against this commit.
+
+## Synthetic data for a stand-alone smoke
+
+If you don't have the Vultr CSV or RIPE Atlas ClickHouse data, generate a
+small synthetic CSV that matches `GenericCSVSource`'s schema:
+
+```bash
+poetry run python -m scripts.benchmark.v2.sources._make_smoke_csv /tmp/smoke.csv
+# wrote /tmp/smoke.csv (750 rows, 25 VPs × 30 targets)
+```
+
+Then edit `DEFAULT_CSV` in [sources/generic_csv.py](sources/generic_csv.py) to
+point at `/tmp/smoke.csv` and run the smoke benchmark as in [Quick start](#quick-start).
