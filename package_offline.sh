@@ -29,14 +29,29 @@ for dep in pyproject["project"]["dependencies"]:
 PY
 echo "✔ requirements.txt written ($(wc -l < requirements.txt) deps)"
 
-# 2. Build a fresh venv at .venv/ with --copies so the python binary is a
-#    real file (not a symlink to the host's system python). pip-install
-#    every dep into it.
-rm -rf .venv
-"$PYTHON" -m venv --copies .venv
-./.venv/bin/pip install --upgrade pip
-./.venv/bin/pip install -r requirements.txt
-echo "✔ venv at $(pwd)/.venv ($(du -sh .venv | cut -f1))"
+# 2. Materialize .venv/. By default, build a fresh venv with --copies (so the
+#    python binary is a real file, not a symlink to the host's system python)
+#    and pip-install every dep into it. If REUSE_VENV=1 and a usable .venv
+#    already exists (e.g. populated by `poetry install`), reuse it as-is —
+#    this lets poetry own dep resolution while package_offline only packages.
+if [[ "${REUSE_VENV:-0}" == "1" && -x ./.venv/bin/python3.12 ]]; then
+    # Re-copy the interpreter if it's still a symlink to the host python,
+    # so the bundle stays portable to hosts that lack python3.12.
+    for f in .venv/bin/python .venv/bin/python3 .venv/bin/python3.12; do
+        if [[ -L "$f" ]]; then
+            target="$(readlink -f "$f")"
+            rm "$f"
+            cp "$target" "$f"
+        fi
+    done
+    echo "✔ reusing existing .venv at $(pwd)/.venv ($(du -sh .venv | cut -f1))"
+else
+    rm -rf .venv
+    "$PYTHON" -m venv --copies .venv
+    ./.venv/bin/pip install --upgrade pip
+    ./.venv/bin/pip install -r requirements.txt
+    echo "✔ venv at $(pwd)/.venv ($(du -sh .venv | cut -f1))"
+fi
 
 # 3. Tar the repo + .venv, excluding heavy / regenerable directories.
 TARBALL="geoscale-offline-$(date -u +%Y%m%d-%H%M%S).tar.gz"
