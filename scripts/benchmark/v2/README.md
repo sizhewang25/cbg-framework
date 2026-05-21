@@ -21,7 +21,8 @@ post-hoc forensic analysis.
 ## Install
 
 ```bash
-# From the repo root. Python ≥ 3.11.
+# From the repo root. Python 3.11 or 3.12 (3.13 lacks wheels for several
+# pinned scientific deps — pyenv install 3.12.x if needed).
 poetry install
 ```
 

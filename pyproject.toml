@@ -3,7 +3,7 @@ name = "geoscale"
 version = "1.0.0"
 description = "Geolocation reproduction paper — IMC 2023"
 readme = "README.md"
-requires-python = ">=3.11,<4.0"
+requires-python = ">=3.11,<3.13"  # tested on 3.12; 3.13 lacks wheels for several pinned deps
 authors = [
     { name = "Danaelmilo", email = "milo2.dreyfus@gmail.com" },
 ]
@@ -14,7 +14,7 @@ dependencies = [
     "pyarrow (>=16.0.0)",
     "scipy (>=1.11.4,<2.0.0)",
     "matplotlib (>=3.8.0,<4.0.0)",
-    "pillow (>=10.0.0,<12.0.0)",          # PIL — matplotlib's image backend
+    "pillow (>=10.4.0,<12.0.0)",          # PIL — matplotlib's image backend; 10.4 added cp313 wheels
 
     # Geospatial
     "shapely (>=2.1.2,<3.0.0)",
