@@ -50,7 +50,7 @@ from scripts.framework.v2.types import Coord, Latency, VpId
 
 DEFAULT_CSV = (
     Path(__file__).resolve().parents[4]
-    / "datasets" / "your_csv_here.csv"
+    / "datasets" / "smoke-test.csv"
 )
 
 # ============================================================================

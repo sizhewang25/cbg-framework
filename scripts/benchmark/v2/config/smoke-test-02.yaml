@@ -9,7 +9,7 @@
 #   snakemake -s scripts/benchmark/v2/Snakefile \
 #       --configfile scripts/benchmark/v2/config/smoke.yaml -j 4
 
-run_id: smoke-003
+run_id: smoke-test-02
 source: vultr_csv
 setup: anchors_to_probes   # anchors are VPs, probes are eval targets (pressure test)
 slices: [top1]
