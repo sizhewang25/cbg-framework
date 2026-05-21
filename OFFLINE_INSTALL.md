@@ -72,9 +72,10 @@ Run things via the venv's python (no activation needed):
 ## When things go sideways
 
 - **`pyvenv.cfg` check fails** — `python3.12` isn't where the venv expects
-  it on the target. Either install it at the right path or update
-  `pyvenv.cfg`'s `home = …` line (the script prints the exact `sed` for
-  you).
+  it on the target. The script auto-detects `python3.12` on `PATH` and
+  rewrites `pyvenv.cfg`'s `home = …` / `executable = …` / `command = …`
+  lines for you. If `python3.12` isn't on `PATH`, install it (or add it
+  to `PATH`) and re-run.
 - **`./.venv/bin/python` segfaults / "wrong ELF class"** — build host
   arch ≠ target arch (x86_64 vs aarch64), or glibc too old / too new.
   No fix beyond rebuilding on a matching host.
