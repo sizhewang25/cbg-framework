@@ -176,6 +176,25 @@ class TestNormalDistLTD(unittest.TestCase):
         # baseline cap at rtt=80 is 8000 km, so no 2/3·c clip
         self.assertLess(result.tg_distance.upper_km, 80.0 / THEORETICAL_SLOPE)
 
+    def test_predict_returns_numerical_failure_when_bounds_raises(self):
+        """rtt past sentinel raises ValueError in SpotterRTTModel; wrapper
+        maps to NUMERICAL_FAILURE rather than letting it propagate."""
+        ltd = self._ltd_with_model(
+            make_fitted_spotter_model(
+                rtt_min=10.0,
+                rtt_max=10000.0,
+                cutoff_rtt=50.0,
+                sentinel_rtt=200.0,
+            )
+        )
+
+        result = ltd.predict(
+            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(500.0)
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, Error.NUMERICAL_FAILURE)
+
     def test_predict_outer_above_cutoff_approaches_baseline_with_large_sentinel(self):
         """As sentinel_rtt → ∞, the cutoff extension reverts to the
         previous asymptotic 1/THEORETICAL_SLOPE slope (parallel to 2/3·c)."""

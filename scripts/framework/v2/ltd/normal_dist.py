@@ -21,6 +21,7 @@ Wraps scripts/libs/spotter/spotter_model.py :: SpotterRTTModel.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import numpy as np
@@ -35,6 +36,8 @@ from scripts.framework.v2.registry import register_ltd
 from scripts.framework.v2.types import Coord, Distance, Error, Latency, VpId
 from scripts.libs.cbg.rtt_model import haversine_distance
 from scripts.libs.spotter.spotter_model import SpotterRTTModel
+
+logger = logging.getLogger(__name__)
 
 
 @register_ltd("normal_dist")
@@ -128,7 +131,22 @@ class NormalDistLTD(AnnulusLTDModel):
                 vp_coord=vp_coord,
                 latency=latency,
             )
-        bounds = self._model.predict_distance_bounds(latency)
+        try:
+            bounds = self._model.predict_distance_bounds(latency)
+        except Exception as exc:
+            logger.debug(
+                "Spotter predict_distance_bounds failed for %s at RTT %.3f ms: %s",
+                vp_id,
+                latency,
+                exc,
+            )
+            return LTDResult(
+                success=False,
+                error=Error.NUMERICAL_FAILURE,
+                vp_id=vp_id,
+                vp_coord=vp_coord,
+                latency=latency,
+            )
         if bounds is None:
             return LTDResult(
                 success=False,
