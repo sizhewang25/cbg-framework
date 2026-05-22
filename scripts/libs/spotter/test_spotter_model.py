@@ -264,16 +264,20 @@ class TestSpotterRTTModel(unittest.TestCase):
         )
         self.assertIsNone(model.predict_distance_bounds(80.0))
 
-    def test_predict_extends_outer_at_baseline_slope_above_cutoff(self):
+    def test_predict_extends_outer_at_finite_sentinel_slope_above_cutoff(self):
         """With cutoff_rtt set: inner is held flat at inner(cutoff); outer
-        extends along the 2/3*c slope from outer(cutoff). Mirrors the
-        Octant broader-hull convention above cutoff."""
+        extends from outer(cutoff) toward the fictitious sentinel
+        z = (sentinel_rtt, sentinel_rtt / THEORETICAL_SLOPE) on the 2/3*c
+        bound — Octant paper's smooth-transition construction."""
+        cutoff_rtt = 50.0
+        sentinel_rtt = 10000.0
         model = SpotterRTTModel(
             p_mu=np.array([50.0, 0.0]),    # mu = 50 * rtt
             p_sigma=np.array([50.0]),       # sigma = 50 (constant)
             rtt_min=10.0,
             rtt_max=100.0,
-            cutoff_rtt=50.0,
+            cutoff_rtt=cutoff_rtt,
+            sentinel_rtt=sentinel_rtt,
             fitted=True,
         )
 
@@ -287,10 +291,45 @@ class TestSpotterRTTModel(unittest.TestCase):
         # At cutoff: mu=2500, sigma=50, raw outer=2550.
         self.assertAlmostEqual(at_cutoff[0], 2450.0, places=3)
         self.assertAlmostEqual(at_cutoff[1], 2550.0, places=3)
-        # Above cutoff: inner stays at 2450 (flat); outer = 2550 + (80-50)/0.01
-        # = 2550 + 3000 = 5550. baseline at rtt=80 is 8000, no clip.
+        # Above cutoff: inner stays at 2450 (flat); outer extends with finite-
+        # sentinel slope = (10000/0.01 - 2550) / (10000 - 50) ≈ 100.2462 km/ms.
+        outer_at_cutoff = 2550.0
+        sentinel_dist = sentinel_rtt / THEORETICAL_SLOPE
+        slope = (sentinel_dist - outer_at_cutoff) / (sentinel_rtt - cutoff_rtt)
         self.assertAlmostEqual(above[0], 2450.0, places=3)
-        self.assertAlmostEqual(above[1], 5550.0, places=3)
+        self.assertAlmostEqual(above[1], outer_at_cutoff + slope * 30.0, places=3)
+
+    def test_large_sentinel_recovers_baseline_slope_above_cutoff(self):
+        """As sentinel_rtt → ∞, the cutoff extension collapses to the
+        asymptotic 1/THEORETICAL_SLOPE slope (parallel to 2/3*c)."""
+        model = SpotterRTTModel(
+            p_mu=np.array([50.0, 0.0]),
+            p_sigma=np.array([50.0]),
+            rtt_min=10.0,
+            rtt_max=100.0,
+            cutoff_rtt=50.0,
+            sentinel_rtt=1e9,
+            fitted=True,
+        )
+        above = model.predict_distance_bounds(80.0)
+        # outer(50)=2550; large-sentinel slope ≈ 1/THEORETICAL_SLOPE so
+        # outer(80) ≈ 2550 + 30/THEORETICAL_SLOPE = 5550.
+        self.assertAlmostEqual(above[0], 2450.0, places=3)
+        self.assertAlmostEqual(above[1], 5550.0, places=2)
+
+    def test_predict_raises_when_rtt_exceeds_sentinel(self):
+        # rtt past the sentinel would push the outer above the 2/3*c bound.
+        model = SpotterRTTModel(
+            p_mu=np.array([50.0, 0.0]),
+            p_sigma=np.array([50.0]),
+            rtt_min=10.0,
+            rtt_max=10000.0,
+            cutoff_rtt=50.0,
+            sentinel_rtt=200.0,
+            fitted=True,
+        )
+        with self.assertRaises(ValueError):
+            model.predict_distance_bounds(500.0)
 
     def test_predict_distance_returns_mu_only(self):
         """predict_distance gives the pooled mean (no band)."""

@@ -31,6 +31,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from scripts.libs.octant_simple.octant_model import sentinel_extension_distance
+
 
 SPEED_OF_LIGHT_KM_MS = 300.0
 THEORETICAL_SLOPE = 2.0 / (SPEED_OF_LIGHT_KM_MS * (2.0 / 3.0))  # ~ 0.01 ms/km
@@ -123,6 +125,7 @@ class SpotterRTTModel:
     rtt_min: float = 0.0
     rtt_max: float = 0.0
     cutoff_rtt: float = 0.0
+    sentinel_rtt: float = 10000.0
     fitted: bool = False
     fit_message: str = ""
     metadata: dict = field(default_factory=dict)
@@ -220,7 +223,11 @@ class SpotterRTTModel:
         - Above `cutoff_rtt` (when set): mu and sigma held flat at the
           cutoff value -- the deg-3 / deg-2 polynomials are not safe to
           extrapolate into the sparse tail. Inner stays at inner(cutoff);
-          outer extends along the 2/3*c slope from outer(cutoff).
+          outer extends from outer(cutoff) toward a fictitious sentinel
+          z = (sentinel_rtt, sentinel_rtt / THEORETICAL_SLOPE) on the
+          2/3*c bound -- the Octant paper's smooth-transition construction
+          (see octant_simple.sentinel_extension_distance). Raises
+          ValueError if rtt > sentinel_rtt.
         - Otherwise: plain polynomial evaluation.
 
         The outer bound is always clipped by the 2/3*c speed-of-internet
@@ -256,6 +263,12 @@ class SpotterRTTModel:
         inner = max(0.0, mu - sigma)
         outer = max(0.0, mu + sigma)
         if self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
-            outer = outer + (rtt - self.cutoff_rtt) / THEORETICAL_SLOPE
+            outer = sentinel_extension_distance(
+                rtt,
+                self.cutoff_rtt,
+                outer,
+                THEORETICAL_SLOPE,
+                self.sentinel_rtt,
+            )
         outer = min(outer, rtt / THEORETICAL_SLOPE)
         return inner, outer

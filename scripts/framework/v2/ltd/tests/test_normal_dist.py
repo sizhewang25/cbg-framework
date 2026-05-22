@@ -25,6 +25,7 @@ from scripts.framework.v2.ltd.tests.helpers import (
     make_unfitted_spotter_model,
 )
 from scripts.framework.v2.types import Error, Latency, VpId
+from scripts.libs.spotter.spotter_model import THEORETICAL_SLOPE
 
 
 class TestNormalDistLTD(unittest.TestCase):
@@ -141,18 +142,27 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertEqual(below.tg_distance.lower_km, 0.0)
         self.assertAlmostEqual(below.tg_distance.upper_km, 275.0)
 
-    def test_predict_extends_outer_at_baseline_slope_above_cutoff(self):
-        """Above cutoff_rtt: inner is held flat at inner(cutoff); outer
-        extends along the 2/3·c slope from outer(cutoff). No RTT_OUT_OF_RANGE
-        rejection — the Octant broader-hull convention."""
-        # mu(rtt)=50*rtt, sigma=50 -> +/-sigma band of width 100. cutoff_rtt=30 -> at
-        # rtt=80: inner stays at inner(30)=1450; outer = outer(30) + 50/0.01
-        # = 1550 + 5000 = 6550 (baseline at 80 is 8000, no clip).
+    def test_predict_extends_outer_at_finite_sentinel_slope_above_cutoff(self):
+        """Above cutoff_rtt: inner held flat at inner(cutoff); outer extends
+        toward a finite sentinel on the 2/3·c bound — Octant paper's smooth-
+        transition construction. No RTT_OUT_OF_RANGE rejection."""
+        # mu(rtt)=50*rtt, sigma=50 -> ±σ band. cutoff_rtt=30 ->
+        # inner(30)=1450, outer(30)=1550. With the default sentinel z at
+        # (10_000 ms, 1_000_000 km), the extension slope is
+        # (1_000_000 - 1550) / (10_000 - 30) ≈ 100.1454 km/ms, strictly
+        # steeper than the asymptotic 100 km/ms.
+        cutoff_rtt = 30.0
+        sentinel_rtt = 10000.0
+        outer_at_cutoff = 1550.0
+        sentinel_dist = sentinel_rtt / THEORETICAL_SLOPE
+        slope = (sentinel_dist - outer_at_cutoff) / (sentinel_rtt - cutoff_rtt)
+        expected_outer = outer_at_cutoff + slope * (80.0 - cutoff_rtt)
         ltd = self._ltd_with_model(
             make_fitted_spotter_model(
                 rtt_min=0.0,
                 rtt_max=100.0,
-                cutoff_rtt=30.0,
+                cutoff_rtt=cutoff_rtt,
+                sentinel_rtt=sentinel_rtt,
             )
         )
 
@@ -162,7 +172,49 @@ class TestNormalDistLTD(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertAlmostEqual(result.tg_distance.lower_km, 1450.0)
-        self.assertAlmostEqual(result.tg_distance.upper_km, 6550.0)
+        self.assertAlmostEqual(result.tg_distance.upper_km, expected_outer)
+        # baseline cap at rtt=80 is 8000 km, so no 2/3·c clip
+        self.assertLess(result.tg_distance.upper_km, 80.0 / THEORETICAL_SLOPE)
+
+    def test_predict_returns_numerical_failure_when_bounds_raises(self):
+        """rtt past sentinel raises ValueError in SpotterRTTModel; wrapper
+        maps to NUMERICAL_FAILURE rather than letting it propagate."""
+        ltd = self._ltd_with_model(
+            make_fitted_spotter_model(
+                rtt_min=10.0,
+                rtt_max=10000.0,
+                cutoff_rtt=50.0,
+                sentinel_rtt=200.0,
+            )
+        )
+
+        result = ltd.predict(
+            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(500.0)
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, Error.NUMERICAL_FAILURE)
+
+    def test_predict_outer_above_cutoff_approaches_baseline_with_large_sentinel(self):
+        """As sentinel_rtt → ∞, the cutoff extension reverts to the
+        previous asymptotic 1/THEORETICAL_SLOPE slope (parallel to 2/3·c)."""
+        ltd = self._ltd_with_model(
+            make_fitted_spotter_model(
+                rtt_min=0.0,
+                rtt_max=100.0,
+                cutoff_rtt=30.0,
+                sentinel_rtt=1e9,
+            )
+        )
+
+        result = ltd.predict(
+            VpId("anchor-a"), ANCHOR_COORDS[VpId("anchor-a")], Latency(80.0)
+        )
+
+        self.assertTrue(result.success)
+        # outer(30) = 1550; large-sentinel slope ≈ 1/THEORETICAL_SLOPE
+        # → 1550 + 50/THEORETICAL_SLOPE = 6550.
+        self.assertAlmostEqual(result.tg_distance.upper_km, 6550.0, places=2)
 
     def test_predict_failure_echoes_vp_id_coord_and_stamps_method(self):
         unfitted = self._ltd_with_model(make_unfitted_spotter_model())

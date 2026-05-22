@@ -91,13 +91,61 @@ class TestHullOuterDistance(unittest.TestCase):
         )
         self.assertAlmostEqual(d, 300.0)
 
-    def test_extends_above_cutoff_with_baseline_slope(self):
-        # rtt=60, cutoff=50, hull tops out at 500 — extension = 500 + 10/baseline.
+    def test_extends_above_cutoff_with_finite_sentinel_slope(self):
+        # rtt=60, cutoff=50, hull tops out at 500. With the default
+        # sentinel at 10_000 ms on the 2/3·c line, the slope to z is
+        # (10_000/baseline − 500) / (10_000 − 50), strictly greater than the
+        # asymptotic 1/baseline.
+        cutoff_rtt, cutoff_dist = 50.0, 500.0
+        sentinel_rtt = 10000.0
+        sentinel_dist = sentinel_rtt / THEORETICAL_SLOPE
+        slope = (sentinel_dist - cutoff_dist) / (sentinel_rtt - cutoff_rtt)
+        self.assertGreater(slope, 1.0 / THEORETICAL_SLOPE)
+        d = hull_outer_distance(
+            60.0, [10.0, 50.0], [100.0, cutoff_dist], cutoff_rtt=cutoff_rtt,
+            baseline_slope=THEORETICAL_SLOPE, sentinel_rtt=sentinel_rtt,
+        )
+        self.assertAlmostEqual(d, cutoff_dist + slope * (60.0 - cutoff_rtt))
+
+    def test_extension_reaches_sentinel_on_two_thirds_c_line(self):
+        # At rtt = sentinel_rtt, the extension should land exactly on the
+        # 2/3·c bound (the paper's "conservative constraint") — that's the
+        # whole point of the sentinel.
+        sentinel_rtt = 1000.0
+        d = hull_outer_distance(
+            sentinel_rtt, [10.0, 50.0], [100.0, 500.0],
+            cutoff_rtt=50.0,
+            baseline_slope=THEORETICAL_SLOPE,
+            sentinel_rtt=sentinel_rtt,
+        )
+        self.assertAlmostEqual(d, sentinel_rtt / THEORETICAL_SLOPE)
+
+    def test_large_sentinel_approaches_baseline_slope_limit(self):
+        # As sentinel → ∞, slope → 1/baseline_slope (parallel to 2/3·c).
         d = hull_outer_distance(
             60.0, [10.0, 50.0], [100.0, 500.0], cutoff_rtt=50.0,
-            baseline_slope=THEORETICAL_SLOPE,
+            baseline_slope=THEORETICAL_SLOPE, sentinel_rtt=1e9,
         )
-        self.assertAlmostEqual(d, 500.0 + 10.0 / THEORETICAL_SLOPE)
+        self.assertAlmostEqual(d, 500.0 + 10.0 / THEORETICAL_SLOPE, places=2)
+
+    def test_raises_when_rtt_exceeds_sentinel(self):
+        # rtt past the sentinel would push the extension above the 2/3·c
+        # bound — violating the speed-of-internet constraint that the
+        # sentinel was placed to honor.
+        with self.assertRaises(ValueError):
+            hull_outer_distance(
+                60.0, [10.0, 50.0], [100.0, 500.0], cutoff_rtt=50.0,
+                baseline_slope=THEORETICAL_SLOPE, sentinel_rtt=55.0,
+            )
+
+    def test_raises_when_sentinel_not_above_cutoff(self):
+        # Misconfiguration: the sentinel must sit strictly to the right of
+        # the cutoff for the smooth-transition construction to be defined.
+        with self.assertRaises(ValueError):
+            hull_outer_distance(
+                60.0, [10.0, 50.0], [100.0, 500.0], cutoff_rtt=50.0,
+                baseline_slope=THEORETICAL_SLOPE, sentinel_rtt=50.0,
+            )
 
     def test_below_leftmost_vertex_uses_line_through_origin(self):
         # Leftmost vertex (10, 100); rtt=5 lies on the line from (0, 0) through
@@ -291,6 +339,30 @@ class TestPredictDistanceBounds(unittest.TestCase):
         ))
         with self.assertRaises(SplineFitError):
             m.predict_distance(20.0)
+
+    def test_predict_distance_above_cutoff_uses_finite_sentinel_slope(self):
+        # Hand-build a fitted model with cutoff_rtt=50 (so RTT=60 is above)
+        # and spline value 1000 km at cutoff. Default sentinel at 10_000 ms
+        # gives slope (10_000 / 0.01 - 1000) / (10_000 - 50) ≈ 100.4020 km/ms;
+        # at rtt=60 (Δ=10): 1000 + 10 · 100.4020 ≈ 2004.02 km. The hull band
+        # is wide enough not to clip.
+        m = OctantRTTModel(
+            anchor_ip="x",
+            hull_upper_rtts=[10.0, 50.0],
+            hull_upper_distances=[100.0, 1000.0 * 100],  # wide hull → no outer clip
+            hull_lower_rtts=[10.0, 50.0],
+            hull_lower_distances=[0.0, 0.0],  # zero inner → no inner clip
+            cutoff_rtt=50.0,
+            spline_rtt_knots=[10.0, 50.0],
+            spline_dist_knots=[100.0, 1000.0],
+            sentinel_rtt=10000.0,
+            fitted=True,
+        )
+        cutoff_val = 1000.0
+        sentinel_dist = 10000.0 / THEORETICAL_SLOPE
+        slope = (sentinel_dist - cutoff_val) / (10000.0 - 50.0)
+        expected = cutoff_val + slope * (60.0 - 50.0)
+        self.assertAlmostEqual(m.predict_distance(60.0), expected, places=4)
 
 
 class TestSerializationJSON(unittest.TestCase):
