@@ -50,6 +50,7 @@ class NormalDistLTD(AnnulusLTDModel):
         deg_sigma: int = 2,
         bin_size_ms: float = 5.0,
         cutoff_min_points: int = 30,
+        sentinel_rtt: float = 10000.0,
     ) -> None:
         self.sample_coverage = sample_coverage
         self.n_bins = n_bins
@@ -58,6 +59,7 @@ class NormalDistLTD(AnnulusLTDModel):
         self.deg_sigma = deg_sigma
         self.bin_size_ms = bin_size_ms
         self.cutoff_min_points = cutoff_min_points
+        self.sentinel_rtt = sentinel_rtt
         self._model: Optional[SpotterRTTModel] = None
 
     def _fit(self, samples: list[FitSample]) -> FittingResult:
@@ -78,7 +80,7 @@ class NormalDistLTD(AnnulusLTDModel):
             dtype=float,
         )
 
-        model = SpotterRTTModel()
+        model = SpotterRTTModel(sentinel_rtt=self.sentinel_rtt)
         try:
             model.fit(
                 rtts,

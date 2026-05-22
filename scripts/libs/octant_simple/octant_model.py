@@ -134,6 +134,47 @@ def compute_convex_hull_bounds(
     }
 
 
+def sentinel_extension_distance(
+    rtt: float,
+    cutoff_rtt: float,
+    cutoff_dist: float,
+    baseline_slope: float,
+    sentinel_rtt: float,
+) -> float:
+    """Distance at `rtt` on the line from `(cutoff_rtt, cutoff_dist)` to the
+    fictitious sentinel `z = (sentinel_rtt, sentinel_rtt / baseline_slope)`
+    placed on the 2/3·c bound — Octant paper's smooth-transition construction
+    above the cutoff.
+
+    Slope:
+        m = (sentinel_rtt / baseline_slope − cutoff_dist)
+            / (sentinel_rtt − cutoff_rtt)
+
+    As `sentinel_rtt → ∞`, `m → 1 / baseline_slope` (parallel to 2/3·c).
+    For finite sentinel, the line lands exactly on `z` at `rtt = sentinel_rtt`.
+
+    Raises:
+        ValueError: if `sentinel_rtt ≤ cutoff_rtt` — the sentinel must sit
+            strictly to the right of the cutoff for the construction to be
+            well-defined.
+        ValueError: if `rtt > sentinel_rtt` — extrapolation past the sentinel
+            would push the line above the 2/3·c bound, violating the
+            speed-of-internet constraint the sentinel was placed to honor.
+    """
+    if sentinel_rtt <= cutoff_rtt:
+        raise ValueError(
+            f"sentinel_rtt={sentinel_rtt} must be > cutoff_rtt={cutoff_rtt}"
+        )
+    if rtt > sentinel_rtt:
+        raise ValueError(
+            f"rtt={rtt} exceeds sentinel_rtt={sentinel_rtt}; "
+            f"extrapolation past the sentinel violates the 2/3·c bound"
+        )
+    sentinel_dist = sentinel_rtt / baseline_slope
+    slope = (sentinel_dist - cutoff_dist) / (sentinel_rtt - cutoff_rtt)
+    return cutoff_dist + slope * (rtt - cutoff_rtt)
+
+
 def _interpolate_in_hull(
     rtt: float,
     hull_rtts_arr: np.ndarray,
@@ -160,15 +201,18 @@ def hull_outer_distance(
     hull_distances: List[float],
     cutoff_rtt: float,
     baseline_slope: float = THEORETICAL_SLOPE,
+    sentinel_rtt: float = 10000.0,
 ) -> float:
     """Upper hull boundary distance at `rtt`.
 
     - Below the leftmost vertex: line through origin (physical bound — all
       training RTTs already respect the speed-of-internet constraint).
-    - Strictly above `cutoff_rtt`: pin to the hull at `cutoff_rtt`, extend
-      with the baseline (2/3·c) slope. The cutoff itself uses plain
-      interpolation — only RTTs strictly larger than the cutoff are in the
-      extension regime, matching `predict_distance_bounds`'s gate.
+    - Strictly above `cutoff_rtt`: extend from the hull at `cutoff_rtt`
+      toward the fictitious sentinel `z = (sentinel_rtt, sentinel_rtt /
+      baseline_slope)` on the 2/3·c bound — see
+      `sentinel_extension_distance` for the slope construction. Raises
+      `ValueError` if `rtt > sentinel_rtt` (extrapolation past z would push
+      the line above the 2/3·c bound).
     - Otherwise: linear interpolation between adjacent hull vertices.
 
     `compute_convex_hull_bounds` clamps `cutoff_rtt ≤ max(data_rtt)`, so the
@@ -182,7 +226,9 @@ def hull_outer_distance(
 
     if rtt > cutoff_rtt and cutoff_rtt > 0:
         cutoff_dist = _interpolate_in_hull(cutoff_rtt, hull_rtts_arr, hull_dists_arr)
-        return cutoff_dist + (rtt - cutoff_rtt) / baseline_slope
+        return sentinel_extension_distance(
+            rtt, cutoff_rtt, cutoff_dist, baseline_slope, sentinel_rtt
+        )
 
     x0 = hull_rtts_arr[0]
     if rtt < x0:
@@ -424,6 +470,7 @@ class OctantRTTModel:
     cutoff_rtt: float = 0.0
     cutoff_min_points: int = 5
     baseline_slope: float = THEORETICAL_SLOPE
+    sentinel_rtt: float = 10000.0
 
     spline_rtt_knots: Optional[List[float]] = None
     spline_dist_knots: Optional[List[float]] = None
@@ -440,6 +487,7 @@ class OctantRTTModel:
             self.hull_upper_distances,
             self.cutoff_rtt,
             self.baseline_slope,
+            self.sentinel_rtt,
         )
 
     def _inner(self, rtt: float) -> float:
@@ -547,8 +595,10 @@ class OctantRTTModel:
     def predict_distance(self, rtt: float) -> float:
         """Spline value at `rtt`, clipped to the hull band.
 
-        Above `cutoff_rtt`: pin to the spline value at cutoff and extend
-        with the baseline (2/3·c) slope.
+        Above `cutoff_rtt`: extend from `spline(cutoff_rtt)` toward the
+        sentinel `z = (sentinel_rtt, sentinel_rtt / baseline_slope)` on the
+        2/3·c bound — same construction as `hull_outer_distance`. Raises
+        `ValueError` if `rtt > sentinel_rtt`.
         """
         if not self.fitted:
             raise OctantFitError("model not fitted")
@@ -559,7 +609,13 @@ class OctantRTTModel:
         knot_dists = np.array(self.spline_dist_knots)
         if rtt > self.cutoff_rtt and self.cutoff_rtt > 0:
             cutoff_val = float(np.interp(self.cutoff_rtt, knot_rtts, knot_dists))
-            predicted = cutoff_val + (rtt - self.cutoff_rtt) / self.baseline_slope
+            predicted = sentinel_extension_distance(
+                rtt,
+                self.cutoff_rtt,
+                cutoff_val,
+                self.baseline_slope,
+                self.sentinel_rtt,
+            )
         else:
             predicted = float(np.interp(rtt, knot_rtts, knot_dists))
 
@@ -616,6 +672,7 @@ class OctantRTTModel:
             "cutoff_rtt": self.cutoff_rtt,
             "cutoff_min_points": self.cutoff_min_points,
             "baseline_slope": self.baseline_slope,
+            "sentinel_rtt": self.sentinel_rtt,
             "spline_rtt_knots": self.spline_rtt_knots,
             "spline_dist_knots": self.spline_dist_knots,
             "spline_n_knots": self.spline_n_knots,

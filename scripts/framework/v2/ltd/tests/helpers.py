@@ -155,6 +155,7 @@ def make_fitted_spotter_model(
     rtt_min: float = 0.0,
     rtt_max: float = 100.0,
     cutoff_rtt: float = 0.0,
+    sentinel_rtt: float = 10000.0,
 ) -> "SpotterRTTModel":
     """Build a hand-constructed fitted Spotter model with a parallel +/- k*sigma band.
 
@@ -180,6 +181,7 @@ def make_fitted_spotter_model(
         rtt_min=rtt_min,
         rtt_max=rtt_max,
         cutoff_rtt=cutoff_rtt,
+        sentinel_rtt=sentinel_rtt,
         fitted=True,
     )
 

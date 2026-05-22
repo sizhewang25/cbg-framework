@@ -50,12 +50,14 @@ class BoundedSplineLTD(AnnulusLTDModel):
         fit_spline: bool = True,
         spline_n_knots: int = 4,
         bin_size_ms: float = 5.0,
+        sentinel_rtt: float = 10000.0,
     ) -> None:
         self.target_coverage = target_coverage
         self.cutoff_min_points = cutoff_min_points
         self.fit_spline = fit_spline
         self.spline_n_knots = spline_n_knots
         self.bin_size_ms = bin_size_ms
+        self.sentinel_rtt = sentinel_rtt
         self._submodels: Dict[VpId, OctantRTTModel] = {}
         self._deltas: Dict[VpId, float] = {}
 
@@ -86,6 +88,7 @@ class BoundedSplineLTD(AnnulusLTDModel):
                 anchor_ip=str(vp_id),
                 anchor_lat=vp_coord.lat,
                 anchor_lon=vp_coord.lon,
+                sentinel_rtt=self.sentinel_rtt,
             )
             try:
                 model.fit(
