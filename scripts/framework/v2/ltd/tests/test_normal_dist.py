@@ -34,7 +34,7 @@ class TestNormalDistLTD(unittest.TestCase):
         return ltd
 
     def test_predict_produces_annular_constraints_with_pooled_band(self):
-        """All VPs share the same (mu, sigma, k) — the pooled-normal claim."""
+        """All VPs share the same (mu, sigma) — the pooled-normal claim."""
         ltd = self._ltd_with_model(make_fitted_spotter_model())
 
         obs = [
@@ -46,20 +46,20 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertEqual(len(results), 2)
         for r in results:
             self.assertTrue(r.success)
-            # mu(20)=1000, k*sigma=100 -> [900, 1100]
-            self.assertAlmostEqual(r.tg_distance.lower_km, 900.0)
-            self.assertAlmostEqual(r.tg_distance.upper_km, 1100.0)
+            # mu(20)=1000, sigma=50 -> [950, 1050]
+            self.assertAlmostEqual(r.tg_distance.lower_km, 950.0)
+            self.assertAlmostEqual(r.tg_distance.upper_km, 1050.0)
             self.assertTrue(r.tg_distance.is_annular)
 
     def test_predict_clips_inner_radius_at_zero(self):
-        """When k*sigma > mu, lower_km clamps to 0 (degenerates to disk)."""
-        # mu(rtt)=20*rtt, sigma=50, k=2 → band=±100. At rtt=1: mu=20, inner_raw=-80→0;
-        # raw outer=120, baseline cap = 1/THEORETICAL_SLOPE = 100 -> outer=100.
+        """When sigma > mu, lower_km clamps to 0 (degenerates to disk)."""
+        # mu(rtt)=20*rtt, sigma=50 -> +/-sigma band of width 100. At rtt=1: mu=20,
+        # inner_raw=-30 -> 0; raw outer=70, baseline cap = 1/THEORETICAL_SLOPE = 100,
+        # so no clip -> outer=70.
         ltd = self._ltd_with_model(
             make_fitted_spotter_model(
                 p_mu=np.array([20.0, 0.0]),
                 p_sigma=np.array([50.0]),
-                k=2.0,
                 rtt_min=0.0,
                 rtt_max=20.0,
             )
@@ -71,7 +71,7 @@ class TestNormalDistLTD(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(result.tg_distance.lower_km, 0.0)
-        self.assertAlmostEqual(result.tg_distance.upper_km, 100.0)
+        self.assertAlmostEqual(result.tg_distance.upper_km, 70.0)
         self.assertFalse(result.tg_distance.is_annular)
 
     def test_predict_returns_degenerate_region_on_zero_width_band(self):
@@ -137,17 +137,17 @@ class TestNormalDistLTD(unittest.TestCase):
         )
 
         self.assertTrue(below.success)
-        # outer(10) = min(50*10 + 100, 1000) = 600. Scaled: (600/10) * 5 = 300.
+        # outer(10) = min(50*10 + 50, 1000) = 550. Scaled: (550/10) * 5 = 275.
         self.assertEqual(below.tg_distance.lower_km, 0.0)
-        self.assertAlmostEqual(below.tg_distance.upper_km, 300.0)
+        self.assertAlmostEqual(below.tg_distance.upper_km, 275.0)
 
     def test_predict_extends_outer_at_baseline_slope_above_cutoff(self):
         """Above cutoff_rtt: inner is held flat at inner(cutoff); outer
         extends along the 2/3·c slope from outer(cutoff). No RTT_OUT_OF_RANGE
         rejection — the Octant broader-hull convention."""
-        # mu(rtt)=50*rtt, sigma=50, k=2 -> band=±100. cutoff_rtt=30 -> at
-        # rtt=80: inner stays at inner(30)=1400; outer = outer(30) + 50/0.01
-        # = 1600 + 5000 = 6600 (baseline at 80 is 8000, no clip).
+        # mu(rtt)=50*rtt, sigma=50 -> +/-sigma band of width 100. cutoff_rtt=30 -> at
+        # rtt=80: inner stays at inner(30)=1450; outer = outer(30) + 50/0.01
+        # = 1550 + 5000 = 6550 (baseline at 80 is 8000, no clip).
         ltd = self._ltd_with_model(
             make_fitted_spotter_model(
                 rtt_min=0.0,
@@ -161,8 +161,8 @@ class TestNormalDistLTD(unittest.TestCase):
         )
 
         self.assertTrue(result.success)
-        self.assertAlmostEqual(result.tg_distance.lower_km, 1400.0)
-        self.assertAlmostEqual(result.tg_distance.upper_km, 6600.0)
+        self.assertAlmostEqual(result.tg_distance.lower_km, 1450.0)
+        self.assertAlmostEqual(result.tg_distance.upper_km, 6550.0)
 
     def test_predict_failure_echoes_vp_id_coord_and_stamps_method(self):
         unfitted = self._ltd_with_model(make_unfitted_spotter_model())
@@ -215,8 +215,8 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertEqual(fit_result.method, "NormalDistLTD")
         self.assertIn("cutoff_rtt", fit_result.args)
         self.assertTrue(pred.success)
-        # mu(20) ≈ 1000 from the parallel band centered at 50*rtt. Bounds depend
-        # on fit-time k calibration so we only check the band straddles the mean.
+        # mu(20) ≈ 1000 from the parallel band centered at 50*rtt; the +/-sigma
+        # band straddles the mean.
         self.assertLess(pred.tg_distance.lower_km, 1000.0)
         self.assertGreater(pred.tg_distance.upper_km, 1000.0)
 

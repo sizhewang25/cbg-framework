@@ -1,12 +1,12 @@
 """NormalDistLTD — pooled-normal RTT-to-distance model (Laki et al. 2011).
 
-A single (mu(d), sigma(d), k) shared across all VPs — the pooled-normal claim.
+A single (mu(d), sigma(d)) shared across all VPs — the pooled-normal claim.
 Maps an RTT to an annular Distance:
 
-    lower_km = max(0, mu(rtt) - k * sigma(rtt))
-    upper_km = min(max(0, mu(rtt) + k * sigma(rtt)), rtt / THEORETICAL_SLOPE)
+    lower_km = max(0, mu(rtt) - sigma(rtt))
+    upper_km = min(max(0, mu(rtt) + sigma(rtt)), rtt / THEORETICAL_SLOPE)
 
-with k calibrated empirically (see notes/2026-05-17-spotter-normality-check.md).
+This is the paper's published band (Figure 3a in Laki et al. 2011).
 Above `cutoff_rtt` (the right edge of the last dense RTT bin) mu and sigma are
 held flat at the cutoff value — Octant-style graceful degradation when the
 deg-3 / deg-2 polynomial extrapolation would otherwise diverge in the sparse
@@ -39,11 +39,10 @@ from scripts.libs.spotter.spotter_model import SpotterRTTModel
 
 @register_ltd("normal_dist")
 class NormalDistLTD(AnnulusLTDModel):
-    """Pooled-normal RTT-to-distance model with empirical k."""
+    """Pooled-normal RTT-to-distance model with the paper's +/-sigma band."""
 
     def __init__(
         self,
-        sample_coverage: float = 0.95,
         n_bins: int = 40,
         min_per_bin: int = 30,
         deg_mu: int = 3,
@@ -51,7 +50,6 @@ class NormalDistLTD(AnnulusLTDModel):
         bin_size_ms: float = 5.0,
         cutoff_min_points: int = 30,
     ) -> None:
-        self.sample_coverage = sample_coverage
         self.n_bins = n_bins
         self.min_per_bin = min_per_bin
         self.deg_mu = deg_mu
@@ -83,7 +81,6 @@ class NormalDistLTD(AnnulusLTDModel):
             model.fit(
                 rtts,
                 dists,
-                target_coverage=self.sample_coverage,
                 n_bins=self.n_bins,
                 min_per_bin=self.min_per_bin,
                 deg_mu=self.deg_mu,
@@ -105,7 +102,6 @@ class NormalDistLTD(AnnulusLTDModel):
         return FittingResult(
             success=True,
             args={
-                "k": model.k,
                 "rtt_min": model.rtt_min,
                 "rtt_max": model.rtt_max,
                 "cutoff_rtt": model.cutoff_rtt,

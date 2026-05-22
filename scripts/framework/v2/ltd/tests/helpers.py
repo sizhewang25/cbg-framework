@@ -151,15 +151,14 @@ def make_fitted_spotter_model(
     *,
     p_mu: Optional[np.ndarray] = None,
     p_sigma: Optional[np.ndarray] = None,
-    k: float = 2.0,
     rtt_min: float = 0.0,
     rtt_max: float = 100.0,
     cutoff_rtt: float = 0.0,
 ) -> "SpotterRTTModel":
-    """Build a hand-constructed fitted Spotter model with a parallel +/- k*sigma band.
+    """Build a hand-constructed fitted Spotter model with a parallel +/-sigma band.
 
-    Defaults: mu(d) = 50 * d, sigma(d) = 50, k = 2 -> band of width 200 km.
-    At RTT=20: inner=900, outer=1100. At RTT=30: inner=1400, outer=1600. The 50
+    Defaults: mu(d) = 50 * d, sigma(d) = 50 -> +/-sigma band of width 100 km.
+    At RTT=20: inner=950, outer=1050. At RTT=30: inner=1450, outer=1550. The 50
     km/ms slope keeps every probe below the 2/3*c speed-of-internet line, so the
     new baseline clip in predict_distance_bounds is a no-op at these RTTs.
 
@@ -176,7 +175,6 @@ def make_fitted_spotter_model(
     return SpotterRTTModel(
         p_mu=np.asarray(p_mu, dtype=float),
         p_sigma=np.asarray(p_sigma, dtype=float),
-        k=k,
         rtt_min=rtt_min,
         rtt_max=rtt_max,
         cutoff_rtt=cutoff_rtt,
@@ -191,7 +189,6 @@ def make_fitted_degenerate_spotter_model() -> "SpotterRTTModel":
     return SpotterRTTModel(
         p_mu=np.array([50.0, 0.0]),
         p_sigma=np.array([0.0]),
-        k=2.0,
         rtt_min=0.0,
         rtt_max=100.0,
         fitted=True,

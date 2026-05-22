@@ -1,6 +1,6 @@
 """Spotter (Laki et al. 2011) pooled RTT-distance model.
 
-Implements the three-step calibration laid out in
+Implements the two-step calibration laid out in
 notes/2026-05-17-spotter-normality-check.md:
 
     1. fit_mu_sigma(rtt, dist) -> polynomial fits p_mu(d), p_sigma(d)
@@ -8,15 +8,11 @@ notes/2026-05-17-spotter-normality-check.md:
        distribution f_d(s) = N(mu(d), sigma(d)^2) is *landmark-independent*,
        so a single pooled pair describes all anchors.
 
-    2. calibrate_k(rtt, dist, p_mu, p_sigma, target_coverage) -> k
-       Empirical: k = quantile(|z|, target_coverage) on the calibration set.
-       Distribution-free; matches Octant's coverage-driven delta search in
-       spirit. Avoids assuming sigma_z = 1 (the note's panel (b) shows
-       sigma_z = 0.894 on probes->anchors, so the parametric k = Phi^-1(.)
-       would be wrong by ~12 %).
+    2. The pooled annulus is `mu(d) +/- sigma(d)` -- the paper's published
+       band (Figure 3a).
 
     3. SpotterRTTModel.predict_distance_bounds(rtt) -> (inner, outer)
-       Symmetric annulus [max(0, mu - k*sigma), max(0, mu + k*sigma)],
+       Symmetric annulus [max(0, mu - sigma), max(0, mu + sigma)],
        with the outer bound clipped by the 2/3*c speed-of-internet line
        (signal can't travel faster than light). Above `cutoff_rtt` the
        polynomial extrapolation is unsafe, so mu and sigma are held flat
@@ -24,8 +20,8 @@ notes/2026-05-17-spotter-normality-check.md:
 
 CAVEAT (load-bearing). On ping_10k_to_anchors the landmark-independence
 claim FAILS: per-anchor Q-Q curves S-off the diagonal due to probe-side
-last-mile heterogeneity. On anchors_meshed_pings it approximately holds
-(sigma_z = 0.964). See the note for the panel-by-panel mechanism.
+last-mile heterogeneity. On anchors_meshed_pings it approximately holds.
+See the note for the panel-by-panel mechanism.
 """
 
 from __future__ import annotations
@@ -110,33 +106,12 @@ def fit_mu_sigma(
     return p_mu, p_sigma, centers, mus, sigmas
 
 
-def calibrate_k(
-    rtt: np.ndarray,
-    dist: np.ndarray,
-    p_mu: np.ndarray,
-    p_sigma: np.ndarray,
-    target_coverage: float = 0.95,
-) -> float:
-    """Empirical confidence multiplier: k = quantile(|z|, target_coverage).
-
-    z = (dist - mu(d)) / sigma(d). Points with non-positive sigma are dropped.
-    """
-    rtt = np.asarray(rtt, dtype=float)
-    dist = np.asarray(dist, dtype=float)
-    mu = np.polyval(p_mu, rtt)
-    sig = np.polyval(p_sigma, rtt)
-    mask = (sig > 0) & np.isfinite(mu) & np.isfinite(sig)
-    z = (dist[mask] - mu[mask]) / sig[mask]
-    z = z[np.isfinite(z)]
-    return float(np.quantile(np.abs(z), target_coverage))
-
-
 @dataclass
 class SpotterRTTModel:
     """Pooled Spotter RTT->distance model.
 
-    One (p_mu, p_sigma, k) shared across all anchors. predict_distance_bounds
-    produces a symmetric annulus [mu(d) - k*sigma(d), mu(d) + k*sigma(d)]
+    One (p_mu, p_sigma) shared across all anchors. predict_distance_bounds
+    produces a symmetric annulus [mu(d) - sigma(d), mu(d) + sigma(d)]
     clipped at 0 on the inner side and at the 2/3*c baseline on the outer.
     Above `cutoff_rtt` the polynomial is held flat at the cutoff -- the
     extrapolation is not safe, so the model falls back to a constant-width
@@ -145,7 +120,6 @@ class SpotterRTTModel:
 
     p_mu: Optional[np.ndarray] = None
     p_sigma: Optional[np.ndarray] = None
-    k: float = 0.0
     rtt_min: float = 0.0
     rtt_max: float = 0.0
     cutoff_rtt: float = 0.0
@@ -161,11 +135,10 @@ class SpotterRTTModel:
         min_per_bin: int = 30,
         deg_mu: int = 3,
         deg_sigma: int = 2,
-        target_coverage: float = 0.95,
         bin_size_ms: float = 5.0,
         cutoff_min_points: int = 30,
     ) -> bool:
-        """Fit the pooled mu(d), sigma(d) polynomials and calibrate k.
+        """Fit the pooled mu(d), sigma(d) polynomials.
 
         Drops physically impossible rows (rtt < THEORETICAL_SLOPE * dist)
         before binning. Computes a per-fit `cutoff_rtt` (right edge of the
@@ -210,7 +183,6 @@ class SpotterRTTModel:
             return False
         self.p_mu = p_mu
         self.p_sigma = p_sigma
-        self.k = calibrate_k(rtt, dist, p_mu, p_sigma, target_coverage=target_coverage)
         self.rtt_min = float(rtt.min())
         self.rtt_max = float(rtt.max())
         self.cutoff_rtt = compute_cutoff_rtt(
@@ -219,7 +191,6 @@ class SpotterRTTModel:
         self.metadata = {
             "n_pairs": int(len(rtt)),
             "n_bins_used": int(len(centers)),
-            "target_coverage": float(target_coverage),
             "cutoff_rtt": float(self.cutoff_rtt),
         }
         self.fitted = True
@@ -237,7 +208,8 @@ class SpotterRTTModel:
     def predict_distance_bounds(
         self, rtt: float
     ) -> Optional[Tuple[float, float]]:
-        """Symmetric annulus (inner, outer) = mu(rtt) +/- k*sigma(rtt).
+        """Symmetric +/-sigma annulus (inner, outer) = mu(rtt) +/- sigma(rtt)
+        -- the paper's published band.
 
         Three regimes, mirroring octant_simple's hull conventions:
 
@@ -269,7 +241,7 @@ class SpotterRTTModel:
             mu_min = float(np.polyval(self.p_mu, self.rtt_min))
             sigma_min = float(np.polyval(self.p_sigma, self.rtt_min))
             outer_at_min = min(
-                max(0.0, mu_min + self.k * sigma_min),
+                max(0.0, mu_min + sigma_min),
                 self.rtt_min / THEORETICAL_SLOPE,
             )
             return 0.0, (outer_at_min / self.rtt_min) * rtt
@@ -281,8 +253,8 @@ class SpotterRTTModel:
             eval_rtt = rtt
         mu = float(np.polyval(self.p_mu, eval_rtt))
         sigma = float(np.polyval(self.p_sigma, eval_rtt))
-        inner = max(0.0, mu - self.k * sigma)
-        outer = max(0.0, mu + self.k * sigma)
+        inner = max(0.0, mu - sigma)
+        outer = max(0.0, mu + sigma)
         if self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
             outer = outer + (rtt - self.cutoff_rtt) / THEORETICAL_SLOPE
         outer = min(outer, rtt / THEORETICAL_SLOPE)
