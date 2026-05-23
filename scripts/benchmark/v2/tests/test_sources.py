@@ -140,6 +140,7 @@ class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
                 slice="all_anchors", setup="anchors_to_probes",
                 probes_and_anchors_file=probes_json,
                 rtt_query=lambda *a, **kw: {"1.1.1.1": {"vp-a": [10.0], "vp-b": [12.0]}},
+                sanitize=False,
             )
             targets = list(src.iter_eval_targets())
         # 1 anchor × 2 probes → 2 EvalTargets (one per probe), each with the
@@ -168,6 +169,7 @@ class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
                 slice="all_anchors",
                 probes_and_anchors_file=probes_json,
                 rtt_query=lambda *a, **kw: {"1.1.1.1": {"vp-a": [10.0], "vp-b": [12.0]}},
+                sanitize=False,
             )
             targets = list(src.iter_eval_targets())
         self.assertEqual(len(targets), 1)
