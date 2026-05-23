@@ -30,6 +30,9 @@ from scripts.framework.v2.types import Coord, Latency, VpId
 # Default ClickHouse query parameters. `threshold=70` matches v1/million_scale.py:76.
 _DEFAULT_FILTER = ""
 _DEFAULT_THRESHOLD = 70
+# Sanitization re-runs the paper's SOI-violation removal. threshold=300 matches
+# datasets/create_datasets.ipynb (the cell that produced reproducibility_filtered_probes.json).
+_DEFAULT_SANITIZE_THRESHOLD = 300
 
 
 class RipeAtlasSource(DataSource):
@@ -47,6 +50,9 @@ class RipeAtlasSource(DataSource):
         threshold: int = _DEFAULT_THRESHOLD,
         filter_clause: str = _DEFAULT_FILTER,
         rtt_query: Optional[Callable[..., dict[str, dict[str, list[float]]]]] = None,
+        sanitize: bool = True,
+        anchor_mesh_table: Optional[str] = None,
+        sanitize_threshold: int = _DEFAULT_SANITIZE_THRESHOLD,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
@@ -67,6 +73,13 @@ class RipeAtlasSource(DataSource):
         # doesn't pull in ClickHouse / the v1 analysis module.
         self._rtt_query = rtt_query
 
+        self._sanitize = sanitize
+        self._anchor_mesh_table = (
+            anchor_mesh_table if anchor_mesh_table is not None
+            else default.ANCHORS_MESHED_PING_TABLE
+        )
+        self._sanitize_threshold = sanitize_threshold
+
         # Lazily populated caches; first iter_*() call triggers loading.
         self._coords_by_ip: Optional[dict[str, Coord]] = None
         self._anchor_ips: Optional[set[str]] = None
@@ -74,6 +87,8 @@ class RipeAtlasSource(DataSource):
         self._country_by_ip: dict[str, Optional[str]] = {}
         # rtts_by_anchor[anchor_ip] = {probe_ip: min_rtt_ms}
         self._rtts_by_anchor: Optional[dict[str, dict[str, float]]] = None
+        # IPs removed by SOI sanitization (populated when sanitize=True).
+        self._removed_ips: set[str] = set()
 
     # ---- DataSource API ------------------------------------------------------
 
@@ -214,6 +229,16 @@ class RipeAtlasSource(DataSource):
             self._threshold,
             is_per_prefix=False,
         )
+
+        if self._sanitize:
+            self._removed_ips = self._compute_soi_removed_ips(query, raw)
+            if self._removed_ips:
+                raw = {
+                    dst: {s: r for s, r in srcs.items() if s not in self._removed_ips}
+                    for dst, srcs in raw.items()
+                    if dst not in self._removed_ips
+                }
+
         # raw shape: {dst_ip: {src_ip: [min_rtt]}}. Collapse to one float per pair.
         out: dict[str, dict[str, float]] = {}
         for anchor_ip, vp_rtts in raw.items():
@@ -227,6 +252,61 @@ class RipeAtlasSource(DataSource):
             if collapsed:
                 out[anchor_ip] = collapsed
         self._rtts_by_anchor = out
+
+    def _compute_soi_removed_ips(
+        self,
+        query: Callable[..., dict[str, dict[str, list[float]]]],
+        rtt_probes: dict[str, dict[str, list[float]]],
+    ) -> set[str]:
+        """Re-run the IMC 2023 sanitization on the live data.
+
+        Phase 1: query the meshed anchor-anchor table, iteratively remove anchors
+        with the most SOI violations until none remain.
+        Phase 2: same procedure on the probe→anchor data, with phase-1 anchors
+        already excluded.
+
+        Returns the union set of IPs to drop. Stays an empty set if either query
+        returns nothing (e.g. test injection that only knows the probe table).
+        """
+        from scripts.analysis.analysis import compute_remove_wrongly_geolocated_probes
+        from scripts.utils.helpers import haversine
+
+        assert self._coords_by_ip is not None
+        coords = self._coords_by_ip
+
+        try:
+            rtt_anchors = query(
+                self._anchor_mesh_table,
+                "",
+                self._sanitize_threshold,
+                is_per_prefix=False,
+            )
+        except Exception:
+            # If the anchor-mesh table is unavailable (e.g. test fakes), skip
+            # phase 1 rather than crashing. Phase 2 still runs.
+            rtt_anchors = {}
+
+        # Build only the (dst, src) distances the function will actually look up.
+        dist: dict[str, dict[str, float]] = {}
+        for rtt_dict in (rtt_anchors, rtt_probes):
+            for dst, srcs in rtt_dict.items():
+                if dst not in coords:
+                    continue
+                row = dist.setdefault(dst, {})
+                d_loc = (coords[dst].lat, coords[dst].lon)
+                for src in srcs.keys():
+                    if src in row or src not in coords or src == dst:
+                        continue
+                    s_loc = (coords[src].lat, coords[src].lon)
+                    row[src] = float(haversine(d_loc, s_loc))
+
+        removed_anchors = compute_remove_wrongly_geolocated_probes(
+            rtt_anchors, coords, dist, set()
+        )
+        removed_probes = compute_remove_wrongly_geolocated_probes(
+            rtt_probes, coords, dist, set(removed_anchors)
+        )
+        return set(removed_anchors) | set(removed_probes)
 
     def _apply_slice(self) -> None:
         assert self._rtts_by_anchor is not None
