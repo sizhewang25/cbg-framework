@@ -9,9 +9,7 @@ across VPs.
 fitted VP using only that VP's data and spline. `_predict` looks up the
 per-VP δ and asks the submodel for `predict_distance_bounds(rtt, delta)`.
 
-Wraps scripts/libs/octant_simple/octant_model.py — the simplified mirror
-that drops the multi-variant cutoff (only `high_only` behavior survives)
-and the unused RTT-array prediction helpers.
+Wraps `scripts/libs/octant/octant_model.py`.
 """
 
 from __future__ import annotations
@@ -31,7 +29,7 @@ from scripts.framework.v2.ltd.base import (
 from scripts.framework.v2.registry import register_ltd
 from scripts.framework.v2.types import Coord, Distance, Error, Latency, VpId
 from scripts.libs.cbg.rtt_model import haversine_distance
-from scripts.libs.octant_simple.octant_model import (
+from scripts.libs.octant.octant_model import (
     OctantRTTModel,
     find_delta_for_coverage,
 )

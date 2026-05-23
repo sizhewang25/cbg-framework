@@ -28,7 +28,7 @@ from scripts.framework.v2.ltd.base import FitSample
 from scripts.framework.v2.ltd.bounded_spline import BoundedSplineLTD
 from scripts.framework.v2.types import Coord, Latency, VpId
 from scripts.libs.cbg.rtt_model import THEORETICAL_SLOPE, haversine_distance
-from scripts.libs.octant_simple.octant_model import OctantRTTModel
+from scripts.libs.octant.octant_model import OctantRTTModel
 
 
 # ---------------------------------------------------------------------------

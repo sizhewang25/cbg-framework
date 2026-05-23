@@ -1,7 +1,7 @@
 """Shared boilerplate for AnnulusMTLMethod wrappers.
 
 Both PlanarAnnulusMTL and PlanarAnnulusWeightedMTL convert LTDResult to
-octant_simple's AnnularConstraint and wrap the returned Shapely geometry
+octant's AnnularConstraint and wrap the returned Shapely geometry
 in an MTLResult with the same error mapping. Those two operations live
 here so the wrapper classes can focus on the per-constraint weight
 derivation and which feasibility function they call.
@@ -12,7 +12,7 @@ from __future__ import annotations
 from scripts.framework.v2.ltd.base import LTDResult
 from scripts.framework.v2.mtl.base import MTLResult
 from scripts.framework.v2.types import Error
-from scripts.libs.octant_simple.octant_geolocation import AnnularConstraint
+from scripts.libs.octant.octant_geolocation import AnnularConstraint
 
 
 def annular_constraint_from_ltd(
@@ -21,7 +21,7 @@ def annular_constraint_from_ltd(
     rtt_ms: float,
     weight: float,
 ) -> AnnularConstraint:
-    """Translate an LTDResult into an octant_simple AnnularConstraint.
+    """Translate an LTDResult into an octant AnnularConstraint.
 
     `rtt_ms` and `weight` are kwargs-only because their values are
     wrapper-specific: unweighted passes placeholder (0.0, 1.0); weighted

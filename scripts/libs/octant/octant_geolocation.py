@@ -27,7 +27,7 @@ from scipy.stats import qmc
 from shapely.geometry import Point, Polygon, MultiPolygon
 from shapely.ops import polygonize, unary_union
 
-from scripts.libs.octant_simple.octant_model import OctantRTTModel
+from scripts.libs.octant.octant_model import OctantRTTModel
 from scripts.utils.helpers import haversine
 
 logger = logging.getLogger(__name__)

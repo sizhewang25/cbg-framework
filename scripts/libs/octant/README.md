@@ -1,4 +1,4 @@
-# octant_simple — spline fitting deep dive
+# octant — spline fitting deep dive
 
 The "best-guess curve" inside the hull band is a piecewise-linear LSQ spline. Three layers hand off to each other: `fit_rtt_distance_spline` does the math, `OctantRTTModel.fit` enforces the data-shape guards, and `predict_distance` evaluates the result at query time.
 

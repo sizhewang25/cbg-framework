@@ -5,7 +5,7 @@ all inner disks. With disk-only inputs (`lower_km == 0`) this degenerates to
 the same result as PlanarCircleMTL, but the family base is AnnulusMTLMethod
 because the value of this method comes from honouring `lower_km > 0`.
 
-Wraps scripts/libs/octant_simple/octant_geolocation.compute_feasible_region_unweighted.
+Wraps scripts/libs/octant/octant_geolocation.compute_feasible_region_unweighted.
 The wrapped function reads only `landmark_lat`, `landmark_lon`,
 `inner_radius_km`, and `outer_radius_km`; `rtt_ms` and `weight` are unused —
 we pass placeholders.
@@ -21,7 +21,7 @@ from scripts.framework.v2.mtl._annulus_common import (
 )
 from scripts.framework.v2.registry import register_mtl
 from scripts.framework.v2.types import Error
-from scripts.libs.octant_simple.octant_geolocation import (
+from scripts.libs.octant.octant_geolocation import (
     compute_feasible_region_unweighted,
 )
 

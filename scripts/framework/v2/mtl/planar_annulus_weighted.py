@@ -11,7 +11,7 @@ so it stays forward-compatible. Once `LTDResult.latency` lands, the happy
 path works without further code changes. Until then, the wrapper short-
 circuits with `Error.INSUFFICIENT_DATA` whenever any result lacks latency.
 
-Wraps scripts/libs/octant_simple/octant_geolocation.compute_feasible_region_weighted.
+Wraps scripts/libs/octant/octant_geolocation.compute_feasible_region_weighted.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from scripts.framework.v2.mtl._annulus_common import (
 )
 from scripts.framework.v2.registry import register_mtl
 from scripts.framework.v2.types import Error
-from scripts.libs.octant_simple.octant_geolocation import (
+from scripts.libs.octant.octant_geolocation import (
     compute_feasible_region_weighted,
 )
 

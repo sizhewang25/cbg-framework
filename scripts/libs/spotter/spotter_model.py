@@ -31,7 +31,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from scripts.libs.octant_simple.octant_model import sentinel_extension_distance
+from scripts.libs.octant.octant_model import sentinel_extension_distance
 
 
 SPEED_OF_LIGHT_KM_MS = 300.0
@@ -45,7 +45,7 @@ def compute_cutoff_rtt(
 ) -> float:
     """Right edge of the last RTT bin that contains >= cutoff_min_points.
 
-    Mirrors the cutoff scan in octant_simple/octant_model.py. Scans bins
+    Mirrors the cutoff scan in octant/octant_model.py. Scans bins
     left-to-right; clamped to max(rtts). Returns 0.0 on empty input. When no
     bin meets the threshold cutoff_rtt stays at min(rtts), then is clamped to
     max(rtts) -- so it is always finite and within the data range.
@@ -214,7 +214,7 @@ class SpotterRTTModel:
         """Symmetric +/-sigma annulus (inner, outer) = mu(rtt) +/- sigma(rtt)
         -- the paper's published band.
 
-        Three regimes, mirroring octant_simple's hull conventions:
+        Three regimes, mirroring octant's hull conventions:
 
         - Below `rtt_min`: line through origin. inner = 0; outer scales
           linearly from 0 at rtt=0 to outer(rtt_min) at rtt=rtt_min. The
@@ -226,7 +226,7 @@ class SpotterRTTModel:
           outer extends from outer(cutoff) toward a fictitious sentinel
           z = (sentinel_rtt, sentinel_rtt / THEORETICAL_SLOPE) on the
           2/3*c bound -- the Octant paper's smooth-transition construction
-          (see octant_simple.sentinel_extension_distance). Raises
+          (see octant.sentinel_extension_distance). Raises
           ValueError if rtt > sentinel_rtt.
         - Otherwise: plain polynomial evaluation.
 

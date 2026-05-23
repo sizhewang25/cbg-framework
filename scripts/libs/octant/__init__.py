@@ -1,4 +1,4 @@
-from scripts.libs.octant_simple.octant_geolocation import (
+from scripts.libs.octant.octant_geolocation import (
     AnnularConstraint,
     form_constraint,
     form_constraints,

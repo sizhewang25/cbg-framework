@@ -1,13 +1,8 @@
-"""Unit tests for the octant_simple geolocation pipeline.
+"""Unit tests for the octant geolocation pipeline.
 
-Mirrors `scripts/libs/octant/test_octant_geolocation.py` with two adjustments:
-- Imports come from `scripts.libs.octant_simple.*`.
-- The `grid_resolution_deg` keyword is gone — the weighted region uses planar
-  face decomposition now, not grid sampling.
-
-A new test class `TestComputeFeasibleRegionWeightedFaceDecomposition` covers
-paper-faithful invariants the grid version did not satisfy: representative-
-point face weights, top-weight selection, disconnected results, inner-hole
+`TestComputeFeasibleRegionWeightedFaceDecomposition` covers the paper-
+faithful invariants of the weighted feasible region: representative-point
+face weights, top-weight selection, disconnected results, inner-hole
 exclusion, and a divergence case where a sparse-greedy variant would miss
 support from low-weight annuli.
 """
@@ -16,8 +11,8 @@ import unittest
 import numpy as np
 from shapely.geometry import MultiPolygon, Point
 
-from scripts.libs.octant_simple.octant_model import OctantRTTModel
-from scripts.libs.octant_simple.octant_geolocation import (
+from scripts.libs.octant.octant_model import OctantRTTModel
+from scripts.libs.octant.octant_geolocation import (
     AnnularConstraint,
     form_constraint,
     form_constraints,

@@ -25,7 +25,7 @@ from scripts.framework.v2.types import Coord, Latency, VpId
 from scripts.libs.cbg.rtt_model import RTTDistanceModel
 
 if TYPE_CHECKING:
-    from scripts.libs.octant_simple.octant_model import OctantRTTModel
+    from scripts.libs.octant.octant_model import OctantRTTModel
     from scripts.libs.spotter.spotter_model import SpotterRTTModel
 
 
@@ -86,7 +86,7 @@ def make_fitted_octant_model(
     50 km/ms slope sits well below the 100 km/ms speed-of-internet ceiling,
     so every probe survives the baseline filter in `OctantRTTModel.fit`.
     """
-    from scripts.libs.octant_simple.octant_model import OctantRTTModel
+    from scripts.libs.octant.octant_model import OctantRTTModel
 
     coord = ANCHOR_COORDS[VpId(anchor_ip)]
     rtt_values = np.array([10, 20, 30, 40, 50], dtype=float)
@@ -114,7 +114,7 @@ def make_fitted_octant_model(
 
 def make_fitted_degenerate_octant_model(anchor_ip: str = "anchor-a") -> "OctantRTTModel":
     """Fit a real Octant model whose lower and upper bounds are identical."""
-    from scripts.libs.octant_simple.octant_model import OctantRTTModel
+    from scripts.libs.octant.octant_model import OctantRTTModel
 
     coord = ANCHOR_COORDS[VpId(anchor_ip)]
     rtts = np.array([10, 20, 30, 40, 50], dtype=float)
@@ -139,7 +139,7 @@ def make_fitted_degenerate_octant_model(anchor_ip: str = "anchor-a") -> "OctantR
 
 def make_unfitted_octant_model(anchor_ip: str = "anchor-a") -> "OctantRTTModel":
     """Build a real but unfitted Octant RTT-distance model."""
-    from scripts.libs.octant_simple.octant_model import OctantRTTModel
+    from scripts.libs.octant.octant_model import OctantRTTModel
 
     coord = ANCHOR_COORDS[VpId(anchor_ip)]
     return OctantRTTModel(

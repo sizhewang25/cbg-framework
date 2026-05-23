@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts.libs.octant_simple.octant_model import (
+from scripts.libs.octant.octant_model import (
     DeltaSearchError,
     OctantFitError,
     OctantRTTModel,
