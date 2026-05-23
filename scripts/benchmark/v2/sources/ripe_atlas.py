@@ -137,8 +137,8 @@ class RipeAtlasSource(DataSource):
     def iter_vp_configs(self) -> Iterator[VpConfig]:
         self._ensure_loaded()
         assert self._coords_by_ip is not None and self._rtts_by_anchor is not None
-        if self._setup == DataSource.PROBES_TO_ANCHORS:
-            # VPs are probes that appear in at least one RTT row.
+        if self._setup in (DataSource.PROBES_TO_ANCHORS, DataSource.ANCHORS_TO_ANCHORS):
+            # VPs are src-side IPs — probes (P2A) or anchors (A2A).
             active_ips: set[str] = set()
             for measurements in self._rtts_by_anchor.values():
                 active_ips.update(measurements.keys())
@@ -158,8 +158,8 @@ class RipeAtlasSource(DataSource):
     def iter_tg_configs(self) -> Iterator[TgConfig]:
         self._ensure_loaded()
         assert self._coords_by_ip is not None and self._rtts_by_anchor is not None
-        if self._setup == DataSource.PROBES_TO_ANCHORS:
-            # Targets are anchors — outer keys of _rtts_by_anchor.
+        if self._setup in (DataSource.PROBES_TO_ANCHORS, DataSource.ANCHORS_TO_ANCHORS):
+            # Targets are dst-side IPs — anchors in both P2A and A2A setups.
             target_ips = set(self._rtts_by_anchor.keys())
         else:  # ANCHORS_TO_PROBES — targets are probes that appear in any anchor's RTT row.
             target_ips = set()
@@ -189,7 +189,8 @@ class RipeAtlasSource(DataSource):
                 probe_coord = self._coords_by_ip.get(probe_ip)
                 if probe_coord is None or rtt <= 0:
                     continue
-                if self._setup == DataSource.PROBES_TO_ANCHORS:
+                if self._setup in (DataSource.PROBES_TO_ANCHORS, DataSource.ANCHORS_TO_ANCHORS):
+                    # vp = src (probe in P2A, anchor in A2A); target = dst (anchor in both).
                     yield FitSample(
                         vp_id=VpId(probe_ip),
                         vp_coord=probe_coord,
@@ -207,7 +208,7 @@ class RipeAtlasSource(DataSource):
     def iter_eval_targets(self) -> Iterator[EvalTarget]:
         self._ensure_loaded()
         assert self._rtts_by_anchor is not None and self._coords_by_ip is not None
-        if self._setup == DataSource.PROBES_TO_ANCHORS:
+        if self._setup in (DataSource.PROBES_TO_ANCHORS, DataSource.ANCHORS_TO_ANCHORS):
             for anchor_ip in sorted(self._rtts_by_anchor.keys()):
                 anchor_coord = self._coords_by_ip.get(anchor_ip)
                 if anchor_coord is None:

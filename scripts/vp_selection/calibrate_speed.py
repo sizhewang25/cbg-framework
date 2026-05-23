@@ -259,14 +259,9 @@ def write_results(result: dict[str, Any], output_dir: Path) -> None:
 
 def calibrate(output_dir: Path, sanitize: bool = True) -> dict[str, Any]:
     """Production entry: configure a RipeAtlasSource on the anchor mesh + run."""
-    # NB: when ping_table = anchors_meshed_pings, both sides of each row are
-    # anchors. `PROBES_TO_ANCHORS` here means `vp_id = src` (outgoing pings
-    # per anchor); `ANCHORS_TO_PROBES` would mean `vp_id = dst` (incoming
-    # pings per anchor). For per-anchor LP envelopes either is fine — the
-    # mesh stores both directions — so we use the source's default.
     source = RipeAtlasSource(
         slice="all_anchors",
-        setup=DataSource.PROBES_TO_ANCHORS,
+        setup=DataSource.ANCHORS_TO_ANCHORS,
         ping_table=default.ANCHORS_MESHED_PING_TABLE,
         sanitize=sanitize,
     )

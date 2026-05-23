@@ -75,7 +75,7 @@ class VultrCSVSource(DataSource):
 
     def iter_vp_configs(self) -> Iterator[VpConfig]:
         df = self._load()
-        if self._setup == DataSource.PROBES_TO_ANCHORS:
+        if self._setup in (DataSource.PROBES_TO_ANCHORS, DataSource.ANCHORS_TO_ANCHORS):
             for _, row in df.drop_duplicates("prb_id").iterrows():
                 yield VpConfig(
                     vp_id=str(int(row["prb_id"])),
@@ -96,7 +96,7 @@ class VultrCSVSource(DataSource):
 
     def iter_tg_configs(self) -> Iterator[TgConfig]:
         df = self._load()
-        if self._setup == DataSource.PROBES_TO_ANCHORS:
+        if self._setup in (DataSource.PROBES_TO_ANCHORS, DataSource.ANCHORS_TO_ANCHORS):
             # Targets are anchors (dst_ip). Anchor city is optional in the CSV
             # — present in synthetic fixtures + real Vultr exports, absent in
             # stripped-down test CSVs. Missing columns yield NaN via Series.get.
@@ -126,7 +126,7 @@ class VultrCSVSource(DataSource):
     def iter_fit_samples(self) -> Iterator[FitSample]:
         df = self._load()
         for row in df.itertuples(index=False):
-            if self._setup == DataSource.PROBES_TO_ANCHORS:
+            if self._setup in (DataSource.PROBES_TO_ANCHORS, DataSource.ANCHORS_TO_ANCHORS):
                 yield FitSample(
                     vp_id=VpId(str(int(row.prb_id))),
                     vp_coord=Coord(lat=float(row.probe_latitude), lon=float(row.probe_longitude)),
@@ -143,7 +143,7 @@ class VultrCSVSource(DataSource):
 
     def iter_eval_targets(self) -> Iterator[EvalTarget]:
         df = self._load()
-        if self._setup == DataSource.PROBES_TO_ANCHORS:
+        if self._setup in (DataSource.PROBES_TO_ANCHORS, DataSource.ANCHORS_TO_ANCHORS):
             # Group by anchor IP — each anchor is one target. Anchor coords
             # are constant within a group; read true_coord from the first row.
             for dst_ip, group in df.groupby("dst_ip", sort=True):

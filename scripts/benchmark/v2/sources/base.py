@@ -69,10 +69,18 @@ class DataSource(ABC):
 
     name: str  # short identifier — also the subdirectory name under inputs/
 
-    # Allowed values for the `setup` axis. Subclasses must accept both.
+    # Allowed values for the `setup` axis. Subclasses must accept all.
+    #
+    # PROBES_TO_ANCHORS / ANCHORS_TO_PROBES: VP and target sides differ —
+    #   one is probes, one is anchors. Field mapping decides which.
+    # ANCHORS_TO_ANCHORS: both sides are anchors (anchor mesh data). Field
+    #   mapping is identical to PROBES_TO_ANCHORS (vp_id = src, target = dst);
+    #   the separate name documents the data shape and lets callers (e.g.
+    #   the speed-limit calibration) declare intent explicitly.
     PROBES_TO_ANCHORS = "probes_to_anchors"
     ANCHORS_TO_PROBES = "anchors_to_probes"
-    ALLOWED_SETUPS = (PROBES_TO_ANCHORS, ANCHORS_TO_PROBES)
+    ANCHORS_TO_ANCHORS = "anchors_to_anchors"
+    ALLOWED_SETUPS = (PROBES_TO_ANCHORS, ANCHORS_TO_PROBES, ANCHORS_TO_ANCHORS)
 
     @abstractmethod
     def iter_vp_configs(self) -> Iterator[VpConfig]: ...
