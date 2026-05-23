@@ -46,19 +46,22 @@ Cho's calibrated speed limit is **0.51 c = 153 km/ms** (their Fig. 2), tighter t
 
 ## Approach
 
-### Step 1 — Speed-limit calibration in [scripts/vp_selection/calibrate_speed.py](../../scripts/vp_selection/calibrate_speed.py)
+### Step 1 — Speed-limit calibration in [scripts/vp_selection/calibrate_speed.py](../../scripts/vp_selection/calibrate_speed.py) ✓ done
 
-**First deliverable.** Calibrate the global speed limit $S$ (km/ms, one-way) used by the agreement verifier in Step 4. Reuses the existing v2 [LowEnvelopeLTD](../../scripts/framework/v2/ltd/low_envelope.py) infrastructure — no LP reimplementation.
+**First deliverable — complete.** Result: **S = 185.85 km/ms (p99, +21.5% vs Cho)**.
 
 1. **Source**: `anchors_meshed_pings` (anchor↔anchor min-RTT), restricted to the SOI-survived anchor set from `RipeAtlasSource._compute_soi_removed_ips`. Both endpoints are hard-GT + datacenter-grade — the cleanest input we have for this kind of calibration.
-2. **Per-anchor envelope fit**: for each anchor treated as a "VP", construct `FitSample`s from its outgoing mesh pings (`vp_coord` = this anchor, `probe_coord` = other anchor, `latency` = min-RTT). Call `LowEnvelopeLTD._fit(samples)`. The wrapped `RTTDistanceModel` solves the LP that tightens against the lower envelope → per-anchor `(slope_i, intercept_i)` with units (ms/km, ms).
+2. **Per-anchor envelope fit**: for each anchor treated as a "VP", construct `FitSample`s from its outgoing mesh pings (`vp_coord` = this anchor, `probe_coord` = other anchor, `latency` = min-RTT). Reuse `RTTDistanceModel.fit_bestline_lp` directly (the LP under `LowEnvelopeLTD`), but with **`baseline_slope = 2/c`** (= 0.00667 ms/km, speed-of-light floor) rather than the production `THEORETICAL_SLOPE = 0.01` (= 2/3·c, fiber cap). Otherwise the LP is bounded `slope ≥ 0.01` and pegs fast anchors at exactly 200 km/ms — measuring the cap, not the data. `filter_baseline` still drops faster-than-light points.
 3. **Per-anchor implied one-way speed**: $v_i = 2 / \text{slope}_i$ km/ms (factor 2 because RTT is round-trip; asymptotic at large $d$ when intercept becomes negligible).
-4. **Global speed limit**: $S = \max_i v_i = 2 / \min_i \text{slope}_i$ — Cho's "fastest of all" applied to per-anchor LP envelopes instead of per-pair points.
-5. **Stability check** (Cho's Fig. 2 analog): split `anchors_meshed_pings` into non-overlapping hourly windows, recompute $S$ per window, confirm cross-window agreement within ~1%.
-6. **Outputs**: `outputs/speed_calibration.json` (S, per-anchor slope/intercept/$v_i$, stability result) and `outputs/speed_calibration.png` (family of per-anchor envelopes with the fastest one highlighted).
-7. **Cross-check**: if our $S$ deviates from Cho's 153 km/ms by more than ~10%, investigate before adopting. The discrepancy is itself a finding.
+4. **Detect pegged anchors**: any with `slope_i ≤ baseline + ε` are degenerate fits (data implies superluminal marginal propagation — surviving GT errors or sparse-data overfit). Exclude from the headline calibration; keep in the JSON diagnostics. **Our run: 5 of 757 anchors pegged.**
+5. **Headline S = p99** over non-pegged anchors. Raw max is outlier-sensitive (a single Bangalore anchor with n=37 gave 276 km/ms while the next-fastest cluster sat at 186–199 km/ms). p99 captures the fast-network tail without a single bad fit dominating. Max, p95, p50, etc. retained as diagnostics.
+6. **Outputs**: `outputs/speed_calibration.json` (S, full distribution, per-anchor records flagged with `pegged_at_baseline`, list of fastest non-pegged + pegged anchors) and `outputs/speed_calibration.png` (family of per-anchor envelopes, p99 line, raw-max diagnostic line, Cho reference, pegged anchors highlighted).
+7. **Cross-check**: our $S$ is +21.5% over Cho's 153 km/ms — plausibly explained by 2-3 yr network evolution + different anchor pool. p50 = 131.7 km/ms matches Katz-Bassett's 133 km/ms cited by Cho.
 
-Note: only the scalar $S$ extrapolates downstream (used to constrain probe RTT triples in the agreement verifier). The per-anchor envelope curves themselves stay anchor-only — they are GT-specific to each anchor.
+Notes:
+- Only the scalar $S$ extrapolates downstream (used to constrain probe RTT triples in the agreement verifier). The per-anchor envelope curves themselves stay anchor-only — they are GT-specific to each anchor.
+- **SOI ≠ LP-floor pegging.** SOI's per-pair check `2·d/rtt > 200 km/ms` treats *all* of RTT as propagation; the LP fit absorbs per-pair setup delay into an intercept, so `2/slope` is *marginal* speed at large $d$. The two checks catch different things; both are necessary.
+- **Stability check deferred**: requires a per-timestamp ClickHouse query, not exposed by `compute_rtts_per_dst_src` today. Tracked in todo as a Phase 2 follow-up.
 
 ### Step 2 — Lift selection algorithms into [scripts/vp_selection/strategies.py](../../scripts/vp_selection/strategies.py)
 

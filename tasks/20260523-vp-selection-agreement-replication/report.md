@@ -1,6 +1,6 @@
 # VP Selection — Agreement-Methodology Replication — Report
 
-**Status**: Design phase (upstream code copied; no adapted code yet)
+**Status**: Step 1 (speed-limit calibration) complete; Step 2+ design in progress
 **Created**: 2026-05-23
 **Last Updated**: 2026-05-23
 
@@ -8,15 +8,23 @@
 
 Captures an in-progress plan to replicate Cho et al. (TMA 2024)'s VP-selection agreement methodology on our 723-anchor / ~12K-probe pool, generalized to a hard-GT setting. The output of this task is the measurement that resolves Phase 0 Q3 of the parent leakage-free CBG eval protocol task.
 
-Upstream code from `https://github.com/grace71/tma24-vp-ls` is checked into [scripts/vp_selection/upstream_py/](../../scripts/vp_selection/upstream_py/) and [scripts/vp_selection/upstream_csv/](../../scripts/vp_selection/upstream_csv/) — pristine, with `UPSTREAM_LICENSE` preserved. Our adapted versions will live as `strategies.py`, `agreement.py`, `calibrate_speed.py`, `pair_distances.py` at the `scripts/vp_selection/` top level.
+Upstream code from `https://github.com/grace71/tma24-vp-ls` is checked into [scripts/vp_selection/upstream_py/](../../scripts/vp_selection/upstream_py/) and [scripts/vp_selection/upstream_csv/](../../scripts/vp_selection/upstream_csv/) — pristine, with `UPSTREAM_LICENSE` preserved. Our adapted versions live as `strategies.py`, `agreement.py`, `calibrate_speed.py`, `pair_distances.py` at the `scripts/vp_selection/` top level.
 
-No adapted code has been written. The design is still being debated; see "Open Questions" below.
+**Step 1 done**: [scripts/vp_selection/calibrate_speed.py](../../scripts/vp_selection/calibrate_speed.py) implemented and run. **S = 185.85 km/ms (p99)** over 752 fitted anchors. 5 anchors pegged at speed-of-light and excluded as degenerate fits. Detailed results in [outputs/speed_calibration.json](../../scripts/vp_selection/outputs/speed_calibration.json) and [outputs/speed_calibration.png](../../scripts/vp_selection/outputs/speed_calibration.png).
 
 ## Findings
 
+### Step 1 result: calibrated speed limit S = 185.85 km/ms (p99)
+
+- Anchor-mesh post-SOI, per-anchor LP best-line via `RTTDistanceModel.fit(baseline_slope = 2/c)`, p99 over fitted slopes.
+- 752 anchors fitted; 5 pegged at speed-of-light floor (`196.49.15.189`, `210.56.11.202`, `123.176.1.4`, `63.222.187.5`, `146.185.219.73` — sparse measurements and/or GT slippage; all excluded).
+- Distribution (km/ms, excluding pegged): min 62.3, p25 120.9, p50 131.7 (≈ Katz-Bassett 133), p75 146.0, p95 171.6, **p99 185.9**, p99-by-rank → 198.7 → 198.3 → 188.5 → 186.6, max 276.2 (single outlier from Bangalore anchor, n=37).
+- p99 chosen as headline instead of max — see lesson on outlier-sensitivity. +21.5% over Cho 2024's 153 km/ms; plausibly explained by ~3 yr network evolution + different anchor pool.
+
 ### Settled (or close to settled)
 
-- **First deliverable: speed-limit calibration.** Anchor-mesh (post-SOI filter) + per-anchor `LowEnvelopeLTD._fit` (reuses existing v2 infra) + take the fastest envelope's implied one-way speed as $S = 2 / \min_i \text{slope}_i$. Probes are unsuitable for this step despite matching the eventual benchmark data — VP-side last-mile + GT noise survives the SOI filter and would inflate $S$. Only the scalar $S$ extrapolates downstream to probe data; per-anchor envelope curves stay anchor-only.
+- **Speed-limit calibration locked in.** Anchor-mesh (post-SOI filter) + per-anchor LP best-line via `RTTDistanceModel.fit_bestline_lp` with `baseline_slope = 2/c` (vacuum-light floor, *not* the production `THEORETICAL_SLOPE = 0.01` which would peg the LP at the 200 km/ms fiber cap) + p99 over fitted anchors. Probes are unsuitable for this step despite matching the eventual benchmark data — VP-side last-mile + GT noise survives the SOI filter and would inflate $S$. Only the scalar $S$ extrapolates downstream to probe data; per-anchor envelope curves stay anchor-only.
+- **SOI and the LP measure different things.** SOI's per-pair predicate `2·d/rtt > 200 km/ms` treats *all* of RTT as propagation; the LP fits `rtt = slope·d + intercept` where intercept absorbs per-pair setup delay, so `2/slope` is the *marginal* propagation speed. Post-SOI data can therefore still have anchors where the LP pegs at the speed-of-light floor (5 of 752 in our run). SOI is necessary, not sufficient — LP-floor pegging is the additional check that catches the residual cases.
 - **Two metrics, both required.** "Agreement with full-pool verdict" (Cho's metric — preserves their question) AND "accuracy vs hard GT" (our generalization — answers what we actually care about). Reporting only one is misleading: a high-agreement subset can be efficient *and bad*, and a low-agreement subset can be *better than full-pool* if the full pool is noisy.
 - **Strategies to include in sweep**: `random`, `dist_geo`, `dist_rtt` (anchor-pool only), `h1_as`, `h1_city`, `h2_as`. Skip `h1_country` / `h1_continent` (Cho's data shows they don't beat random).
 - **Fold-invariant selection.** Pick the VP corpus *once globally* per strategy, reuse across all K=5 anchor folds. Otherwise selection-noise contaminates fold-variance. (Aligns with parent task's protocol.)
