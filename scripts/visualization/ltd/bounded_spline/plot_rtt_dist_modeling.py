@@ -4,6 +4,11 @@ Six layers on every plot: the RTT-vs-distance scatter, the theoretical 2/3·c
 baseline, the per-VP upper and lower convex hulls, the per-VP spline center,
 and the per-VP δ-band tuned for `target_coverage = 0.9`.
 
+The hull lines and the δ-band both come from `predict_distance_bounds` —
+called with `delta=None` for the bare hulls and with the per-VP `delta` for
+the band. That keeps the visualization aligned with whatever extension the
+model uses above `cutoff_rtt` (currently the Octant sentinel construction).
+
 Run as a script to validate on `vultr_pings_us_only.csv` — fits one
 BoundedSplineLTD across all anchors (each `dst_ip` is a VP) and writes one
 PNG per anchor to the `outputs/` subfolder.
@@ -29,24 +34,6 @@ from scripts.libs.octant_simple.octant_model import OctantRTTModel
 # ---------------------------------------------------------------------------
 # Plotting primitives
 # ---------------------------------------------------------------------------
-
-
-def _hull_segment_to_cutoff(
-    hull_rtts, hull_dists, cutoff: float
-) -> tuple[np.ndarray, np.ndarray]:
-    """Hull vertices with RTT ≤ cutoff, plus an interpolated endpoint at cutoff."""
-    rtts_arr = np.asarray(hull_rtts, dtype=float)
-    dists_arr = np.asarray(hull_dists, dtype=float)
-    if cutoff <= 0 or rtts_arr.size == 0:
-        return rtts_arr, dists_arr
-    mask = rtts_arr <= cutoff
-    r_in = rtts_arr[mask]
-    d_in = dists_arr[mask]
-    if rtts_arr[-1] > cutoff and (r_in.size == 0 or r_in[-1] < cutoff):
-        d_at = float(np.interp(cutoff, rtts_arr, dists_arr))
-        r_in = np.append(r_in, cutoff)
-        d_in = np.append(d_in, d_at)
-    return r_in, d_in
 
 
 def plot_rtt_distance(
@@ -81,46 +68,40 @@ def plot_rtt_distance(
 
     if submodel is not None and submodel.fitted:
         cutoff = submodel.cutoff_rtt
-        # Hulls truncated at cutoff. Beyond cutoff the model falls back to a
-        # 2/3·c extension anchored at the hull value at cutoff — plot that
-        # extension in the same color as the hull it continues.
-        if submodel.hull_upper_distances:
-            r_hull, d_hull = _hull_segment_to_cutoff(
-                submodel.hull_upper_rtts, submodel.hull_upper_distances, cutoff
-            )
-            ax.plot(r_hull, d_hull, color="red", linewidth=1.8, alpha=0.9,
-                    label="Outer hull (max dist)")
-        if submodel.hull_lower_distances:
-            r_hull, d_hull = _hull_segment_to_cutoff(
-                submodel.hull_lower_rtts, submodel.hull_lower_distances, cutoff
-            )
-            ax.plot(r_hull, d_hull, color="blue", linewidth=1.8, alpha=0.9,
-                    label="Inner hull (min dist)")
-        if cutoff > 0 and rtt_max > cutoff:
-            rtt_ext = np.linspace(cutoff, rtt_max, 50)
-            d_up = float(np.interp(
-                cutoff, submodel.hull_upper_rtts, submodel.hull_upper_distances
-            ))
-            d_lo = float(np.interp(
-                cutoff, submodel.hull_lower_rtts, submodel.hull_lower_distances
-            ))
-            # Upper hull above cutoff extends with baseline slope; matches
-            # `hull_outer_distance`.
-            ax.plot(rtt_ext, d_up + (rtt_ext - cutoff) / THEORETICAL_SLOPE,
-                    color="red", linewidth=1.5, alpha=0.7,
-                    label="Outer hull (2/3·c extension)")
-            # Lower hull above cutoff stays flat at hull_lower(cutoff); the
-            # inner bound never extends — matches `hull_inner_distance`.
-            ax.plot(rtt_ext, np.full_like(rtt_ext, d_lo),
-                    color="blue", linewidth=1.5, alpha=0.7,
-                    label="Inner hull (flat above cutoff)")
-
         has_spline = (
             submodel.spline_rtt_knots is not None
             and submodel.spline_dist_knots is not None
         )
+        rtt_lo = (
+            float(min(submodel.spline_rtt_knots))
+            if has_spline
+            else float(min(submodel.hull_upper_rtts[0], submodel.hull_lower_rtts[0]))
+        )
+        # Single grid for both the hull lines (delta=None) and the δ-band
+        # (delta=delta). Both come from `predict_distance_bounds`, so they
+        # agree above `cutoff_rtt` with whatever extension the model uses
+        # (currently the Octant sentinel construction). Insert an explicit
+        # `[cutoff, cutoff + 1e-6]` pair so the inner-band discontinuity at
+        # cutoff renders as a near-vertical snap rather than a slanted
+        # segment — the linspace's ~1 ms spacing would otherwise smear it.
+        rtt_grid = np.linspace(rtt_lo, max(rtt_max, rtt_lo + 1e-6), 200)
+        if cutoff > rtt_lo and cutoff < rtt_grid[-1]:
+            rtt_grid = np.sort(np.concatenate(
+                [rtt_grid, [cutoff, cutoff + 1e-6]]
+            ))
+
+        inner_hull = np.empty_like(rtt_grid)
+        outer_hull = np.empty_like(rtt_grid)
+        for i, r in enumerate(rtt_grid):
+            inner_hull[i], outer_hull[i] = submodel.predict_distance_bounds(
+                float(r), delta=None
+            )
+        ax.plot(rtt_grid, outer_hull, color="red", linewidth=1.8, alpha=0.9,
+                label="Outer hull (sentinel above cutoff)")
+        ax.plot(rtt_grid, inner_hull, color="blue", linewidth=1.8, alpha=0.9,
+                label="Inner hull (flat above cutoff)")
+
         if has_spline:
-            rtt_lo = float(min(submodel.spline_rtt_knots))
             spline_hi = cutoff if cutoff > 0 else rtt_max
             spline_grid = np.linspace(rtt_lo, max(spline_hi, rtt_lo + 1e-6), 200)
             centers = np.array(
@@ -130,35 +111,18 @@ def plot_rtt_distance(
                     linewidth=1.8, label="Spline center")
 
             if delta is not None:
-                # Band lines = `predict_distance_bounds` output (already
-                # hull-clipped). Drawn over the full RTT range so the lines
-                # match the fill — and so the visualization shows exactly
-                # what the wrapper sees at predict time. The raw spline·δ /
-                # spline/δ multiplication is NOT plotted because the model
-                # never returns those un-clipped values.
-                rtt_grid = np.linspace(rtt_lo, max(rtt_max, rtt_lo + 1e-6), 200)
-                # Force the inner-bound discontinuity at cutoff_rtt to render
-                # as a near-vertical snap: at rtt = cutoff the model still
-                # uses spline/δ (clipped above hull_lower); just past cutoff
-                # it falls to bare hull_lower(cutoff). Without inserting
-                # explicit points across the boundary, the linspace's ~1 ms
-                # spacing smears the snap into a slanted segment.
-                if cutoff > rtt_lo and cutoff < rtt_grid[-1]:
-                    rtt_grid = np.sort(np.concatenate(
-                        [rtt_grid, [cutoff, cutoff + 1e-6]]
-                    ))
-                inner = np.empty_like(rtt_grid)
-                outer = np.empty_like(rtt_grid)
+                inner_band = np.empty_like(rtt_grid)
+                outer_band = np.empty_like(rtt_grid)
                 for i, r in enumerate(rtt_grid):
-                    inner[i], outer[i] = submodel.predict_distance_bounds(
+                    inner_band[i], outer_band[i] = submodel.predict_distance_bounds(
                         float(r), delta=delta
                     )
-                ax.plot(rtt_grid, outer, color="darkorange", linewidth=1.6,
+                ax.plot(rtt_grid, outer_band, color="darkorange", linewidth=1.6,
                         label=f"Outer prediction (δ={delta:.3f}, coverage≈0.9)")
-                ax.plot(rtt_grid, inner, color="darkorange", linewidth=1.6,
+                ax.plot(rtt_grid, inner_band, color="darkorange", linewidth=1.6,
                         label="Inner prediction")
-                ax.fill_between(rtt_grid, inner, outer, color="darkorange",
-                                alpha=0.35)
+                ax.fill_between(rtt_grid, inner_band, outer_band,
+                                color="darkorange", alpha=0.35)
 
         if cutoff > 0:
             ax.axvline(cutoff, color="purple", linestyle=":", linewidth=1.0,
