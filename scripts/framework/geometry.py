@@ -13,7 +13,7 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
-from scripts.framework.types import EARTH_RADIUS_KM
+EARTH_RADIUS_KM = 6371.0
 
 CircleTuple = Tuple[float, float, float, float, float]
 

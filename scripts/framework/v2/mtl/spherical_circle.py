@@ -13,8 +13,7 @@ Wraps scripts/framework/geometry.circle_intersections (unchanged from v1).
 
 from __future__ import annotations
 
-from scripts.framework.geometry import circle_intersections
-from scripts.framework.types import EARTH_RADIUS_KM
+from scripts.framework.geometry import EARTH_RADIUS_KM, circle_intersections
 from scripts.framework.v2.ltd.base import LTDResult
 from scripts.framework.v2.mtl.base import CircleMTLMethod, MTLResult
 from scripts.framework.v2.registry import register_mtl
