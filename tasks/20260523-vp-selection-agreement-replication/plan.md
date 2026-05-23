@@ -48,15 +48,16 @@ Cho's calibrated speed limit is **0.51 c = 153 km/ms** (their Fig. 2), tighter t
 
 ### Step 1 — Speed-limit calibration in [scripts/vp_selection/calibrate_speed.py](../../scripts/vp_selection/calibrate_speed.py) ✓ done
 
-**First deliverable — complete.** Result: **S = 185.56 km/ms (p99, +21.3% vs Cho)**.
+**First deliverable — complete.** Result: **S = 168.62 km/ms (p99, +10.2% vs Cho)**.
 
 1. **Source**: `anchors_meshed_pings` (anchor↔anchor min-RTT), restricted to the SOI-survived anchor set from `RipeAtlasSource._compute_soi_removed_ips`. Both endpoints are hard-GT + datacenter-grade — the cleanest input we have for this kind of calibration.
-2. **Per-anchor envelope fit**: for each anchor treated as a "VP", construct `FitSample`s from its outgoing mesh pings (`vp_coord` = this anchor, `probe_coord` = other anchor, `latency` = min-RTT). Call `RTTDistanceModel.fit()` directly (the LP under `LowEnvelopeLTD`) with its production default `baseline_slope = THEORETICAL_SLOPE = 0.01 ms/km` (= 2/3·c speed cap = SOI). Same LP constraint that benchmark runs use — no methodological asymmetry.
-3. **Per-anchor implied one-way speed**: $v_i = 2 / \text{slope}_i$ km/ms (factor 2 because RTT is round-trip; asymptotic at large $d$ when intercept becomes negligible).
-4. **Detect pegged anchors**: any with `slope_i ≤ THEORETICAL_SLOPE + ε` (= speed ≥ 200 km/ms = SOI cap) are degenerate fits — their data implies marginal propagation faster than 2/3·c, so the LP pinned them at the floor. Causes: GT slippage, clock skew, sparse-data overfit. Exclude from the headline calibration; keep in the JSON diagnostics. **Our run: 6 of 757 anchors pegged.**
-5. **Headline S = p99** over non-pegged anchors. Raw max can be outlier-sensitive (one anchor's noisy fit can drive max); p99 captures the fast-network tail without a single bad fit dominating. Max, p95, p50, etc. retained as diagnostics.
-6. **Outputs**: `outputs/speed_calibration.json` (S, full distribution, per-anchor records flagged with `pegged_at_baseline`, list of fastest non-pegged + pegged anchors) and `outputs/speed_calibration.png` (family of per-anchor envelopes, p99 line, Cho reference, SOI/LP-floor reference, pegged anchors highlighted).
-7. **Cross-check**: our $S$ is +21.3% over Cho's 153 km/ms — plausibly explained by 2-3 yr network evolution + different anchor pool. p50 = 131.7 km/ms matches Katz-Bassett's 133 km/ms cited by Cho.
+2. **Sample-count filter**: drop anchors with `n_measurements < 100` before fitting. Per-anchor LP slopes from few points are noise, not signal — small mesh samples shouldn't drive calibration. **212 of 761 anchors skipped.**
+3. **Per-anchor envelope fit**: for each surviving anchor treated as a "VP", construct `FitSample`s from its outgoing mesh pings (`vp_coord` = this anchor, `probe_coord` = other anchor, `latency` = min-RTT). Call `RTTDistanceModel.fit()` directly (the LP under `LowEnvelopeLTD`) with its production default `baseline_slope = THEORETICAL_SLOPE = 0.01 ms/km` (= 2/3·c speed cap = SOI). Same LP constraint that benchmark runs use — no methodological asymmetry.
+4. **Per-anchor implied one-way speed**: $v_i = 2 / \text{slope}_i$ km/ms (factor 2 because RTT is round-trip; asymptotic at large $d$ when intercept becomes negligible).
+5. **Detect pegged anchors**: any with `slope_i ≤ THEORETICAL_SLOPE + ε` (= speed ≥ 200 km/ms = SOI cap) are degenerate fits — their data implies marginal propagation faster than 2/3·c, so the LP pinned them at the floor. Causes: GT slippage, clock skew (sparse-data overfit handled by the n-filter above). Exclude from the headline calibration; keep in the JSON diagnostics. **Our run: 1 of 549 fitted anchors pegged.**
+6. **Headline S = p99** over non-pegged anchors. Raw max can be outlier-sensitive (one anchor's noisy fit can drive max); p99 captures the fast-network tail without a single bad fit dominating. Max, p95, p50, etc. retained as diagnostics.
+7. **Outputs**: `outputs/speed_calibration.json` (S, full distribution, per-anchor records flagged with `pegged_at_baseline`, list of fastest non-pegged + pegged anchors, skipped-low-n list) and `outputs/speed_calibration.png` (family of per-anchor envelopes, p99 line, Cho reference, SOI/LP-floor reference, pegged anchors highlighted).
+8. **Cross-check**: our $S$ is +10.2% over Cho's 153 km/ms — plausibly explained by 2-3 yr network evolution + different anchor pool. p50 = 128.2 km/ms matches Katz-Bassett's 133 km/ms cited by Cho.
 
 Notes:
 - Only the scalar $S$ extrapolates downstream (used to constrain probe RTT triples in the agreement verifier). The per-anchor envelope curves themselves stay anchor-only — they are GT-specific to each anchor.

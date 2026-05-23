@@ -7,21 +7,26 @@ anchors and doesn't survive as a stable calibration.
 
 Pipeline:
   1. Load anchor-mesh pings via `RipeAtlasSource(ping_table=anchors_meshed_pings)`,
-     PROBES_TO_ANCHORS setup. Source IPs become VpIds (each anchor as a "VP").
+     ANCHORS_TO_ANCHORS setup. Source IPs become VpIds (each anchor as a "VP").
   2. Run SOI sanitization (default on) to drop anchors with structural
      GT-vs-RTT inconsistencies.
-  3. For each anchor: call `RTTDistanceModel.fit()` directly with its default
-     `baseline_slope = THEORETICAL_SLOPE = 0.01 ms/km` (= 2/3·c speed cap,
-     the same constraint production CBG runs use). This is the LP under
-     `LowEnvelopeLTD`; we bypass the wrapper to keep the calibration loop
-     simple, but the LP itself is identical to production.
-  4. Per-anchor implied one-way speed: v_i = 2 / slope_i (km/ms). The
+  3. **Drop low-sample anchors** (`n_measurements < MIN_N_MEASUREMENTS`)
+     before fitting. Per-anchor LP slopes are noisy when only a handful of
+     (d, RTT) points pin the line; rejecting up front keeps them out of
+     both the diagnostics and the headline.
+  4. For each surviving anchor: call `RTTDistanceModel.fit()` directly
+     with its default `baseline_slope = THEORETICAL_SLOPE = 0.01 ms/km`
+     (= 2/3·c speed cap, the same constraint production CBG runs use).
+     This is the LP under `LowEnvelopeLTD`; we bypass the wrapper to keep
+     the calibration loop simple, but the LP itself is identical to
+     production.
+  5. Per-anchor implied one-way speed: v_i = 2 / slope_i (km/ms). The
      factor of 2 accounts for RTT being round-trip.
-  5. **Detect pegged anchors**: any with `slope_i ≤ THEORETICAL_SLOPE + ε` —
+  6. **Detect pegged anchors**: any with `slope_i ≤ THEORETICAL_SLOPE + ε` —
      their data implies marginal propagation faster than 2/3·c, so the LP
      pinned them at the floor. These are degenerate fits (GT slippage,
-     clock skew, sparse-data overfit) — exclude them from the calibration.
-  6. **Headline S = p99** over the remaining fitted anchors. Robust to a
+     clock skew) — exclude them from the calibration.
+  7. **Headline S = p99** over the remaining fitted anchors. Robust to a
      single outlier. Max, p95, p50, etc. retained as JSON diagnostics.
 
 Outputs `outputs/speed_calibration.json` and `outputs/speed_calibration.png`.
@@ -55,6 +60,10 @@ CHO_2024_REFERENCE_KM_PER_MS = 153.0
 SPEED_OF_LIGHT_KM_PER_MS = SPEED_OF_LIGHT_KM_MS
 SOI_SPEED_KM_PER_MS = (2.0 / 3.0) * SPEED_OF_LIGHT_KM_PER_MS  # 200 km/ms; matches THEORETICAL_SLOPE
 
+# Anchors with fewer than this many mesh measurements are skipped — LP slopes
+# fit from a handful of points have too much variance to be calibration signal.
+MIN_N_MEASUREMENTS = 100
+
 
 def _slope_to_one_way_speed(slope_ms_per_km: float) -> float:
     """One-way speed in km/ms from RTT-vs-distance slope (ms/km). RTT/2 = d/v
@@ -62,8 +71,16 @@ def _slope_to_one_way_speed(slope_ms_per_km: float) -> float:
     return 2.0 / slope_ms_per_km
 
 
-def calibrate_from_source(source: DataSource) -> dict[str, Any]:
+def calibrate_from_source(
+    source: DataSource,
+    min_n_measurements: int = MIN_N_MEASUREMENTS,
+) -> dict[str, Any]:
     """Run the calibration against an already-configured DataSource.
+
+    `min_n_measurements` drops anchors with fewer than this many mesh pings
+    before the LP fit — their slopes are noisy and don't contribute usable
+    calibration signal. Excluded anchors are reported in the summary as
+    counts + IP list.
 
     Returns a dict with summary stats + per-anchor records. Caller is
     responsible for serialization and plotting.
@@ -88,7 +105,12 @@ def calibrate_from_source(source: DataSource) -> dict[str, Any]:
 
     pegged_tolerance = 1e-9
     per_anchor: list[dict[str, Any]] = []
+    skipped_low_n: list[dict[str, Any]] = []
     for vp_id, data in by_vp.items():
+        n_measurements = len(data["distances"])
+        if n_measurements < min_n_measurements:
+            skipped_low_n.append({"vp_id": vp_id, "n_measurements": n_measurements})
+            continue
         vp_coord = data["vp_coord"]
         model = RTTDistanceModel(
             anchor_ip=vp_id,
@@ -152,13 +174,16 @@ def calibrate_from_source(source: DataSource) -> dict[str, Any]:
         "delta_vs_cho_pct": 100.0 * (S - CHO_2024_REFERENCE_KM_PER_MS) / CHO_2024_REFERENCE_KM_PER_MS,
         "lp_baseline_slope_ms_per_km": THEORETICAL_SLOPE,
         "lp_baseline_speed_cap_km_per_ms": SOI_SPEED_KM_PER_MS,
+        "min_n_measurements": min_n_measurements,
         "n_anchors_fitted": len(fitted),
         "n_anchors_pegged_at_baseline": len(pegged_anchors),
-        "n_anchors_total": len(per_anchor),
+        "n_anchors_skipped_low_n": len(skipped_low_n),
+        "n_anchors_total_in_mesh": len(per_anchor) + len(skipped_low_n),
         "n_samples_total": len(samples),
         "speed_distribution_km_per_ms_excluding_pegged": distribution,
         "fastest_anchors_excluding_pegged": fitted[:5],
         "pegged_anchors": pegged_anchors,
+        "skipped_low_n_anchors": skipped_low_n,
     }
     return {"summary": summary, "per_anchor": per_anchor, "samples": samples}
 

@@ -10,16 +10,16 @@ Captures an in-progress plan to replicate Cho et al. (TMA 2024)'s VP-selection a
 
 Upstream code from `https://github.com/grace71/tma24-vp-ls` is checked into [scripts/vp_selection/upstream_py/](../../scripts/vp_selection/upstream_py/) and [scripts/vp_selection/upstream_csv/](../../scripts/vp_selection/upstream_csv/) — pristine, with `UPSTREAM_LICENSE` preserved. Our adapted versions live as `strategies.py`, `agreement.py`, `calibrate_speed.py`, `pair_distances.py` at the `scripts/vp_selection/` top level.
 
-**Step 1 done**: [scripts/vp_selection/calibrate_speed.py](../../scripts/vp_selection/calibrate_speed.py) implemented and run. **S = 185.56 km/ms (p99)** over 751 fitted anchors. 6 anchors pegged at the LP floor (slope = 0.01 ms/km, = SOI = 200 km/ms) and excluded as degenerate fits. Detailed results in [outputs/speed_calibration.json](../../scripts/vp_selection/outputs/speed_calibration.json) and [outputs/speed_calibration.png](../../scripts/vp_selection/outputs/speed_calibration.png).
+**Step 1 done**: [scripts/vp_selection/calibrate_speed.py](../../scripts/vp_selection/calibrate_speed.py) implemented and run. **S = 168.62 km/ms (p99)** over 548 fitted anchors (`n_measurements ≥ 100`, post-SOI). 212 anchors skipped for low sample count, 1 anchor pegged at the LP floor (`146.185.219.73` — n=292 but slope still hits 0.01, real GT/clock anomaly). Detailed results in [outputs/speed_calibration.json](../../scripts/vp_selection/outputs/speed_calibration.json) and [outputs/speed_calibration.png](../../scripts/vp_selection/outputs/speed_calibration.png).
 
 ## Findings
 
-### Step 1 result: calibrated speed limit S = 185.56 km/ms (p99)
+### Step 1 result: calibrated speed limit S = 168.62 km/ms (p99)
 
-- Anchor-mesh post-SOI, per-anchor LP best-line via `RTTDistanceModel.fit()` with its production default `baseline_slope = THEORETICAL_SLOPE = 0.01 ms/km` (= 2/3·c cap = SOI). p99 over fitted slopes.
-- 751 anchors fitted; 6 pegged at the LP floor (slope = 0.01 ⇔ speed = 200 km/ms; `196.49.15.189`, `210.56.11.202`, `123.176.1.4`, `63.222.187.5`, `146.185.219.73`, `159.65.150.114` — sparse measurements and/or GT slippage; all excluded).
-- Distribution (km/ms, excluding pegged): min 62.3, p25 120.9, **p50 131.7** (≈ Katz-Bassett 133), p75 145.9, p95 171.6, **p99 185.6**, max 198.7 (next-fastest anchor, well within SOI).
-- p99 chosen as headline instead of max — see lesson on outlier-sensitivity. +21.3% over Cho 2024's 153 km/ms; plausibly explained by ~3 yr network evolution + different anchor pool.
+- Anchor-mesh post-SOI, **filter `n_measurements ≥ 100`**, per-anchor LP best-line via `RTTDistanceModel.fit()` with its production default `baseline_slope = THEORETICAL_SLOPE = 0.01 ms/km` (= 2/3·c cap = SOI). p99 over fitted slopes.
+- 761 anchors total in mesh; **212 skipped** for low sample count; 548 fitted; **1 pegged** at LP floor (`146.185.219.73`, Tel Aviv, n=292 — high-n but still pegs at slope=0.01, real GT-or-clock anomaly, excluded).
+- Distribution (km/ms, excluding pegged): min 88.7, p25 119.0, **p50 128.2** (≈ Katz-Bassett 133), p75 139.3, p95 165.0, **p99 168.6**, max 186.0.
+- p99 chosen as headline instead of max — see lesson on outlier-sensitivity. **+10.2% over Cho 2024's 153 km/ms** (down from +21.3% before the n-filter); the previous gap was inflated by 5 sparse-data anchors whose LP slopes were noisy artifacts, not network signal.
 
 ### Settled (or close to settled)
 

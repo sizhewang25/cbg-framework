@@ -18,7 +18,7 @@
 - [ ] Sketch the `VpMeta` dataclass + the `select_vps()` signature
 
 ## Phase 2: Implementation
-- [x] **First deliverable.** Implement `scripts/vp_selection/calibrate_speed.py` — anchor-mesh post-SOI + per-anchor LP fit via `RTTDistanceModel.fit()` (production `baseline_slope = THEORETICAL_SLOPE = 0.01 ms/km`) + pegged-anchor detection + p99-as-headline + JSON/PNG outputs. **Result: S = 185.56 km/ms (+21.3% vs Cho)**; 6 of 757 anchors pegged at SOI floor (excluded as degenerate fits).
+- [x] **First deliverable.** Implement `scripts/vp_selection/calibrate_speed.py` — anchor-mesh post-SOI + `n_measurements ≥ 100` filter + per-anchor LP fit via `RTTDistanceModel.fit()` (production `baseline_slope = THEORETICAL_SLOPE = 0.01 ms/km`) + pegged-anchor detection + p99-as-headline + JSON/PNG outputs. **Result: S = 168.62 km/ms (+10.2% vs Cho)**; 548 fitted, 212 skipped low-n, 1 pegged (Tel Aviv anchor with high n=292 but still pegs — real GT/clock anomaly).
 - [ ] Add hourly-window stability check to `calibrate_speed.py` (Cho's Fig. 2 analog) — requires a per-timestamp ClickHouse query, not currently exposed by `compute_rtts_per_dst_src`
 - [ ] Implement `scripts/vp_selection/strategies.py` — lift `_select_prim` + `select_prim`; expose `select_vps(pool, pair_distances, strategy, seed)` returning `{k: [vp_ids]}`
 - [ ] Implement geodesic pair-distance generator (`scripts/vp_selection/pair_distances.py`) with parquet cache
@@ -28,8 +28,8 @@
 
 ## Phase 3: Verification
 - [ ] Calibration sanity: confirm intra-window stability of $S$ (≤1% drift across hourly recomputations); if not, document why — blocked on hourly-window query support
-- [x] Calibration cross-check: per-anchor speed distribution looks reasonable — median 131.7 km/ms ≈ Katz-Bassett 133 km/ms; p99 185.6; max 198.7 (next-fastest non-pegged, within SOI)
-- [x] Calibration cross-check: our $S$ within reasonable range of Cho's 153 km/ms — p99 is +21.3%; explained by 2-3 yr network evolution + different anchor pool
+- [x] Calibration cross-check: per-anchor speed distribution looks reasonable — median 128.2 km/ms ≈ Katz-Bassett 133 km/ms; p99 168.6; max 186.0 (clean tail after low-n filter)
+- [x] Calibration cross-check: our $S$ within reasonable range of Cho's 153 km/ms — p99 is +10.2%; explained by 2-3 yr network evolution + different anchor pool
 - [ ] Unit tests: strategy determinism (same seed → same selection), monotonicity (`select_vps(k=K)` ⊃ `select_vps(k=K−1)` where applicable), cluster-balance correctness for `h1_*`
 - [ ] Sanity check: run `dist_geo` on Cho's 780-anchor input — compare against their published `anchorSelectionAll.csv` results to confirm we get the same selection sequence
 - [ ] Spot-check the agreement metric: 100% selection should give 100% agreement and matching accuracy
