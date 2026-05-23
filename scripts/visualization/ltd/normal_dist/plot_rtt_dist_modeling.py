@@ -2,9 +2,9 @@
 
 Five layers on every plot: the RTT-vs-distance scatter, the theoretical
 2/3·c baseline, the pooled μ(rtt) center curve, and the symmetric
-(μ ± k·σ) band tuned for `target_coverage = 0.95`.
+(μ ± σ) band — the paper's published band (Laki et al. 2011 Fig 3a).
 
-NormalDistLTD is a pooled (Spotter) model — one (μ, σ, k) shared across
+NormalDistLTD is a pooled (Spotter) model — one (μ, σ) shared across
 all VPs. The same overlay is drawn on every per-anchor scatter so the
 viewer can eyeball how well the pooled fit explains each anchor's points.
 
@@ -44,7 +44,7 @@ def plot_rtt_distance(
     title: Optional[str] = None,
     y_max_km: Optional[float] = None,
 ) -> Axes:
-    """Draw scatter + 2/3·c baseline + pooled μ center + (μ ± k·σ) band on `ax`.
+    """Draw scatter + 2/3·c baseline + pooled μ center + (μ ± σ) band on `ax`.
 
     `model` is the pooled SpotterRTTModel; the same overlay is reused on every
     per-anchor scatter (Spotter's pooled-normal claim).
@@ -87,9 +87,9 @@ def plot_rtt_distance(
             if bounds is not None:
                 inner_line[i], outer_line[i] = bounds
         ax.plot(rtt_grid, outer_line, color="darkorange", linewidth=1.6,
-                label=f"μ + k·σ (k={model.k:.2f}, baseline-clipped)")
+                label="μ + σ (baseline-clipped, sentinel above cutoff)")
         ax.plot(rtt_grid, inner_line, color="darkorange", linewidth=1.6,
-                label="μ − k·σ")
+                label="μ − σ")
         ax.fill_between(rtt_grid, inner_line, outer_line,
                         color="darkorange", alpha=0.35)
 
@@ -191,12 +191,12 @@ def main() -> None:
     print(f"Loaded {len(samples)} samples across "
           f"{len({s.vp_id for s in samples})} anchors")
 
-    model = NormalDistLTD(sample_coverage=0.95)
+    model = NormalDistLTD()
     result = model.fit(samples)
     if not result.success:
         raise RuntimeError(f"fit failed: {result.error}")
 
-    print(f"Fitted pooled model: k={result.args['k']:.3f}, "
+    print(f"Fitted pooled model: "
           f"rtt_range=[{result.args['rtt_min']:.2f}, "
           f"{result.args['rtt_max']:.2f}] ms, "
           f"cutoff_rtt={result.args['cutoff_rtt']:.2f} ms")
