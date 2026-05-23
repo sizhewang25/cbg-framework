@@ -250,6 +250,13 @@ def write_results(result: dict[str, Any], output_dir: Path) -> None:
             color="blue", lw=1.5, linestyle="--", zorder=3,
             label="Cho 2024: 153 km/ms (0.51 c)")
 
+    # Production CBG floor: 2/3·c = 200 km/ms (the LowEnvelopeLTD THEORETICAL_SLOPE).
+    soi_speed = (2.0 / 3.0) * SPEED_OF_LIGHT_KM_PER_MS
+    soi_slope = 2.0 / soi_speed
+    ax.plot(d_grid, soi_slope * d_grid,
+            color="green", lw=1.5, linestyle="--", zorder=3,
+            label=f"SOI / 2/3·c: {soi_speed:.1f} km/ms (LowEnvelopeLTD floor)")
+
     if pegged_records:
         ax.plot([], [], color="orange", linestyle=":",
                 label=f"pegged at baseline ({len(pegged_records)} anchors, excluded)")
