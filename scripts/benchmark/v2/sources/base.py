@@ -50,6 +50,7 @@ class VpConfig:
     lon: float
     asn: int | None = None
     country: str | None = None
+    city: str | None = None
 
 
 class DataSource(ABC):
