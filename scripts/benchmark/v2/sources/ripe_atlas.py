@@ -12,19 +12,27 @@ The slice mechanism here is intentionally coarse:
   - "all_anchors"       : every anchor with at least one valid (probe, RTT)
   - "n<K>"              : keep the K anchors with the most VP measurements
                           (deterministic by (count desc, anchor_ip asc) tiebreaker)
+
+Optional anchor-city enrichment: if `anchor_city.json` (produced by
+`scripts/processing/append_city_to_anchors.py`) is present, each anchor's city
+gets attached to its `VpConfig.city` (visible in vp_configs.parquet). Probes
+remain city-less. Missing or unreadable file is silently skipped.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
-from typing import Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import default
 
-from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, VpConfig
+from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
+
+logger = logging.getLogger(__name__)
 
 
 # Default ClickHouse query parameters. `threshold=70` matches v1/million_scale.py:76.
@@ -33,6 +41,27 @@ _DEFAULT_THRESHOLD = 70
 # Sanitization re-runs the paper's SOI-violation removal. threshold=300 matches
 # datasets/create_datasets.ipynb (the cell that produced reproducibility_filtered_probes.json).
 _DEFAULT_SANITIZE_THRESHOLD = 300
+
+# Nominatim address-component fallback chain. Mirrors the notebook cell that
+# produced datasets/static_datasets/population_city_file.json: prefer `city`,
+# fall back to village/town/country in that order.
+_CITY_KEYS = ("city", "village", "town", "country")
+
+
+def _extract_city(response: Any) -> Optional[str]:
+    """Pull a city-like label out of one Nominatim reverse-geocode response."""
+    if not isinstance(response, dict):
+        return None
+    features = response.get("features") or []
+    if not features:
+        return None
+    props = (features[0] or {}).get("properties") or {}
+    address = props.get("address") or {}
+    for key in _CITY_KEYS:
+        value = address.get(key)
+        if value:
+            return str(value)
+    return None
 
 
 class RipeAtlasSource(DataSource):
@@ -46,6 +75,7 @@ class RipeAtlasSource(DataSource):
         setup: str = DataSource.PROBES_TO_ANCHORS,
         *,
         probes_and_anchors_file: Optional[Path] = None,
+        anchor_city_file: Optional[Path] = None,
         ping_table: Optional[str] = None,
         threshold: int = _DEFAULT_THRESHOLD,
         filter_clause: str = _DEFAULT_FILTER,
@@ -64,6 +94,11 @@ class RipeAtlasSource(DataSource):
             Path(probes_and_anchors_file)
             if probes_and_anchors_file is not None
             else Path(default.REPRO_PROBES_AND_ANCHORS_FILE)
+        )
+        self._anchor_city_file = (
+            Path(anchor_city_file)
+            if anchor_city_file is not None
+            else Path(default.REPRO_ANCHOR_CITY_FILE)
         )
         self._ping_table = ping_table if ping_table is not None else default.PROBES_TO_ANCHORS_PING_TABLE
         self._threshold = threshold
@@ -85,6 +120,7 @@ class RipeAtlasSource(DataSource):
         self._anchor_ips: Optional[set[str]] = None
         self._asn_by_ip: dict[str, Optional[int]] = {}
         self._country_by_ip: dict[str, Optional[str]] = {}
+        self._city_by_ip: dict[str, Optional[str]] = {}
         # rtts_by_anchor[anchor_ip] = {probe_ip: min_rtt_ms}
         self._rtts_by_anchor: Optional[dict[str, dict[str, float]]] = None
         # IPs removed by SOI sanitization (populated when sanitize=True).
@@ -116,6 +152,28 @@ class RipeAtlasSource(DataSource):
                 vp_id=ip, lat=coord.lat, lon=coord.lon,
                 asn=self._asn_by_ip.get(ip),
                 country=self._country_by_ip.get(ip),
+                city=self._city_by_ip.get(ip),
+            )
+
+    def iter_tg_configs(self) -> Iterator[TgConfig]:
+        self._ensure_loaded()
+        assert self._coords_by_ip is not None and self._rtts_by_anchor is not None
+        if self._setup == DataSource.PROBES_TO_ANCHORS:
+            # Targets are anchors — outer keys of _rtts_by_anchor.
+            target_ips = set(self._rtts_by_anchor.keys())
+        else:  # ANCHORS_TO_PROBES — targets are probes that appear in any anchor's RTT row.
+            target_ips = set()
+            for measurements in self._rtts_by_anchor.values():
+                target_ips.update(measurements.keys())
+        for ip in sorted(target_ips):
+            coord = self._coords_by_ip.get(ip)
+            if coord is None:
+                continue
+            yield TgConfig(
+                tg_id=ip, lat=coord.lat, lon=coord.lon,
+                asn=self._asn_by_ip.get(ip),
+                country=self._country_by_ip.get(ip),
+                city=self._city_by_ip.get(ip),
             )
 
     def iter_fit_samples(self) -> Iterator[FitSample]:
@@ -198,6 +256,7 @@ class RipeAtlasSource(DataSource):
         # also reads a precomputed pairwise-distance file we don't need here.
         with open(self._probes_and_anchors_file) as fh:
             probes = json.load(fh)
+        city_by_anchor_id = self._load_anchor_cities()
         coords: dict[str, Coord] = {}
         anchor_ips: set[str] = set()
         for p in probes:
@@ -209,10 +268,39 @@ class RipeAtlasSource(DataSource):
             coords[ip] = Coord(lat=float(lat), lon=float(lon))
             self._asn_by_ip[ip] = p.get("asn_v4")
             self._country_by_ip[ip] = p.get("country_code")
+            anchor_id = p.get("id")
+            if anchor_id is not None:
+                city = city_by_anchor_id.get(str(anchor_id))
+                if city is not None:
+                    self._city_by_ip[ip] = city
             if p.get("is_anchor"):
                 anchor_ips.add(ip)
         self._coords_by_ip = coords
         self._anchor_ips = anchor_ips
+
+    def _load_anchor_cities(self) -> dict[str, str]:
+        """Load and parse `anchor_city.json` into {anchor_id_str: city_name}.
+
+        Returns an empty dict if the file is missing or unreadable — city
+        enrichment is best-effort, not a hard dependency.
+        """
+        try:
+            with open(self._anchor_city_file) as fh:
+                raw = json.load(fh)
+        except FileNotFoundError:
+            return {}
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "could not read anchor city file %s: %s — VPs will have city=None",
+                self._anchor_city_file, exc,
+            )
+            return {}
+        out: dict[str, str] = {}
+        for anchor_id, response in raw.items():
+            city = _extract_city(response)
+            if city:
+                out[str(anchor_id)] = city
+        return out
 
     def _load_rtts(self) -> None:
         # Imported lazily so importing this module doesn't require ClickHouse

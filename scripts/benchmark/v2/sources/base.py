@@ -53,6 +53,17 @@ class VpConfig:
     city: str | None = None
 
 
+@dataclass(frozen=True)
+class TgConfig:
+    """One target's static configuration as it should appear in tg_configs.parquet."""
+    tg_id: str
+    lat: float
+    lon: float
+    asn: int | None = None
+    country: str | None = None
+    city: str | None = None
+
+
 class DataSource(ABC):
     """Interface every benchmark data adapter must satisfy."""
 
@@ -65,6 +76,9 @@ class DataSource(ABC):
 
     @abstractmethod
     def iter_vp_configs(self) -> Iterator[VpConfig]: ...
+
+    @abstractmethod
+    def iter_tg_configs(self) -> Iterator[TgConfig]: ...
 
     @abstractmethod
     def iter_fit_samples(self) -> Iterator[FitSample]: ...

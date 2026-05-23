@@ -1,4 +1,4 @@
-"""Materialize a DataSource into the three input parquets the runner consumes.
+"""Materialize a DataSource into the four input parquets the runner consumes.
 
 The runner is fan-out across (source × slice × combo). Querying ClickHouse or
 re-reading a CSV per-combo would be wasteful, so this step caches the source
@@ -7,6 +7,7 @@ into a deterministic on-disk shape that downstream combos all read from.
 Layout written by `materialize_inputs(source, root)`:
     <root>/<source_name>/<slice>/
         vp_configs.parquet
+        tg_configs.parquet
         fit_samples.parquet
         eval_observations.parquet
         manifest.json
@@ -23,7 +24,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from scripts.benchmark.v2 import schema as bench_schema
-from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, VpConfig
+from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
 from scripts.framework.v2 import FitSample
 
 
@@ -76,6 +77,7 @@ def materialize_inputs(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     n_vps = _write_vp_configs(source.iter_vp_configs(), out_dir / "vp_configs.parquet")
+    n_tgs = _write_tg_configs(source.iter_tg_configs(), out_dir / "tg_configs.parquet")
     n_fit = _write_fit_samples(source.iter_fit_samples(), out_dir / "fit_samples.parquet")
     n_obs, n_targets = _write_eval_observations(
         source.iter_eval_targets(), out_dir / "eval_observations.parquet",
@@ -87,6 +89,7 @@ def materialize_inputs(
         "slice": source.slice_id(),
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "n_vps": n_vps,
+        "n_tg_configs": n_tgs,
         "n_fit_samples": n_fit,
         "n_eval_observations": n_obs,
         "n_eval_targets": n_targets,
@@ -106,8 +109,26 @@ def _write_vp_configs(rows: Iterable[VpConfig], path: Path) -> int:
             "lon": [r.lon for r in items],
             "asn": [r.asn for r in items],
             "country": [r.country for r in items],
+            "city": [r.city for r in items],
         },
         schema=bench_schema.VP_CONFIGS_SCHEMA,
+    )
+    pq.write_table(table, path)
+    return len(items)
+
+
+def _write_tg_configs(rows: Iterable[TgConfig], path: Path) -> int:
+    items = list(rows)
+    table = pa.table(
+        {
+            "tg_id": [r.tg_id for r in items],
+            "lat": [r.lat for r in items],
+            "lon": [r.lon for r in items],
+            "asn": [r.asn for r in items],
+            "country": [r.country for r in items],
+            "city": [r.city for r in items],
+        },
+        schema=bench_schema.TG_CONFIGS_SCHEMA,
     )
     pq.write_table(table, path)
     return len(items)

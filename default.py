@@ -33,6 +33,10 @@ REPRO_PROBES_FILE: Path = REPRO_ATLAS_PATH / "reproducibility_probes.json"
 REPRO_PROBES_AND_ANCHORS_FILE: Path = (
     REPRO_ATLAS_PATH / "reproducibility_probes_and_anchors.json"
 )
+# Per-anchor reverse-geocoded city info from OSM Nominatim. Keyed by anchor id
+# (as a string), valued by the raw GeoJSON response. Produced by
+# scripts/processing/append_city_to_anchors.py.
+REPRO_ANCHOR_CITY_FILE: Path = REPRO_ATLAS_PATH / "anchor_city.json"
 
 REPRO_PAIRWISE_DISTANCE_FILE: Path = (
     REPRO_GENERATED_PATH / "reproducibility_pairwise_distance_ripe_probes.json"

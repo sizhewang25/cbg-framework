@@ -22,7 +22,7 @@ from typing import Iterator, Optional
 
 import pandas as pd
 
-from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, VpConfig
+from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
 
@@ -92,6 +92,35 @@ class VultrCSVSource(DataSource):
                     lon=float(row["anchor_longitude"]),
                     asn=int(row["anchor_asn"]) if pd.notna(row["anchor_asn"]) else None,
                     country=str(row["anchor_country"]) if pd.notna(row["anchor_country"]) else None,
+                )
+
+    def iter_tg_configs(self) -> Iterator[TgConfig]:
+        df = self._load()
+        if self._setup == DataSource.PROBES_TO_ANCHORS:
+            # Targets are anchors (dst_ip). Anchor city is optional in the CSV
+            # — present in synthetic fixtures + real Vultr exports, absent in
+            # stripped-down test CSVs. Missing columns yield NaN via Series.get.
+            for _, row in df.drop_duplicates("dst_ip").iterrows():
+                asn = row.get("anchor_asn")
+                country = row.get("anchor_country")
+                city = row.get("anchor_city")
+                yield TgConfig(
+                    tg_id=str(row["dst_ip"]),
+                    lat=float(row["anchor_latitude"]),
+                    lon=float(row["anchor_longitude"]),
+                    asn=int(asn) if pd.notna(asn) else None,
+                    country=str(country) if pd.notna(country) else None,
+                    city=str(city) if pd.notna(city) else None,
+                )
+        else:  # ANCHORS_TO_PROBES — targets are probes
+            for _, row in df.drop_duplicates("prb_id").iterrows():
+                yield TgConfig(
+                    tg_id=str(int(row["prb_id"])),
+                    lat=float(row["probe_latitude"]),
+                    lon=float(row["probe_longitude"]),
+                    asn=int(row["probe_asn"]) if pd.notna(row["probe_asn"]) else None,
+                    country=str(row["probe_country"]) if pd.notna(row["probe_country"]) else None,
+                    city=None,  # Vultr CSV has no probe_city column
                 )
 
     def iter_fit_samples(self) -> Iterator[FitSample]:

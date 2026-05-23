@@ -3,8 +3,9 @@
 Keeping schemas in one module ensures the materialize → run → summarize pipeline
 agrees on column names, types, and nullability without notebook-level drift.
 
-Three input parquets (materialize-inputs):
+Four input parquets (materialize-inputs):
   - VP_CONFIGS_SCHEMA       : one row per VP
+  - TG_CONFIGS_SCHEMA       : one row per target
   - FIT_SAMPLES_SCHEMA      : one row per (vp, target) training observation
   - EVAL_OBSERVATIONS_SCHEMA: one row per (target, vp) eval observation
 
@@ -26,6 +27,16 @@ VP_CONFIGS_SCHEMA = pa.schema([
     pa.field("lon", pa.float64(), nullable=False),
     pa.field("asn", pa.int64(), nullable=True),
     pa.field("country", pa.string(), nullable=True),
+    pa.field("city", pa.string(), nullable=True),
+])
+
+TG_CONFIGS_SCHEMA = pa.schema([
+    pa.field("tg_id", pa.string(), nullable=False),
+    pa.field("lat", pa.float64(), nullable=False),
+    pa.field("lon", pa.float64(), nullable=False),
+    pa.field("asn", pa.int64(), nullable=True),
+    pa.field("country", pa.string(), nullable=True),
+    pa.field("city", pa.string(), nullable=True),
 ])
 
 FIT_SAMPLES_SCHEMA = pa.schema([
