@@ -27,3 +27,50 @@ Initial framing (will likely be revisited):
 - **Strip holdout at construction for setups where it doesn't apply, not at iterator level.** ANCHORS_TO_PROBES has noisy probe GT; applying holdout there would produce confusingly-named directories (`fold0of5_seed42`) with no actual filtering. Stripping at `__init__` with a logged WARNING means the slice_id carries no suffix, logs are clean, and the caller sees the correct behavior without surprises later. Iterator-level silently-ignoring holdout is worse because it creates a mismatch between what the slice_id advertises and what the iterators emit.
 
 - **Encoding fold identity in `slice_id()` (not in a separate field) was the right call.** It means materialize, inputs.py, and the runner need zero changes — they just see another source with a different string ID. Each fold appears as a separate output directory with no orchestration changes. The cost is that the user must invoke materialize K times (or write a trivial loop), which is acceptable for K=5 and eliminates complexity at the framework level.
+
+## 2026-05-24 — DistGeoKFoldPolicy implementation
+
+### Methodology
+
+- **Per-pair K-fold leaks for CBG; anchor-level is the correct granularity.**
+  Worked through this with the user. CBG aggregates RTT→distance predictions
+  across multiple VPs at prediction time. If anchor X's `(VP_i, X)` pairs are
+  split across folds, eval on X still uses VPs whose LTDs were trained on
+  `(VP_i, X)` — those VPs have memorized X's RTT-distance point exactly. The
+  leakage unit is the anchor, not the pair. Captured in `report.md` lock-in.
+
+- **"Balanced + diverse folds" and "spatial blocking" pull in opposite
+  directions.** Sechidis-style stratification and dist_geo round-robin both
+  give each fold a *spread* set of anchors — so train and test share metros
+  freely. Spatial k-means blocking does the opposite: each fold is one
+  geographic cluster. These answer different scientific questions
+  (novel-anchor in known metro vs novel metro). Don't conflate them — the
+  Roberts et al. workflow is to run both and report the gap.
+
+### Implementation
+
+- **`select_vps`'s `dist_geo` mode is seed-light by design.** The seed only
+  picks one endpoint of the max-distance edge in `_max_edge_start`; the
+  greedy-Prim continuation is deterministic. On symmetric corpora, both
+  endpoints lead to equivalent orderings → the seed parameter can be a
+  no-op. Don't write a "different seed differs" test for DistGeoKFoldPolicy
+  — assert that the seed is accepted and the result is valid instead.
+
+- **Polymorphic dispatch via method (`compute_fold_assignments`) on each
+  policy class is cleaner than isinstance/kind dispatch in the source.**
+  Adding a third policy now requires zero changes to `RipeAtlasSource` — it
+  only knows `policy.compute_fold_assignments(...)` and
+  `policy.slice_suffix()`. Backward compat preserved by adding the same
+  method to existing `HoldoutPolicy` (wraps the module-level function).
+
+- **Balanced round-robin (smallest-fold tiebreak), not pure `i mod K`.**
+  Singleton ASN buckets land first (per-bucket loop) and disrupt the
+  modular cadence across buckets. Tracking `fold_sizes` and shifting to the
+  smallest fold when the modular preference is ahead by 2+ keeps the
+  global fold-size spread ≤ 1.
+
+- **`scripts.vp_selection.strategies.VpMeta` is generic enough to reuse
+  for anchors** — it carries lat/lon/asn/city/country, which is exactly the
+  metadata dist_geo needs. No new "AnchorMeta" type required. Lazy-import
+  from inside the algorithm function avoids pulling vp_selection at module
+  load time.

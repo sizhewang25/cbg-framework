@@ -1,24 +1,26 @@
-"""Anchor holdout policy for the v2 benchmark — Sechidis-style K-fold split.
+"""Anchor holdout policies for the v2 benchmark — K-fold splits.
 
 Solves the fit/eval leakage problem in fitted LTDs: today every anchor that
 appears as an eval target also appears in the LTD training corpus, so the
 curve is fit on the exact (RTT, distance) point it's later asked to predict.
 
-The split is anchor-level. For fold *i*, anchors in fold *i* are evaluated;
-all other anchors are fit-training material. The same policy is applied
-uniformly across LTD variants so leaderboard comparisons reflect technique
-differences rather than asymmetric eval conditions.
+The split is anchor-level (per `report.md` lock-in). For fold *i*, anchors in
+fold *i* are evaluated; all other anchors are fit-training material. The same
+policy is applied uniformly across LTD variants so leaderboard comparisons
+reflect technique differences rather than asymmetric eval conditions.
 
-Algorithm (Sechidis et al. 2011, "On the Stratification of Multi-Label Data"):
-greedy iterative multi-label stratification, deterministic given a seed.
-Handles singleton labels (ASNs with one anchor) by sending them to one fold
-each — unavoidable with K folds and N=1 samples per label.
+Two policies live here, both exposing `slice_suffix()` and
+`compute_fold_assignments(anchors)` so `RipeAtlasSource` dispatches uniformly:
 
-Spatial pre-clustering (Roberts et al. 2017, "Cross-validation strategies for
-data with temporal, spatial, hierarchical, or phylogenetic structure") makes
-the unit of stratification a k-means cluster of nearby anchors rather than an
-individual anchor — so anchors in the same metro never straddle the train/test
-boundary, eliminating the spatial-autocorrelation leakage path.
+- `HoldoutPolicy` — Sechidis-style iterative multi-label stratification
+  (Sechidis et al. 2011) balancing country + ASN-bucket. Optional spatial
+  k-means pre-clustering (Roberts et al. 2017) makes the unit of
+  stratification a metro rather than an individual anchor.
+
+- `DistGeoKFoldPolicy` — per-ASN-bucket greedy-Prim ordering (reuses
+  `select_vps(strategy="dist_geo")` from scripts.vp_selection.strategies) +
+  balanced round-robin into K folds. Each fold gets ~1/K of each ASN bucket
+  with explicit intra-fold spatial spread.
 """
 
 from __future__ import annotations
@@ -96,6 +98,74 @@ class HoldoutPolicy:
         return self.slice_suffix_fmt.format(
             fold_index=self.fold_index, k=self.k, seed=self.seed,
         )
+
+    def compute_fold_assignments(
+        self, anchors: list[AnchorInfo],
+    ) -> dict[str, int]:
+        """Polymorphic dispatch entry — same name as DistGeoKFoldPolicy's so
+        `RipeAtlasSource` can call `policy.compute_fold_assignments(...)`
+        without knowing which subclass is in hand."""
+        return compute_fold_assignments(anchors, self)
+
+
+@dataclass(frozen=True)
+class DistGeoKFoldPolicy:
+    """K-fold anchor split via per-ASN-bucket dist_geo ordering + round-robin.
+
+    Algorithm (see `compute_dist_geo_fold_assignments`):
+      1. Bucket anchors by ASN (top-N ASNs each keep their own bucket; rest
+         collapse to "other_AS"; ASN None → "asn_none").
+      2. For each bucket, run greedy-Prim distance ordering (the `dist_geo`
+         strategy from `scripts/vp_selection/strategies.py`) on the
+         bucket members' pairwise haversine distances.
+      3. Assign each bucket's ordered anchors to folds via balanced
+         round-robin (i mod k by default; shift to the smallest fold when
+         singleton placements from earlier buckets unbalance counts).
+
+    Each fold gets ~1/K of each ASN bucket with spatially-spread anchors
+    within each bucket → per-fold ASN balance + intra-fold spatial diversity.
+    Sibling to `HoldoutPolicy` (Sechidis); not a drop-in replacement — the
+    two answer slightly different questions (balance-by-label vs
+    spread-by-distance) and we intend to run both and compare.
+
+    Asymmetric naming (HoldoutPolicy is Sechidis-only): kept to avoid
+    breaking existing call sites.
+    """
+
+    kind: str = "dist_geo_kfold"
+    k: int = 5
+    fold_index: int = 0
+    seed: int = 42
+    asn_bucket_top_n: int = 20
+    slice_suffix_fmt: str = "distgeo_fold{fold_index}of{k}_seed{seed}"
+
+    def __post_init__(self) -> None:
+        if self.k < 2:
+            raise ValueError(f"DistGeoKFoldPolicy.k must be >=2 (got {self.k})")
+        if not 0 <= self.fold_index < self.k:
+            raise ValueError(
+                f"DistGeoKFoldPolicy.fold_index must be in [0, k), got "
+                f"{self.fold_index} for k={self.k}"
+            )
+        if self.kind != "dist_geo_kfold":
+            raise ValueError(
+                f"unknown DistGeoKFoldPolicy.kind {self.kind!r}; "
+                f"only 'dist_geo_kfold' is implemented"
+            )
+        if self.asn_bucket_top_n < 0:
+            raise ValueError(
+                f"asn_bucket_top_n must be >=0 (got {self.asn_bucket_top_n})"
+            )
+
+    def slice_suffix(self) -> str:
+        return self.slice_suffix_fmt.format(
+            fold_index=self.fold_index, k=self.k, seed=self.seed,
+        )
+
+    def compute_fold_assignments(
+        self, anchors: list[AnchorInfo],
+    ) -> dict[str, int]:
+        return compute_dist_geo_fold_assignments(anchors, self)
 
 
 # ---- Public algorithm entry point -------------------------------------------
@@ -361,3 +431,94 @@ def _pick_fold(
 
     # Final tiebreak: seeded random (still deterministic given seed).
     return rng.choice(candidates)
+
+
+# ---- DistGeo K-fold (per-ASN-bucket greedy Prim + balanced round-robin) -----
+
+
+def compute_dist_geo_fold_assignments(
+    anchors: list[AnchorInfo],
+    policy: DistGeoKFoldPolicy,
+) -> dict[str, int]:
+    """Assign each anchor to a fold in [0, policy.k) via dist_geo + ASN bucket.
+
+    Returns `{anchor_ip: fold_index}`. Deterministic given `policy.seed`.
+
+    Algorithm:
+      1. Bucket anchors by ASN (top-N + "other_AS"; None → "asn_none").
+      2. For each bucket (in deterministic key order):
+         - Singleton bucket (≤1 anchor): place in the currently-smallest fold.
+         - General case: compute pairwise haversine distances, run
+           `select_vps(strategy="dist_geo")` → ordered list, then assign each
+           anchor to the smallest fold (tiebreak: prefer position `i mod k`,
+           then lowest fold_index).
+      3. Result: each fold has ~1/K of each ASN bucket with intra-bucket
+         spatial spread.
+
+    Edge cases:
+      - 0 anchors: returns {}.
+      - fewer anchors than folds: still produces a valid mapping; some folds
+        end up empty.
+    """
+    if not anchors:
+        return {}
+
+    # Lazy imports — avoid hard deps at module-load.
+    from scripts.utils.helpers import haversine
+    from scripts.vp_selection.strategies import VpMeta, select_vps
+
+    anchors = sorted(anchors, key=lambda a: a.ip)
+    asn_bucket = _bucket_asns(anchors, policy.asn_bucket_top_n)
+
+    by_bucket: dict[str, list[AnchorInfo]] = defaultdict(list)
+    for a in anchors:
+        by_bucket[asn_bucket[a.ip]].append(a)
+
+    fold_sizes: dict[int, int] = {f: 0 for f in range(policy.k)}
+    out: dict[str, int] = {}
+
+    for bucket_name in sorted(by_bucket):
+        bucket_anchors = sorted(by_bucket[bucket_name], key=lambda a: a.ip)
+
+        if len(bucket_anchors) <= 1:
+            for a in bucket_anchors:
+                fold = _smallest_fold(fold_sizes)
+                out[a.ip] = fold
+                fold_sizes[fold] += 1
+            continue
+
+        # Pairwise haversine; canonical (a, b) keying suffices — strategies.py
+        # builds a symmetric adjacency from it.
+        distances: dict[tuple[str, str], float] = {}
+        for i, a in enumerate(bucket_anchors):
+            for b in bucket_anchors[i + 1:]:
+                distances[(a.ip, b.ip)] = float(
+                    haversine((a.lat, a.lon), (b.lat, b.lon))
+                )
+
+        pool = {
+            a.ip: VpMeta(lat=a.lat, lon=a.lon, asn=a.asn, country=a.country)
+            for a in bucket_anchors
+        }
+        ordered = select_vps(pool, distances, strategy="dist_geo", seed=policy.seed)
+
+        # Balanced round-robin: preferred fold is (i % k); shift to a smaller
+        # fold if the preferred one is already 2+ ahead globally.
+        for i, ip in enumerate(ordered):
+            preferred = i % policy.k
+            min_size = min(fold_sizes.values())
+            if fold_sizes[preferred] <= min_size + 1:
+                fold = preferred
+            else:
+                fold = _smallest_fold(fold_sizes)
+            out[ip] = fold
+            fold_sizes[fold] += 1
+
+    return out
+
+
+def _smallest_fold(fold_sizes: dict[int, int]) -> int:
+    """Return the fold with the smallest current size; tiebreak by lowest
+    fold_index. Used by DistGeo K-fold for balanced placement across
+    buckets."""
+    return min(fold_sizes, key=lambda f: (fold_sizes[f], f))

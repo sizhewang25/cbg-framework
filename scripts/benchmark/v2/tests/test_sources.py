@@ -388,11 +388,33 @@ class TestSourceRegistry(unittest.TestCase):
 
 
 class TestRipeAtlasSourceHoldout(unittest.TestCase):
-    """End-to-end checks that HoldoutPolicy partitions iter_fit_samples and
+    """End-to-end checks that holdout policies partition iter_fit_samples and
     iter_eval_targets disjointly and that slice_id() carries the fold suffix.
 
     Uses a synthetic 20-anchor / 20-probe corpus so spatial-clustering and
-    multi-fold semantics are exercised without ClickHouse."""
+    multi-fold semantics are exercised without ClickHouse. Parametrizable
+    tests run under both HoldoutPolicy (Sechidis) and DistGeoKFoldPolicy via
+    subTest — failure messages identify which policy regressed."""
+
+    @staticmethod
+    def _policy_factories() -> list[tuple[str, "object"]]:
+        """Return [(name, factory(k, fold_index) -> policy)] pairs.
+
+        Sechidis is configured with spatial_clusters=k so each tight
+        synthetic cluster (4 in the fixture) lands atomically in a fold;
+        DistGeo is configured with the default ASN bucketing."""
+        from scripts.benchmark.v2.sources.holdout import (
+            DistGeoKFoldPolicy,
+            HoldoutPolicy,
+        )
+        return [
+            ("sechidis", lambda k, fold: HoldoutPolicy(
+                k=k, fold_index=fold, seed=42, spatial_clusters=k,
+            )),
+            ("dist_geo", lambda k, fold: DistGeoKFoldPolicy(
+                k=k, fold_index=fold, seed=42,
+            )),
+        ]
 
     def _build_source(self, holdout=None, k=4):
         """Build a RipeAtlasSource backed by 20 synthetic anchors arranged in
@@ -457,74 +479,82 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
         self.assertEqual(src.slice_id(), "all_anchors")
 
     def test_holdout_fold_yields_disjoint_fit_and_eval_targets(self) -> None:
-        from scripts.benchmark.v2.sources.holdout import HoldoutPolicy
-        policy = HoldoutPolicy(
-            k=4, fold_index=0, seed=42, spatial_clusters=4,
-        )
-        src, _ = self._build_source(holdout=policy)
-        # Fit samples' probe_coord lat/lon back-derives to anchors — but easier:
-        # check via the internal sets after _ensure_loaded().
-        list(src.iter_eval_targets())  # forces load
-        self.assertIsNotNone(src._train_anchors)
-        self.assertIsNotNone(src._test_anchors)
-        assert src._train_anchors is not None and src._test_anchors is not None
-        self.assertEqual(src._train_anchors & src._test_anchors, set())
+        for name, factory in self._policy_factories():
+            with self.subTest(policy=name):
+                policy = factory(4, 0)
+                src, _ = self._build_source(holdout=policy)
+                # Fit samples' probe_coord lat/lon back-derives to anchors — but easier:
+                # check via the internal sets after _ensure_loaded().
+                list(src.iter_eval_targets())  # forces load
+                self.assertIsNotNone(src._train_anchors)
+                self.assertIsNotNone(src._test_anchors)
+                assert src._train_anchors is not None and src._test_anchors is not None
+                self.assertEqual(src._train_anchors & src._test_anchors, set())
 
-        # Confirm iter_eval_targets only emits test anchors.
-        eval_ids = {t.target_id for t in src.iter_eval_targets()}
-        self.assertEqual(eval_ids, src._test_anchors)
+                # Confirm iter_eval_targets only emits test anchors.
+                eval_ids = {t.target_id for t in src.iter_eval_targets()}
+                self.assertEqual(eval_ids, src._test_anchors)
 
-        # Confirm iter_fit_samples never references a test anchor as the target.
-        # Target = probe_coord in v2 FitSample; back-derive via anchor coord lookup.
-        test_coords = {
-            (src._coords_by_ip[ip].lat, src._coords_by_ip[ip].lon)
-            for ip in src._test_anchors
-        }
-        for fs in src.iter_fit_samples():
-            self.assertNotIn(
-                (fs.probe_coord.lat, fs.probe_coord.lon), test_coords,
-                "fit sample's target (probe_coord) is a held-out anchor — leakage!",
-            )
+                # Confirm iter_fit_samples never references a test anchor as
+                # the target. Target = probe_coord in v2 FitSample; back-derive
+                # via anchor coord lookup.
+                test_coords = {
+                    (src._coords_by_ip[ip].lat, src._coords_by_ip[ip].lon)
+                    for ip in src._test_anchors
+                }
+                for fs in src.iter_fit_samples():
+                    self.assertNotIn(
+                        (fs.probe_coord.lat, fs.probe_coord.lon), test_coords,
+                        "fit sample's target (probe_coord) is a held-out anchor — leakage!",
+                    )
 
     def test_holdout_fold_union_covers_all_anchors(self) -> None:
         """Sweeping fold_index across [0, k) — the union of eval sets must
         equal the full anchor corpus."""
-        from scripts.benchmark.v2.sources.holdout import HoldoutPolicy
-        all_evals: set[str] = set()
-        all_anchors_collected: set[str] = set()
-        for fold in range(4):
-            policy = HoldoutPolicy(
-                k=4, fold_index=fold, seed=42, spatial_clusters=4,
-            )
-            src, all_anchors = self._build_source(holdout=policy)
-            all_anchors_collected = all_anchors
-            evals = {t.target_id for t in src.iter_eval_targets()}
-            self.assertGreater(len(evals), 0, f"fold {fold} produced empty eval set")
-            self.assertTrue(
-                evals.isdisjoint(all_evals),
-                f"fold {fold} overlaps an earlier fold's eval set",
-            )
-            all_evals |= evals
-        self.assertEqual(all_evals, all_anchors_collected)
+        for name, factory in self._policy_factories():
+            with self.subTest(policy=name):
+                all_evals: set[str] = set()
+                all_anchors_collected: set[str] = set()
+                for fold in range(4):
+                    policy = factory(4, fold)
+                    src, all_anchors = self._build_source(holdout=policy)
+                    all_anchors_collected = all_anchors
+                    evals = {t.target_id for t in src.iter_eval_targets()}
+                    self.assertGreater(len(evals), 0, f"fold {fold} produced empty eval set")
+                    self.assertTrue(
+                        evals.isdisjoint(all_evals),
+                        f"fold {fold} overlaps an earlier fold's eval set",
+                    )
+                    all_evals |= evals
+                self.assertEqual(all_evals, all_anchors_collected)
 
     def test_slice_id_includes_fold_suffix_when_holdout_set(self) -> None:
-        from scripts.benchmark.v2.sources.holdout import HoldoutPolicy
-        src, _ = self._build_source(
-            holdout=HoldoutPolicy(k=5, fold_index=2, seed=99, spatial_clusters=None),
+        """Each policy contributes its own slice_suffix() format."""
+        from scripts.benchmark.v2.sources.holdout import (
+            DistGeoKFoldPolicy,
+            HoldoutPolicy,
         )
-        self.assertEqual(src.slice_id(), "all_anchors__fold2of5_seed99")
+        cases = [
+            (HoldoutPolicy(k=5, fold_index=2, seed=99, spatial_clusters=None),
+             "all_anchors__fold2of5_seed99"),
+            (DistGeoKFoldPolicy(k=5, fold_index=2, seed=99),
+             "all_anchors__distgeo_fold2of5_seed99"),
+        ]
+        for policy, expected in cases:
+            with self.subTest(policy=policy.__class__.__name__):
+                src, _ = self._build_source(holdout=policy)
+                self.assertEqual(src.slice_id(), expected)
 
     def test_vp_configs_unchanged_by_holdout(self) -> None:
         """vp_configs is metadata — fold filtering only affects fit/eval row
         emission, not the VP roster."""
-        from scripts.benchmark.v2.sources.holdout import HoldoutPolicy
         src_none, _ = self._build_source(holdout=None)
         n_vps_none = len(list(src_none.iter_vp_configs()))
-        src_f, _ = self._build_source(
-            holdout=HoldoutPolicy(k=4, fold_index=0, seed=42, spatial_clusters=None),
-        )
-        n_vps_f = len(list(src_f.iter_vp_configs()))
-        self.assertEqual(n_vps_none, n_vps_f)
+        for name, factory in self._policy_factories():
+            with self.subTest(policy=name):
+                src_f, _ = self._build_source(holdout=factory(4, 0))
+                n_vps_f = len(list(src_f.iter_vp_configs()))
+                self.assertEqual(n_vps_none, n_vps_f)
 
     def test_anchors_to_probes_setup_strips_holdout_with_warning(self) -> None:
         """For setup=anchors_to_probes the eval targets are probes (noisy GT,

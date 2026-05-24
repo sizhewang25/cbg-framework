@@ -50,7 +50,7 @@ python -m scripts.analysis.characterize_ripe_atlas \
 | `anchor_mesh_table` | `default.ANCHORS_MESHED_PING_TABLE` | source for sanitization phase 1 |
 | `ping_table` | `default.PROBES_TO_ANCHORS_PING_TABLE` | main RTT table |
 | `rtt_query` | `None` | test injection seam; production lazy-imports `compute_rtts_per_dst_src` |
-| `holdout` | `None` | optional `HoldoutPolicy` (see [Holdout](#holdout-leakage-free-fit--eval-split)) — when set, anchors are split into K folds; fit/eval iterators emit disjoint subsets |
+| `holdout` | `None` | optional `HoldoutPolicy` (Sechidis) or `DistGeoKFoldPolicy` (greedy-Prim, see [Holdout](#holdout-leakage-free-fit--eval-split)) — when set, anchors are split into K folds; fit/eval iterators emit disjoint subsets |
 
 ### Load pipeline
 
@@ -133,26 +133,35 @@ Pass `sanitize=False` to disable.
 
 ## Holdout (leakage-free fit / eval split)
 
-Implemented in [holdout.py](holdout.py). Passing a `HoldoutPolicy` to the
-constructor partitions the anchor corpus into K folds; for the configured
-`fold_index`, `iter_eval_targets()` emits **only** that fold's anchors, and
+Implemented in [holdout.py](holdout.py). Passing a holdout policy
+(`HoldoutPolicy` or `DistGeoKFoldPolicy`) to the constructor partitions the
+anchor corpus into K folds; for the configured `fold_index`,
+`iter_eval_targets()` emits **only** that fold's anchors, and
 `iter_fit_samples()` emits **only** rows whose target anchor is in one of the
 other K−1 folds. This eliminates the partial answer-memorization that
 otherwise affects every fitted LTD (Octant spline, bounded_spline, NormalDist,
 Spotter) when fit_samples and eval_observations are drawn from the same
 anchor set.
 
-The fold assignment is computed once, on first iteration, using
-**Sechidis-style iterative multi-label stratification** (Sechidis et al. 2011)
-with country and ASN-bucket as balance axes, plus optional
-**spatial k-means pre-clustering** (Roberts et al. 2017) so co-located
-anchors never straddle the train/test boundary.
+Both policies are anchor-level K-fold (the leakage unit is the anchor — see
+the task's `report.md` for why per-pair K-fold leaks via multi-VP centroid
+aggregation). They differ in how anchors are distributed into folds:
 
-### `HoldoutPolicy` parameters
+| Policy | Algorithm | Strength |
+|---|---|---|
+| `HoldoutPolicy` | Sechidis-style iterative multi-label stratification on country + ASN-bucket (optional spatial k-means pre-clustering) | best country balance; spatial-block mode available |
+| `DistGeoKFoldPolicy` | Per-ASN-bucket greedy-Prim distance ordering + balanced round-robin | explicit intra-fold spatial spread within each ASN bucket |
+
+Dispatch is method-based — `policy.compute_fold_assignments(anchors) → {ip: fold_index}`
+and `policy.slice_suffix() → "..."` are the only entry points the source
+calls, so adding a third policy doesn't require any change to
+`RipeAtlasSource`.
+
+### `HoldoutPolicy` parameters (Sechidis)
 
 | Param | Default | Purpose |
 |---|---|---|
-| `kind` | `"sechidis_kfold"` | algorithm selector (only this value implemented in v1) |
+| `kind` | `"sechidis_kfold"` | algorithm selector (only this value implemented for HoldoutPolicy) |
 | `k` | `5` | number of folds |
 | `fold_index` | `0` | which fold (0..k-1) is held out as the eval set |
 | `seed` | `42` | determinism seed for tiebreaks and k-means init |
@@ -160,21 +169,45 @@ anchors never straddle the train/test boundary.
 | `asn_bucket_top_n` | `20` | top-N ASNs each get their own bucket; rest collapse to `"other_AS"` |
 | `spatial_clusters` | `30` | k-means cluster count (3D unit-vector projection); `None` disables spatial blocking |
 
+### `DistGeoKFoldPolicy` parameters (greedy-Prim + ASN bucketing)
+
+| Param | Default | Purpose |
+|---|---|---|
+| `kind` | `"dist_geo_kfold"` | algorithm selector (only this value implemented) |
+| `k` | `5` | number of folds |
+| `fold_index` | `0` | which fold (0..k-1) is held out as the eval set |
+| `seed` | `42` | seed for the greedy-Prim start-edge tiebreak (passed into `select_vps`) |
+| `asn_bucket_top_n` | `20` | same bucketing as HoldoutPolicy; rest → `"other_AS"` |
+
+Algorithm: for each ASN bucket, run `select_vps(strategy="dist_geo")`
+(reused from [scripts/vp_selection/strategies.py](../../../vp_selection/strategies.py))
+to order the bucket's anchors by greedy-Prim maximum pairwise spread, then
+round-robin into K folds with a smallest-fold tiebreak that absorbs
+singleton-bucket placements across the corpus. Result: ~1/K of each ASN
+bucket per fold, with maximal spatial spread within each fold-bucket slice.
+
 ### Effect on `slice_id()`
 
-When `holdout` is set, `slice_id()` returns
-`"<base_slice>__fold{i}of{k}_seed{seed}"`, so each fold materializes into its
-own directory under `<inputs_root>/ripe_atlas/<setup>/`:
+When `holdout` is set, `slice_id()` returns `"<base_slice>__<policy_suffix>"`.
+The suffix format is policy-specific:
+
+- `HoldoutPolicy` (Sechidis) → `fold{i}of{k}_seed{seed}`
+- `DistGeoKFoldPolicy` → `distgeo_fold{i}of{k}_seed{seed}`
+
+Each fold materializes into its own directory under
+`<inputs_root>/ripe_atlas/<setup>/`:
 
 - `all_anchors/` — paper-faithful (no split)
-- `all_anchors__fold0of5_seed42/` — fold 0 held out
-- `all_anchors__fold1of5_seed42/` — fold 1 held out
+- `all_anchors__fold0of5_seed42/` — Sechidis fold 0 held out
+- `all_anchors__fold1of5_seed42/` — Sechidis fold 1 held out
+- `all_anchors__distgeo_fold0of5_seed42/` — DistGeo fold 0 held out
 - ... etc.
 
 The runner reads each as an independent slice; no changes to
 [inputs.py](../inputs.py) or the materialize CLI are needed to support
-cross-validation. To run K=5 CV, materialize K times with
-`fold_index=0..4` and aggregate downstream.
+cross-validation. To run K=5 CV under one policy, materialize K times with
+`fold_index=0..4` and aggregate downstream. To compare two policies, run
+both — they produce parallel directory trees.
 
 ### Per-setup behavior
 

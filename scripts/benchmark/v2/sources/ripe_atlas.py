@@ -31,9 +31,13 @@ import default
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
 from scripts.benchmark.v2.sources.holdout import (
     AnchorInfo,
+    DistGeoKFoldPolicy,
     HoldoutPolicy,
-    compute_fold_assignments,
 )
+
+# Either policy class is acceptable — both expose slice_suffix() and
+# compute_fold_assignments() so dispatch is method-based, not isinstance-based.
+HoldoutPolicyT = HoldoutPolicy | DistGeoKFoldPolicy
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
 
@@ -88,7 +92,7 @@ class RipeAtlasSource(DataSource):
         sanitize: bool = True,
         anchor_mesh_table: Optional[str] = None,
         sanitize_threshold: int = _DEFAULT_SANITIZE_THRESHOLD,
-        holdout: Optional[HoldoutPolicy] = None,
+        holdout: Optional[HoldoutPolicyT] = None,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
@@ -122,7 +126,7 @@ class RipeAtlasSource(DataSource):
         self._sanitize_threshold = sanitize_threshold
         if holdout is not None and setup == DataSource.ANCHORS_TO_PROBES:
             logger.warning(
-                "HoldoutPolicy ignored for setup=anchors_to_probes: the eval targets are "
+                "Holdout policy ignored for setup=anchors_to_probes: the eval targets are "
                 "probes (noisy GT, secondary setup) and the anchor-axis holdout does not "
                 "apply. Iterators and slice_id() will behave as if holdout=None."
             )
@@ -445,6 +449,10 @@ class RipeAtlasSource(DataSource):
     def _apply_holdout(self) -> None:
         """Partition anchors into K folds; populate train/test sets.
 
+        Dispatch is method-based: `self._holdout` may be a `HoldoutPolicy`
+        (Sechidis) or `DistGeoKFoldPolicy` — both expose
+        `compute_fold_assignments(anchors)`.
+
         Only meaningful for PROBES_TO_ANCHORS and ANCHORS_TO_ANCHORS — the
         held-out axis is anchors in both. ANCHORS_TO_PROBES with a holdout is
         already stripped to `holdout=None` at construction time (see __init__).
@@ -466,7 +474,7 @@ class RipeAtlasSource(DataSource):
                 asn=self._asn_by_ip.get(anchor_ip),
             ))
 
-        self._fold_by_anchor = compute_fold_assignments(anchor_infos, self._holdout)
+        self._fold_by_anchor = self._holdout.compute_fold_assignments(anchor_infos)
         self._test_anchors = {
             ip for ip, fold in self._fold_by_anchor.items()
             if fold == self._holdout.fold_index

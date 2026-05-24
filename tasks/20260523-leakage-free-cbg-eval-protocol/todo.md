@@ -55,3 +55,23 @@
 - [ ] Leakage measurement: run spline LTD in paper-faithful vs K=5 mode, quantify the optimism bias
 - [ ] Cross-variant comparison: re-run all CBG variants under the new protocol, compare to current numbers
 - [ ] Document the protocol change in `papers/cbg-variant-benchmark-proposal/`
+
+## Phase 4: DistGeoKFoldPolicy (alternative stratification)
+- [x] Design + plan written → `/home/nuwinslab/.claude/plans/cozy-soaring-hamming.md` — 2026-05-24
+- [x] Add `DistGeoKFoldPolicy` dataclass + `compute_dist_geo_fold_assignments` to `holdout.py` — 2026-05-24
+  - Per-ASN-bucket dist_geo (greedy Prim, reused from `scripts/vp_selection/strategies.py`)
+  - Balanced round-robin assignment (smallest-fold first across bucket boundaries)
+- [x] Add `compute_fold_assignments(self, anchors)` method to existing `HoldoutPolicy` so both policies dispatch uniformly via the same method name — 2026-05-24
+- [x] Update `RipeAtlasSource._apply_holdout()` to call `self._holdout.compute_fold_assignments(anchor_infos)`; widen type hint to `HoldoutPolicy | DistGeoKFoldPolicy` — 2026-05-24
+- [x] Update `RIPE_ATLAS_DATA.md`: knob row + comparison subsection + new `slice_id` directory layout — 2026-05-24
+- [x] New `test_dist_geo_holdout.py`: determinism, disjointness, ASN balance, spatial spread, edge cases, validation — 2026-05-24
+  - 18 tests (TestDistGeoDeterminism × 3, TestDistGeoFoldDisjointness × 3, TestDistGeoAsnBalance × 2, TestDistGeoSpatialSpread × 1, TestDistGeoEdgeCases × 4, TestDistGeoKFoldPolicyValidation × 5)
+- [x] Parametrize `TestRipeAtlasSourceHoldout` over both policies (Sechidis + DistGeo) via `subTest` — 2026-05-24
+- [x] Run full test suite; expect ≥ 70 passing tests — 2026-05-24
+  - 72/72 tests pass (54 existing + 18 new)
+- [x] Comparison run: tabulate per-fold country/ASN balance + intra-fold pairwise-distance distribution for both policies on the 752-anchor corpus — 2026-05-24
+  - End-to-end smoke test against live ClickHouse confirms both policies work on the real 752-anchor corpus (9683 VPs after sanitization)
+  - Sechidis (spatial=30): fold sizes 91/90/212/114/245, country max-min=68, ASN max-min=135 — spatial atomicity at the cost of label balance
+  - DistGeo: fold sizes 150-151 uniform, country max-min=6, ASN max-min=3 — near-perfect balance, no metro blocking
+  - Full table in `report.md` 2026-05-24 entry
+- [ ] Downstream: run bounded_spline LTD under both, compare median accuracy + leaderboard stability
