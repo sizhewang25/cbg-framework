@@ -387,5 +387,174 @@ class TestSourceRegistry(unittest.TestCase):
         self.assertIn("ripe_atlas", SOURCES)
 
 
+class TestRipeAtlasSourceHoldout(unittest.TestCase):
+    """End-to-end checks that HoldoutPolicy partitions iter_fit_samples and
+    iter_eval_targets disjointly and that slice_id() carries the fold suffix.
+
+    Uses a synthetic 20-anchor / 20-probe corpus so spatial-clustering and
+    multi-fold semantics are exercised without ClickHouse."""
+
+    def _build_source(self, holdout=None, k=4):
+        """Build a RipeAtlasSource backed by 20 synthetic anchors arranged in
+        4 tight geographic clusters × 5 anchors each. Each anchor has 4 probes
+        pinging it. ASN cycles through 100/200/300/400; country through US/DE/JP/BR."""
+        import json as _json
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        probes_json = Path(tmp.name) / "probes_and_anchors.json"
+        cluster_centers = [(40, -100), (50, 10), (35, 135), (-15, -50)]
+        countries = ["US", "DE", "JP", "BR"]
+        entries = []
+        # 20 anchors: 4 clusters × 5 anchors.
+        for c_idx, (clat, clon) in enumerate(cluster_centers):
+            for i in range(5):
+                entries.append({
+                    "id": c_idx * 100 + i,
+                    "address_v4": f"10.{c_idx}.0.{i}",
+                    "asn_v4": 100 + (c_idx * 5 + i) * 100 % 400,
+                    "country_code": countries[c_idx],
+                    "geometry": {"coordinates": [clon + i * 0.1, clat + i * 0.1]},
+                    "is_anchor": True,
+                })
+        # 20 probes: spread separately. Their ASN/country don't matter for the holdout.
+        for i in range(20):
+            entries.append({
+                "id": 9000 + i,
+                "address_v4": f"192.168.{i // 16}.{i % 16}",
+                "asn_v4": 7922,
+                "country_code": "US",
+                "geometry": {"coordinates": [-100.0 + i, 40.0 + i * 0.1]},
+                "is_anchor": False,
+            })
+        probes_json.write_text(_json.dumps(entries))
+
+        anchor_ips = [e["address_v4"] for e in entries if e["is_anchor"]]
+        probe_ips = [e["address_v4"] for e in entries if not e["is_anchor"]]
+        # Each anchor has 4 probes pinging it (deterministic by anchor index).
+        def rtt_query(*_a, **_kw):
+            out = {}
+            for i, a_ip in enumerate(anchor_ips):
+                out[a_ip] = {
+                    probe_ips[(i + j) % len(probe_ips)]: [10.0 + j]
+                    for j in range(4)
+                }
+            return out
+
+        src = RipeAtlasSource(
+            slice="all_anchors",
+            probes_and_anchors_file=probes_json,
+            rtt_query=rtt_query,
+            sanitize=False,
+            holdout=holdout,
+        )
+        return src, set(anchor_ips)
+
+    def test_holdout_none_preserves_full_eval_set(self) -> None:
+        """holdout=None: behavior must be byte-identical to today (no filter)."""
+        src, all_anchors = self._build_source(holdout=None)
+        targets = {t.target_id for t in src.iter_eval_targets()}
+        self.assertEqual(targets, all_anchors)
+        self.assertEqual(src.slice_id(), "all_anchors")
+
+    def test_holdout_fold_yields_disjoint_fit_and_eval_targets(self) -> None:
+        from scripts.benchmark.v2.sources.holdout import HoldoutPolicy
+        policy = HoldoutPolicy(
+            k=4, fold_index=0, seed=42, spatial_clusters=4,
+        )
+        src, _ = self._build_source(holdout=policy)
+        # Fit samples' probe_coord lat/lon back-derives to anchors — but easier:
+        # check via the internal sets after _ensure_loaded().
+        list(src.iter_eval_targets())  # forces load
+        self.assertIsNotNone(src._train_anchors)
+        self.assertIsNotNone(src._test_anchors)
+        assert src._train_anchors is not None and src._test_anchors is not None
+        self.assertEqual(src._train_anchors & src._test_anchors, set())
+
+        # Confirm iter_eval_targets only emits test anchors.
+        eval_ids = {t.target_id for t in src.iter_eval_targets()}
+        self.assertEqual(eval_ids, src._test_anchors)
+
+        # Confirm iter_fit_samples never references a test anchor as the target.
+        # Target = probe_coord in v2 FitSample; back-derive via anchor coord lookup.
+        test_coords = {
+            (src._coords_by_ip[ip].lat, src._coords_by_ip[ip].lon)
+            for ip in src._test_anchors
+        }
+        for fs in src.iter_fit_samples():
+            self.assertNotIn(
+                (fs.probe_coord.lat, fs.probe_coord.lon), test_coords,
+                "fit sample's target (probe_coord) is a held-out anchor — leakage!",
+            )
+
+    def test_holdout_fold_union_covers_all_anchors(self) -> None:
+        """Sweeping fold_index across [0, k) — the union of eval sets must
+        equal the full anchor corpus."""
+        from scripts.benchmark.v2.sources.holdout import HoldoutPolicy
+        all_evals: set[str] = set()
+        all_anchors_collected: set[str] = set()
+        for fold in range(4):
+            policy = HoldoutPolicy(
+                k=4, fold_index=fold, seed=42, spatial_clusters=4,
+            )
+            src, all_anchors = self._build_source(holdout=policy)
+            all_anchors_collected = all_anchors
+            evals = {t.target_id for t in src.iter_eval_targets()}
+            self.assertGreater(len(evals), 0, f"fold {fold} produced empty eval set")
+            self.assertTrue(
+                evals.isdisjoint(all_evals),
+                f"fold {fold} overlaps an earlier fold's eval set",
+            )
+            all_evals |= evals
+        self.assertEqual(all_evals, all_anchors_collected)
+
+    def test_slice_id_includes_fold_suffix_when_holdout_set(self) -> None:
+        from scripts.benchmark.v2.sources.holdout import HoldoutPolicy
+        src, _ = self._build_source(
+            holdout=HoldoutPolicy(k=5, fold_index=2, seed=99, spatial_clusters=None),
+        )
+        self.assertEqual(src.slice_id(), "all_anchors__fold2of5_seed99")
+
+    def test_vp_configs_unchanged_by_holdout(self) -> None:
+        """vp_configs is metadata — fold filtering only affects fit/eval row
+        emission, not the VP roster."""
+        from scripts.benchmark.v2.sources.holdout import HoldoutPolicy
+        src_none, _ = self._build_source(holdout=None)
+        n_vps_none = len(list(src_none.iter_vp_configs()))
+        src_f, _ = self._build_source(
+            holdout=HoldoutPolicy(k=4, fold_index=0, seed=42, spatial_clusters=None),
+        )
+        n_vps_f = len(list(src_f.iter_vp_configs()))
+        self.assertEqual(n_vps_none, n_vps_f)
+
+    def test_anchors_to_probes_setup_strips_holdout_with_warning(self) -> None:
+        """For setup=anchors_to_probes the eval targets are probes (noisy GT,
+        secondary setup); a HoldoutPolicy should be silently dropped at
+        construction with a logged warning, and slice_id() must not carry the
+        suffix."""
+        from scripts.benchmark.v2.sources.holdout import HoldoutPolicy
+        # Re-implement minimal fixture inline to set setup='anchors_to_probes'.
+        import json as _json
+        with tempfile.TemporaryDirectory() as tmp:
+            probes_json = Path(tmp) / "probes_and_anchors.json"
+            probes_json.write_text(_json.dumps([
+                {"address_v4": "1.1.1.1", "asn_v4": 7922, "country_code": "US",
+                 "geometry": {"coordinates": [-84.0, 33.0]}, "is_anchor": True},
+                {"address_v4": "vp-a", "asn_v4": 7922, "country_code": "US",
+                 "geometry": {"coordinates": [-100.0, 40.0]}, "is_anchor": False},
+            ]))
+            with self.assertLogs(
+                "scripts.benchmark.v2.sources.ripe_atlas", level="WARNING",
+            ) as captured:
+                src = RipeAtlasSource(
+                    slice="all_anchors", setup="anchors_to_probes",
+                    probes_and_anchors_file=probes_json,
+                    rtt_query=lambda *a, **kw: {"1.1.1.1": {"vp-a": [10.0]}},
+                    sanitize=False,
+                    holdout=HoldoutPolicy(k=5, fold_index=0),
+                )
+            self.assertTrue(any("anchors_to_probes" in m for m in captured.output))
+            self.assertEqual(src.slice_id(), "all_anchors")
+
+
 if __name__ == "__main__":
     unittest.main()

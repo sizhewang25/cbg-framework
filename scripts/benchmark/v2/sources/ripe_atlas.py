@@ -29,6 +29,11 @@ from typing import Any, Callable, Iterator, Optional
 import default
 
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
+from scripts.benchmark.v2.sources.holdout import (
+    AnchorInfo,
+    HoldoutPolicy,
+    compute_fold_assignments,
+)
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
 
@@ -83,6 +88,7 @@ class RipeAtlasSource(DataSource):
         sanitize: bool = True,
         anchor_mesh_table: Optional[str] = None,
         sanitize_threshold: int = _DEFAULT_SANITIZE_THRESHOLD,
+        holdout: Optional[HoldoutPolicy] = None,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
@@ -114,6 +120,14 @@ class RipeAtlasSource(DataSource):
             else default.ANCHORS_MESHED_PING_TABLE
         )
         self._sanitize_threshold = sanitize_threshold
+        if holdout is not None and setup == DataSource.ANCHORS_TO_PROBES:
+            logger.warning(
+                "HoldoutPolicy ignored for setup=anchors_to_probes: the eval targets are "
+                "probes (noisy GT, secondary setup) and the anchor-axis holdout does not "
+                "apply. Iterators and slice_id() will behave as if holdout=None."
+            )
+            holdout = None
+        self._holdout = holdout
 
         # Lazily populated caches; first iter_*() call triggers loading.
         self._coords_by_ip: Optional[dict[str, Coord]] = None
@@ -125,11 +139,17 @@ class RipeAtlasSource(DataSource):
         self._rtts_by_anchor: Optional[dict[str, dict[str, float]]] = None
         # IPs removed by SOI sanitization (populated when sanitize=True).
         self._removed_ips: set[str] = set()
+        # Populated by _apply_holdout() when holdout is set. None until then.
+        self._fold_by_anchor: Optional[dict[str, int]] = None
+        self._train_anchors: Optional[set[str]] = None
+        self._test_anchors: Optional[set[str]] = None
 
     # ---- DataSource API ------------------------------------------------------
 
     def slice_id(self) -> str:
-        return self._slice
+        if self._holdout is None:
+            return self._slice
+        return f"{self._slice}__{self._holdout.slice_suffix()}"
 
     def setup_id(self) -> str:
         return self._setup
@@ -182,6 +202,8 @@ class RipeAtlasSource(DataSource):
         # The training pair is (vp_known_coord, target_known_coord, rtt).
         # The setup decides which side gets called the VP.
         for anchor_ip, vp_rtts in self._rtts_by_anchor.items():
+            if self._train_anchors is not None and anchor_ip not in self._train_anchors:
+                continue
             anchor_coord = self._coords_by_ip.get(anchor_ip)
             if anchor_coord is None:
                 continue
@@ -210,6 +232,8 @@ class RipeAtlasSource(DataSource):
         assert self._rtts_by_anchor is not None and self._coords_by_ip is not None
         if self._setup in (DataSource.PROBES_TO_ANCHORS, DataSource.ANCHORS_TO_ANCHORS):
             for anchor_ip in sorted(self._rtts_by_anchor.keys()):
+                if self._test_anchors is not None and anchor_ip not in self._test_anchors:
+                    continue
                 anchor_coord = self._coords_by_ip.get(anchor_ip)
                 if anchor_coord is None:
                     continue
@@ -251,6 +275,7 @@ class RipeAtlasSource(DataSource):
         if self._rtts_by_anchor is None:
             self._load_rtts()
             self._apply_slice()
+            self._apply_holdout()
 
     def _load_coords(self) -> None:
         # Local load instead of analysis.compute_geo_info() because the latter
@@ -416,3 +441,37 @@ class RipeAtlasSource(DataSource):
             key=lambda kv: (-len(kv[1]), kv[0]),
         )[:k]
         self._rtts_by_anchor = {ip: rtts for ip, rtts in ranked}
+
+    def _apply_holdout(self) -> None:
+        """Partition anchors into K folds; populate train/test sets.
+
+        Only meaningful for PROBES_TO_ANCHORS and ANCHORS_TO_ANCHORS — the
+        held-out axis is anchors in both. ANCHORS_TO_PROBES with a holdout is
+        already stripped to `holdout=None` at construction time (see __init__).
+        """
+        if self._holdout is None:
+            return
+        assert self._rtts_by_anchor is not None and self._coords_by_ip is not None
+
+        anchor_infos: list[AnchorInfo] = []
+        for anchor_ip in self._rtts_by_anchor:
+            coord = self._coords_by_ip.get(anchor_ip)
+            if coord is None:
+                continue
+            anchor_infos.append(AnchorInfo(
+                ip=anchor_ip,
+                lat=coord.lat,
+                lon=coord.lon,
+                country=self._country_by_ip.get(anchor_ip),
+                asn=self._asn_by_ip.get(anchor_ip),
+            ))
+
+        self._fold_by_anchor = compute_fold_assignments(anchor_infos, self._holdout)
+        self._test_anchors = {
+            ip for ip, fold in self._fold_by_anchor.items()
+            if fold == self._holdout.fold_index
+        }
+        self._train_anchors = {
+            ip for ip, fold in self._fold_by_anchor.items()
+            if fold != self._holdout.fold_index
+        }
