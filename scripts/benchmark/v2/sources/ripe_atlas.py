@@ -29,7 +29,7 @@ from typing import Any, Callable, Iterator, Optional
 import default
 
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
-from scripts.benchmark.v2.sources.holdout import (
+from scripts.processing.ripe_atlas.holdout import (
     AnchorInfo,
     DistGeoKFoldPolicy,
     HoldoutPolicy,

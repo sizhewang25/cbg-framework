@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.benchmark.v2.sources.holdout import (
+from scripts.processing.ripe_atlas.holdout import (
     AnchorInfo,
     HoldoutPolicy,
     _bucket_asns,

@@ -403,7 +403,7 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
         Sechidis is configured with spatial_clusters=k so each tight
         synthetic cluster (4 in the fixture) lands atomically in a fold;
         DistGeo is configured with the default ASN bucketing."""
-        from scripts.benchmark.v2.sources.holdout import (
+        from scripts.processing.ripe_atlas.holdout import (
             DistGeoKFoldPolicy,
             HoldoutPolicy,
         )
@@ -530,7 +530,7 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
 
     def test_slice_id_includes_fold_suffix_when_holdout_set(self) -> None:
         """Each policy contributes its own slice_suffix() format."""
-        from scripts.benchmark.v2.sources.holdout import (
+        from scripts.processing.ripe_atlas.holdout import (
             DistGeoKFoldPolicy,
             HoldoutPolicy,
         )
@@ -561,7 +561,7 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
         secondary setup); a HoldoutPolicy should be silently dropped at
         construction with a logged warning, and slice_id() must not carry the
         suffix."""
-        from scripts.benchmark.v2.sources.holdout import HoldoutPolicy
+        from scripts.processing.ripe_atlas.holdout import HoldoutPolicy
         # Re-implement minimal fixture inline to set setup='anchors_to_probes'.
         import json as _json
         with tempfile.TemporaryDirectory() as tmp:

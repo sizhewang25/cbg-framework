@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from scripts.benchmark.v2.sources.holdout import (
+from scripts.processing.ripe_atlas.holdout import (
     AnchorInfo,
     DistGeoKFoldPolicy,
     _bucket_asns,

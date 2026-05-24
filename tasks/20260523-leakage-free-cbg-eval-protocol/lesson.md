@@ -74,3 +74,14 @@ Initial framing (will likely be revisited):
   metadata dist_geo needs. No new "AnchorMeta" type required. Lazy-import
   from inside the algorithm function avoids pulling vp_selection at module
   load time.
+
+- **For anchor-only SOI sanitization, only phase 1 (anchor-mesh) is safe.**
+  The IMC 2023 pipeline runs a second phase against `ping_10k_to_anchors`
+  to catch more violators. That phase greedily removes the IP with the
+  most SOI violations on each iteration — fine when the goal is the union
+  of bad anchors + bad probes, but unsafe for an *anchor-only* filter
+  because the bad-GT side could be the probe. Phase 1 has both endpoints
+  curated (anchors with paper-quality GT), so any flagged IP is
+  unambiguously a bad anchor. Phase 1 alone on the canonical 723-anchor
+  file flags 0 — confirming the canonical set is pre-curated, not
+  revealing a bug.

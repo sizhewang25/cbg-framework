@@ -74,4 +74,11 @@
   - Sechidis (spatial=30): fold sizes 91/90/212/114/245, country max-min=68, ASN max-min=135 — spatial atomicity at the cost of label balance
   - DistGeo: fold sizes 150-151 uniform, country max-min=6, ASN max-min=3 — near-perfect balance, no metro blocking
   - Full table in `report.md` 2026-05-24 entry
+- [x] Move holdout module to `scripts/processing/ripe_atlas/` + add partition.py CLI + visualize_partition.ipynb — 2026-05-24
+  - 72/72 tests pass after the move; partition.py writes per-policy JSON to `datasets/ripe_atlas/<policy>/`
+  - Notebook smoke-tested via `nbconvert --execute`
+- [x] Add sanitize_anchors.py CLI to drop SOI-violating anchors (re-uses `compute_remove_wrongly_geolocated_probes`) — 2026-05-24
+  - Anchor-mesh only (phase 1 of the IMC 2023 procedure). Phase 2 (probes→anchors) dropped after review: greedy "remove most-violating IP" can blame the anchor when the probe is actually the bad-GT side, so it's not safe for anchor-only filtering
+  - Run against canonical 723-anchor file: 0 violators flagged → all 723 anchors retained (canonical file is already SOI-clean at the anchor-mesh level)
+  - `filtered_anchors.json` artifact is functionally identical to input but lives in the partitioning pipeline as a documented checkpoint
 - [ ] Downstream: run bounded_spline LTD under both, compare median accuracy + leaderboard stability
