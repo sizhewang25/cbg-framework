@@ -388,42 +388,82 @@ class TestSourceRegistry(unittest.TestCase):
 
 
 class TestRipeAtlasSourceHoldout(unittest.TestCase):
-    """End-to-end checks that holdout policies partition iter_fit_samples and
+    """End-to-end checks that PartitionPolicy partitions iter_fit_samples and
     iter_eval_targets disjointly and that slice_id() carries the fold suffix.
 
-    Uses a synthetic 20-anchor / 20-probe corpus so spatial-clustering and
-    multi-fold semantics are exercised without ClickHouse. Parametrizable
-    tests run under both HoldoutPolicy (Sechidis) and DistGeoKFoldPolicy via
-    subTest — failure messages identify which policy regressed."""
+    The source consumes a precomputed partition JSON; this fixture writes one
+    over the 20-anchor / 20-probe synthetic corpus on the fly. Algorithm-level
+    invariants live in test_holdout.py / test_dist_geo_holdout.py."""
 
     @staticmethod
-    def _policy_factories() -> list[tuple[str, "object"]]:
-        """Return [(name, factory(k, fold_index) -> policy)] pairs.
-
-        Sechidis is configured with spatial_clusters=k so each tight
-        synthetic cluster (4 in the fixture) lands atomically in a fold;
-        DistGeo is configured with the default ASN bucketing."""
+    def _write_partition_json(
+        path: Path, anchor_entries: list[dict], k: int, policy_class: str,
+    ) -> None:
+        """Compute fold assignments over `anchor_entries` using `policy_class`
+        and write the partition JSON to `path` (matching `partition.py`'s
+        output schema)."""
+        import json as _json
         from scripts.processing.ripe_atlas.holdout import (
-            DistGeoKFoldPolicy,
-            HoldoutPolicy,
+            AnchorInfo, DistGeoKFoldPolicy, HoldoutPolicy,
         )
-        return [
-            ("sechidis", lambda k, fold: HoldoutPolicy(
-                k=k, fold_index=fold, seed=42, spatial_clusters=k,
-            )),
-            ("dist_geo", lambda k, fold: DistGeoKFoldPolicy(
-                k=k, fold_index=fold, seed=42,
-            )),
+        anchor_infos = [
+            AnchorInfo(
+                ip=e["address_v4"],
+                lat=e["geometry"]["coordinates"][1],
+                lon=e["geometry"]["coordinates"][0],
+                country=e["country_code"],
+                asn=e["asn_v4"],
+            )
+            for e in anchor_entries
         ]
+        if policy_class == "DistGeoKFoldPolicy":
+            algo = DistGeoKFoldPolicy(k=k, fold_index=0, seed=42)
+            policy_payload: dict = {
+                "class": "DistGeoKFoldPolicy", "kind": "dist_geo_kfold",
+                "k": k, "seed": 42, "asn_bucket_top_n": 20,
+            }
+        elif policy_class == "HoldoutPolicy":
+            algo = HoldoutPolicy(k=k, fold_index=0, seed=42, spatial_clusters=k)
+            policy_payload = {
+                "class": "HoldoutPolicy", "kind": "sechidis_kfold",
+                "k": k, "seed": 42, "asn_bucket_top_n": 20,
+                "spatial_clusters": k, "labels": ["country", "asn_bucket"],
+            }
+        else:
+            raise ValueError(f"unsupported policy_class for test fixture: {policy_class!r}")
+        assignments = algo.compute_fold_assignments(anchor_infos)
+        path.write_text(_json.dumps({
+            "policy": policy_payload,
+            "corpus": {"source": "test", "n_anchors_yielded": len(assignments)},
+            "generated_at": "2026-05-24T00:00:00+00:00",
+            "fold_sizes": [
+                sum(1 for f in assignments.values() if f == i) for i in range(k)
+            ],
+            "fold_assignments": assignments,
+        }))
 
-    def _build_source(self, holdout=None, k=4):
+    def _build_source(
+        self, *, fold_index: int | None = None, k: int = 4,
+        policy_class: str = "DistGeoKFoldPolicy",
+        partition_override: "Path | None" = None,
+    ):
         """Build a RipeAtlasSource backed by 20 synthetic anchors arranged in
         4 tight geographic clusters × 5 anchors each. Each anchor has 4 probes
-        pinging it. ASN cycles through 100/200/300/400; country through US/DE/JP/BR."""
+        pinging it. ASN cycles through 100/200/300/400; country through
+        US/DE/JP/BR.
+
+        When `fold_index` is set, also precomputes a partition over the
+        synthetic corpus (using `policy_class`) and wraps it in a
+        PartitionPolicy passed via `holdout=`. `partition_override` skips the
+        compute step and uses an externally-prepared partition file instead.
+        """
         import json as _json
+        from scripts.processing.ripe_atlas.holdout import PartitionPolicy
+
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        probes_json = Path(tmp.name) / "probes_and_anchors.json"
+        tmp_root = Path(tmp.name)
+        probes_json = tmp_root / "probes_and_anchors.json"
         cluster_centers = [(40, -100), (50, 10), (35, 135), (-15, -50)]
         countries = ["US", "DE", "JP", "BR"]
         entries = []
@@ -438,7 +478,7 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
                     "geometry": {"coordinates": [clon + i * 0.1, clat + i * 0.1]},
                     "is_anchor": True,
                 })
-        # 20 probes: spread separately. Their ASN/country don't matter for the holdout.
+        # 20 probes: spread separately. Their ASN/country don't matter.
         for i in range(20):
             entries.append({
                 "id": 9000 + i,
@@ -450,7 +490,8 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
             })
         probes_json.write_text(_json.dumps(entries))
 
-        anchor_ips = [e["address_v4"] for e in entries if e["is_anchor"]]
+        anchor_entries = [e for e in entries if e["is_anchor"]]
+        anchor_ips = [e["address_v4"] for e in anchor_entries]
         probe_ips = [e["address_v4"] for e in entries if not e["is_anchor"]]
         # Each anchor has 4 probes pinging it (deterministic by anchor index).
         def rtt_query(*_a, **_kw):
@@ -461,6 +502,18 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
                     for j in range(4)
                 }
             return out
+
+        if partition_override is not None:
+            holdout = PartitionPolicy(
+                path=partition_override,
+                fold_index=fold_index if fold_index is not None else 0,
+            )
+        elif fold_index is None:
+            holdout = None
+        else:
+            partition_path = tmp_root / "partition.json"
+            self._write_partition_json(partition_path, anchor_entries, k, policy_class)
+            holdout = PartitionPolicy(path=partition_path, fold_index=fold_index)
 
         src = RipeAtlasSource(
             slice="all_anchors",
@@ -473,105 +526,153 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
 
     def test_holdout_none_preserves_full_eval_set(self) -> None:
         """holdout=None: behavior must be byte-identical to today (no filter)."""
-        src, all_anchors = self._build_source(holdout=None)
+        src, all_anchors = self._build_source(fold_index=None)
         targets = {t.target_id for t in src.iter_eval_targets()}
         self.assertEqual(targets, all_anchors)
         self.assertEqual(src.slice_id(), "all_anchors")
 
     def test_holdout_fold_yields_disjoint_fit_and_eval_targets(self) -> None:
-        for name, factory in self._policy_factories():
-            with self.subTest(policy=name):
-                policy = factory(4, 0)
-                src, _ = self._build_source(holdout=policy)
-                # Fit samples' probe_coord lat/lon back-derives to anchors — but easier:
-                # check via the internal sets after _ensure_loaded().
-                list(src.iter_eval_targets())  # forces load
-                self.assertIsNotNone(src._train_anchors)
-                self.assertIsNotNone(src._test_anchors)
-                assert src._train_anchors is not None and src._test_anchors is not None
-                self.assertEqual(src._train_anchors & src._test_anchors, set())
+        src, _ = self._build_source(fold_index=0, k=4)
+        list(src.iter_eval_targets())  # forces load
+        self.assertIsNotNone(src._train_anchors)
+        self.assertIsNotNone(src._test_anchors)
+        assert src._train_anchors is not None and src._test_anchors is not None
+        self.assertEqual(src._train_anchors & src._test_anchors, set())
 
-                # Confirm iter_eval_targets only emits test anchors.
-                eval_ids = {t.target_id for t in src.iter_eval_targets()}
-                self.assertEqual(eval_ids, src._test_anchors)
+        # iter_eval_targets emits only test anchors.
+        eval_ids = {t.target_id for t in src.iter_eval_targets()}
+        self.assertEqual(eval_ids, src._test_anchors)
 
-                # Confirm iter_fit_samples never references a test anchor as
-                # the target. Target = probe_coord in v2 FitSample; back-derive
-                # via anchor coord lookup.
-                test_coords = {
-                    (src._coords_by_ip[ip].lat, src._coords_by_ip[ip].lon)
-                    for ip in src._test_anchors
-                }
-                for fs in src.iter_fit_samples():
-                    self.assertNotIn(
-                        (fs.probe_coord.lat, fs.probe_coord.lon), test_coords,
-                        "fit sample's target (probe_coord) is a held-out anchor — leakage!",
-                    )
+        # iter_fit_samples never references a held-out anchor as the target
+        # (target = probe_coord in v2 FitSample; back-derive via coord lookup).
+        test_coords = {
+            (src._coords_by_ip[ip].lat, src._coords_by_ip[ip].lon)
+            for ip in src._test_anchors
+        }
+        for fs in src.iter_fit_samples():
+            self.assertNotIn(
+                (fs.probe_coord.lat, fs.probe_coord.lon), test_coords,
+                "fit sample's target (probe_coord) is a held-out anchor — leakage!",
+            )
 
     def test_holdout_fold_union_covers_all_anchors(self) -> None:
-        """Sweeping fold_index across [0, k) — the union of eval sets must
-        equal the full anchor corpus."""
-        for name, factory in self._policy_factories():
-            with self.subTest(policy=name):
-                all_evals: set[str] = set()
-                all_anchors_collected: set[str] = set()
-                for fold in range(4):
-                    policy = factory(4, fold)
-                    src, all_anchors = self._build_source(holdout=policy)
-                    all_anchors_collected = all_anchors
-                    evals = {t.target_id for t in src.iter_eval_targets()}
-                    self.assertGreater(len(evals), 0, f"fold {fold} produced empty eval set")
-                    self.assertTrue(
-                        evals.isdisjoint(all_evals),
-                        f"fold {fold} overlaps an earlier fold's eval set",
-                    )
-                    all_evals |= evals
-                self.assertEqual(all_evals, all_anchors_collected)
+        """Sweeping fold_index across [0, k): union of eval sets equals corpus."""
+        all_evals: set[str] = set()
+        all_anchors_collected: set[str] = set()
+        for fold in range(4):
+            src, all_anchors_collected = self._build_source(fold_index=fold, k=4)
+            evals = {t.target_id for t in src.iter_eval_targets()}
+            self.assertGreater(len(evals), 0, f"fold {fold} produced empty eval set")
+            self.assertTrue(
+                evals.isdisjoint(all_evals),
+                f"fold {fold} overlaps an earlier fold's eval set",
+            )
+            all_evals |= evals
+        self.assertEqual(all_evals, all_anchors_collected)
 
-    def test_slice_id_includes_fold_suffix_when_holdout_set(self) -> None:
-        """Each policy contributes its own slice_suffix() format."""
-        from scripts.processing.ripe_atlas.holdout import (
-            DistGeoKFoldPolicy,
-            HoldoutPolicy,
-        )
+    def test_slice_id_reconstructs_underlying_policy_suffix(self) -> None:
+        """PartitionPolicy reconstructs the suffix from the partition JSON's
+        policy.class field, so slice_id reflects whichever algorithm produced
+        the file (DistGeo vs Sechidis)."""
         cases = [
-            (HoldoutPolicy(k=5, fold_index=2, seed=99, spatial_clusters=None),
-             "all_anchors__fold2of5_seed99"),
-            (DistGeoKFoldPolicy(k=5, fold_index=2, seed=99),
-             "all_anchors__distgeo_fold2of5_seed99"),
+            ("DistGeoKFoldPolicy", "all_anchors__distgeo_fold2of4_seed42"),
+            ("HoldoutPolicy", "all_anchors__fold2of4_seed42"),
         ]
-        for policy, expected in cases:
-            with self.subTest(policy=policy.__class__.__name__):
-                src, _ = self._build_source(holdout=policy)
+        for policy_class, expected in cases:
+            with self.subTest(policy_class=policy_class):
+                src, _ = self._build_source(
+                    fold_index=2, k=4, policy_class=policy_class,
+                )
                 self.assertEqual(src.slice_id(), expected)
 
     def test_vp_configs_unchanged_by_holdout(self) -> None:
         """vp_configs is metadata — fold filtering only affects fit/eval row
         emission, not the VP roster."""
-        src_none, _ = self._build_source(holdout=None)
+        src_none, _ = self._build_source(fold_index=None)
         n_vps_none = len(list(src_none.iter_vp_configs()))
-        for name, factory in self._policy_factories():
-            with self.subTest(policy=name):
-                src_f, _ = self._build_source(holdout=factory(4, 0))
-                n_vps_f = len(list(src_f.iter_vp_configs()))
-                self.assertEqual(n_vps_none, n_vps_f)
+        src_fold, _ = self._build_source(fold_index=0, k=4)
+        n_vps_fold = len(list(src_fold.iter_vp_configs()))
+        self.assertEqual(n_vps_none, n_vps_fold)
+
+    def test_partition_policy_drops_active_anchors_missing_from_partition(self) -> None:
+        """If the partition was computed over a smaller corpus than what the
+        source ends up with, active anchors not in the partition must be
+        dropped (logged) from both fit and eval."""
+        import json as _json
+
+        # Build the source first to discover its active anchor set.
+        src_probe, all_anchors = self._build_source(fold_index=None)
+        list(src_probe.iter_eval_targets())
+
+        # Pick a half-corpus subset for the partition. Distribute across folds
+        # so neither fold ends up empty.
+        sorted_anchors = sorted(all_anchors)
+        subset = sorted_anchors[: len(sorted_anchors) // 2 + 1]
+        assignments = {ip: i % 4 for i, ip in enumerate(subset)}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "partition.json"
+            path.write_text(_json.dumps({
+                "policy": {
+                    "class": "DistGeoKFoldPolicy",
+                    "kind": "dist_geo_kfold",
+                    "k": 4, "seed": 42, "asn_bucket_top_n": 20,
+                },
+                "corpus": {"source": "test", "n_anchors_yielded": len(assignments)},
+                "generated_at": "2026-05-24T00:00:00+00:00",
+                "fold_sizes": [
+                    sum(1 for f in assignments.values() if f == i) for i in range(4)
+                ],
+                "fold_assignments": assignments,
+            }))
+
+            with self.assertLogs(
+                "scripts.processing.ripe_atlas.holdout", level="WARNING",
+            ) as logs:
+                src, _ = self._build_source(fold_index=0, partition_override=path)
+                list(src.iter_eval_targets())
+            self.assertTrue(
+                any("active anchor(s) missing from partition" in m for m in logs.output),
+                f"expected drop warning in logs: {logs.output}",
+            )
+            # Eval set is a strict subset of the partition's fold-0 anchors.
+            assert src._test_anchors is not None
+            expected_test = {ip for ip, f in assignments.items() if f == 0}
+            self.assertEqual(set(src._test_anchors), expected_test)
+            # Active anchors absent from partition appear in neither train nor test.
+            dropped = set(all_anchors) - set(assignments)
+            for ip in dropped:
+                self.assertNotIn(ip, src._train_anchors)
+                self.assertNotIn(ip, src._test_anchors)
 
     def test_anchors_to_probes_setup_strips_holdout_with_warning(self) -> None:
         """For setup=anchors_to_probes the eval targets are probes (noisy GT,
-        secondary setup); a HoldoutPolicy should be silently dropped at
-        construction with a logged warning, and slice_id() must not carry the
-        suffix."""
-        from scripts.processing.ripe_atlas.holdout import HoldoutPolicy
-        # Re-implement minimal fixture inline to set setup='anchors_to_probes'.
+        secondary setup); a PartitionPolicy is silently dropped at construction
+        with a logged warning, and slice_id() must not carry the suffix."""
+        from scripts.processing.ripe_atlas.holdout import PartitionPolicy
         import json as _json
         with tempfile.TemporaryDirectory() as tmp:
-            probes_json = Path(tmp) / "probes_and_anchors.json"
+            tmp_root = Path(tmp)
+            probes_json = tmp_root / "probes_and_anchors.json"
             probes_json.write_text(_json.dumps([
                 {"address_v4": "1.1.1.1", "asn_v4": 7922, "country_code": "US",
                  "geometry": {"coordinates": [-84.0, 33.0]}, "is_anchor": True},
+                {"address_v4": "2.2.2.2", "asn_v4": 7922, "country_code": "US",
+                 "geometry": {"coordinates": [-122.0, 47.0]}, "is_anchor": True},
                 {"address_v4": "vp-a", "asn_v4": 7922, "country_code": "US",
                  "geometry": {"coordinates": [-100.0, 40.0]}, "is_anchor": False},
             ]))
+            partition_path = tmp_root / "partition.json"
+            partition_path.write_text(_json.dumps({
+                "policy": {
+                    "class": "DistGeoKFoldPolicy", "kind": "dist_geo_kfold",
+                    "k": 2, "seed": 42, "asn_bucket_top_n": 20,
+                },
+                "corpus": {"source": "test", "n_anchors_yielded": 2},
+                "generated_at": "2026-05-24T00:00:00+00:00",
+                "fold_sizes": [1, 1],
+                "fold_assignments": {"1.1.1.1": 0, "2.2.2.2": 1},
+            }))
             with self.assertLogs(
                 "scripts.benchmark.v2.sources.ripe_atlas", level="WARNING",
             ) as captured:
@@ -580,7 +681,7 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
                     probes_and_anchors_file=probes_json,
                     rtt_query=lambda *a, **kw: {"1.1.1.1": {"vp-a": [10.0]}},
                     sanitize=False,
-                    holdout=HoldoutPolicy(k=5, fold_index=0),
+                    holdout=PartitionPolicy(path=partition_path, fold_index=0),
                 )
             self.assertTrue(any("anchors_to_probes" in m for m in captured.output))
             self.assertEqual(src.slice_id(), "all_anchors")

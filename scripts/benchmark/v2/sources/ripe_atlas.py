@@ -29,15 +29,7 @@ from typing import Any, Callable, Iterator, Optional
 import default
 
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
-from scripts.processing.ripe_atlas.holdout import (
-    AnchorInfo,
-    DistGeoKFoldPolicy,
-    HoldoutPolicy,
-)
-
-# Either policy class is acceptable — both expose slice_suffix() and
-# compute_fold_assignments() so dispatch is method-based, not isinstance-based.
-HoldoutPolicyT = HoldoutPolicy | DistGeoKFoldPolicy
+from scripts.processing.ripe_atlas.holdout import AnchorInfo, PartitionPolicy
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
 
@@ -92,7 +84,7 @@ class RipeAtlasSource(DataSource):
         sanitize: bool = True,
         anchor_mesh_table: Optional[str] = None,
         sanitize_threshold: int = _DEFAULT_SANITIZE_THRESHOLD,
-        holdout: Optional[HoldoutPolicyT] = None,
+        holdout: Optional[PartitionPolicy] = None,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
@@ -447,15 +439,14 @@ class RipeAtlasSource(DataSource):
         self._rtts_by_anchor = {ip: rtts for ip, rtts in ranked}
 
     def _apply_holdout(self) -> None:
-        """Partition anchors into K folds; populate train/test sets.
+        """Partition anchors into K folds via the policy's precomputed JSON;
+        populate train/test sets.
 
-        Dispatch is method-based: `self._holdout` may be a `HoldoutPolicy`
-        (Sechidis) or `DistGeoKFoldPolicy` — both expose
-        `compute_fold_assignments(anchors)`.
-
-        Only meaningful for PROBES_TO_ANCHORS and ANCHORS_TO_ANCHORS — the
-        held-out axis is anchors in both. ANCHORS_TO_PROBES with a holdout is
-        already stripped to `holdout=None` at construction time (see __init__).
+        `PartitionPolicy.compute_fold_assignments` reads the assignments from
+        the JSON written by `scripts/processing/ripe_atlas/partition.py`,
+        intersects with this source's active corpus, and logs drops on both
+        sides. Only meaningful for PROBES_TO_ANCHORS and ANCHORS_TO_ANCHORS;
+        ANCHORS_TO_PROBES with a holdout is stripped at construction.
         """
         if self._holdout is None:
             return

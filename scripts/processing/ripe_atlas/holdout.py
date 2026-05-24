@@ -25,11 +25,13 @@ Two policies live here, both exposing `slice_suffix()` and
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import NamedTuple, Optional
 
 import numpy as np
@@ -166,6 +168,105 @@ class DistGeoKFoldPolicy:
         self, anchors: list[AnchorInfo],
     ) -> dict[str, int]:
         return compute_dist_geo_fold_assignments(anchors, self)
+
+
+@dataclass(frozen=True)
+class PartitionPolicy:
+    """Consume a precomputed partition JSON (from `partition.py`).
+
+    Decouples the split decision from the source's active corpus: partition.py
+    is run once over the canonical anchor set to produce a reviewable JSON
+    artifact, then RipeAtlasSource is constructed with this policy to read
+    those assignments instead of recomputing.
+
+    Mismatch handling: `compute_fold_assignments(anchors)` intersects the
+    loaded assignments with the active anchor list, logs counts on both
+    sides, and raises if the target fold or its complement ends up empty.
+
+    Anchors in the active corpus but not in the partition naturally drop
+    out of both train and test (they are absent from the returned mapping
+    and RipeAtlasSource's iterators skip anything not in either set).
+    """
+
+    path: Path
+    fold_index: int = 0
+
+    def __post_init__(self) -> None:
+        # Normalize to Path so callers can pass strings.
+        object.__setattr__(self, "path", Path(self.path))
+        if not self.path.exists():
+            raise FileNotFoundError(f"partition file not found: {self.path}")
+        data = self._load()
+        if "policy" not in data or "fold_assignments" not in data:
+            raise ValueError(
+                f"partition file {self.path} missing required keys "
+                f"(expected 'policy' and 'fold_assignments')"
+            )
+        k = int(data["policy"]["k"])
+        if not 0 <= self.fold_index < k:
+            raise ValueError(
+                f"PartitionPolicy.fold_index must be in [0, {k}), got {self.fold_index}"
+            )
+
+    @property
+    def k(self) -> int:
+        return int(self._load()["policy"]["k"])
+
+    def _load(self) -> dict:
+        with self.path.open() as fh:
+            return json.load(fh)
+
+    def slice_suffix(self) -> str:
+        """Match the in-source suffix of the policy that produced this file
+        so partition-driven and in-source slice_ids align for the same fold."""
+        data = self._load()
+        cls = data["policy"]["class"]
+        k = int(data["policy"]["k"])
+        seed = int(data["policy"].get("seed", 0))
+        if cls == "DistGeoKFoldPolicy":
+            return f"distgeo_fold{self.fold_index}of{k}_seed{seed}"
+        if cls == "HoldoutPolicy":
+            return f"fold{self.fold_index}of{k}_seed{seed}"
+        return f"partition_{self.path.stem}_fold{self.fold_index}"
+
+    def compute_fold_assignments(
+        self, anchors: list[AnchorInfo],
+    ) -> dict[str, int]:
+        data = self._load()
+        loaded = {ip: int(f) for ip, f in data["fold_assignments"].items()}
+        active = {a.ip for a in anchors}
+        partition_ips = set(loaded)
+
+        in_both = active & partition_ips
+        only_active = active - partition_ips
+        only_partition = partition_ips - active
+
+        if only_active:
+            logger.warning(
+                "PartitionPolicy: %d active anchor(s) missing from partition %s — dropped from both fit and eval",
+                len(only_active), self.path,
+            )
+        if only_partition:
+            logger.warning(
+                "PartitionPolicy: %d partition anchor(s) absent from active corpus — ignored",
+                len(only_partition),
+            )
+
+        result = {ip: loaded[ip] for ip in in_both}
+
+        n_test = sum(1 for f in result.values() if f == self.fold_index)
+        n_train = sum(1 for f in result.values() if f != self.fold_index)
+        if n_test == 0:
+            raise ValueError(
+                f"PartitionPolicy: fold_index={self.fold_index} eval set is empty "
+                f"after intersecting partition ({self.path}) with active corpus"
+            )
+        if n_train == 0:
+            raise ValueError(
+                f"PartitionPolicy: fold_index={self.fold_index} fit set is empty "
+                f"after intersecting partition ({self.path}) with active corpus"
+            )
+        return result
 
 
 # ---- Public algorithm entry point -------------------------------------------

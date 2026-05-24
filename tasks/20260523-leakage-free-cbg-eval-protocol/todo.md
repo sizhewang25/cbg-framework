@@ -81,4 +81,14 @@
   - Anchor-mesh only (phase 1 of the IMC 2023 procedure). Phase 2 (probes→anchors) dropped after review: greedy "remove most-violating IP" can blame the anchor when the probe is actually the bad-GT side, so it's not safe for anchor-only filtering
   - Run against canonical 723-anchor file: 0 violators flagged → all 723 anchors retained (canonical file is already SOI-clean at the anchor-mesh level)
   - `filtered_anchors.json` artifact is functionally identical to input but lives in the partitioning pipeline as a documented checkpoint
+- [x] Wire `PartitionPolicy` so `RipeAtlasSource` can consume `datasets/ripe_atlas/<policy>/<tag>.json` as the canonical split — 2026-05-24
+  - `PartitionPolicy(path, fold_index)` in `holdout.py` satisfies the same `slice_suffix()` + `compute_fold_assignments()` interface, so `RipeAtlasSource` needs zero new branches
+  - Mismatch rule: intersect active corpus ∩ partition; logs counts on both sides; raises if target fold or its complement ends up empty
+  - `slice_suffix()` reconstructs the underlying policy's format → partition-driven and in-source slice_ids align for the same fold
+  - 13 unit tests in `tests/test_partition_policy.py` + 2 integration tests in `test_sources.py::TestRipeAtlasSourceHoldout`
+- [x] Tighten `RipeAtlasSource.holdout` type to `Optional[PartitionPolicy]` only — 2026-05-24
+  - Partition file is now the canonical artifact; `HoldoutPolicy` and `DistGeoKFoldPolicy` stay in `holdout.py` (used by `partition.py`) but the source no longer accepts them
+  - Forces the two-step workflow (`partition.py` → JSON → `PartitionPolicy`), eliminating the silent-recompute path where the source's active corpus and the partition could disagree
+  - `TestRipeAtlasSourceHoldout` rewritten: precomputes partitions over the synthetic corpus, drops the dual-policy `subTest` parametrization (algorithm validation lives in `test_holdout.py` / `test_dist_geo_holdout.py`)
+  - 86/86 tests pass (was 87; the now-redundant in-source-vs-partition comparison test deleted)
 - [ ] Downstream: run bounded_spline LTD under both, compare median accuracy + leaderboard stability

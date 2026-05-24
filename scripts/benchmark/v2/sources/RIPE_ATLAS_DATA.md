@@ -50,7 +50,7 @@ python -m scripts.analysis.characterize_ripe_atlas \
 | `anchor_mesh_table` | `default.ANCHORS_MESHED_PING_TABLE` | source for sanitization phase 1 |
 | `ping_table` | `default.PROBES_TO_ANCHORS_PING_TABLE` | main RTT table |
 | `rtt_query` | `None` | test injection seam; production lazy-imports `compute_rtts_per_dst_src` |
-| `holdout` | `None` | optional `HoldoutPolicy` (Sechidis) or `DistGeoKFoldPolicy` (greedy-Prim, see [Holdout](#holdout-leakage-free-fit--eval-split)) — when set, anchors are split into K folds; fit/eval iterators emit disjoint subsets |
+| `holdout` | `None` | optional `PartitionPolicy(path, fold_index)` (see [Holdout](#holdout-leakage-free-fit--eval-split)) — reads a precomputed K-fold partition JSON; fit/eval iterators emit disjoint subsets |
 
 ### Load pipeline
 
@@ -133,81 +133,85 @@ Pass `sanitize=False` to disable.
 
 ## Holdout (leakage-free fit / eval split)
 
-Implemented in [holdout.py](holdout.py). Passing a holdout policy
-(`HoldoutPolicy` or `DistGeoKFoldPolicy`) to the constructor partitions the
-anchor corpus into K folds; for the configured `fold_index`,
-`iter_eval_targets()` emits **only** that fold's anchors, and
-`iter_fit_samples()` emits **only** rows whose target anchor is in one of the
-other K−1 folds. This eliminates the partial answer-memorization that
-otherwise affects every fitted LTD (Octant spline, bounded_spline, NormalDist,
-Spotter) when fit_samples and eval_observations are drawn from the same
-anchor set.
+Two-step workflow: a **partition** (deterministic anchor-level K-fold) is
+computed once by [`scripts/processing/ripe_atlas/partition.py`](../../../processing/ripe_atlas/partition.py)
+and written to `datasets/ripe_atlas/<policy>/<tag>.json`. The source then
+reads that JSON via `PartitionPolicy(path, fold_index)`: for the configured
+`fold_index`, `iter_eval_targets()` emits **only** that fold's anchors, and
+`iter_fit_samples()` emits **only** rows whose target anchor is in one of
+the other K−1 folds. This eliminates the partial answer-memorization that
+otherwise affects every fitted LTD (Octant spline, bounded_spline,
+NormalDist, Spotter) when fit_samples and eval_observations are drawn from
+the same anchor set.
 
-Both policies are anchor-level K-fold (the leakage unit is the anchor — see
-the task's `report.md` for why per-pair K-fold leaks via multi-VP centroid
-aggregation). They differ in how anchors are distributed into folds:
+The split is anchor-level (the leakage unit is the anchor — see the task's
+`report.md` for why per-pair K-fold leaks via multi-VP centroid aggregation).
 
-| Policy | Algorithm | Strength |
+### Algorithms (live in [holdout.py](../../../processing/ripe_atlas/holdout.py); used by `partition.py`, never by the source directly)
+
+| Algorithm class | Behavior | Strength |
 |---|---|---|
-| `HoldoutPolicy` | Sechidis-style iterative multi-label stratification on country + ASN-bucket (optional spatial k-means pre-clustering) | best country balance; spatial-block mode available |
+| `HoldoutPolicy` (Sechidis) | Iterative multi-label stratification on country + ASN-bucket (optional spatial k-means pre-clustering) | best country balance; spatial-block mode available |
 | `DistGeoKFoldPolicy` | Per-ASN-bucket greedy-Prim distance ordering + balanced round-robin | explicit intra-fold spatial spread within each ASN bucket |
 
-Dispatch is method-based — `policy.compute_fold_assignments(anchors) → {ip: fold_index}`
-and `policy.slice_suffix() → "..."` are the only entry points the source
-calls, so adding a third policy doesn't require any change to
-`RipeAtlasSource`.
+To compare algorithms, run `partition.py --policy sechidis ...` and
+`--policy distgeo ...` to produce two JSONs; the source treats each as an
+independent slice.
 
-### `HoldoutPolicy` parameters (Sechidis)
-
-| Param | Default | Purpose |
-|---|---|---|
-| `kind` | `"sechidis_kfold"` | algorithm selector (only this value implemented for HoldoutPolicy) |
-| `k` | `5` | number of folds |
-| `fold_index` | `0` | which fold (0..k-1) is held out as the eval set |
-| `seed` | `42` | determinism seed for tiebreaks and k-means init |
-| `labels` | `("country", "asn_bucket")` | balance axes |
-| `asn_bucket_top_n` | `20` | top-N ASNs each get their own bucket; rest collapse to `"other_AS"` |
-| `spatial_clusters` | `30` | k-means cluster count (3D unit-vector projection); `None` disables spatial blocking |
-
-### `DistGeoKFoldPolicy` parameters (greedy-Prim + ASN bucketing)
+### `PartitionPolicy` parameters
 
 | Param | Default | Purpose |
 |---|---|---|
-| `kind` | `"dist_geo_kfold"` | algorithm selector (only this value implemented) |
-| `k` | `5` | number of folds |
-| `fold_index` | `0` | which fold (0..k-1) is held out as the eval set |
-| `seed` | `42` | seed for the greedy-Prim start-edge tiebreak (passed into `select_vps`) |
-| `asn_bucket_top_n` | `20` | same bucketing as HoldoutPolicy; rest → `"other_AS"` |
+| `path` | (required) | path to a partition JSON written by `partition.py` |
+| `fold_index` | `0` | which fold (0..k-1) is held out as the eval set; `k` is read from the file |
 
-Algorithm: for each ASN bucket, run `select_vps(strategy="dist_geo")`
-(reused from [scripts/vp_selection/strategies.py](../../../vp_selection/strategies.py))
-to order the bucket's anchors by greedy-Prim maximum pairwise spread, then
-round-robin into K folds with a smallest-fold tiebreak that absorbs
-singleton-bucket placements across the corpus. Result: ~1/K of each ASN
-bucket per fold, with maximal spatial spread within each fold-bucket slice.
+Mismatch handling: `compute_fold_assignments` intersects the loaded
+assignments with the source's active corpus (post-sanitization, post-RTT
+filter). Anchors in the active corpus but missing from the partition are
+dropped from both fit and eval (logged WARNING). Anchors in the partition
+but absent from the active corpus are ignored (logged WARNING). Raises
+`ValueError` if the target fold or its complement ends up empty after
+intersection.
+
+### Producing a partition
+
+```
+python -m scripts.processing.ripe_atlas.partition --policy distgeo \
+    --k 5 --seed 42 --asn-bucket-top-n 20
+# → datasets/ripe_atlas/distgeo/k5_seed42_top20.json
+
+python -m scripts.processing.ripe_atlas.partition --policy sechidis \
+    --k 5 --seed 42 --spatial-clusters 30
+# → datasets/ripe_atlas/sechidis/k5_seed42_spatial30_top20.json
+```
+
+The partition CLI reads the canonical 723-anchor file
+(`reproducibility_anchors.json`); see [partition.py](../../../processing/ripe_atlas/partition.py)
+for arguments. It has no ClickHouse dependency. To use a sanitized corpus,
+first run `sanitize_anchors.py` (which queries ClickHouse) and pass the
+output to `partition.py --anchors-file ...`.
 
 ### Effect on `slice_id()`
 
+`PartitionPolicy.slice_suffix()` reconstructs the underlying algorithm's
+suffix from the JSON's `policy.class` field, so:
+
+- partition produced by `HoldoutPolicy` → `fold{i}of{k}_seed{seed}`
+- partition produced by `DistGeoKFoldPolicy` → `distgeo_fold{i}of{k}_seed{seed}`
+
 When `holdout` is set, `slice_id()` returns `"<base_slice>__<policy_suffix>"`.
-The suffix format is policy-specific:
-
-- `HoldoutPolicy` (Sechidis) → `fold{i}of{k}_seed{seed}`
-- `DistGeoKFoldPolicy` → `distgeo_fold{i}of{k}_seed{seed}`
-
 Each fold materializes into its own directory under
 `<inputs_root>/ripe_atlas/<setup>/`:
 
 - `all_anchors/` — paper-faithful (no split)
 - `all_anchors__fold0of5_seed42/` — Sechidis fold 0 held out
-- `all_anchors__fold1of5_seed42/` — Sechidis fold 1 held out
 - `all_anchors__distgeo_fold0of5_seed42/` — DistGeo fold 0 held out
 - ... etc.
 
 The runner reads each as an independent slice; no changes to
 [inputs.py](../inputs.py) or the materialize CLI are needed to support
-cross-validation. To run K=5 CV under one policy, materialize K times with
-`fold_index=0..4` and aggregate downstream. To compare two policies, run
-both — they produce parallel directory trees.
+cross-validation. To run K=5 CV, materialize K times with `fold_index=0..4`
+against the same partition file and aggregate downstream.
 
 ### Per-setup behavior
 

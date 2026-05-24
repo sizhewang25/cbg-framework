@@ -75,6 +75,20 @@ Initial framing (will likely be revisited):
   from inside the algorithm function avoids pulling vp_selection at module
   load time.
 
+- **Decouple the split decision from the source.** Originally `RipeAtlasSource`
+  accepted any of three holdout policies and ran the algorithm at
+  `_apply_holdout` time. Replaced with a single `PartitionPolicy` that reads
+  a precomputed JSON written by `scripts/processing/ripe_atlas/partition.py`.
+  Two wins: (a) the split is a reviewable artifact you can diff / version /
+  visualize without re-running the source; (b) the source's active corpus
+  (post-sanitize, post-RTT-filter) and the partition can disagree — the
+  intersect-and-warn rule makes the mismatch visible instead of silently
+  recomputing a different split. The algorithm classes (`HoldoutPolicy`,
+  `DistGeoKFoldPolicy`) stay in `holdout.py` because `partition.py` still
+  uses them. Lesson: when an artifact is both the input to a pipeline *and*
+  the output of a deterministic computation, persist it explicitly rather
+  than recomputing — the persisted form forces alignment and enables review.
+
 - **For anchor-only SOI sanitization, only phase 1 (anchor-mesh) is safe.**
   The IMC 2023 pipeline runs a second phase against `ping_10k_to_anchors`
   to catch more violators. That phase greedily removes the IP with the
