@@ -22,6 +22,7 @@ SELECTION_KEYS = [
     for seed in range(s["seeds"])
 ]
 N_BORDER_SHARDS = DEFAULTS["n_border_shards"]
+SEQUENCE_STRATEGIES = {"dist_geo", "h1_as", "h1_city", "h2_as"}
 
 
 rule all:
@@ -84,20 +85,47 @@ rule borders_merge:
         "--inputs {input} --output {output} 2>&1 | tee {log}"
 
 
+# ---- Cached pair distances (used by sequence strategies) ----------------
+
+rule pair_distances:
+    output: f"{OUT}/pair_distances.parquet"
+    threads: 1
+    log: f"{OUT}/.logs/pair_distances.log"
+    shell:
+        "python -m scripts.vp_selection.pair_distances "
+        "--output {output} 2>&1 | tee {log}"
+
+
 # ---- Stage d.1: per-(strategy, seed) selection runs (parallel) -----------
 
+def _selection_inputs(wildcards):
+    """Sequence strategies depend on cached pair_distances; sampling don't."""
+    if wildcards.strategy in SEQUENCE_STRATEGIES:
+        return {"pair_distances": f"{OUT}/pair_distances.parquet"}
+    return {}
+
+
+def _pair_distances_arg(wildcards):
+    if wildcards.strategy in SEQUENCE_STRATEGIES:
+        return f"--pair-distances {OUT}/pair_distances.parquet"
+    return ""
+
+
 rule selection_run:
+    input:  unpack(_selection_inputs)
     output: f"{OUT}/selections/{{strategy}}_{{seed}}.parquet"
     threads: 1
     log: f"{OUT}/.logs/selection_{{strategy}}_{{seed}}.log"
     params:
         k_min=DEFAULTS["k_min"],
         k_step=DEFAULTS["k_step"],
+        pair_distances_arg=_pair_distances_arg,
     shell:
         "python -m scripts.vp_selection.selection_runner "
         "--strategy {wildcards.strategy} --seed {wildcards.seed} "
         "--output {output} "
-        "--k-min {params.k_min} --k-step {params.k_step} 2>&1 | tee {log}"
+        "--k-min {params.k_min} --k-step {params.k_step} "
+        "{params.pair_distances_arg} 2>&1 | tee {log}"
 
 
 # ---- Stage d.2: aggregate sweep + write summary --------------------------

@@ -23,7 +23,10 @@ from typing import Any
 import default
 from scripts.benchmark.v2.sources.base import DataSource
 from scripts.benchmark.v2.sources.ripe_atlas import RipeAtlasSource
-from scripts.vp_selection.pair_distances import compute_geodesic_distances
+from scripts.vp_selection.pair_distances import (
+    compute_geodesic_distances,
+    load_parquet as load_pair_distances_parquet,
+)
 from scripts.vp_selection.strategies import (
     VpMeta,
     sample_vps,
@@ -138,6 +141,9 @@ def main() -> None:
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--k-min", type=int, default=100)
     p.add_argument("--k-step", type=int, default=100)
+    p.add_argument("--pair-distances", type=Path, default=None,
+                   help="Cached pair-distance parquet "
+                        "(required for sequence strategies; ignored for sampling).")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -154,8 +160,15 @@ def main() -> None:
                     k_grid[0] if k_grid else 0)
         rows = run_one_sampling(pool, args.strategy, args.seed, k_grid)
     elif args.strategy in _SEQUENCE:
-        coords = {vp_id: (m.lat, m.lon) for vp_id, m in pool.items()}
-        distances = compute_geodesic_distances(coords)
+        if args.pair_distances is not None and args.pair_distances.exists():
+            logger.info("loading cached pair distances from %s",
+                        args.pair_distances)
+            distances = load_pair_distances_parquet(args.pair_distances)
+        else:
+            logger.info("computing pair distances inline "
+                        "(pass --pair-distances for caching)")
+            coords = {vp_id: (m.lat, m.lon) for vp_id, m in pool.items()}
+            distances = compute_geodesic_distances(coords)
         logger.info("sequence strategy %s — computing N-element ordering",
                     args.strategy)
         rows = run_one_sequence(pool, distances, args.strategy, args.seed)
