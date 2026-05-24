@@ -1,6 +1,6 @@
 # VP Selection — Agreement-Methodology Replication — Report
 
-**Status**: Step 1 (speed-limit calibration) complete; Step 2+ design in progress
+**Status**: Steps 1–4 complete (calibration + strategies + pair distances + ICLab agreement harness, TDD)
 **Created**: 2026-05-23
 **Last Updated**: 2026-05-23
 

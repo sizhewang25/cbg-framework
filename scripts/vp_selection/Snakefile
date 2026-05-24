@@ -1,0 +1,137 @@
+"""VP-selection agreement pipeline.
+
+Run end-to-end:    snakemake -s scripts/vp_selection/Snakefile --cores 8
+Inspect DAG only:  snakemake -s scripts/vp_selection/Snakefile --dry-run
+Force re-sweep:    snakemake -s scripts/vp_selection/Snakefile --cores 8 --forcerun sweep
+
+See README.md in this directory for the full pipeline narrative.
+"""
+
+import yaml
+
+configfile: "scripts/vp_selection/configs/strategies.yaml"
+
+OUT = "scripts/vp_selection/outputs"
+DEFAULTS = config["defaults"]
+STRATEGIES = config["strategies"]
+
+# Enumerate (strategy, seed) pairs from the YAML
+SELECTION_KEYS = [
+    (s["name"], seed)
+    for s in STRATEGIES
+    for seed in range(s["seeds"])
+]
+N_BORDER_SHARDS = DEFAULTS["n_border_shards"]
+
+
+rule all:
+    input:
+        f"{OUT}/agreement_curve.png",
+        f"{OUT}/agreement_summary.json",
+
+
+# ---- Stage a: calibrate the speed limit S --------------------------------
+
+rule calibrate:
+    output: f"{OUT}/speed_calibration.json"
+    threads: 1
+    log: f"{OUT}/.logs/calibrate.log"
+    shell:
+        "python -m scripts.vp_selection.calibrate_speed "
+        "--output-dir {OUT} 2>&1 | tee {log}"
+
+
+# ---- Stage b: assign claims (30% fake) -----------------------------------
+
+rule claims:
+    input:  f"{OUT}/speed_calibration.json"
+    output: f"{OUT}/claims.parquet"
+    threads: 1
+    log: f"{OUT}/.logs/claims.log"
+    params:
+        fake_fraction=DEFAULTS["fake_fraction"],
+        fake_seed=DEFAULTS["fake_assignment_seed"],
+    shell:
+        "python -m scripts.vp_selection.claims "
+        "--output {output} "
+        "--fake-fraction {params.fake_fraction} "
+        "--fake-seed {params.fake_seed} 2>&1 | tee {log}"
+
+
+# ---- Stage c: precompute (probe, country) border distances (parallel) ----
+
+rule borders_shard:
+    input:  claims=f"{OUT}/claims.parquet"
+    output: f"{OUT}/borders/shard_{{shard}}.parquet"
+    threads: 1
+    log: f"{OUT}/.logs/borders_shard_{{shard}}.log"
+    params:
+        n_shards=N_BORDER_SHARDS,
+    shell:
+        "python -m scripts.vp_selection.borders_precompute "
+        "--shard {wildcards.shard} --n-shards {params.n_shards} "
+        "--claims {input.claims} --output {output} 2>&1 | tee {log}"
+
+
+rule borders_merge:
+    input:
+        expand(f"{OUT}/borders/shard_{{i}}.parquet", i=range(N_BORDER_SHARDS)),
+    output: f"{OUT}/border_distances.parquet"
+    threads: 1
+    log: f"{OUT}/.logs/borders_merge.log"
+    shell:
+        "python -m scripts.vp_selection.borders_precompute --merge "
+        "--inputs {input} --output {output} 2>&1 | tee {log}"
+
+
+# ---- Stage d.1: per-(strategy, seed) selection runs (parallel) -----------
+
+rule selection_run:
+    output: f"{OUT}/selections/{{strategy}}_{{seed}}.parquet"
+    threads: 1
+    log: f"{OUT}/.logs/selection_{{strategy}}_{{seed}}.log"
+    params:
+        k_min=DEFAULTS["k_min"],
+        k_step=DEFAULTS["k_step"],
+    shell:
+        "python -m scripts.vp_selection.selection_runner "
+        "--strategy {wildcards.strategy} --seed {wildcards.seed} "
+        "--output {output} "
+        "--k-min {params.k_min} --k-step {params.k_step} 2>&1 | tee {log}"
+
+
+# ---- Stage d.2: aggregate sweep + write summary --------------------------
+
+rule sweep:
+    input:
+        selections=[f"{OUT}/selections/{s}_{seed}.parquet"
+                    for (s, seed) in SELECTION_KEYS],
+        claims=f"{OUT}/claims.parquet",
+        borders=f"{OUT}/border_distances.parquet",
+        speed=f"{OUT}/speed_calibration.json",
+    output:
+        rows=f"{OUT}/agreement_rows.parquet",
+        summary=f"{OUT}/agreement_summary.json",
+    threads: 8
+    log: f"{OUT}/.logs/sweep.log"
+    params:
+        k_min=DEFAULTS["k_min"],
+        k_step=DEFAULTS["k_step"],
+    shell:
+        "python -m scripts.vp_selection.agreement sweep "
+        "--selections {input.selections} "
+        "--claims {input.claims} "
+        "--borders {input.borders} "
+        "--speed {input.speed} "
+        "--rows {output.rows} --summary {output.summary} "
+        "--k-min {params.k_min} --k-step {params.k_step} 2>&1 | tee {log}"
+
+
+rule plot:
+    input:  f"{OUT}/agreement_summary.json"
+    output: f"{OUT}/agreement_curve.png"
+    threads: 1
+    log: f"{OUT}/.logs/plot.log"
+    shell:
+        "python -m scripts.vp_selection.agreement plot "
+        "--summary {input} --output {output} 2>&1 | tee {log}"

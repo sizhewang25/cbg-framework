@@ -1,0 +1,39 @@
+# VP-selection pipeline config.
+#
+# Edit `strategies` to change the lineup or seed counts. Top-level `defaults`
+# controls pipeline-wide parameters consumed by snakemake / the per-stage CLIs.
+
+defaults:
+  pool_setup: probes_to_anchors        # RipeAtlasSource setup (probes-as-VPs, anchors-as-targets)
+  fake_fraction: 0.30                  # 30% of anchors get a wrong-country claim
+  fake_assignment_seed: 9001           # disjoint from per-strategy seeds
+  speed_calibration_path: null         # null → use scripts/vp_selection/outputs/speed_calibration.json
+  k_step: 100                          # sweep K = pool_size, pool_size - 100, ..., 200, 100
+  k_min: 100
+  n_border_shards: 8                   # AEQD precompute fanout
+
+strategies:
+  - name: random
+    output_shape: sampling
+    seeds: 100
+
+  - name: cluster_as
+    output_shape: sampling
+    cluster_attr: asn
+    seeds: 100
+
+  - name: cluster_city
+    output_shape: sampling
+    cluster_attr: city
+    seeds: 100
+
+  - name: h1_as
+    output_shape: sequence
+    cluster_attr: asn
+    seeds: 1
+
+  - name: h2_as
+    output_shape: sequence
+    cluster_attr: asn
+    seed_init_size: 100
+    seeds: 100
