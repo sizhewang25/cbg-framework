@@ -43,3 +43,85 @@ No code has been written. The proposal is still being debated; see "Open Questio
 ## Conclusions
 
 To be written when the proposal is locked in. Currently this is a thinking document, not a decision document.
+
+---
+
+## 2026-05-24 — Implementation complete
+
+**Status**: Phase 0–2 complete; Phase 3 partially complete (unit + smoke tests done; leakage measurement pending)
+**Last Updated**: 2026-05-24
+
+### Design decisions locked in (Phase 0)
+
+| Decision | Choice |
+|---|---|
+| Fold count | K=5 (uniform across all LTD variants) |
+| Split axis | Anchor-level (not probe-level) |
+| Algorithm | Sechidis et al. 2011 iterative multi-label stratification |
+| Spatial blocking | Roberts et al. 2017 k-means pre-clustering (`spatial_clusters=30`) |
+| ASN bucketing | Top-20 ASNs get own bucket; rest → `"other_AS"` |
+| Materialize shape | Separate `slice_id()` per fold (no changes to materialize/runner) |
+| ANCHORS_TO_PROBES | Holdout stripped at construction with WARNING; treated as secondary pressure test |
+| VP corpus | Deferred; K-fold protocol is VP-selection-independent |
+
+### New files
+
+- **`scripts/benchmark/v2/sources/holdout.py`** — self-contained algorithm module
+  - `HoldoutPolicy(frozen dataclass)`: k=5, fold_index, seed=42, labels=("country","asn_bucket"), asn_bucket_top_n=20, spatial_clusters=30
+  - `AnchorInfo(NamedTuple)`: ip, lat, lon, country, asn
+  - `compute_fold_assignments(anchors, policy) → dict[str, int]`: public entry point
+  - Uses `scipy.cluster.vq.kmeans2` on 3D unit-vector projection (lat/lon → (x,y,z)); handles antimeridian wrap-around
+  - Sechidis: unit-first ordering (by rarest label), sum-of-needs scoring → country + ASN-bucket max-min ≤ 2
+
+- **`scripts/benchmark/v2/tests/test_holdout.py`** — 17 unit tests
+  - Covers: determinism, input-order invariance, disjointness, balanced sizes, country balance, singleton ASN, ASN bucketing (None/top-N/other), spatial cluster atomicity, clamp behavior, HoldoutPolicy validation, slice_suffix format
+
+### Modified files
+
+- **`scripts/benchmark/v2/sources/ripe_atlas.py`**
+  - `holdout: Optional[HoldoutPolicy] = None` constructor param
+  - `slice_id()` returns `"{base}__{fold{i}of{k}_seed{s}}"` when holdout set
+  - `_apply_holdout()` called after `_apply_slice()`; populates `_train_anchors` / `_test_anchors`
+  - `iter_fit_samples()` skips anchors not in `_train_anchors` when holdout set
+  - `iter_eval_targets()` skips anchors not in `_test_anchors` when holdout set
+  - `iter_vp_configs()`, `iter_tg_configs()` unchanged
+
+- **`scripts/benchmark/v2/tests/test_sources.py`** — added `TestRipeAtlasSourceHoldout` (6 tests)
+  - fit vs eval anchor IDs disjoint
+  - sweep 0..K-1: union of eval sets = full corpus; pairwise fold disjointness
+  - slice_id carries fold suffix
+  - vp_configs count unchanged
+  - ANCHORS_TO_PROBES strips holdout + no suffix + logs WARNING
+
+- **`scripts/benchmark/v2/sources/RIPE_ATLAS_DATA.md`**
+  - `holdout` row added to constructor knobs table
+  - Full "Holdout (leakage-free fit / eval split)" section added with algorithm, HoldoutPolicy params, slice_id directory layout, per-setup behavior, spatial vs label balance tradeoff
+
+### Test results
+
+```
+54 tests total (test_holdout.py × 17 + test_sources.py × 37)
+PASS: 54 / FAIL: 0 / ERROR: 0
+```
+
+### Algorithm notes
+
+**Initial label-first approach caused country max-min=3** (C2 distribution: [3,2,2,0,3]).
+Root cause: processing labels one at a time locked placements for rare labels that then forced a bad fold for common labels.
+
+**Fix**: switch to unit-first with sum-of-needs scoring:
+- Sort units by rarity of their rarest label (rarest unit first)
+- For each unit, score each fold by **sum** of remaining_need across all the unit's labels
+- Sum (not max) means a unit carrying multiple under-served labels prefers folds starved on multiple axes
+- After fix: country max-min ≤ 2, ASN-bucket balance maintained jointly
+
+**Spatial clustering tradeoff** (Roberts et al. 2017):
+- `spatial_clusters=30` (default): spatial atomicity preserved; US, DE may show per-fold country imbalance of ~10–15%
+- `spatial_clusters=None`: per-country max-min ≤ 2 across all folds; spatial autocorrelation leakage path not blocked
+- Roberts et al. recommendation: report both and treat the gap as the "autocorrelation premium"
+
+### Pending (Phase 3)
+
+- [ ] Run bounded_spline in paper-faithful vs K=5 mode; measure optimism delta
+- [ ] Re-run all CBG variants under new protocol; tabulate vs current numbers
+- [ ] Document in `papers/cbg-variant-benchmark-proposal/`
