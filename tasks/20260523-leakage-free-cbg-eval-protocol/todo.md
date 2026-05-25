@@ -91,4 +91,9 @@
   - Forces the two-step workflow (`partition.py` → JSON → `PartitionPolicy`), eliminating the silent-recompute path where the source's active corpus and the partition could disagree
   - `TestRipeAtlasSourceHoldout` rewritten: precomputes partitions over the synthetic corpus, drops the dual-policy `subTest` parametrization (algorithm validation lives in `test_holdout.py` / `test_dist_geo_holdout.py`)
   - 86/86 tests pass (was 87; the now-redundant in-source-vs-partition comparison test deleted)
+- [x] Fold-as-slice + yaml-driven source kwargs + Stratification rename — 2026-05-24
+  - **Fold-as-slice**: `RipeAtlasSource.slice` must match `fold_N` for P2A/A2A; `slice_id()` returns the slice verbatim. Dropped `"all_anchors"` and `"n<K>"` slice handling. Each fold materializes into a flat `inputs/ripe_atlas/<setup>/fold_N/` directory (no `__suffix` encoding).
+  - **yaml-driven source kwargs**: added a generic `--source-kwargs '<json>'` option to `cli.py materialize-inputs` / `run-combo`, mirroring `--ltd-kwargs` / `--mtl-kwargs` / `--ctr-kwargs`. Snakefile reads `source_kwargs:` from the yaml and forwards it. No source-specific CLI flags. New `scripts/benchmark/v2/config/ripe-smoke.yaml` is a working ripe_atlas + 5-fold example.
+  - **Stratification rename**: `holdout.py` → `stratification.py`; `partition.py` → `stratify.py`; classes `HoldoutPolicy` → `SechidisStratification`, `DistGeoKFoldPolicy` → `DistGeoStratification`, `PartitionPolicy` → `LoadedStratification`; constructor kwarg `partition_path` → `stratification_path`; on-disk paths moved under `datasets/ripe_atlas/stratifications/<algo>/`. Test files renamed to match. Dead `slice_suffix()` methods on algo classes removed (source no longer encodes a suffix).
+  - 86 tests pass (43 + 41 + 2 new CLI smoke tests for `--source-kwargs` round-trip and bad-JSON rejection)
 - [ ] Downstream: run bounded_spline LTD under both, compare median accuracy + leaderboard stability

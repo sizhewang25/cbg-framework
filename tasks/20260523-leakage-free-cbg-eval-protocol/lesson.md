@@ -75,6 +75,34 @@ Initial framing (will likely be revisited):
   from inside the algorithm function avoids pulling vp_selection at module
   load time.
 
+- **Yaml-driven source kwargs > source-specific CLI flags.** First instinct
+  was to add `--partition-path` (a ripe-atlas-specific flag) to the CLI.
+  Better: a generic `--source-kwargs '<json>'` option that the yaml's
+  `source_kwargs:` block populates, then the CLI forwards verbatim as
+  `**kwargs` to the source constructor. Matches the existing
+  `--ltd-kwargs` / `--mtl-kwargs` / `--ctr-kwargs` convention. The win: new
+  source variants don't bloat the CLI signature; their knobs live in the
+  yaml with the rest of the run config.
+
+- **When the slice has one config axis, encode the axis in the slice
+  string.** For RIPE Atlas the only meaningful "subset selection" is the
+  fold (`"all_anchors"` was no-op for the leakage-free protocol). Making
+  `slice="fold_N"` mandatory eliminates the dead "no-holdout" path and
+  collapses the directory naming: `inputs/ripe_atlas/<setup>/fold_0/`
+  instead of `inputs/ripe_atlas/<setup>/all_anchors__distgeo_fold0of5_seed42/`.
+  The stratification fingerprint (algorithm, k, seed) moves into the
+  partition file path that the yaml carries, not the slice directory name —
+  cleaner separation of "which fold" (slice) vs "which partition" (yaml).
+
+- **Stratification > Holdout/Partition for naming.** Both "holdout" and
+  "partition" were in play across the codebase, splitting the mental
+  model. "Stratification" is the standard ML term for the operation
+  ("balanced split into K folds preserving label distributions"), and it
+  works as both a noun (the artifact, `stratification.json`) and a verb
+  (the CLI, `stratify.py`). Unifying on a single noun across module name,
+  class names, constructor kwarg, on-disk path, and docs eliminated a
+  category of "wait, which name does this thing use here?" friction.
+
 - **Decouple the split decision from the source.** Originally `RipeAtlasSource`
   accepted any of three holdout policies and ran the algorithm at
   `_apply_holdout` time. Replaced with a single `PartitionPolicy` that reads

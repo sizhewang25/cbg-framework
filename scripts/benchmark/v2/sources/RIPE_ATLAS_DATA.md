@@ -32,25 +32,30 @@ python -m scripts.analysis.characterize_ripe_atlas \
 (Counts after sanitization and after dropping IPs that don't appear in
 `ping_10k_to_anchors` or are missing geometry; matches what the iterators yield.)
 
-### Slices (`_apply_slice`)
+### Slices
 
-- `"all_anchors"` — every anchor with ≥1 valid (probe, RTT)
-- `"n<K>"` — top-K anchors by VP count; tiebreak by `anchor_ip` ascending
-  (deterministic)
+The slice IS the fold for the anchor-targeted setups (P2A / A2A):
 
-### Constructor knobs ([ripe_atlas.py:43-91](ripe_atlas.py#L43-L91))
+- `"fold_N"` (where N is `0` … `K-1`) — eval set is the Nth fold of the
+  stratification at `stratification_path`; fit set is the union of the
+  other K-1 folds.
+
+For `ANCHORS_TO_PROBES`, the slice is just a label (fold semantics don't
+apply — eval targets are probes). Use any string, e.g. `"all"`.
+
+### Constructor knobs
 
 | Param | Default | Purpose |
 |---|---|---|
-| `slice` | `"all_anchors"` | `"all_anchors"` or `"n<K>"` (top-K by VP count) |
+| `slice` | (required) | `"fold_N"` for P2A / A2A; any string for A2P |
 | `setup` | `PROBES_TO_ANCHORS` | which side is the VP — see Setups |
+| `stratification_path` | (required for P2A/A2A) | JSON written by `stratify.py`; ignored with warning for A2P |
 | `threshold` | `70` | min-RTT filter for the main query (matches v1) |
 | `sanitize` | `True` | re-run paper's SOI removal at load time |
 | `sanitize_threshold` | `300` | threshold for the sanitization queries |
 | `anchor_mesh_table` | `default.ANCHORS_MESHED_PING_TABLE` | source for sanitization phase 1 |
 | `ping_table` | `default.PROBES_TO_ANCHORS_PING_TABLE` | main RTT table |
 | `rtt_query` | `None` | test injection seam; production lazy-imports `compute_rtts_per_dst_src` |
-| `holdout` | `None` | optional `PartitionPolicy(path, fold_index)` (see [Holdout](#holdout-leakage-free-fit--eval-split)) — reads a precomputed K-fold partition JSON; fit/eval iterators emit disjoint subsets |
 
 ### Load pipeline
 
@@ -67,9 +72,10 @@ python -m scripts.analysis.characterize_ripe_atlas \
    `{dst: {src: [min_rtt]}}`. If sanitize on, calls `_compute_soi_removed_ips`
    and filters both keys and values. Then collapses `[rtts]` → `min(rtts)` and
    drops RTT ≤ 0.
-3. **`_apply_slice()`** ([:311-329](ripe_atlas.py#L311-L329)) — for `n<K>`,
-   sorts by `(-len(measurements), anchor_ip)` and keeps top K. Deterministic
-   tiebreak by IP.
+3. **`_apply_holdout()`** — for P2A / A2A: builds a `LoadedStratification`
+   from `stratification_path` + the fold index parsed from `slice`,
+   intersects its assignments with the active anchor set, and populates
+   `_train_anchors` / `_test_anchors`. No-op for A2P.
 
 ### Internal cache shape
 
@@ -131,95 +137,111 @@ swap between two equivalent IPs in AS16276/OVH). Validation script:
 
 Pass `sanitize=False` to disable.
 
-## Holdout (leakage-free fit / eval split)
+## Stratification (leakage-free fit / eval split)
 
-Two-step workflow: a **partition** (deterministic anchor-level K-fold) is
-computed once by [`scripts/processing/ripe_atlas/partition.py`](../../../processing/ripe_atlas/partition.py)
-and written to `datasets/ripe_atlas/<policy>/<tag>.json`. The source then
-reads that JSON via `PartitionPolicy(path, fold_index)`: for the configured
-`fold_index`, `iter_eval_targets()` emits **only** that fold's anchors, and
-`iter_fit_samples()` emits **only** rows whose target anchor is in one of
-the other K−1 folds. This eliminates the partial answer-memorization that
-otherwise affects every fitted LTD (Octant spline, bounded_spline,
-NormalDist, Spotter) when fit_samples and eval_observations are drawn from
-the same anchor set.
+Two-step workflow:
+
+1. A **stratification** (deterministic anchor-level K-fold) is computed
+   once by [`scripts/processing/ripe_atlas/stratify.py`](../../../processing/ripe_atlas/stratify.py)
+   and written to `datasets/ripe_atlas/stratifications/<algo>/<tag>.json`.
+2. The source consumes the JSON via `LoadedStratification`: when
+   `slice="fold_N"`, `iter_eval_targets()` emits **only** that fold's
+   anchors and `iter_fit_samples()` emits **only** rows whose target anchor
+   is in one of the other K−1 folds. This eliminates the partial
+   answer-memorization that otherwise affects every fitted LTD (Octant
+   spline, bounded_spline, NormalDist, Spotter) when fit_samples and
+   eval_observations are drawn from the same anchor set.
 
 The split is anchor-level (the leakage unit is the anchor — see the task's
 `report.md` for why per-pair K-fold leaks via multi-VP centroid aggregation).
 
-### Algorithms (live in [holdout.py](../../../processing/ripe_atlas/holdout.py); used by `partition.py`, never by the source directly)
+### Algorithms
+
+Live in [stratification.py](../../../processing/ripe_atlas/stratification.py).
+Used by `stratify.py` to produce the JSON; never instantiated by the source.
 
 | Algorithm class | Behavior | Strength |
 |---|---|---|
-| `HoldoutPolicy` (Sechidis) | Iterative multi-label stratification on country + ASN-bucket (optional spatial k-means pre-clustering) | best country balance; spatial-block mode available |
-| `DistGeoKFoldPolicy` | Per-ASN-bucket greedy-Prim distance ordering + balanced round-robin | explicit intra-fold spatial spread within each ASN bucket |
+| `SechidisStratification` | Iterative multi-label stratification on country + ASN-bucket (optional spatial k-means pre-clustering) | best country balance; spatial-block mode available |
+| `DistGeoStratification` | Per-ASN-bucket greedy-Prim distance ordering + balanced round-robin | explicit intra-fold spatial spread within each ASN bucket |
 
-To compare algorithms, run `partition.py --policy sechidis ...` and
-`--policy distgeo ...` to produce two JSONs; the source treats each as an
-independent slice.
+To compare algorithms, run `stratify.py --algo sechidis ...` and
+`--algo distgeo ...` to produce two JSONs; point `stratification_path` at
+whichever you want to evaluate.
 
-### `PartitionPolicy` parameters
+### `LoadedStratification` (what the source uses)
 
 | Param | Default | Purpose |
 |---|---|---|
-| `path` | (required) | path to a partition JSON written by `partition.py` |
+| `path` | (required) | path to a stratification JSON written by `stratify.py` |
 | `fold_index` | `0` | which fold (0..k-1) is held out as the eval set; `k` is read from the file |
 
-Mismatch handling: `compute_fold_assignments` intersects the loaded
-assignments with the source's active corpus (post-sanitization, post-RTT
-filter). Anchors in the active corpus but missing from the partition are
-dropped from both fit and eval (logged WARNING). Anchors in the partition
-but absent from the active corpus are ignored (logged WARNING). Raises
-`ValueError` if the target fold or its complement ends up empty after
-intersection.
+The source builds it internally from `stratification_path` + the fold
+parsed from `slice`. Mismatch handling: `compute_fold_assignments` intersects
+the loaded assignments with the source's active corpus (post-sanitization,
+post-RTT filter). Anchors in the active corpus but missing from the
+stratification are dropped from both fit and eval (logged WARNING). Anchors
+in the stratification but absent from the active corpus are ignored (logged
+WARNING). Raises `ValueError` if the target fold or its complement ends up
+empty after intersection.
 
-### Producing a partition
+### Producing a stratification
 
 ```
-python -m scripts.processing.ripe_atlas.partition --policy distgeo \
+python -m scripts.processing.ripe_atlas.stratify --algo distgeo \
     --k 5 --seed 42 --asn-bucket-top-n 20
-# → datasets/ripe_atlas/distgeo/k5_seed42_top20.json
+# → datasets/ripe_atlas/stratifications/distgeo/k5_seed42_top20.json
 
-python -m scripts.processing.ripe_atlas.partition --policy sechidis \
+python -m scripts.processing.ripe_atlas.stratify --algo sechidis \
     --k 5 --seed 42 --spatial-clusters 30
-# → datasets/ripe_atlas/sechidis/k5_seed42_spatial30_top20.json
+# → datasets/ripe_atlas/stratifications/sechidis/k5_seed42_spatial30_top20.json
 ```
 
-The partition CLI reads the canonical 723-anchor file
-(`reproducibility_anchors.json`); see [partition.py](../../../processing/ripe_atlas/partition.py)
-for arguments. It has no ClickHouse dependency. To use a sanitized corpus,
-first run `sanitize_anchors.py` (which queries ClickHouse) and pass the
-output to `partition.py --anchors-file ...`.
+The CLI reads the canonical 723-anchor file (`reproducibility_anchors.json`);
+see [stratify.py](../../../processing/ripe_atlas/stratify.py) for arguments.
+It has no ClickHouse dependency. To use a sanitized corpus, first run
+`sanitize_anchors.py` (which queries ClickHouse) and pass the output to
+`stratify.py --anchors-file ...`.
+
+### Yaml driving the materialize + run grid
+
+```yaml
+source: ripe_atlas
+setup: probes_to_anchors
+slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+source_kwargs:
+  stratification_path: datasets/ripe_atlas/stratifications/distgeo/k5_seed42_top20.json
+```
+
+`source_kwargs` is forwarded verbatim through the CLI's `--source-kwargs`
+JSON option to the source constructor as `**kwargs`. See
+[config/ripe-smoke.yaml](../config/ripe-smoke.yaml) for a working example.
 
 ### Effect on `slice_id()`
 
-`PartitionPolicy.slice_suffix()` reconstructs the underlying algorithm's
-suffix from the JSON's `policy.class` field, so:
+`slice_id()` returns the slice verbatim — `"fold_0"`, `"fold_1"`, etc. The
+stratification file fingerprint (algorithm, k, seed) is **not** encoded in
+the directory name; that lives in `stratification_path` and is the user's
+responsibility to track across runs. Each fold materializes into its own
+directory under `<inputs_root>/ripe_atlas/<setup>/`:
 
-- partition produced by `HoldoutPolicy` → `fold{i}of{k}_seed{seed}`
-- partition produced by `DistGeoKFoldPolicy` → `distgeo_fold{i}of{k}_seed{seed}`
-
-When `holdout` is set, `slice_id()` returns `"<base_slice>__<policy_suffix>"`.
-Each fold materializes into its own directory under
-`<inputs_root>/ripe_atlas/<setup>/`:
-
-- `all_anchors/` — paper-faithful (no split)
-- `all_anchors__fold0of5_seed42/` — Sechidis fold 0 held out
-- `all_anchors__distgeo_fold0of5_seed42/` — DistGeo fold 0 held out
+- `fold_0/` — eval set = fold 0 anchors
+- `fold_1/` — eval set = fold 1 anchors
 - ... etc.
 
 The runner reads each as an independent slice; no changes to
 [inputs.py](../inputs.py) or the materialize CLI are needed to support
-cross-validation. To run K=5 CV, materialize K times with `fold_index=0..4`
-against the same partition file and aggregate downstream.
+cross-validation. To run K=5 CV, materialize K times with `slice=fold_0..fold_4`
+against the same `stratification_path` and aggregate downstream.
 
 ### Per-setup behavior
 
-| Setup | Holdout applied? |
+| Setup | Stratification applied? |
 |---|---|
-| `PROBES_TO_ANCHORS` | yes — eval anchors held out from fit samples |
+| `PROBES_TO_ANCHORS` | yes — eval anchors held out from fit samples; `slice` must be `fold_N` and `stratification_path` is required |
 | `ANCHORS_TO_ANCHORS` | yes — same axis (anchors); fit-side VP-reuse of train-fold anchors is intentional and not leakage |
-| `ANCHORS_TO_PROBES` | **no** — eval targets are probes (noisy GT, secondary setup). Holdout is stripped at construction with a logged warning; `slice_id()` does not carry the suffix. |
+| `ANCHORS_TO_PROBES` | **no** — eval targets are probes (noisy GT, secondary setup). `stratification_path` is dropped at construction with a logged warning; `slice` is used as an opaque label. |
 
 ### Spatial blocking vs label balance — a real tradeoff
 

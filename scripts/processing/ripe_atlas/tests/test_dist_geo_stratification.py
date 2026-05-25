@@ -1,4 +1,4 @@
-"""Tests for the DistGeoKFoldPolicy anchor splitter.
+"""Tests for the DistGeoStratification anchor splitter.
 
 Algorithmic invariants: determinism, disjointness, ASN balance, intra-fold
 spatial spread, edge cases, policy validation. Integration with
@@ -10,9 +10,9 @@ from __future__ import annotations
 import math
 import unittest
 
-from scripts.processing.ripe_atlas.holdout import (
+from scripts.processing.ripe_atlas.stratification import (
     AnchorInfo,
-    DistGeoKFoldPolicy,
+    DistGeoStratification,
     _bucket_asns,
     compute_dist_geo_fold_assignments,
 )
@@ -50,7 +50,7 @@ def _haversine_km(a: AnchorInfo, b: AnchorInfo) -> float:
 class TestDistGeoDeterminism(unittest.TestCase):
     def test_same_seed_same_assignments(self) -> None:
         anchors = _synth_anchors(60)
-        policy = DistGeoKFoldPolicy(k=5, fold_index=0, seed=7)
+        policy = DistGeoStratification(k=5, fold_index=0, seed=7)
         a = compute_dist_geo_fold_assignments(anchors, policy)
         b = compute_dist_geo_fold_assignments(anchors, policy)
         self.assertEqual(a, b)
@@ -59,7 +59,7 @@ class TestDistGeoDeterminism(unittest.TestCase):
         """The algorithm sorts anchors by IP early; permuted input must
         produce the same fold map."""
         anchors = _synth_anchors(40)
-        policy = DistGeoKFoldPolicy(k=4, fold_index=0, seed=42)
+        policy = DistGeoStratification(k=4, fold_index=0, seed=42)
         a = compute_dist_geo_fold_assignments(anchors, policy)
         b = compute_dist_geo_fold_assignments(list(reversed(anchors)), policy)
         self.assertEqual(a, b)
@@ -74,7 +74,7 @@ class TestDistGeoDeterminism(unittest.TestCase):
         different seeds produce different outputs."""
         anchors = _synth_anchors(60)
         for seed in (1, 7, 42, 999):
-            p = DistGeoKFoldPolicy(k=5, fold_index=0, seed=seed)
+            p = DistGeoStratification(k=5, fold_index=0, seed=seed)
             m = compute_dist_geo_fold_assignments(anchors, p)
             self.assertEqual(set(m), {a.ip for a in anchors})
             self.assertTrue(all(0 <= f < 5 for f in m.values()))
@@ -84,7 +84,7 @@ class TestDistGeoFoldDisjointness(unittest.TestCase):
     def test_every_anchor_in_exactly_one_fold(self) -> None:
         anchors = _synth_anchors(73)
         k = 5
-        policy = DistGeoKFoldPolicy(k=k, fold_index=0, seed=42)
+        policy = DistGeoStratification(k=k, fold_index=0, seed=42)
         fold_by_ip = compute_dist_geo_fold_assignments(anchors, policy)
         self.assertEqual(set(fold_by_ip), {a.ip for a in anchors})
         self.assertTrue(all(0 <= f < k for f in fold_by_ip.values()))
@@ -94,13 +94,13 @@ class TestDistGeoFoldDisjointness(unittest.TestCase):
         ASN buckets are uneven."""
         anchors = _synth_anchors(100)
         k = 5
-        policy = DistGeoKFoldPolicy(k=k, fold_index=0, seed=42)
+        policy = DistGeoStratification(k=k, fold_index=0, seed=42)
         fold_by_ip = compute_dist_geo_fold_assignments(anchors, policy)
         counts = [sum(1 for f in fold_by_ip.values() if f == i) for i in range(k)]
         self.assertLessEqual(max(counts) - min(counts), 1)
 
     def test_empty_input(self) -> None:
-        policy = DistGeoKFoldPolicy(k=5, fold_index=0, seed=42)
+        policy = DistGeoStratification(k=5, fold_index=0, seed=42)
         self.assertEqual(compute_dist_geo_fold_assignments([], policy), {})
 
 
@@ -119,7 +119,7 @@ class TestDistGeoAsnBalance(unittest.TestCase):
                     country="US",
                     asn=asn,
                 ))
-        policy = DistGeoKFoldPolicy(k=5, fold_index=0, seed=42, asn_bucket_top_n=5)
+        policy = DistGeoStratification(k=5, fold_index=0, seed=42, asn_bucket_top_n=5)
         fold_by_ip = compute_dist_geo_fold_assignments(anchors, policy)
 
         # Count (asn, fold) cells.
@@ -150,7 +150,7 @@ class TestDistGeoAsnBalance(unittest.TestCase):
                 ))
                 ip_counter += 1
 
-        policy = DistGeoKFoldPolicy(k=5, fold_index=0, seed=42, asn_bucket_top_n=2)
+        policy = DistGeoStratification(k=5, fold_index=0, seed=42, asn_bucket_top_n=2)
         fold_by_ip = compute_dist_geo_fold_assignments(anchors, policy)
 
         # 13 anchors / 5 folds → 2-3 per fold globally; balance constraint ≤ 1.
@@ -187,7 +187,7 @@ class TestDistGeoSpatialSpread(unittest.TestCase):
                 ))
                 ip += 1
 
-        policy = DistGeoKFoldPolicy(k=5, fold_index=0, seed=42, asn_bucket_top_n=10)
+        policy = DistGeoStratification(k=5, fold_index=0, seed=42, asn_bucket_top_n=10)
         fold_by_ip = compute_dist_geo_fold_assignments(anchors, policy)
 
         by_ip = {a.ip: a for a in anchors}
@@ -216,7 +216,7 @@ class TestDistGeoEdgeCases(unittest.TestCase):
         smallest-fold placement."""
         anchors = _synth_anchors(40)
         anchors.append(AnchorInfo(ip="9.9.9.9", lat=0.0, lon=0.0, country="ZZ", asn=99999))
-        policy = DistGeoKFoldPolicy(k=5, fold_index=0, seed=42)
+        policy = DistGeoStratification(k=5, fold_index=0, seed=42)
         fold_by_ip = compute_dist_geo_fold_assignments(anchors, policy)
         self.assertIn("9.9.9.9", fold_by_ip)
         self.assertIn(fold_by_ip["9.9.9.9"], range(5))
@@ -228,7 +228,7 @@ class TestDistGeoEdgeCases(unittest.TestCase):
             AnchorInfo(ip="2.2.2.2", lat=10.0, lon=10.0, country="DE", asn=2),
             AnchorInfo(ip="3.3.3.3", lat=-10.0, lon=-10.0, country="JP", asn=3),
         ]
-        policy = DistGeoKFoldPolicy(k=5, fold_index=0, seed=42)
+        policy = DistGeoStratification(k=5, fold_index=0, seed=42)
         fold_by_ip = compute_dist_geo_fold_assignments(anchors, policy)
         self.assertEqual(len(fold_by_ip), 3)
         # Each anchor in a singleton bucket → all hit _smallest_fold,
@@ -247,13 +247,13 @@ class TestDistGeoEdgeCases(unittest.TestCase):
                 country="US",
                 asn=None,
             ))
-        policy = DistGeoKFoldPolicy(k=3, fold_index=0, seed=42, asn_bucket_top_n=10)
+        policy = DistGeoStratification(k=3, fold_index=0, seed=42, asn_bucket_top_n=10)
         fold_by_ip = compute_dist_geo_fold_assignments(anchors, policy)
         counts = [sum(1 for f in fold_by_ip.values() if f == i) for i in range(3)]
         self.assertLessEqual(max(counts) - min(counts), 1)
 
     def test_bucketing_consistent_with_holdout_policy(self) -> None:
-        """_bucket_asns reuse — same bucket labels as HoldoutPolicy uses."""
+        """_bucket_asns reuse — same bucket labels as SechidisStratification uses."""
         anchors = _synth_anchors(40)
         bucketed = _bucket_asns(anchors, top_n=5)
         # 40 anchors, 10 ASNs, round-robin → 4 anchors per ASN; top 5 → AS1000..AS1004; rest → other_AS
@@ -261,28 +261,24 @@ class TestDistGeoEdgeCases(unittest.TestCase):
         self.assertTrue({"AS1000", "AS1001", "AS1002", "AS1003", "AS1004", "other_AS"}.issubset(labels))
 
 
-class TestDistGeoKFoldPolicyValidation(unittest.TestCase):
+class TestDistGeoStratificationValidation(unittest.TestCase):
     def test_k_must_be_at_least_two(self) -> None:
         with self.assertRaises(ValueError):
-            DistGeoKFoldPolicy(k=1)
+            DistGeoStratification(k=1)
 
     def test_fold_index_out_of_range(self) -> None:
         with self.assertRaises(ValueError):
-            DistGeoKFoldPolicy(k=5, fold_index=5)
+            DistGeoStratification(k=5, fold_index=5)
         with self.assertRaises(ValueError):
-            DistGeoKFoldPolicy(k=5, fold_index=-1)
+            DistGeoStratification(k=5, fold_index=-1)
 
     def test_unknown_kind_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            DistGeoKFoldPolicy(kind="random_kfold")
+            DistGeoStratification(kind="random_kfold")
 
     def test_negative_asn_top_n_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            DistGeoKFoldPolicy(asn_bucket_top_n=-1)
-
-    def test_slice_suffix_format(self) -> None:
-        p = DistGeoKFoldPolicy(k=5, fold_index=2, seed=99)
-        self.assertEqual(p.slice_suffix(), "distgeo_fold2of5_seed99")
+            DistGeoStratification(asn_bucket_top_n=-1)
 
 
 if __name__ == "__main__":

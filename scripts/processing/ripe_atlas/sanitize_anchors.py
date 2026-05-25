@@ -15,8 +15,8 @@ Output: filtered anchors JSON (subset of input with SOI-violators removed)
 plus a side-by-side list of removed anchor IPs for audit.
 
 Requires ClickHouse reachable per CLICKHOUSE_HOST / CLICKHOUSE_PASSWORD from
-`.env`. Sister script to `partition.py`, which then consumes the filtered
-file (no DB needed at partition time).
+`.env`. Sister script to `stratify.py`, which then consumes the filtered
+file (no DB needed at stratification time).
 
 Usage:
   python -m scripts.processing.ripe_atlas.sanitize_anchors

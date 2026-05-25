@@ -1,4 +1,4 @@
-"""Anchor holdout policies for the v2 benchmark — K-fold splits.
+"""Anchor stratification algorithms for the v2 benchmark — K-fold splits.
 
 Solves the fit/eval leakage problem in fitted LTDs: today every anchor that
 appears as an eval target also appears in the LTD training corpus, so the
@@ -6,21 +6,24 @@ curve is fit on the exact (RTT, distance) point it's later asked to predict.
 
 The split is anchor-level (per `report.md` lock-in). For fold *i*, anchors in
 fold *i* are evaluated; all other anchors are fit-training material. The same
-policy is applied uniformly across LTD variants so leaderboard comparisons
-reflect technique differences rather than asymmetric eval conditions.
+stratification is applied uniformly across LTD variants so leaderboard
+comparisons reflect technique differences rather than asymmetric eval
+conditions.
 
-Two policies live here, both exposing `slice_suffix()` and
-`compute_fold_assignments(anchors)` so `RipeAtlasSource` dispatches uniformly:
+Three classes live here:
 
-- `HoldoutPolicy` — Sechidis-style iterative multi-label stratification
-  (Sechidis et al. 2011) balancing country + ASN-bucket. Optional spatial
-  k-means pre-clustering (Roberts et al. 2017) makes the unit of
-  stratification a metro rather than an individual anchor.
-
-- `DistGeoKFoldPolicy` — per-ASN-bucket greedy-Prim ordering (reuses
+- `SechidisStratification` — iterative multi-label stratification (Sechidis
+  et al. 2011) balancing country + ASN-bucket. Optional spatial k-means
+  pre-clustering (Roberts et al. 2017) makes the unit of stratification a
+  metro rather than an individual anchor.
+- `DistGeoStratification` — per-ASN-bucket greedy-Prim ordering (reuses
   `select_vps(strategy="dist_geo")` from scripts.vp_selection.strategies) +
   balanced round-robin into K folds. Each fold gets ~1/K of each ASN bucket
   with explicit intra-fold spatial spread.
+- `LoadedStratification` — reads a precomputed stratification JSON
+  (the artifact written by `stratify.py`). What `RipeAtlasSource` actually
+  consumes in production. The other two are used by `stratify.py` to
+  produce that JSON.
 """
 
 from __future__ import annotations
@@ -55,14 +58,14 @@ class AnchorInfo(NamedTuple):
 
 
 @dataclass(frozen=True)
-class HoldoutPolicy:
-    """Cross-validation holdout configuration for anchor-level splits.
+class SechidisStratification:
+    """Sechidis-style iterative multi-label stratification.
 
-    `kind` is reserved for future strategies (BLOO, environmental-only, etc.);
-    v1 only implements `sechidis_kfold`. The `slice_suffix_fmt` controls how
-    the policy serializes into the source's `slice_id()`, which in turn
-    becomes the materialize/runner output directory — so two folds get
-    parallel parquet trees with no orchestration changes upstream.
+    Used by `stratify.py` to produce a stratification JSON; consumed by
+    `RipeAtlasSource` indirectly via `LoadedStratification`.
+
+    `kind` is reserved for future variants (BLOO, environmental-only, etc.);
+    v1 only implements `sechidis_kfold`.
     """
 
     kind: str = "sechidis_kfold"
@@ -72,18 +75,19 @@ class HoldoutPolicy:
     labels: tuple[str, ...] = ("country", "asn_bucket")
     asn_bucket_top_n: int = 20
     spatial_clusters: Optional[int] = 30
-    slice_suffix_fmt: str = "fold{fold_index}of{k}_seed{seed}"
 
     def __post_init__(self) -> None:
         if self.k < 2:
-            raise ValueError(f"HoldoutPolicy.k must be >=2 (got {self.k})")
+            raise ValueError(f"SechidisStratification.k must be >=2 (got {self.k})")
         if not 0 <= self.fold_index < self.k:
             raise ValueError(
-                f"HoldoutPolicy.fold_index must be in [0, k), got {self.fold_index} for k={self.k}"
+                f"SechidisStratification.fold_index must be in [0, k), got "
+                f"{self.fold_index} for k={self.k}"
             )
         if self.kind != "sechidis_kfold":
             raise ValueError(
-                f"unknown HoldoutPolicy.kind {self.kind!r}; only 'sechidis_kfold' is implemented"
+                f"unknown SechidisStratification.kind {self.kind!r}; "
+                f"only 'sechidis_kfold' is implemented"
             )
         allowed_labels = {"country", "asn_bucket"}
         unknown = set(self.labels) - allowed_labels
@@ -96,22 +100,17 @@ class HoldoutPolicy:
                 f"spatial_clusters must be None or >=2 (got {self.spatial_clusters})"
             )
 
-    def slice_suffix(self) -> str:
-        return self.slice_suffix_fmt.format(
-            fold_index=self.fold_index, k=self.k, seed=self.seed,
-        )
-
     def compute_fold_assignments(
         self, anchors: list[AnchorInfo],
     ) -> dict[str, int]:
-        """Polymorphic dispatch entry — same name as DistGeoKFoldPolicy's so
-        `RipeAtlasSource` can call `policy.compute_fold_assignments(...)`
+        """Polymorphic dispatch entry — same name as DistGeoStratification's
+        so `stratify.py` can call `algo.compute_fold_assignments(...)`
         without knowing which subclass is in hand."""
         return compute_fold_assignments(anchors, self)
 
 
 @dataclass(frozen=True)
-class DistGeoKFoldPolicy:
+class DistGeoStratification:
     """K-fold anchor split via per-ASN-bucket dist_geo ordering + round-robin.
 
     Algorithm (see `compute_dist_geo_fold_assignments`):
@@ -126,12 +125,9 @@ class DistGeoKFoldPolicy:
 
     Each fold gets ~1/K of each ASN bucket with spatially-spread anchors
     within each bucket → per-fold ASN balance + intra-fold spatial diversity.
-    Sibling to `HoldoutPolicy` (Sechidis); not a drop-in replacement — the
-    two answer slightly different questions (balance-by-label vs
+    Sibling to `SechidisStratification`; not a drop-in replacement — the two
+    answer slightly different questions (balance-by-label vs
     spread-by-distance) and we intend to run both and compare.
-
-    Asymmetric naming (HoldoutPolicy is Sechidis-only): kept to avoid
-    breaking existing call sites.
     """
 
     kind: str = "dist_geo_kfold"
@@ -139,30 +135,24 @@ class DistGeoKFoldPolicy:
     fold_index: int = 0
     seed: int = 42
     asn_bucket_top_n: int = 20
-    slice_suffix_fmt: str = "distgeo_fold{fold_index}of{k}_seed{seed}"
 
     def __post_init__(self) -> None:
         if self.k < 2:
-            raise ValueError(f"DistGeoKFoldPolicy.k must be >=2 (got {self.k})")
+            raise ValueError(f"DistGeoStratification.k must be >=2 (got {self.k})")
         if not 0 <= self.fold_index < self.k:
             raise ValueError(
-                f"DistGeoKFoldPolicy.fold_index must be in [0, k), got "
+                f"DistGeoStratification.fold_index must be in [0, k), got "
                 f"{self.fold_index} for k={self.k}"
             )
         if self.kind != "dist_geo_kfold":
             raise ValueError(
-                f"unknown DistGeoKFoldPolicy.kind {self.kind!r}; "
+                f"unknown DistGeoStratification.kind {self.kind!r}; "
                 f"only 'dist_geo_kfold' is implemented"
             )
         if self.asn_bucket_top_n < 0:
             raise ValueError(
                 f"asn_bucket_top_n must be >=0 (got {self.asn_bucket_top_n})"
             )
-
-    def slice_suffix(self) -> str:
-        return self.slice_suffix_fmt.format(
-            fold_index=self.fold_index, k=self.k, seed=self.seed,
-        )
 
     def compute_fold_assignments(
         self, anchors: list[AnchorInfo],
@@ -171,21 +161,21 @@ class DistGeoKFoldPolicy:
 
 
 @dataclass(frozen=True)
-class PartitionPolicy:
-    """Consume a precomputed partition JSON (from `partition.py`).
+class LoadedStratification:
+    """Consume a precomputed stratification JSON (from `stratify.py`).
 
-    Decouples the split decision from the source's active corpus: partition.py
-    is run once over the canonical anchor set to produce a reviewable JSON
-    artifact, then RipeAtlasSource is constructed with this policy to read
-    those assignments instead of recomputing.
+    Decouples the split decision from the source's active corpus:
+    `stratify.py` runs once over the canonical anchor set to produce a
+    reviewable JSON artifact; then `RipeAtlasSource` is constructed with this
+    class to read those assignments instead of recomputing.
 
     Mismatch handling: `compute_fold_assignments(anchors)` intersects the
     loaded assignments with the active anchor list, logs counts on both
     sides, and raises if the target fold or its complement ends up empty.
 
-    Anchors in the active corpus but not in the partition naturally drop
+    Anchors in the active corpus but not in the stratification naturally drop
     out of both train and test (they are absent from the returned mapping
-    and RipeAtlasSource's iterators skip anything not in either set).
+    and `RipeAtlasSource`'s iterators skip anything not in either set).
     """
 
     path: Path
@@ -195,17 +185,17 @@ class PartitionPolicy:
         # Normalize to Path so callers can pass strings.
         object.__setattr__(self, "path", Path(self.path))
         if not self.path.exists():
-            raise FileNotFoundError(f"partition file not found: {self.path}")
+            raise FileNotFoundError(f"stratification file not found: {self.path}")
         data = self._load()
         if "policy" not in data or "fold_assignments" not in data:
             raise ValueError(
-                f"partition file {self.path} missing required keys "
+                f"stratification file {self.path} missing required keys "
                 f"(expected 'policy' and 'fold_assignments')"
             )
         k = int(data["policy"]["k"])
         if not 0 <= self.fold_index < k:
             raise ValueError(
-                f"PartitionPolicy.fold_index must be in [0, {k}), got {self.fold_index}"
+                f"LoadedStratification.fold_index must be in [0, {k}), got {self.fold_index}"
             )
 
     @property
@@ -216,40 +206,27 @@ class PartitionPolicy:
         with self.path.open() as fh:
             return json.load(fh)
 
-    def slice_suffix(self) -> str:
-        """Match the in-source suffix of the policy that produced this file
-        so partition-driven and in-source slice_ids align for the same fold."""
-        data = self._load()
-        cls = data["policy"]["class"]
-        k = int(data["policy"]["k"])
-        seed = int(data["policy"].get("seed", 0))
-        if cls == "DistGeoKFoldPolicy":
-            return f"distgeo_fold{self.fold_index}of{k}_seed{seed}"
-        if cls == "HoldoutPolicy":
-            return f"fold{self.fold_index}of{k}_seed{seed}"
-        return f"partition_{self.path.stem}_fold{self.fold_index}"
-
     def compute_fold_assignments(
         self, anchors: list[AnchorInfo],
     ) -> dict[str, int]:
         data = self._load()
         loaded = {ip: int(f) for ip, f in data["fold_assignments"].items()}
         active = {a.ip for a in anchors}
-        partition_ips = set(loaded)
+        stratification_ips = set(loaded)
 
-        in_both = active & partition_ips
-        only_active = active - partition_ips
-        only_partition = partition_ips - active
+        in_both = active & stratification_ips
+        only_active = active - stratification_ips
+        only_stratification = stratification_ips - active
 
         if only_active:
             logger.warning(
-                "PartitionPolicy: %d active anchor(s) missing from partition %s — dropped from both fit and eval",
+                "LoadedStratification: %d active anchor(s) missing from stratification %s — dropped from both fit and eval",
                 len(only_active), self.path,
             )
-        if only_partition:
+        if only_stratification:
             logger.warning(
-                "PartitionPolicy: %d partition anchor(s) absent from active corpus — ignored",
-                len(only_partition),
+                "LoadedStratification: %d stratification anchor(s) absent from active corpus — ignored",
+                len(only_stratification),
             )
 
         result = {ip: loaded[ip] for ip in in_both}
@@ -258,13 +235,13 @@ class PartitionPolicy:
         n_train = sum(1 for f in result.values() if f != self.fold_index)
         if n_test == 0:
             raise ValueError(
-                f"PartitionPolicy: fold_index={self.fold_index} eval set is empty "
-                f"after intersecting partition ({self.path}) with active corpus"
+                f"LoadedStratification: fold_index={self.fold_index} eval set is empty "
+                f"after intersecting stratification ({self.path}) with active corpus"
             )
         if n_train == 0:
             raise ValueError(
-                f"PartitionPolicy: fold_index={self.fold_index} fit set is empty "
-                f"after intersecting partition ({self.path}) with active corpus"
+                f"LoadedStratification: fold_index={self.fold_index} fit set is empty "
+                f"after intersecting stratification ({self.path}) with active corpus"
             )
         return result
 
@@ -274,7 +251,7 @@ class PartitionPolicy:
 
 def compute_fold_assignments(
     anchors: list[AnchorInfo],
-    policy: HoldoutPolicy,
+    policy: "SechidisStratification",
 ) -> dict[str, int]:
     """Assign each anchor to a fold in [0, policy.k).
 
@@ -539,7 +516,7 @@ def _pick_fold(
 
 def compute_dist_geo_fold_assignments(
     anchors: list[AnchorInfo],
-    policy: DistGeoKFoldPolicy,
+    policy: "DistGeoStratification",
 ) -> dict[str, int]:
     """Assign each anchor to a fold in [0, policy.k) via dist_geo + ASN bucket.
 

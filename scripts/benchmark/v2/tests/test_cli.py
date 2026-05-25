@@ -78,6 +78,35 @@ class TestCLI(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("materialize-inputs", result.output)
 
+    def test_materialize_forwards_source_kwargs(self) -> None:
+        """`--source-kwargs` JSON is parsed and forwarded as **kwargs to the
+        source constructor — exercised here with a vultr_csv override that
+        points at a temp CSV."""
+        alt_csv = Path(self.tmp.name) / "alt.csv"
+        alt_csv.write_text(_SYNTH_CSV)
+        # Path the source through --source-kwargs rather than positional args.
+        result = self.runner.invoke(app, [
+            "materialize-inputs",
+            "--source", "vultr_csv", "--slice", "all_us",
+            "--inputs-root", str(self.inputs_root),
+            "--source-kwargs", json.dumps({"csv_path": str(alt_csv)}),
+        ])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        manifest = (
+            self.inputs_root / "vultr_csv" / "probes_to_anchors" / "all_us"
+            / "manifest.json"
+        )
+        self.assertTrue(manifest.exists())
+
+    def test_materialize_rejects_invalid_source_kwargs_json(self) -> None:
+        result = self.runner.invoke(app, [
+            "materialize-inputs",
+            "--source", "vultr_csv", "--slice", "all_us",
+            "--inputs-root", str(self.inputs_root),
+            "--source-kwargs", "not-json",
+        ])
+        self.assertNotEqual(result.exit_code, 0)
+
     def test_summarize_aggregates_combos(self) -> None:
         self._materialize()
         # Run two combos under one run id.

@@ -8,10 +8,16 @@ VPs are the ~12K probes in `reproducibility_probes.json`. RTTs come from the
 This source reaches out to ClickHouse on first iteration. Cache the materialized
 parquets and avoid re-querying. For unit testing, prefer VultrCSVSource (file-only).
 
-The slice mechanism here is intentionally coarse:
-  - "all_anchors"       : every anchor with at least one valid (probe, RTT)
-  - "n<K>"              : keep the K anchors with the most VP measurements
-                          (deterministic by (count desc, anchor_ip asc) tiebreaker)
+The slice IS the fold for anchor-targeted setups: `slice="fold_N"` selects
+the Nth fold from the stratification JSON at `stratification_path` as the
+eval set; the other K-1 folds become the fit corpus. Each fold materializes
+into its own directory (`<inputs_root>/ripe_atlas/<setup>/fold_N/`). There
+is no "all_anchors" / "no stratification" path for the anchor-targeted
+setups — leakage-free K-fold is the only mode.
+
+For `setup=anchors_to_probes`, fold semantics don't apply (eval targets are
+probes); pass any slice label (e.g. `"all"`), and `stratification_path` is
+ignored if supplied.
 
 Optional anchor-city enrichment: if `anchor_city.json` (produced by
 `scripts/processing/append_city_to_anchors.py`) is present, each anchor's city
@@ -23,17 +29,22 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
 import default
 
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
-from scripts.processing.ripe_atlas.holdout import AnchorInfo, PartitionPolicy
+from scripts.processing.ripe_atlas.stratification import AnchorInfo, LoadedStratification
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
 
 logger = logging.getLogger(__name__)
+
+# Slice grammar for the anchor-targeted setups: literally `fold_N` where N is
+# the fold index into the partition JSON.
+_FOLD_SLICE_RE = re.compile(r"^fold_(\d+)$")
 
 
 # Default ClickHouse query parameters. `threshold=70` matches v1/million_scale.py:76.
@@ -72,9 +83,10 @@ class RipeAtlasSource(DataSource):
 
     def __init__(
         self,
-        slice: str = "all_anchors",
+        slice: str,
         setup: str = DataSource.PROBES_TO_ANCHORS,
         *,
+        stratification_path: Optional[Path] = None,
         probes_and_anchors_file: Optional[Path] = None,
         anchor_city_file: Optional[Path] = None,
         ping_table: Optional[str] = None,
@@ -84,7 +96,6 @@ class RipeAtlasSource(DataSource):
         sanitize: bool = True,
         anchor_mesh_table: Optional[str] = None,
         sanitize_threshold: int = _DEFAULT_SANITIZE_THRESHOLD,
-        holdout: Optional[PartitionPolicy] = None,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
@@ -92,6 +103,35 @@ class RipeAtlasSource(DataSource):
             )
         self._slice = slice
         self._setup = setup
+
+        # Slice grammar + partition wiring depend on the setup. Anchor-targeted
+        # setups (P2A / A2A) require a fold slice and a partition file; A2P is
+        # corpus-wide because the eval axis is probes, not anchors.
+        if setup == DataSource.ANCHORS_TO_PROBES:
+            if stratification_path is not None:
+                logger.warning(
+                    "stratification_path ignored for setup=anchors_to_probes: eval targets "
+                    "are probes (noisy GT, secondary setup) and the anchor-axis fold "
+                    "filter does not apply. Slice label is used as-is."
+                )
+            self._fold_index: Optional[int] = None
+            self._stratification_path: Optional[Path] = None
+        else:
+            match = _FOLD_SLICE_RE.match(slice)
+            if not match:
+                raise ValueError(
+                    f"slice must match 'fold_N' for setup={setup!r} (got {slice!r}). "
+                    f"Each fold is materialized as a separate slice."
+                )
+            if stratification_path is None:
+                raise ValueError(
+                    f"stratification_path is required for setup={setup!r} with slice "
+                    f"{slice!r}. Produce one with "
+                    f"`python -m scripts.processing.ripe_atlas.stratify`."
+                )
+            self._fold_index = int(match.group(1))
+            self._stratification_path = Path(stratification_path)
+
         self._probes_and_anchors_file = (
             Path(probes_and_anchors_file)
             if probes_and_anchors_file is not None
@@ -116,14 +156,6 @@ class RipeAtlasSource(DataSource):
             else default.ANCHORS_MESHED_PING_TABLE
         )
         self._sanitize_threshold = sanitize_threshold
-        if holdout is not None and setup == DataSource.ANCHORS_TO_PROBES:
-            logger.warning(
-                "Holdout policy ignored for setup=anchors_to_probes: the eval targets are "
-                "probes (noisy GT, secondary setup) and the anchor-axis holdout does not "
-                "apply. Iterators and slice_id() will behave as if holdout=None."
-            )
-            holdout = None
-        self._holdout = holdout
 
         # Lazily populated caches; first iter_*() call triggers loading.
         self._coords_by_ip: Optional[dict[str, Coord]] = None
@@ -143,9 +175,10 @@ class RipeAtlasSource(DataSource):
     # ---- DataSource API ------------------------------------------------------
 
     def slice_id(self) -> str:
-        if self._holdout is None:
-            return self._slice
-        return f"{self._slice}__{self._holdout.slice_suffix()}"
+        # The slice IS the fold for anchor-targeted setups; no suffix
+        # encoding needed — the partition file fingerprint lives in
+        # `stratification_path`, not the directory name.
+        return self._slice
 
     def setup_id(self) -> str:
         return self._setup
@@ -270,7 +303,6 @@ class RipeAtlasSource(DataSource):
             self._load_coords()
         if self._rtts_by_anchor is None:
             self._load_rtts()
-            self._apply_slice()
             self._apply_holdout()
 
     def _load_coords(self) -> None:
@@ -418,39 +450,20 @@ class RipeAtlasSource(DataSource):
         )
         return set(removed_anchors) | set(removed_probes)
 
-    def _apply_slice(self) -> None:
-        assert self._rtts_by_anchor is not None
-        if self._slice == "all_anchors":
-            return
-        if not self._slice.startswith("n"):
-            raise ValueError(
-                f"unknown RIPE Atlas slice {self._slice!r}; expected 'all_anchors' or 'n<K>'"
-            )
-        try:
-            k = int(self._slice.removeprefix("n"))
-        except ValueError as e:
-            raise ValueError(f"invalid n<K> slice: {self._slice!r}") from e
-        if k < 1:
-            raise ValueError(f"slice K must be >=1, got {k}")
-        ranked = sorted(
-            self._rtts_by_anchor.items(),
-            key=lambda kv: (-len(kv[1]), kv[0]),
-        )[:k]
-        self._rtts_by_anchor = {ip: rtts for ip, rtts in ranked}
-
     def _apply_holdout(self) -> None:
-        """Partition anchors into K folds via the policy's precomputed JSON;
-        populate train/test sets.
+        """Partition anchors into K folds via the partition JSON and pick the
+        slice's fold as the eval set.
 
-        `PartitionPolicy.compute_fold_assignments` reads the assignments from
-        the JSON written by `scripts/processing/ripe_atlas/partition.py`,
-        intersects with this source's active corpus, and logs drops on both
-        sides. Only meaningful for PROBES_TO_ANCHORS and ANCHORS_TO_ANCHORS;
-        ANCHORS_TO_PROBES with a holdout is stripped at construction.
+        For setup=anchors_to_probes the fold filter does not apply (eval
+        targets are probes); this method is a no-op. Otherwise it builds a
+        `LoadedStratification(self._stratification_path, self._fold_index)`,
+        intersects its assignments with this source's active corpus, and
+        populates `_train_anchors` / `_test_anchors`.
         """
-        if self._holdout is None:
+        if self._stratification_path is None:
             return
         assert self._rtts_by_anchor is not None and self._coords_by_ip is not None
+        assert self._fold_index is not None
 
         anchor_infos: list[AnchorInfo] = []
         for anchor_ip in self._rtts_by_anchor:
@@ -465,12 +478,15 @@ class RipeAtlasSource(DataSource):
                 asn=self._asn_by_ip.get(anchor_ip),
             ))
 
-        self._fold_by_anchor = self._holdout.compute_fold_assignments(anchor_infos)
+        policy = LoadedStratification(
+            path=self._stratification_path, fold_index=self._fold_index,
+        )
+        self._fold_by_anchor = policy.compute_fold_assignments(anchor_infos)
         self._test_anchors = {
             ip for ip, fold in self._fold_by_anchor.items()
-            if fold == self._holdout.fold_index
+            if fold == self._fold_index
         }
         self._train_anchors = {
             ip for ip, fold in self._fold_by_anchor.items()
-            if fold != self._holdout.fold_index
+            if fold != self._fold_index
         }

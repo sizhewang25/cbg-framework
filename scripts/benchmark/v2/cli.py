@@ -46,7 +46,7 @@ DEFAULT_OUTPUTS_ROOT = Path(__file__).resolve().parent / "outputs"
 @app.command("materialize-inputs")
 def cmd_materialize_inputs(
     source: str = typer.Option(..., help=f"Data source name. One of: {sorted(SOURCES)}"),
-    slice: str = typer.Option(..., help="Slice identifier (source-specific, e.g. 'top1' / 'all_anchors')."),
+    slice: str = typer.Option(..., help="Slice identifier (source-specific, e.g. 'top1' / 'fold_0')."),
     setup: str = typer.Option(
         _DataSource.PROBES_TO_ANCHORS,
         help=(
@@ -54,6 +54,14 @@ def cmd_materialize_inputs(
             f"One of: {list(_DataSource.ALLOWED_SETUPS)}. "
             "'probes_to_anchors' = probes are VPs, anchors are targets (IMC 2023 primary). "
             "'anchors_to_probes' = anchors are VPs, probes are targets (pressure test)."
+        ),
+    ),
+    source_kwargs: str = typer.Option(
+        "{}",
+        help=(
+            "JSON dict forwarded to the source constructor as **kwargs. "
+            "Source-specific knobs live in the yaml's `source_kwargs:` block "
+            "(e.g. `{\"stratification_path\": \"datasets/ripe_atlas/stratifications/distgeo/k5_seed42_top20.json\"}` for ripe_atlas)."
         ),
     ),
     inputs_root: Path = typer.Option(
@@ -68,7 +76,7 @@ def cmd_materialize_inputs(
         raise typer.Exit(code=2)
 
     source_cls = SOURCES[source]
-    src = source_cls(slice=slice, setup=setup)
+    src = source_cls(slice=slice, setup=setup, **json.loads(source_kwargs))
     out_dir = inputs_dir_for(src, inputs_root)
     if (out_dir / "manifest.json").exists() and not force:
         typer.echo(f"Already materialized at {out_dir} (use --force to overwrite).")
@@ -99,6 +107,13 @@ def cmd_run_combo(
     ltd_kwargs: str = typer.Option("{}", help="JSON dict forwarded to the LTD constructor."),
     mtl_kwargs: str = typer.Option("{}", help="JSON dict forwarded to the MTL constructor."),
     ctr_kwargs: str = typer.Option("{}", help="JSON dict forwarded to the CTR constructor."),
+    source_kwargs: str = typer.Option(
+        "{}",
+        help=(
+            "JSON dict forwarded to the source constructor as **kwargs (must match "
+            "what materialize-inputs received so the inputs path resolves correctly)."
+        ),
+    ),
     seed: Optional[int] = typer.Option(
         None,
         help=(
@@ -117,7 +132,7 @@ def cmd_run_combo(
         raise typer.Exit(code=2)
     # Construct only to derive canonical inputs/outputs paths — no I/O happens
     # until iter_* is called, so this is cheap even for RipeAtlasSource.
-    src = SOURCES[source](slice=slice, setup=setup)
+    src = SOURCES[source](slice=slice, setup=setup, **json.loads(source_kwargs))
     inputs_dir = inputs_dir_for(src, inputs_root)
     if not (inputs_dir / "eval_observations.parquet").exists():
         typer.echo(

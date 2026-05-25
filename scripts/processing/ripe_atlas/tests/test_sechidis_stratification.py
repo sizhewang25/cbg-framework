@@ -1,4 +1,4 @@
-"""Tests for the Sechidis-style anchor holdout splitter.
+"""Tests for the Sechidis-style anchor stratification.
 
 Algorithmic invariants live here (determinism, disjointness, label balance,
 spatial cluster atomicity, ASN bucketing). Integration with RipeAtlasSource
@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.processing.ripe_atlas.holdout import (
+from scripts.processing.ripe_atlas.stratification import (
     AnchorInfo,
-    HoldoutPolicy,
+    SechidisStratification,
     _bucket_asns,
     compute_fold_assignments,
 )
@@ -44,15 +44,15 @@ def _synth_anchors(n: int = 50, n_countries: int = 6, n_asns: int = 10) -> list[
 class TestSechidisDeterminism(unittest.TestCase):
     def test_same_seed_same_assignments(self) -> None:
         anchors = _synth_anchors(60)
-        policy = HoldoutPolicy(k=5, fold_index=0, seed=7, spatial_clusters=None)
+        policy = SechidisStratification(k=5, fold_index=0, seed=7, spatial_clusters=None)
         a = compute_fold_assignments(anchors, policy)
         b = compute_fold_assignments(anchors, policy)
         self.assertEqual(a, b)
 
     def test_different_seed_can_differ(self) -> None:
         anchors = _synth_anchors(60)
-        p1 = HoldoutPolicy(k=5, fold_index=0, seed=1, spatial_clusters=None)
-        p2 = HoldoutPolicy(k=5, fold_index=0, seed=999, spatial_clusters=None)
+        p1 = SechidisStratification(k=5, fold_index=0, seed=1, spatial_clusters=None)
+        p2 = SechidisStratification(k=5, fold_index=0, seed=999, spatial_clusters=None)
         a = compute_fold_assignments(anchors, p1)
         b = compute_fold_assignments(anchors, p2)
         # Not strictly required to differ, but with N=60 and uniform labels
@@ -63,7 +63,7 @@ class TestSechidisDeterminism(unittest.TestCase):
         """The algorithm sorts anchors by IP early; permuted input must
         produce the same fold map."""
         anchors = _synth_anchors(40)
-        policy = HoldoutPolicy(k=4, fold_index=0, seed=42, spatial_clusters=None)
+        policy = SechidisStratification(k=4, fold_index=0, seed=42, spatial_clusters=None)
         a = compute_fold_assignments(anchors, policy)
         b = compute_fold_assignments(list(reversed(anchors)), policy)
         self.assertEqual(a, b)
@@ -75,7 +75,7 @@ class TestFoldDisjointness(unittest.TestCase):
         k = 5
         # Compute once with fold_index=0 — assignment is the same regardless
         # of fold_index (that's just which fold becomes "test" downstream).
-        policy = HoldoutPolicy(k=k, fold_index=0, seed=42, spatial_clusters=None)
+        policy = SechidisStratification(k=k, fold_index=0, seed=42, spatial_clusters=None)
         fold_by_ip = compute_fold_assignments(anchors, policy)
         self.assertEqual(set(fold_by_ip), {a.ip for a in anchors})
         self.assertTrue(all(0 <= f < k for f in fold_by_ip.values()))
@@ -83,7 +83,7 @@ class TestFoldDisjointness(unittest.TestCase):
     def test_fold_sizes_are_balanced(self) -> None:
         anchors = _synth_anchors(100)
         k = 5
-        policy = HoldoutPolicy(k=k, fold_index=0, seed=42, spatial_clusters=None)
+        policy = SechidisStratification(k=k, fold_index=0, seed=42, spatial_clusters=None)
         fold_by_ip = compute_fold_assignments(anchors, policy)
         counts = [sum(1 for f in fold_by_ip.values() if f == i) for i in range(k)]
         # 100 anchors across 5 folds → 20 each in the ideal case; the greedy
@@ -91,7 +91,7 @@ class TestFoldDisjointness(unittest.TestCase):
         self.assertLessEqual(max(counts) - min(counts), 2)
 
     def test_empty_input(self) -> None:
-        policy = HoldoutPolicy(k=5, fold_index=0, seed=42, spatial_clusters=None)
+        policy = SechidisStratification(k=5, fold_index=0, seed=42, spatial_clusters=None)
         self.assertEqual(compute_fold_assignments([], policy), {})
 
 
@@ -101,7 +101,7 @@ class TestLabelBalance(unittest.TestCase):
         into one. With 60 anchors / 6 countries / 5 folds → 10 anchors per
         country, ~2 per (country, fold)."""
         anchors = _synth_anchors(60, n_countries=6, n_asns=10)
-        policy = HoldoutPolicy(k=5, fold_index=0, seed=42, spatial_clusters=None)
+        policy = SechidisStratification(k=5, fold_index=0, seed=42, spatial_clusters=None)
         fold_by_ip = compute_fold_assignments(anchors, policy)
 
         # Count (country, fold) cells.
@@ -124,7 +124,7 @@ class TestLabelBalance(unittest.TestCase):
         singleton = AnchorInfo(ip="9.9.9.9", lat=0.0, lon=0.0, country="ZZ", asn=99999)
         anchors.append(singleton)
 
-        policy = HoldoutPolicy(k=5, fold_index=0, seed=42, spatial_clusters=None)
+        policy = SechidisStratification(k=5, fold_index=0, seed=42, spatial_clusters=None)
         fold_by_ip = compute_fold_assignments(anchors, policy)
         self.assertIn("9.9.9.9", fold_by_ip)
 
@@ -182,7 +182,7 @@ class TestSpatialClustering(unittest.TestCase):
                 country="JP", asn=300,
             ))
 
-        policy = HoldoutPolicy(
+        policy = SechidisStratification(
             k=3, fold_index=0, seed=42,
             spatial_clusters=3,
         )
@@ -199,33 +199,29 @@ class TestSpatialClustering(unittest.TestCase):
     def test_spatial_clusters_greater_than_n_clamps(self) -> None:
         """spatial_clusters > #anchors should not crash; it clamps to N."""
         anchors = _synth_anchors(5)
-        policy = HoldoutPolicy(k=2, fold_index=0, seed=42, spatial_clusters=100)
+        policy = SechidisStratification(k=2, fold_index=0, seed=42, spatial_clusters=100)
         fold_by_ip = compute_fold_assignments(anchors, policy)
         self.assertEqual(len(fold_by_ip), 5)
 
 
-class TestHoldoutPolicyValidation(unittest.TestCase):
+class TestSechidisStratificationValidation(unittest.TestCase):
     def test_k_must_be_at_least_two(self) -> None:
         with self.assertRaises(ValueError):
-            HoldoutPolicy(k=1)
+            SechidisStratification(k=1)
 
     def test_fold_index_out_of_range(self) -> None:
         with self.assertRaises(ValueError):
-            HoldoutPolicy(k=5, fold_index=5)
+            SechidisStratification(k=5, fold_index=5)
         with self.assertRaises(ValueError):
-            HoldoutPolicy(k=5, fold_index=-1)
+            SechidisStratification(k=5, fold_index=-1)
 
     def test_unknown_kind_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            HoldoutPolicy(kind="bloo")
+            SechidisStratification(kind="bloo")
 
     def test_unknown_label_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            HoldoutPolicy(labels=("country", "continent"))
-
-    def test_slice_suffix_format(self) -> None:
-        p = HoldoutPolicy(k=5, fold_index=2, seed=99)
-        self.assertEqual(p.slice_suffix(), "fold2of5_seed99")
+            SechidisStratification(labels=("country", "continent"))
 
 
 if __name__ == "__main__":

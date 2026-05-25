@@ -7,6 +7,7 @@ only for its JSON coord-loading half — ClickHouse is mocked out.
 
 from __future__ import annotations
 
+import json as _json
 import tempfile
 import textwrap
 import unittest
@@ -15,6 +16,36 @@ from pathlib import Path
 from scripts.benchmark.v2.sources import SOURCES
 from scripts.benchmark.v2.sources.ripe_atlas import RipeAtlasSource
 from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource
+
+
+def _write_stratification(
+    path: Path,
+    anchor_ips: list[str],
+    k: int = 2,
+    policy_class: str = "DistGeoStratification",
+    seed: int = 42,
+) -> Path:
+    """Write a minimal stratification JSON (the shape `stratify.py` emits).
+
+    Round-robins `anchor_ips` into K folds in input order, so the caller
+    controls which anchors land where. Used by P2A test fixtures, where
+    `RipeAtlasSource(slice="fold_N")` requires a stratification file."""
+    sorted_ips = list(anchor_ips)
+    assignments = {ip: i % k for i, ip in enumerate(sorted_ips)}
+    fold_sizes = [sum(1 for f in assignments.values() if f == i) for i in range(k)]
+    payload = {
+        "policy": {
+            "class": policy_class,
+            "kind": "dist_geo_kfold" if policy_class == "DistGeoStratification" else "sechidis_kfold",
+            "k": k, "seed": seed, "asn_bucket_top_n": 20,
+        },
+        "corpus": {"source": "test", "n_anchors_yielded": len(assignments)},
+        "generated_at": "2026-05-24T00:00:00+00:00",
+        "fold_sizes": fold_sizes,
+        "fold_assignments": assignments,
+    }
+    path.write_text(_json.dumps(payload))
+    return path
 
 
 _SYNTH_CSV = textwrap.dedent("""
@@ -98,7 +129,9 @@ class TestVultrCSVSource(unittest.TestCase):
 
 class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
     def test_load_coords_from_synthetic_json(self) -> None:
-        import json as _json
+        # _load_coords runs before _apply_holdout, so the partition file
+        # doesn't need to exist for this construction — we just need a
+        # path argument to satisfy the P2A signature.
         with tempfile.TemporaryDirectory() as tmp:
             probes_json = Path(tmp) / "probes_and_anchors.json"
             probes_json.write_text(_json.dumps([
@@ -115,7 +148,11 @@ class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
                     "is_anchor": False,
                 },
             ]))
-            src = RipeAtlasSource(slice="all_anchors", probes_and_anchors_file=probes_json)
+            src = RipeAtlasSource(
+                slice="fold_0",
+                probes_and_anchors_file=probes_json,
+                stratification_path=Path(tmp) / "stratification.json",
+            )
             src._load_coords()
             assert src._coords_by_ip is not None
             self.assertEqual(len(src._coords_by_ip), 2)
@@ -124,8 +161,8 @@ class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
             self.assertEqual(src._anchor_ips, {"1.1.1.1"})
 
     def test_anchors_to_probes_setup_transposes_groups(self) -> None:
-        """In anchors_to_probes mode, EvalTargets are probes, not anchors."""
-        import json as _json
+        """In anchors_to_probes mode, EvalTargets are probes, not anchors.
+        Fold semantics don't apply to A2P, so slice is just a label."""
         with tempfile.TemporaryDirectory() as tmp:
             probes_json = Path(tmp) / "probes_and_anchors.json"
             probes_json.write_text(_json.dumps([
@@ -137,7 +174,7 @@ class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
                  "geometry": {"coordinates": [-101.0, 41.0]}, "is_anchor": False},
             ]))
             src = RipeAtlasSource(
-                slice="all_anchors", setup="anchors_to_probes",
+                slice="all", setup="anchors_to_probes",
                 probes_and_anchors_file=probes_json,
                 rtt_query=lambda *a, **kw: {"1.1.1.1": {"vp-a": [10.0], "vp-b": [12.0]}},
                 sanitize=False,
@@ -153,25 +190,37 @@ class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
             self.assertEqual(str(t.obs[0][0]), "1.1.1.1")
 
     def test_iter_eval_targets_groups_by_anchor(self) -> None:
-        """Inject a fake rtt_query so the test doesn't require ClickHouse."""
-        import json as _json
+        """Inject a fake rtt_query so the test doesn't require ClickHouse.
+        Two anchors split round-robin into K=2 folds; slice='fold_0' picks
+        one as the eval target."""
         with tempfile.TemporaryDirectory() as tmp:
-            probes_json = Path(tmp) / "probes_and_anchors.json"
+            tmp_path = Path(tmp)
+            probes_json = tmp_path / "probes_and_anchors.json"
             probes_json.write_text(_json.dumps([
                 {"address_v4": "1.1.1.1", "asn_v4": 7922, "country_code": "US",
                  "geometry": {"coordinates": [-84.0, 33.0]}, "is_anchor": True},
+                {"address_v4": "1.1.1.2", "asn_v4": 7922, "country_code": "US",
+                 "geometry": {"coordinates": [-85.0, 34.0]}, "is_anchor": True},
                 {"address_v4": "vp-a", "asn_v4": 7922, "country_code": "US",
                  "geometry": {"coordinates": [-100.0, 40.0]}, "is_anchor": False},
                 {"address_v4": "vp-b", "asn_v4": 7922, "country_code": "US",
                  "geometry": {"coordinates": [-101.0, 41.0]}, "is_anchor": False},
             ]))
+            stratification_path = _write_stratification(
+                tmp_path / "stratification.json", ["1.1.1.1", "1.1.1.2"], k=2,
+            )
             src = RipeAtlasSource(
-                slice="all_anchors",
+                slice="fold_0",
                 probes_and_anchors_file=probes_json,
-                rtt_query=lambda *a, **kw: {"1.1.1.1": {"vp-a": [10.0], "vp-b": [12.0]}},
+                stratification_path=stratification_path,
+                rtt_query=lambda *a, **kw: {
+                    "1.1.1.1": {"vp-a": [10.0], "vp-b": [12.0]},
+                    "1.1.1.2": {"vp-a": [11.0], "vp-b": [13.0]},
+                },
                 sanitize=False,
             )
             targets = list(src.iter_eval_targets())
+        # fold_0 contains the lexicographically-first of the two anchors.
         self.assertEqual(len(targets), 1)
         self.assertEqual(targets[0].target_id, "1.1.1.1")
         self.assertEqual(len(targets[0].obs), 2)
@@ -183,7 +232,6 @@ class TestRipeAtlasAnchorCityEnrichment(unittest.TestCase):
     cities on VPs since anchors *are* the VPs in that setup)."""
 
     def test_city_populated_from_nominatim_response(self) -> None:
-        import json as _json
         with tempfile.TemporaryDirectory() as tmp:
             probes_json = Path(tmp) / "probes_and_anchors.json"
             probes_json.write_text(_json.dumps([
@@ -208,7 +256,7 @@ class TestRipeAtlasAnchorCityEnrichment(unittest.TestCase):
                 "9999": {"features": [{"properties": {"address": {"city": "Ghost"}}}]},
             }))
             src = RipeAtlasSource(
-                slice="all_anchors", setup="anchors_to_probes",
+                slice="all", setup="anchors_to_probes",
                 probes_and_anchors_file=probes_json,
                 anchor_city_file=city_json,
                 rtt_query=lambda *a, **kw: {
@@ -227,7 +275,6 @@ class TestRipeAtlasAnchorCityEnrichment(unittest.TestCase):
 
     def test_missing_city_file_is_silently_skipped(self) -> None:
         """No anchor_city.json → cities are all None, no crash."""
-        import json as _json
         with tempfile.TemporaryDirectory() as tmp:
             probes_json = Path(tmp) / "probes_and_anchors.json"
             probes_json.write_text(_json.dumps([
@@ -236,7 +283,7 @@ class TestRipeAtlasAnchorCityEnrichment(unittest.TestCase):
                  "geometry": {"coordinates": [-84.0, 33.0]}, "is_anchor": True},
             ]))
             src = RipeAtlasSource(
-                slice="all_anchors", setup="anchors_to_probes",
+                slice="all", setup="anchors_to_probes",
                 probes_and_anchors_file=probes_json,
                 anchor_city_file=Path(tmp) / "does_not_exist.json",
                 rtt_query=lambda *a, **kw: {"1.1.1.1": {"1.1.1.1": [1.0]}},
@@ -321,34 +368,46 @@ class TestRipeAtlasTgConfigs(unittest.TestCase):
     plus city propagation from anchor_city.json."""
 
     def test_probes_to_anchors_targets_are_anchors_with_city(self) -> None:
-        import json as _json
         with tempfile.TemporaryDirectory() as tmp:
-            probes_json = Path(tmp) / "probes_and_anchors.json"
+            tmp_path = Path(tmp)
+            probes_json = tmp_path / "probes_and_anchors.json"
             probes_json.write_text(_json.dumps([
                 {"id": 6025, "address_v4": "anchor-a", "asn_v4": 8839,
                  "country_code": "FR",
                  "geometry": {"coordinates": [7.7485, 48.5795]}, "is_anchor": True},
+                {"id": 6026, "address_v4": "anchor-b", "asn_v4": 8839,
+                 "country_code": "FR",
+                 "geometry": {"coordinates": [7.0, 48.0]}, "is_anchor": True},
                 {"id": 999, "address_v4": "vp-x", "asn_v4": 1,
                  "country_code": "FR",
                  "geometry": {"coordinates": [7.0, 48.0]}, "is_anchor": False},
             ]))
-            city_json = Path(tmp) / "anchor_city.json"
+            city_json = tmp_path / "anchor_city.json"
             city_json.write_text(_json.dumps({
                 "6025": {"features": [{"properties": {"address": {"city": "Strasbourg"}}}]},
             }))
+            stratification_path = _write_stratification(
+                tmp_path / "stratification.json", ["anchor-a", "anchor-b"], k=2,
+            )
             src = RipeAtlasSource(
-                slice="all_anchors",
+                slice="fold_0",
                 probes_and_anchors_file=probes_json,
                 anchor_city_file=city_json,
-                rtt_query=lambda *a, **kw: {"anchor-a": {"vp-x": [10.0]}},
+                stratification_path=stratification_path,
+                rtt_query=lambda *a, **kw: {
+                    "anchor-a": {"vp-x": [10.0]},
+                    "anchor-b": {"vp-x": [11.0]},
+                },
                 sanitize=False,
             )
             tgs = list(src.iter_tg_configs())
-        self.assertEqual([t.tg_id for t in tgs], ["anchor-a"])
-        self.assertEqual(tgs[0].city, "Strasbourg")
+        # tg_configs surfaces every active anchor regardless of fold (the fold
+        # split only filters fit_samples / eval_targets).
+        self.assertEqual({t.tg_id for t in tgs}, {"anchor-a", "anchor-b"})
+        anchor_a = next(t for t in tgs if t.tg_id == "anchor-a")
+        self.assertEqual(anchor_a.city, "Strasbourg")
 
     def test_anchors_to_probes_targets_are_probes_without_city(self) -> None:
-        import json as _json
         with tempfile.TemporaryDirectory() as tmp:
             probes_json = Path(tmp) / "probes_and_anchors.json"
             probes_json.write_text(_json.dumps([
@@ -367,7 +426,7 @@ class TestRipeAtlasTgConfigs(unittest.TestCase):
                 "6025": {"features": [{"properties": {"address": {"city": "Strasbourg"}}}]},
             }))
             src = RipeAtlasSource(
-                slice="all_anchors", setup="anchors_to_probes",
+                slice="all", setup="anchors_to_probes",
                 probes_and_anchors_file=probes_json,
                 anchor_city_file=city_json,
                 rtt_query=lambda *a, **kw: {"anchor-a": {"vp-a": [10.0], "vp-b": [12.0]}},
@@ -387,24 +446,24 @@ class TestSourceRegistry(unittest.TestCase):
         self.assertIn("ripe_atlas", SOURCES)
 
 
-class TestRipeAtlasSourceHoldout(unittest.TestCase):
-    """End-to-end checks that PartitionPolicy partitions iter_fit_samples and
-    iter_eval_targets disjointly and that slice_id() carries the fold suffix.
+class TestRipeAtlasSourceStratification(unittest.TestCase):
+    """End-to-end checks that the fold slice partitions iter_fit_samples and
+    iter_eval_targets disjointly.
 
-    The source consumes a precomputed partition JSON; this fixture writes one
-    over the 20-anchor / 20-probe synthetic corpus on the fly. Algorithm-level
-    invariants live in test_holdout.py / test_dist_geo_holdout.py."""
+    The source consumes a precomputed stratification JSON; this fixture
+    writes one over a 20-anchor / 20-probe synthetic corpus on the fly.
+    Algorithm-level invariants live in
+    test_sechidis_stratification.py / test_dist_geo_stratification.py."""
 
     @staticmethod
-    def _write_partition_json(
-        path: Path, anchor_entries: list[dict], k: int, policy_class: str,
+    def _write_stratification_for_anchors(
+        path: Path, anchor_entries: list[dict], k: int,
     ) -> None:
-        """Compute fold assignments over `anchor_entries` using `policy_class`
-        and write the partition JSON to `path` (matching `partition.py`'s
-        output schema)."""
-        import json as _json
-        from scripts.processing.ripe_atlas.holdout import (
-            AnchorInfo, DistGeoKFoldPolicy, HoldoutPolicy,
+        """Compute fold assignments over `anchor_entries` using
+        DistGeoStratification and write the stratification JSON to `path`
+        (matching `stratify.py`'s output schema)."""
+        from scripts.processing.ripe_atlas.stratification import (
+            AnchorInfo, DistGeoStratification,
         )
         anchor_infos = [
             AnchorInfo(
@@ -416,24 +475,13 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
             )
             for e in anchor_entries
         ]
-        if policy_class == "DistGeoKFoldPolicy":
-            algo = DistGeoKFoldPolicy(k=k, fold_index=0, seed=42)
-            policy_payload: dict = {
-                "class": "DistGeoKFoldPolicy", "kind": "dist_geo_kfold",
-                "k": k, "seed": 42, "asn_bucket_top_n": 20,
-            }
-        elif policy_class == "HoldoutPolicy":
-            algo = HoldoutPolicy(k=k, fold_index=0, seed=42, spatial_clusters=k)
-            policy_payload = {
-                "class": "HoldoutPolicy", "kind": "sechidis_kfold",
-                "k": k, "seed": 42, "asn_bucket_top_n": 20,
-                "spatial_clusters": k, "labels": ["country", "asn_bucket"],
-            }
-        else:
-            raise ValueError(f"unsupported policy_class for test fixture: {policy_class!r}")
+        algo = DistGeoStratification(k=k, fold_index=0, seed=42)
         assignments = algo.compute_fold_assignments(anchor_infos)
         path.write_text(_json.dumps({
-            "policy": policy_payload,
+            "policy": {
+                "class": "DistGeoStratification", "kind": "dist_geo_kfold",
+                "k": k, "seed": 42, "asn_bucket_top_n": 20,
+            },
             "corpus": {"source": "test", "n_anchors_yielded": len(assignments)},
             "generated_at": "2026-05-24T00:00:00+00:00",
             "fold_sizes": [
@@ -443,23 +491,17 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
         }))
 
     def _build_source(
-        self, *, fold_index: int | None = None, k: int = 4,
-        policy_class: str = "DistGeoKFoldPolicy",
-        partition_override: "Path | None" = None,
+        self, *, slice: str, k: int = 4,
+        stratification_override: "Path | None" = None,
     ):
         """Build a RipeAtlasSource backed by 20 synthetic anchors arranged in
-        4 tight geographic clusters × 5 anchors each. Each anchor has 4 probes
-        pinging it. ASN cycles through 100/200/300/400; country through
-        US/DE/JP/BR.
+        4 tight geographic clusters × 5 anchors each. Each anchor has 4
+        probes pinging it. ASN cycles through 100/200/300/400; country
+        through US/DE/JP/BR.
 
-        When `fold_index` is set, also precomputes a partition over the
-        synthetic corpus (using `policy_class`) and wraps it in a
-        PartitionPolicy passed via `holdout=`. `partition_override` skips the
-        compute step and uses an externally-prepared partition file instead.
-        """
-        import json as _json
-        from scripts.processing.ripe_atlas.holdout import PartitionPolicy
-
+        `slice` must be `fold_N`. By default the fixture precomputes a
+        DistGeoStratification over the synthetic corpus; pass
+        `stratification_override` to use an externally-prepared file."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         tmp_root = Path(tmp.name)
@@ -503,36 +545,23 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
                 }
             return out
 
-        if partition_override is not None:
-            holdout = PartitionPolicy(
-                path=partition_override,
-                fold_index=fold_index if fold_index is not None else 0,
-            )
-        elif fold_index is None:
-            holdout = None
+        if stratification_override is not None:
+            stratification_path = stratification_override
         else:
-            partition_path = tmp_root / "partition.json"
-            self._write_partition_json(partition_path, anchor_entries, k, policy_class)
-            holdout = PartitionPolicy(path=partition_path, fold_index=fold_index)
+            stratification_path = tmp_root / "stratification.json"
+            self._write_stratification_for_anchors(stratification_path, anchor_entries, k)
 
         src = RipeAtlasSource(
-            slice="all_anchors",
+            slice=slice,
             probes_and_anchors_file=probes_json,
             rtt_query=rtt_query,
             sanitize=False,
-            holdout=holdout,
+            stratification_path=stratification_path,
         )
         return src, set(anchor_ips)
 
-    def test_holdout_none_preserves_full_eval_set(self) -> None:
-        """holdout=None: behavior must be byte-identical to today (no filter)."""
-        src, all_anchors = self._build_source(fold_index=None)
-        targets = {t.target_id for t in src.iter_eval_targets()}
-        self.assertEqual(targets, all_anchors)
-        self.assertEqual(src.slice_id(), "all_anchors")
-
-    def test_holdout_fold_yields_disjoint_fit_and_eval_targets(self) -> None:
-        src, _ = self._build_source(fold_index=0, k=4)
+    def test_fold_slice_yields_disjoint_fit_and_eval_targets(self) -> None:
+        src, _ = self._build_source(slice="fold_0", k=4)
         list(src.iter_eval_targets())  # forces load
         self.assertIsNotNone(src._train_anchors)
         self.assertIsNotNone(src._test_anchors)
@@ -555,12 +584,12 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
                 "fit sample's target (probe_coord) is a held-out anchor — leakage!",
             )
 
-    def test_holdout_fold_union_covers_all_anchors(self) -> None:
+    def test_fold_union_covers_all_anchors(self) -> None:
         """Sweeping fold_index across [0, k): union of eval sets equals corpus."""
         all_evals: set[str] = set()
         all_anchors_collected: set[str] = set()
         for fold in range(4):
-            src, all_anchors_collected = self._build_source(fold_index=fold, k=4)
+            src, all_anchors_collected = self._build_source(slice=f"fold_{fold}", k=4)
             evals = {t.target_id for t in src.iter_eval_targets()}
             self.assertGreater(len(evals), 0, f"fold {fold} produced empty eval set")
             self.assertTrue(
@@ -570,51 +599,42 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
             all_evals |= evals
         self.assertEqual(all_evals, all_anchors_collected)
 
-    def test_slice_id_reconstructs_underlying_policy_suffix(self) -> None:
-        """PartitionPolicy reconstructs the suffix from the partition JSON's
-        policy.class field, so slice_id reflects whichever algorithm produced
-        the file (DistGeo vs Sechidis)."""
-        cases = [
-            ("DistGeoKFoldPolicy", "all_anchors__distgeo_fold2of4_seed42"),
-            ("HoldoutPolicy", "all_anchors__fold2of4_seed42"),
-        ]
-        for policy_class, expected in cases:
-            with self.subTest(policy_class=policy_class):
-                src, _ = self._build_source(
-                    fold_index=2, k=4, policy_class=policy_class,
-                )
-                self.assertEqual(src.slice_id(), expected)
+    def test_slice_id_is_the_slice(self) -> None:
+        """slice_id() returns the fold slice verbatim — no suffix encoding."""
+        src, _ = self._build_source(slice="fold_2", k=4)
+        self.assertEqual(src.slice_id(), "fold_2")
 
-    def test_vp_configs_unchanged_by_holdout(self) -> None:
+    def test_vp_configs_unchanged_by_fold(self) -> None:
         """vp_configs is metadata — fold filtering only affects fit/eval row
-        emission, not the VP roster."""
-        src_none, _ = self._build_source(fold_index=None)
-        n_vps_none = len(list(src_none.iter_vp_configs()))
-        src_fold, _ = self._build_source(fold_index=0, k=4)
-        n_vps_fold = len(list(src_fold.iter_vp_configs()))
-        self.assertEqual(n_vps_none, n_vps_fold)
+        emission, not the VP roster. Two different folds must yield the same
+        VP roster."""
+        src_a, _ = self._build_source(slice="fold_0", k=4)
+        src_b, _ = self._build_source(slice="fold_1", k=4)
+        self.assertEqual(
+            len(list(src_a.iter_vp_configs())),
+            len(list(src_b.iter_vp_configs())),
+        )
 
-    def test_partition_policy_drops_active_anchors_missing_from_partition(self) -> None:
-        """If the partition was computed over a smaller corpus than what the
-        source ends up with, active anchors not in the partition must be
-        dropped (logged) from both fit and eval."""
-        import json as _json
-
-        # Build the source first to discover its active anchor set.
-        src_probe, all_anchors = self._build_source(fold_index=None)
+    def test_drops_active_anchors_missing_from_stratification(self) -> None:
+        """If the stratification was computed over a smaller corpus than what
+        the source ends up with, active anchors absent from the stratification
+        must be dropped (logged) from both fit and eval."""
+        # Discover the active anchor set first by building a source with a
+        # complete stratification.
+        src_probe, all_anchors = self._build_source(slice="fold_0", k=4)
         list(src_probe.iter_eval_targets())
 
-        # Pick a half-corpus subset for the partition. Distribute across folds
-        # so neither fold ends up empty.
+        # Pick a half-corpus subset, distribute across folds so neither fold
+        # ends up empty.
         sorted_anchors = sorted(all_anchors)
         subset = sorted_anchors[: len(sorted_anchors) // 2 + 1]
         assignments = {ip: i % 4 for i, ip in enumerate(subset)}
 
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "partition.json"
+            path = Path(tmp) / "stratification.json"
             path.write_text(_json.dumps({
                 "policy": {
-                    "class": "DistGeoKFoldPolicy",
+                    "class": "DistGeoStratification",
                     "kind": "dist_geo_kfold",
                     "k": 4, "seed": 42, "asn_bucket_top_n": 20,
                 },
@@ -627,64 +647,91 @@ class TestRipeAtlasSourceHoldout(unittest.TestCase):
             }))
 
             with self.assertLogs(
-                "scripts.processing.ripe_atlas.holdout", level="WARNING",
+                "scripts.processing.ripe_atlas.stratification", level="WARNING",
             ) as logs:
-                src, _ = self._build_source(fold_index=0, partition_override=path)
+                src, _ = self._build_source(
+                    slice="fold_0", stratification_override=path,
+                )
                 list(src.iter_eval_targets())
             self.assertTrue(
-                any("active anchor(s) missing from partition" in m for m in logs.output),
+                any("active anchor(s) missing from stratification" in m for m in logs.output),
                 f"expected drop warning in logs: {logs.output}",
             )
-            # Eval set is a strict subset of the partition's fold-0 anchors.
+            # Eval set is a strict subset of the stratification's fold-0 anchors.
             assert src._test_anchors is not None
             expected_test = {ip for ip, f in assignments.items() if f == 0}
             self.assertEqual(set(src._test_anchors), expected_test)
-            # Active anchors absent from partition appear in neither train nor test.
+            # Active anchors absent from the stratification appear in neither set.
             dropped = set(all_anchors) - set(assignments)
             for ip in dropped:
                 self.assertNotIn(ip, src._train_anchors)
                 self.assertNotIn(ip, src._test_anchors)
 
-    def test_anchors_to_probes_setup_strips_holdout_with_warning(self) -> None:
+    def test_invalid_slice_for_p2a_rejected(self) -> None:
+        """For P2A, slice must match `fold_N`; anything else is a hard error."""
+        with tempfile.TemporaryDirectory() as tmp:
+            probes_json = Path(tmp) / "probes_and_anchors.json"
+            probes_json.write_text(_json.dumps([
+                {"address_v4": "1.1.1.1", "asn_v4": 7922, "country_code": "US",
+                 "geometry": {"coordinates": [-84.0, 33.0]}, "is_anchor": True},
+            ]))
+            with self.assertRaises(ValueError):
+                RipeAtlasSource(
+                    slice="all_anchors",
+                    probes_and_anchors_file=probes_json,
+                    stratification_path=Path(tmp) / "stratification.json",
+                )
+
+    def test_missing_stratification_path_for_p2a_rejected(self) -> None:
+        """For P2A, stratification_path is mandatory."""
+        with tempfile.TemporaryDirectory() as tmp:
+            probes_json = Path(tmp) / "probes_and_anchors.json"
+            probes_json.write_text(_json.dumps([
+                {"address_v4": "1.1.1.1", "asn_v4": 7922, "country_code": "US",
+                 "geometry": {"coordinates": [-84.0, 33.0]}, "is_anchor": True},
+            ]))
+            with self.assertRaises(ValueError):
+                RipeAtlasSource(
+                    slice="fold_0",
+                    probes_and_anchors_file=probes_json,
+                )
+
+    def test_anchors_to_probes_ignores_stratification_path(self) -> None:
         """For setup=anchors_to_probes the eval targets are probes (noisy GT,
-        secondary setup); a PartitionPolicy is silently dropped at construction
-        with a logged warning, and slice_id() must not carry the suffix."""
-        from scripts.processing.ripe_atlas.holdout import PartitionPolicy
-        import json as _json
+        secondary setup); stratification_path is dropped at construction with
+        a logged warning, and slice_id() reflects the slice as-is."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_root = Path(tmp)
             probes_json = tmp_root / "probes_and_anchors.json"
             probes_json.write_text(_json.dumps([
                 {"address_v4": "1.1.1.1", "asn_v4": 7922, "country_code": "US",
                  "geometry": {"coordinates": [-84.0, 33.0]}, "is_anchor": True},
-                {"address_v4": "2.2.2.2", "asn_v4": 7922, "country_code": "US",
-                 "geometry": {"coordinates": [-122.0, 47.0]}, "is_anchor": True},
                 {"address_v4": "vp-a", "asn_v4": 7922, "country_code": "US",
                  "geometry": {"coordinates": [-100.0, 40.0]}, "is_anchor": False},
             ]))
-            partition_path = tmp_root / "partition.json"
-            partition_path.write_text(_json.dumps({
+            stratification_path = tmp_root / "stratification.json"
+            stratification_path.write_text(_json.dumps({
                 "policy": {
-                    "class": "DistGeoKFoldPolicy", "kind": "dist_geo_kfold",
+                    "class": "DistGeoStratification", "kind": "dist_geo_kfold",
                     "k": 2, "seed": 42, "asn_bucket_top_n": 20,
                 },
-                "corpus": {"source": "test", "n_anchors_yielded": 2},
+                "corpus": {"source": "test", "n_anchors_yielded": 1},
                 "generated_at": "2026-05-24T00:00:00+00:00",
-                "fold_sizes": [1, 1],
-                "fold_assignments": {"1.1.1.1": 0, "2.2.2.2": 1},
+                "fold_sizes": [1, 0],
+                "fold_assignments": {"1.1.1.1": 0},
             }))
             with self.assertLogs(
                 "scripts.benchmark.v2.sources.ripe_atlas", level="WARNING",
             ) as captured:
                 src = RipeAtlasSource(
-                    slice="all_anchors", setup="anchors_to_probes",
+                    slice="all", setup="anchors_to_probes",
                     probes_and_anchors_file=probes_json,
                     rtt_query=lambda *a, **kw: {"1.1.1.1": {"vp-a": [10.0]}},
                     sanitize=False,
-                    holdout=PartitionPolicy(path=partition_path, fold_index=0),
+                    stratification_path=stratification_path,
                 )
             self.assertTrue(any("anchors_to_probes" in m for m in captured.output))
-            self.assertEqual(src.slice_id(), "all_anchors")
+            self.assertEqual(src.slice_id(), "all")
 
 
 if __name__ == "__main__":

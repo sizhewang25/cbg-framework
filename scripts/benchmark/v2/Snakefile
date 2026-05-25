@@ -14,7 +14,8 @@ from pathlib import Path
 RUN_ID  = config.get("run_id",  "default")
 SOURCE  = config["source"]                       # required
 SETUP   = config.get("setup", "probes_to_anchors")  # or "anchors_to_probes"
-SLICES  = config.get("slices", ["all_us"] if SOURCE == "vultr_csv" else ["all_anchors"])
+SLICES  = config.get("slices", ["all_us"] if SOURCE == "vultr_csv" else ["fold_0"])
+SOURCE_KWARGS = config.get("source_kwargs", {})
 COMBOS  = config["combos"]                       # required: list of dicts
 INPUTS_ROOT  = Path(config.get("inputs_root",  "scripts/benchmark/v2/inputs"))
 OUTPUTS_ROOT = Path(config.get("outputs_root", "scripts/benchmark/v2/outputs"))
@@ -42,12 +43,14 @@ rule materialize:
         source = SOURCE,
         setup = SETUP,
         inputs_root = str(INPUTS_ROOT),
+        source_kwargs_json = json.dumps(SOURCE_KWARGS),
     shell:
         CLI + " materialize-inputs"
         " --source {params.source}"
         " --slice {wildcards.slice}"
         " --setup {params.setup}"
         " --inputs-root {params.inputs_root}"
+        " --source-kwargs '{params.source_kwargs_json}'"
 
 # ---- Run one (slice, combo) -------------------------------------------------
 rule run_combo:
@@ -69,6 +72,7 @@ rule run_combo:
         ltd_kwargs = lambda wc: json.dumps(COMBOS_BY_ID[wc.combo_id].get("ltd_kwargs", {})),
         mtl_kwargs = lambda wc: json.dumps(COMBOS_BY_ID[wc.combo_id].get("mtl_kwargs", {})),
         ctr_kwargs = lambda wc: json.dumps(COMBOS_BY_ID[wc.combo_id].get("ctr_kwargs", {})),
+        source_kwargs_json = json.dumps(SOURCE_KWARGS),
         # Per-combo seed wins over the run-level default; both are optional.
         # An empty seed_flag means: let the CTR use its built-in randomization.
         seed_flag = lambda wc: (
@@ -85,6 +89,7 @@ rule run_combo:
         " --ltd-kwargs '{params.ltd_kwargs}'"
         " --mtl-kwargs '{params.mtl_kwargs}'"
         " --ctr-kwargs '{params.ctr_kwargs}'"
+        " --source-kwargs '{params.source_kwargs_json}'"
         " --inputs-root {params.inputs_root}"
         " --outputs-root {params.outputs_root}"
         " {params.enable_fallback}"

@@ -1,0 +1,37 @@
+# Smoke configuration for the v2 CBG benchmark on RIPE Atlas data.
+#
+# Drives one source × five folds × one combo. The slice IS the fold:
+# `slices: [fold_0, ..., fold_4]` materializes K=5 independent slices, each
+# evaluated against the precomputed stratification at `source_kwargs.stratification_path`.
+#
+# Requires:
+#  - ClickHouse reachable per CLICKHOUSE_HOST / CLICKHOUSE_PASSWORD (.env)
+#  - datasets/ripe_atlas/stratifications/distgeo/k5_seed42_top20.json (produced by
+#    `python -m scripts.processing.ripe_atlas.stratify --algo distgeo --k 5`)
+#
+# Run with:
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile scripts/benchmark/v2/config/ripe-smoke.yaml -j 4
+
+run_id: ripe-smoke-01
+source: ripe_atlas
+setup: probes_to_anchors
+slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+# Forwarded verbatim to RipeAtlasSource(**source_kwargs).
+source_kwargs:
+  stratification_path: datasets/ripe_atlas/stratifications/distgeo/k5_seed42_top20.json
+
+enable_fallback: true
+seed: 42
+
+combos:
+  # Vanilla CBG: per-VP min-RTT-fit (low_envelope) + spherical intersection +
+  # mean of feasible-region vertices.
+  - combo_id: vanilla_cbg
+    ltd: low_envelope
+    mtl: spherical_circle
+    ctr: boundary_vertex_mean
+    mtl_kwargs:
+      speed_ratio: 0.6667
+      enable_circle_filter: true
