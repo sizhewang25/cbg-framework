@@ -69,3 +69,44 @@ def continent_of(code: str | None) -> str:
     if not code:
         return "Unknown"
     return CONTINENT_OF.get(code, "Unknown")
+
+
+# Approximate continent bounding boxes (lat_min, lat_max, lon_min, lon_max).
+# Used to sanity-check a country_code-derived continent against the actual
+# coordinates. Motivating case: a RIPE Atlas probe in Guadeloupe is tagged
+# `country_code="FR"` (Guadeloupe is a French overseas department) → the
+# country_code check labels it Europe, but its (16°N, -62°W) coords belong
+# to North America. Bounds are intentionally generous so islands at the
+# edges (Iceland, Cyprus, Aleutians, etc.) aren't false-positived.
+_CONTINENT_BBOX: dict[str, tuple[float, float, float, float]] = {
+    "Africa":        (-35,  38,  -18,   52),
+    "Asia":          (-10,  82,   25,  180),
+    "Europe":        ( 30,  72,  -25,   60),
+    "North America": (  5,  72, -170,  -50),
+    "South America": (-56,  13,  -82,  -34),
+    "Antarctica":    (-90, -60, -180,  180),
+    # Oceania straddles the antimeridian; handled specially in
+    # `continent_bbox_contains` below.
+}
+
+
+def continent_bbox_contains(continent: str, lat: float, lon: float) -> bool:
+    """Approximate test: does `(lat, lon)` fall inside `continent`'s bbox?
+
+    Use as a sanity guard after `continent_of(country_code)` — catches probes
+    whose country_code is a parent country's ISO (e.g. `FR` for Guadeloupe,
+    `US` for Hawaii) but whose physical location is on a different continent.
+
+    Returns `True` for unknown / catch-all continents (`"Unknown"`, `"Global"`)
+    so callers don't have to special-case them.
+    """
+    if continent == "Oceania":
+        # Pacific wraps the antimeridian. Hawaii (~ -155°) is sometimes
+        # bucketed under Oceania; accept either the western sweep (≥ 110°)
+        # or the eastern Pacific (≤ -130°).
+        return -50 <= lat <= 30 and (lon >= 110 or lon <= -130)
+    bbox = _CONTINENT_BBOX.get(continent)
+    if bbox is None:
+        return True
+    lat_min, lat_max, lon_min, lon_max = bbox
+    return lat_min <= lat <= lat_max and lon_min <= lon <= lon_max

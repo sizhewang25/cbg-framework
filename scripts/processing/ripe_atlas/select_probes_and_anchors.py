@@ -51,7 +51,10 @@ from dotenv import load_dotenv
 # Make `default` importable when running as a script.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from scripts.processing.ripe_atlas.continents import continent_of  # noqa: E402
+from scripts.processing.ripe_atlas.continents import (  # noqa: E402
+    continent_bbox_contains,
+    continent_of,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +117,7 @@ def select_probes(setup: Setup, probes: list[dict]) -> tuple[list[dict], dict]:
 
     dropped_no_country = 0
     dropped_other_continent = 0
+    dropped_coords_outside_continent = 0
     dropped_no_coords = 0
     kept: list[dict] = []
 
@@ -129,6 +133,15 @@ def select_probes(setup: Setup, probes: list[dict]) -> tuple[list[dict], dict]:
             if continent_of(cc) != setup.probe_continent_filter:
                 dropped_other_continent += 1
                 continue
+            # country_code passed, but the parent-country ISO can mask an
+            # overseas territory on a different continent (e.g. cc=FR for
+            # Guadeloupe). Sanity-check the coords against the continent's
+            # bounding box.
+            geom = (p.get("geometry") or {}).get("coordinates")
+            lon, lat = float(geom[0]), float(geom[1])
+            if not continent_bbox_contains(setup.probe_continent_filter, lat, lon):
+                dropped_coords_outside_continent += 1
+                continue
         kept.append(p)
 
     stats = {
@@ -140,6 +153,7 @@ def select_probes(setup: Setup, probes: list[dict]) -> tuple[list[dict], dict]:
         "matched_asn": len(matched_asn),
         "kept": len(kept),
         "dropped_other_continent": dropped_other_continent,
+        "dropped_coords_outside_continent": dropped_coords_outside_continent,
         "dropped_no_country_code": dropped_no_country,
         "dropped_no_coords": dropped_no_coords,
         "kept_by_country": _breakdown_by(kept, lambda e: e.get("country_code") or "Unknown"),
