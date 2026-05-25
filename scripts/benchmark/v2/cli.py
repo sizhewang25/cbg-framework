@@ -47,6 +47,14 @@ DEFAULT_OUTPUTS_ROOT = Path(__file__).resolve().parent / "outputs"
 def cmd_materialize_inputs(
     source: str = typer.Option(..., help=f"Data source name. One of: {sorted(SOURCES)}"),
     slice: str = typer.Option(..., help="Slice identifier (source-specific, e.g. 'top1' / 'fold_0')."),
+    run_id: str = typer.Option(
+        ...,
+        help=(
+            "Run identifier — becomes a path component "
+            "(<inputs_root>/<source>/<run_id>/<setup>/<slice>/). Different runs "
+            "that share a source but differ in source_kwargs get parallel trees."
+        ),
+    ),
     setup: str = typer.Option(
         _DataSource.PROBES_TO_ANCHORS,
         help=(
@@ -66,7 +74,7 @@ def cmd_materialize_inputs(
     ),
     inputs_root: Path = typer.Option(
         DEFAULT_INPUTS_ROOT,
-        help="Root directory for materialized inputs. Output goes to <root>/<source>/<setup>/<slice>/.",
+        help="Root directory for materialized inputs. Output goes to <root>/<source>/<run_id>/<setup>/<slice>/.",
     ),
     force: bool = typer.Option(False, help="Re-materialize even if manifest already exists."),
 ) -> None:
@@ -77,12 +85,12 @@ def cmd_materialize_inputs(
 
     source_cls = SOURCES[source]
     src = source_cls(slice=slice, setup=setup, **json.loads(source_kwargs))
-    out_dir = inputs_dir_for(src, inputs_root)
+    out_dir = inputs_dir_for(src, inputs_root, run_id=run_id)
     if (out_dir / "manifest.json").exists() and not force:
         typer.echo(f"Already materialized at {out_dir} (use --force to overwrite).")
         return
 
-    written = materialize_inputs(src, root=inputs_root)
+    written = materialize_inputs(src, root=inputs_root, run_id=run_id)
     typer.echo(f"Materialized {written}")
 
 
@@ -133,11 +141,11 @@ def cmd_run_combo(
     # Construct only to derive canonical inputs/outputs paths — no I/O happens
     # until iter_* is called, so this is cheap even for RipeAtlasSource.
     src = SOURCES[source](slice=slice, setup=setup, **json.loads(source_kwargs))
-    inputs_dir = inputs_dir_for(src, inputs_root)
+    inputs_dir = inputs_dir_for(src, inputs_root, run_id=run_id)
     if not (inputs_dir / "eval_observations.parquet").exists():
         typer.echo(
             f"No inputs at {inputs_dir}. Run 'materialize-inputs --source {source} "
-            f"--slice {slice} --setup {setup}' first.",
+            f"--run-id {run_id} --slice {slice} --setup {setup}' first.",
             err=True,
         )
         raise typer.Exit(code=2)

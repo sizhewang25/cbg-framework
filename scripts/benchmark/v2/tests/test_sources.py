@@ -347,7 +347,7 @@ class TestTgConfigsParquetWriter(unittest.TestCase):
             csv = tmp_path / "synth.csv"
             csv.write_text(_SYNTH_CSV)
             src = VultrCSVSource(slice="all_us", csv_path=csv)
-            out_dir = materialize_inputs(src, root=tmp_path / "inputs")
+            out_dir = materialize_inputs(src, root=tmp_path / "inputs", run_id="test-run")
             tg_path = out_dir / "tg_configs.parquet"
             self.assertTrue(tg_path.exists())
 

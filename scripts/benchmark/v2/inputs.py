@@ -4,13 +4,18 @@ The runner is fan-out across (source × slice × combo). Querying ClickHouse or
 re-reading a CSV per-combo would be wasteful, so this step caches the source
 into a deterministic on-disk shape that downstream combos all read from.
 
-Layout written by `materialize_inputs(source, root)`:
-    <root>/<source_name>/<slice>/
+Layout written by `materialize_inputs(source, root=..., run_id=...)`:
+    <root>/<source_name>/<run_id>/<setup_id>/<slice_id>/
         vp_configs.parquet
         tg_configs.parquet
         fit_samples.parquet
         eval_observations.parquet
         manifest.json
+
+`run_id` is a mandatory path component so different runs that materialize the
+same source under different source_kwargs (e.g. different per-ASN VP corpora
+under `ripe_atlas_asn_corpora`) get parallel directory trees instead of
+clobbering each other.
 """
 
 from __future__ import annotations
@@ -31,15 +36,20 @@ from scripts.framework.v2 import FitSample
 DEFAULT_INPUTS_ROOT = Path(__file__).resolve().parent / "inputs"
 
 
-def inputs_dir_for(source: DataSource, root: Path = DEFAULT_INPUTS_ROOT) -> Path:
+def inputs_dir_for(
+    source: DataSource,
+    root: Path = DEFAULT_INPUTS_ROOT,
+    *,
+    run_id: str,
+) -> Path:
     """Canonical inputs-dir path for one source configuration.
 
-    Layout: `<root>/<source.name>/<setup_id>/<slice_id>/`. The setup_id
-    sits between source and slice so the two role assignments
-    (probes_to_anchors vs anchors_to_probes) get parallel directory
-    trees instead of colliding under the same slice name.
+    Layout: `<root>/<source.name>/<run_id>/<setup_id>/<slice_id>/`. `run_id`
+    isolates materialized inputs across runs that share a source but differ
+    in source_kwargs (e.g. per-ASN VP corpora). `setup_id` separates the two
+    role assignments (probes_to_anchors vs anchors_to_probes).
     """
-    return root / source.name / source.setup_id() / source.slice_id()
+    return root / source.name / run_id / source.setup_id() / source.slice_id()
 
 
 def outputs_combo_dir(
@@ -68,12 +78,13 @@ def outputs_combo_dir(
 def materialize_inputs(
     source: DataSource,
     *,
+    run_id: str,
     root: Path = DEFAULT_INPUTS_ROOT,
 ) -> Path:
     """Write source's VPs, fit samples, and eval observations to parquet.
 
     Returns the output directory path."""
-    out_dir = inputs_dir_for(source, root)
+    out_dir = inputs_dir_for(source, root, run_id=run_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     n_vps = _write_vp_configs(source.iter_vp_configs(), out_dir / "vp_configs.parquet")
@@ -85,6 +96,7 @@ def materialize_inputs(
 
     manifest = {
         "source": source.name,
+        "run_id": run_id,
         "setup": source.setup_id(),
         "slice": source.slice_id(),
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

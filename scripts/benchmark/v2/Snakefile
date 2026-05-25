@@ -36,12 +36,16 @@ rule all:
         f"{OUTPUTS_ROOT}/{RUN_ID}/summary.parquet"
 
 # ---- Materialize one (source, setup, slice) ---------------------------------
+# Inputs layout: <INPUTS_ROOT>/<SOURCE>/<RUN_ID>/<SETUP>/<slice>/. RUN_ID isolates
+# inputs across runs that share a source but differ in source_kwargs (e.g.
+# per-ASN VP corpora under ripe_atlas_asn_corpora).
 rule materialize:
     output:
-        manifest = INPUTS_ROOT / SOURCE / SETUP / "{slice}" / "manifest.json",
+        manifest = INPUTS_ROOT / SOURCE / RUN_ID / SETUP / "{slice}" / "manifest.json",
     params:
         source = SOURCE,
         setup = SETUP,
+        run_id = RUN_ID,
         inputs_root = str(INPUTS_ROOT),
         source_kwargs_json = json.dumps(SOURCE_KWARGS),
     shell:
@@ -49,13 +53,14 @@ rule materialize:
         " --source {params.source}"
         " --slice {wildcards.slice}"
         " --setup {params.setup}"
+        " --run-id {params.run_id}"
         " --inputs-root {params.inputs_root}"
         " --source-kwargs '{params.source_kwargs_json}'"
 
 # ---- Run one (slice, combo) -------------------------------------------------
 rule run_combo:
     input:
-        manifest = INPUTS_ROOT / SOURCE / SETUP / "{slice}" / "manifest.json",
+        manifest = INPUTS_ROOT / SOURCE / RUN_ID / SETUP / "{slice}" / "manifest.json",
     output:
         targets = OUTPUTS_ROOT / RUN_ID / SOURCE / SETUP / "{slice}" / "{combo_id}" / "targets.parquet",
         run_meta = OUTPUTS_ROOT / RUN_ID / SOURCE / SETUP / "{slice}" / "{combo_id}" / "run.json",

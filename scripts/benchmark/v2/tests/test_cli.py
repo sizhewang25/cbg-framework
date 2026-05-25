@@ -39,14 +39,16 @@ class TestCLI(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _materialize(self, source: str = "vultr_csv", slice: str = "all_us") -> Path:
+    def _materialize(
+        self, source: str = "vultr_csv", slice: str = "all_us", run_id: str = "cli-test",
+    ) -> Path:
         # Patch the default CSV path by setting the env variable on the source.
         # Simpler: call the source directly with our synth path via inputs.materialize_inputs.
         from scripts.benchmark.v2.inputs import materialize_inputs
         from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource
 
         src = VultrCSVSource(slice=slice, csv_path=self.csv_path)
-        return materialize_inputs(src, root=self.inputs_root)
+        return materialize_inputs(src, root=self.inputs_root, run_id=run_id)
 
     def test_run_combo_command_writes_outputs(self) -> None:
         self._materialize()
@@ -88,12 +90,13 @@ class TestCLI(unittest.TestCase):
         result = self.runner.invoke(app, [
             "materialize-inputs",
             "--source", "vultr_csv", "--slice", "all_us",
+            "--run-id", "kw-test",
             "--inputs-root", str(self.inputs_root),
             "--source-kwargs", json.dumps({"csv_path": str(alt_csv)}),
         ])
         self.assertEqual(result.exit_code, 0, msg=result.output)
         manifest = (
-            self.inputs_root / "vultr_csv" / "probes_to_anchors" / "all_us"
+            self.inputs_root / "vultr_csv" / "kw-test" / "probes_to_anchors" / "all_us"
             / "manifest.json"
         )
         self.assertTrue(manifest.exists())
@@ -102,13 +105,14 @@ class TestCLI(unittest.TestCase):
         result = self.runner.invoke(app, [
             "materialize-inputs",
             "--source", "vultr_csv", "--slice", "all_us",
+            "--run-id", "kw-test",
             "--inputs-root", str(self.inputs_root),
             "--source-kwargs", "not-json",
         ])
         self.assertNotEqual(result.exit_code, 0)
 
     def test_summarize_aggregates_combos(self) -> None:
-        self._materialize()
+        self._materialize(run_id="sum-test")
         # Run two combos under one run id.
         for ltd_name in ("speed_of_internet", "low_envelope"):
             r = self.runner.invoke(app, [

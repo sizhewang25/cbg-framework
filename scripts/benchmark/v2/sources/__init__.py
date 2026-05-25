@@ -11,11 +11,15 @@ from __future__ import annotations
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, VpConfig
 from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
 from scripts.benchmark.v2.sources.ripe_atlas import RipeAtlasSource
+from scripts.benchmark.v2.sources.ripe_atlas_asn_corpora import (
+    RipeAtlasASNCorporaSource,
+)
 from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource
 
 SOURCES: dict[str, type[DataSource]] = {
     VultrCSVSource.name: VultrCSVSource,
     RipeAtlasSource.name: RipeAtlasSource,
+    RipeAtlasASNCorporaSource.name: RipeAtlasASNCorporaSource,
     GenericCSVSource.name: GenericCSVSource,
 }
 
@@ -25,6 +29,7 @@ __all__ = [
     "VpConfig",
     "VultrCSVSource",
     "RipeAtlasSource",
+    "RipeAtlasASNCorporaSource",
     "GenericCSVSource",
     "SOURCES",
 ]

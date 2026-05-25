@@ -38,7 +38,7 @@ class TestRunOneCombo(unittest.TestCase):
         self.csv_path.write_text(_SYNTH_CSV)
         src = VultrCSVSource(slice="all_us", csv_path=self.csv_path)
         self.src = src
-        self.inputs_dir = materialize_inputs(src, root=root / "inputs")
+        self.inputs_dir = materialize_inputs(src, root=root / "inputs", run_id="test-run")
         self.out_dir = outputs_combo_dir(root / "outputs", "test-run", src, "combo1")
 
     def tearDown(self) -> None:
