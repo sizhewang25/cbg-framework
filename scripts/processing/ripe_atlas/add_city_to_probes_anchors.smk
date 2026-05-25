@@ -18,7 +18,7 @@ Nominatim policy (https://operations.osmfoundation.org/policies/nominatim/):
     full run; the anchor corpus (~720) is ~12 minutes.
 
 Run from the repo root:
-  snakemake -s scripts/processing/ripe_atlas/Snakefile -j 1
+  snakemake -s scripts/processing/ripe_atlas/add_city_to_probes_anchors.smk -j 1
 
 `-j 1` is required: Nominatim's rate limit applies across all callers, so
 the two rules cannot run in parallel.
