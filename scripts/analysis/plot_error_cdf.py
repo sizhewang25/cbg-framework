@@ -155,14 +155,15 @@ def plot_error_cdf(
                 linestyle=":",
                 alpha=0.4,
             )
-        ax.hlines(y=0.5, xmin=0, xmax=max_x_km, color="gray", linestyle="--", alpha=0.3)
+        ax.hlines(y=0.5, xmin=1, xmax=max_x_km, color="gray", linestyle="--", alpha=0.3)
 
         if panel_title:
             ax.set_title(panel_title, fontsize=12, fontweight="bold")
         ax.set_xlabel("Error distance (km)", fontsize=11)
         ax.legend(loc="upper left", fontsize=8)
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim(0, max_x_km)
+        ax.grid(True, which="both", alpha=0.3)
+        ax.set_xscale("log")
+        ax.set_xlim(1, max_x_km)
         ax.set_ylim(0, 1)
 
         if panel_data or baseline_sorted is not None:
