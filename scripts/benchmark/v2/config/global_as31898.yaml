@@ -1,0 +1,76 @@
+# Per-ASN VP corpus benchmark: Oracle Cloud (AS31898) probes → 721 shared anchors.
+#
+# Five folds × the same combo set as ripe-smoke.yaml. RTTs come from the same
+# `ping_10k_to_anchors` ClickHouse table; the source filters in Python down to
+# (probes in AS31898 post-dedup, anchors in this fold's eval+fit sets).
+#
+# Requires (produced by `snakemake -s scripts/processing/ripe_atlas/process_probes_and_anchors.smk`):
+#   - datasets/ripe_atlas/asn_corpora/probes/global/probes_of_as_31898.json
+#   - datasets/ripe_atlas/asn_corpora/anchors/kfolds/anchor_fold_<0..4>.json
+#
+# Run with:
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile scripts/benchmark/v2/config/global_as31898.yaml -j 4
+
+run_id: global_as31898
+source: ripe_atlas_asn_corpora
+setup: probes_to_anchors
+slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+source_kwargs:
+  probe_data_dir: datasets/ripe_atlas/asn_corpora/probes/global
+  probe_asn: 31898
+  anchor_data_dir: datasets/ripe_atlas/asn_corpora/anchors/kfolds
+
+enable_fallback: true
+seed: 42
+
+combos:
+  - combo_id: vanilla_cbg
+    ltd: low_envelope
+    mtl: spherical_circle
+    ctr: boundary_vertex_mean
+    mtl_kwargs:
+      speed_ratio: 0.6667
+      enable_circle_filter: true
+
+  - combo_id: million_scale_cbg
+    ltd: speed_of_internet
+    mtl: spherical_circle
+    ctr: boundary_vertex_mean
+    ltd_kwargs:
+      speed_ratio: 0.6667
+    mtl_kwargs:
+      speed_ratio: 0.6667
+      enable_circle_filter: true
+
+  - combo_id: octant_cbg
+    ltd: bounded_spline
+    mtl: planar_annulus
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg
+    ltd: normal_dist
+    mtl: planar_annulus
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 30
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 30
+    mtl_kwargs:
+      n_pts: 64
+    ctr_kwargs:
+      n_samples: 1024

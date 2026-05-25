@@ -135,11 +135,19 @@ class RipeAtlasASNCorporaSource(DataSource):
             )
 
     def iter_tg_configs(self) -> Iterator[TgConfig]:
-        # Only the EVAL fold belongs in tg_configs — fit anchors are training
-        # material, not eval targets.
+        # tg_configs.parquet is a static catalog of every anchor the source
+        # knows about — both eval and fit anchors across all K folds. The
+        # eval/fit split lives in iter_eval_targets / iter_fit_samples, which
+        # the runner reads. Matches the RipeAtlasSource convention (see
+        # ripe_atlas.py:207-226).
         self._ensure_loaded()
-        assert self._anchor_coords is not None and self._eval_anchors is not None
-        for ip in sorted(self._eval_anchors):
+        assert (
+            self._anchor_coords is not None
+            and self._eval_anchors is not None
+            and self._fit_anchors is not None
+        )
+        all_anchors = self._eval_anchors | self._fit_anchors
+        for ip in sorted(all_anchors):
             coord = self._anchor_coords.get(ip)
             if coord is None:
                 continue
