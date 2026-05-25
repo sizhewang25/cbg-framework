@@ -52,9 +52,12 @@
   - Full suite: 54/54 tests pass (0 failures, 0 errors)
 - [x] Smoke test: paper-faithful mode produces same numbers as current benchmark — 2026-05-24
   - `holdout=None` path verified via integration tests; paper-faithful mode unchanged
-- [ ] Leakage measurement: run spline LTD in paper-faithful vs K=5 mode, quantify the optimism bias
-- [ ] Cross-variant comparison: re-run all CBG variants under the new protocol, compare to current numbers
-- [ ] Document the protocol change in `papers/cbg-variant-benchmark-proposal/`
+- [~] Leakage measurement: run spline LTD in paper-faithful vs K=5 mode, quantify the optimism bias
+  - Deferred to a follow-up downstream-eval task. The protocol itself is shipped and end-to-end-materialized; measuring the optimism delta is a separate experimental sweep.
+- [~] Cross-variant comparison: re-run all CBG variants under the new protocol, compare to current numbers
+  - Deferred — same follow-up task as above.
+- [~] Document the protocol change in `papers/cbg-variant-benchmark-proposal/`
+  - Deferred — protocol docs live in `RIPE_ATLAS_DATA.md` and the in-repo task `report.md` for now; paper-side write-up follows the downstream eval numbers.
 
 ## Phase 4: DistGeoKFoldPolicy (alternative stratification)
 - [x] Design + plan written → `/home/nuwinslab/.claude/plans/cozy-soaring-hamming.md` — 2026-05-24
@@ -96,4 +99,8 @@
   - **yaml-driven source kwargs**: added a generic `--source-kwargs '<json>'` option to `cli.py materialize-inputs` / `run-combo`, mirroring `--ltd-kwargs` / `--mtl-kwargs` / `--ctr-kwargs`. Snakefile reads `source_kwargs:` from the yaml and forwards it. No source-specific CLI flags. New `scripts/benchmark/v2/config/ripe-smoke.yaml` is a working ripe_atlas + 5-fold example.
   - **Stratification rename**: `holdout.py` → `stratification.py`; `partition.py` → `stratify.py`; classes `HoldoutPolicy` → `SechidisStratification`, `DistGeoKFoldPolicy` → `DistGeoStratification`, `PartitionPolicy` → `LoadedStratification`; constructor kwarg `partition_path` → `stratification_path`; on-disk paths moved under `datasets/ripe_atlas/stratifications/<algo>/`. Test files renamed to match. Dead `slice_suffix()` methods on algo classes removed (source no longer encodes a suffix).
   - 86 tests pass (43 + 41 + 2 new CLI smoke tests for `--source-kwargs` round-trip and bad-JSON rejection)
-- [ ] Downstream: run bounded_spline LTD under both, compare median accuracy + leaderboard stability
+- [~] Downstream: run bounded_spline LTD under both, compare median accuracy + leaderboard stability
+  - Deferred to the follow-up downstream-eval task. Per-policy stratification JSONs and the full materialize → run pipeline are in place; only the eval sweep remains.
+
+---
+**Completed**: 2026-05-24

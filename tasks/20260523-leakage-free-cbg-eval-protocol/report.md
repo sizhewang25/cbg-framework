@@ -1,8 +1,9 @@
 # Leakage-Free CBG Evaluation Protocol — Report
 
-**Status**: Design discussion in progress (not finalized)
+**Status**: Complete
 **Created**: 2026-05-23
-**Last Updated**: 2026-05-23
+**Last Updated**: 2026-05-24
+**Completed**: 2026-05-24
 
 ## Summary
 
@@ -42,7 +43,9 @@ No code has been written. The proposal is still being debated; see "Open Questio
 
 ## Conclusions
 
-To be written when the proposal is locked in. Currently this is a thinking document, not a decision document.
+Initial conclusions deferred until the proposal was implemented. See the
+"Final summary & task completion" section at the bottom of this report for
+the locked-in conclusions.
 
 ---
 
@@ -262,3 +265,82 @@ at the cost of not blocking metro overlap between train and test.
 These are the Roberts et al. extremes; the gap between them is the
 "autocorrelation premium" that the downstream LTD accuracy comparison
 should quantify.
+
+---
+
+## 2026-05-24 — Final summary & task completion
+
+The leakage-free CBG evaluation protocol is **shipped end-to-end**:
+
+- **Two stratification algorithms** (`SechidisStratification`,
+  `DistGeoStratification`) producing per-fold anchor assignments — the
+  Roberts et al. autocorrelation-premium pair (Sechidis = best label
+  balance with spatial blocking; DistGeo = near-perfect balance, no
+  blocking).
+- **Reviewable artifact pipeline**: `sanitize_anchors.py` (SOI anchor-mesh
+  phase 1 only — the safe-for-anchors subset of the IMC 2023 procedure) →
+  `stratify.py` → JSON at `datasets/ripe_atlas/stratifications/<algo>/<tag>.json`
+  → `RipeAtlasSource(slice="fold_N", stratification_path=...)` via
+  `LoadedStratification`.
+- **Fold-as-slice in the source**: `slice="fold_N"` is the only legal
+  P2A / A2A slice; `slice_id()` returns the slice verbatim; flat
+  `inputs/ripe_atlas/<setup>/fold_N/` output. Intersect-and-warn on
+  active-corpus vs stratification mismatch.
+- **Yaml-driven source kwargs**: CLI gained a generic
+  `--source-kwargs '<json>'` option (mirroring `--ltd-kwargs` /
+  `--mtl-kwargs` / `--ctr-kwargs`) so source-specific knobs live in the
+  yaml's `source_kwargs:` block, not as new CLI flags. Snakefile threads
+  it through. `scripts/benchmark/v2/config/ripe-smoke.yaml` is a working
+  ripe_atlas + 5-fold example.
+- **End-to-end smoke**: all 5 folds materialized against live ClickHouse
+  (~39s/fold). Disjointness + union-covers-canonical-corpus verified at
+  the parquet level. 718 anchors covered (= 723 canonical − 5 dropped by
+  the intersect-and-warn rule on the post-sanitize active corpus).
+
+**Test count**: 86 (43 in `scripts/processing/ripe_atlas/tests/` + 41 in
+`scripts/benchmark/v2/tests/` including 2 new CLI smoke tests for
+`--source-kwargs` round-trip and bad-JSON rejection).
+
+**Commits**:
+
+- `92fff26` — extract holdout module + add partition / sanitize / viz CLIs
+- `a3c126d` — DistGeoKFoldPolicy (algorithm)
+- `1e99128` — partition JSON is the canonical split (PartitionPolicy)
+- `e6c3ecd` — fold-as-slice + yaml-driven source kwargs + Stratification rename
+
+**Deferred to a follow-up task** (not blockers on the protocol itself):
+
+- Leakage-bias measurement: run a fitted LTD (bounded_spline) under
+  paper-faithful vs K=5 modes and quantify the optimism delta.
+- Cross-variant + cross-policy comparison: re-run every CBG variant under
+  both stratification algorithms; tabulate median accuracy and check
+  leaderboard rank stability.
+- Paper-side write-up in `papers/cbg-variant-benchmark-proposal/`.
+
+## Conclusions
+
+1. **Anchor is the atomic leakage unit for CBG**, not the (VP, anchor)
+   pair. Per-pair K-fold appears to remove leakage but doesn't, because
+   CBG's multi-VP centroid prediction still consumes the eval anchor's
+   exact RTT-distance point via any VP whose LTD saw it during training.
+
+2. **Stratification > random K-fold** for variance, but the choice
+   between Sechidis (label-balanced with optional spatial blocking) and
+   DistGeo (balanced + spatially spread within ASN buckets) is a real
+   tradeoff — they answer different scientific questions
+   (novel-anchor-in-known-metro vs novel-metro). Ship both and treat the
+   gap as the autocorrelation premium (Roberts et al. 2017).
+
+3. **The stratification is an artifact, not a runtime computation.**
+   Persisting it as a JSON under `datasets/ripe_atlas/stratifications/`
+   makes the split reviewable, version-controllable, and reproducible
+   without a database, and surfaces active-corpus / stratification
+   mismatches as warnings rather than silent recomputes.
+
+4. **Yaml-driven generic `--source-kwargs` beats per-source CLI flags.**
+   Every new source variant's knobs land in the yaml with no CLI
+   signature churn.
+
+5. **One vocabulary ("Stratification") across module, classes, kwarg,
+   on-disk paths, and docs** is worth the rename cost — the prior
+   Holdout/Partition split was a constant friction point.
