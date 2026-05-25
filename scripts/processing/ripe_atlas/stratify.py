@@ -17,8 +17,25 @@ Usage:
   python -m scripts.processing.ripe_atlas.stratify \\
       --algo sechidis --k 5 --seed 42 --spatial-clusters 30
 
-Output: `datasets/ripe_atlas/stratifications/<algo>/<param-tag>.json`
-with structure:
+Outputs — two layouts:
+
+  Pipeline / single-config mode (--output-dir <D>):
+    <D>/stratification.json
+    <D>/kfolds/anchor_fold_<n>.json
+
+  Standalone / multi-config mode (--output-root <R>):
+    <R>/<algo>/<param-tag>.json
+    <R>/<algo>/<param-tag>/anchor_fold_<n>.json
+
+The pipeline mode is the one wired into `process_probes_and_anchors.smk`
+(one canonical stratification colocated with the eval anchor corpus). The
+standalone mode lets researchers compare algos/params side-by-side under
+`datasets/ripe_atlas/stratifications/`.
+
+Per-fold anchor JSONs carry the full anchor records (one JSON list per fold)
+for direct downstream consumption without re-parsing the assignments map.
+
+Stratification JSON structure:
   {
     "policy": {...},                 # algo class + params
     "corpus": {...},                 # source + anchor count + extraction flags
@@ -49,21 +66,21 @@ from scripts.processing.ripe_atlas.stratification import (  # noqa: E402
 )
 
 
-def load_anchors(anchors_file: Path) -> list[AnchorInfo]:
-    """Read `reproducibility_anchors.json` and return the entries as
-    AnchorInfo records.
+def load_anchors(anchors_file: Path) -> tuple[list[AnchorInfo], dict[str, dict]]:
+    """Read an anchor JSON file and return (AnchorInfo records, raw entries by IP).
 
-    The anchors-only file (723 entries) is the canonical input — same
-    count the IMC 2023 paper reports. Drops entries missing
-    `address_v4` or `geometry.coordinates`. No sanitization or RTT
-    filtering — that's what `RipeAtlasSource` does. This script captures
-    the raw anchor set so stratification output is reproducible without a
-    database.
+    Works on `reproducibility_anchors.json` (723 entries, IMC 2023 canonical)
+    and on the post-sanitize / per-pipeline anchor JSONs (e.g. the 721-anchor
+    `asn_corpora/anchors.json`) which share the schema. Drops entries missing
+    `address_v4` or `geometry.coordinates`. The raw entry dict is returned
+    alongside so callers can write per-fold full-anchor-info files without
+    re-parsing the source.
     """
     with anchors_file.open() as fh:
         entries = json.load(fh)
 
     anchors: list[AnchorInfo] = []
+    raw_by_ip: dict[str, dict] = {}
     for e in entries:
         ip = e.get("address_v4")
         geom = (e.get("geometry") or {}).get("coordinates")
@@ -77,7 +94,8 @@ def load_anchors(anchors_file: Path) -> list[AnchorInfo]:
             country=e.get("country_code"),
             asn=e.get("asn_v4"),
         ))
-    return anchors
+        raw_by_ip[ip] = e
+    return anchors, raw_by_ip
 
 
 def build_algo(args: argparse.Namespace):
@@ -149,7 +167,15 @@ def main() -> int:
     parser.add_argument(
         "--output-root", type=Path,
         default=Path("datasets/ripe_atlas/stratifications"),
-        help="root dir; final path is <root>/<algo>/<param-tag>.json",
+        help="(multi-config mode) root dir; final path is "
+             "<root>/<algo>/<param-tag>.json with anchor_fold_<n>.json "
+             "files in a sibling <param-tag>/ folder. Ignored if --output-dir is set.",
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, default=None,
+        help="(single-config mode) flat output dir: writes <dir>/stratification.json "
+             "+ <dir>/kfolds/anchor_fold_<n>.json. Overrides --output-root. Use this "
+             "when one canonical stratification belongs alongside its corpus.",
     )
     args = parser.parse_args()
 
@@ -157,7 +183,7 @@ def main() -> int:
         args.spatial_clusters = None
 
     print(f"loading anchors from {args.anchors_file} ...")
-    anchors = load_anchors(args.anchors_file)
+    anchors, raw_by_ip = load_anchors(args.anchors_file)
     print(f"  {len(anchors)} anchors with v4 IP + geometry")
 
     algo = build_algo(args)
@@ -185,12 +211,34 @@ def main() -> int:
         "fold_assignments": fold_by_ip,
     }
 
-    out_dir = args.output_root / args.algo
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{param_tag(args)}.json"
+    if args.output_dir is not None:
+        # Single-config mode: <dir>/stratification.json + <dir>/kfolds/anchor_fold_<n>.json
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        out_path = args.output_dir / "stratification.json"
+        fold_dir = args.output_dir / "kfolds"
+    else:
+        # Multi-config mode: <root>/<algo>/<param-tag>.json + <root>/<algo>/<param-tag>/anchor_fold_<n>.json
+        tag = param_tag(args)
+        out_root = args.output_root / args.algo
+        out_root.mkdir(parents=True, exist_ok=True)
+        out_path = out_root / f"{tag}.json"
+        fold_dir = out_root / tag
+
     with out_path.open("w") as fh:
         json.dump(out_payload, fh, indent=2, sort_keys=True)
     print(f"wrote stratification → {out_path}")
+
+    # Per-fold full-anchor-info JSONs: one JSON list of raw anchor records per
+    # fold, so downstream code can load fold n directly without parsing the
+    # assignments map.
+    fold_dir.mkdir(parents=True, exist_ok=True)
+    for n in range(args.k):
+        ips = [ip for ip, f in fold_by_ip.items() if f == n]
+        records = [raw_by_ip[ip] for ip in ips if ip in raw_by_ip]
+        fold_path = fold_dir / f"anchor_fold_{n}.json"
+        with fold_path.open("w") as fh:
+            json.dump(records, fh, indent=2, sort_keys=True)
+        print(f"  wrote fold {n} ({len(records)} anchors) → {fold_path}")
     return 0
 
 

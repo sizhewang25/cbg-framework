@@ -21,14 +21,14 @@ Inputs:
   ClickHouse `ping_10k_to_anchors` table     (for the dedup ranking)
 
 Outputs (under datasets/ripe_atlas/asn_corpora/):
-  anchors.json                                # shared eval set
-  anchors_stats.json                          # union-exclusion audit trail
-  north_america/probes_of_as_7922.json        + _stats.json
-  north_america/probes_of_as_7018.json        + _stats.json
-  europe/probes_of_as_3209.json               + _stats.json
-  europe/probes_of_as_3215.json               + _stats.json
-  global/probes_of_as_31898.json              + _stats.json
-  global/probes_of_as_16509.json              + _stats.json
+  anchors/anchors.json                          # shared eval set
+  anchors/anchors_stats.json                    # union-exclusion audit trail
+  probes/north_america/probes_of_as_7922.json   + _stats.json
+  probes/north_america/probes_of_as_7018.json   + _stats.json
+  probes/europe/probes_of_as_3209.json          + _stats.json
+  probes/europe/probes_of_as_3215.json          + _stats.json
+  probes/global/probes_of_as_31898.json         + _stats.json
+  probes/global/probes_of_as_16509.json         + _stats.json
 
 Usage:
   python -m scripts.processing.ripe_atlas.select_probes_and_anchors
@@ -316,7 +316,7 @@ def run_setup(
     grid_deg: float = 0.1,
 ) -> None:
     """Probe-only per-setup output. Anchors are shared (see select_shared_anchors)."""
-    folder = out_root / setup.folder
+    folder = out_root / "probes" / setup.folder
     folder.mkdir(parents=True, exist_ok=True)
 
     kept_probes, probe_stats = select_probes(setup, probes)
@@ -407,9 +407,10 @@ def main() -> int:
     # One shared anchor eval set for all setups. Dropping the union of all
     # setup ASNs keeps cross-setup comparisons apples-to-apples.
     shared_anchors, anchor_stats = select_shared_anchors(SETUPS, anchors)
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    _save_json(args.output_dir / "anchors.json", shared_anchors)
-    _save_json(args.output_dir / "anchors_stats.json", anchor_stats)
+    anchors_dir = args.output_dir / "anchors"
+    anchors_dir.mkdir(parents=True, exist_ok=True)
+    _save_json(anchors_dir / "anchors.json", shared_anchors)
+    _save_json(anchors_dir / "anchors_stats.json", anchor_stats)
     logger.info(
         "shared anchors: %d/%d (excluded ASNs: %s; dropped %d)",
         anchor_stats["kept"], anchor_stats["input_total"],
