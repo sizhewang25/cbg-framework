@@ -166,7 +166,6 @@ def _build_fold_payload(
             }
         )
 
-    target_rows.sort(key=lambda t: t["target_id"])
     return {"vps": vps, "targets": target_rows}
 
 
@@ -179,10 +178,25 @@ def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
     setup = cfg["setup"]
     slices = cfg["slices"]
 
-    folds: dict[str, Any] = {}
+    merged_vps: dict[str, list[float]] = {}
+    merged_targets: list[dict[str, Any]] = []
     for fold in slices:
         print(f"  fold {fold}: loading…", flush=True)
-        folds[fold] = _build_fold_payload(source, run_id, setup, fold, combo_id)
+        fold_pl = _build_fold_payload(source, run_id, setup, fold, combo_id)
+        # VPs are identical across folds for an ASN corpus (k-fold splits
+        # anchors, not probes); first-seen wins on any conflict.
+        for vp_id, coord in fold_pl["vps"].items():
+            merged_vps.setdefault(vp_id, coord)
+        for t in fold_pl["targets"]:
+            t["fold"] = fold
+            merged_targets.append(t)
+
+    # Rank ASC by error_km; targets without a finite error_km drop to the end.
+    def _err_sort_key(t: dict[str, Any]) -> tuple[int, float]:
+        e = t.get("error_km")
+        return (1, 0.0) if e is None else (0, float(e))
+
+    merged_targets.sort(key=_err_sort_key)
 
     return {
         "run_id": run_id,
@@ -190,7 +204,8 @@ def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
         "source": source,
         "setup": setup,
         "earth_radius_km": EARTH_RADIUS_KM,
-        "folds": folds,
+        "vps": merged_vps,
+        "targets": merged_targets,
     }
 
 
@@ -216,7 +231,15 @@ HTML_TEMPLATE = """<!doctype html>
 <body>
 <h1>MTL world map — __TITLE__</h1>
 <div class="controls">
-  <label>Fold <select id="fold"></select></label>
+  <label>Percentile <select id="pct">
+    <option value="" selected>(none)</option>
+    <option value="5">p5</option>
+    <option value="25">p25</option>
+    <option value="50">p50</option>
+    <option value="75">p75</option>
+    <option value="90">p90</option>
+  </select></label>
+  <label><input type="checkbox" id="successOnly"> SUCCESS only</label>
   <label>Eval target <select id="target" class="wide"></select></label>
   <label><input type="checkbox" id="keptOnly"> only post-filter circles</label>
   <label>Hide circles ≥ <select id="maxR">
@@ -240,13 +263,29 @@ HTML_TEMPLATE = """<!doctype html>
 (function () {
   const data = JSON.parse(document.getElementById("data").textContent);
   const EARTH = data.earth_radius_km;
-  const foldSel = document.getElementById("fold");
+  const vps = data.vps;
+  const pctSel = document.getElementById("pct");
+  const successOnly = document.getElementById("successOnly");
   const targetSel = document.getElementById("target");
   const maxRSel = document.getElementById("maxR");
   const keptOnly = document.getElementById("keptOnly");
   const projSel = document.getElementById("proj");
   const metaDiv = document.getElementById("meta");
   const plotDiv = document.getElementById("plot");
+
+  function foldLabel(f) {
+    return f.startsWith("fold_") ? f.slice(5) : f;
+  }
+  function statusLabel(s) { return s === "SUCCESS" ? "SUCC" : "FAILED"; }
+  function targetLabel(t) {
+    const err = t.error_km != null ? t.error_km.toFixed(1) : "—";
+    return `${t.target_id} (fold ${foldLabel(t.fold)}), error=${err} km, ${statusLabel(t.status)}`;
+  }
+  function percentileIndex(p, n) {
+    if (n === 0) return 0;
+    const i = Math.round((p / 100) * (n - 1));
+    return Math.max(0, Math.min(n - 1, i));
+  }
 
   // ---- great-circle ring sampler (port of great_circle_polygon) ----
   function cross(a, b) {
@@ -288,29 +327,54 @@ HTML_TEMPLATE = """<!doctype html>
   }
 
   // ---- dropdown population ----
-  Object.keys(data.folds).sort().forEach((f) => {
-    const o = document.createElement("option");
-    o.value = f; o.textContent = f; foldSel.appendChild(o);
-  });
+  // `data.targets` is pre-sorted ASC by error_km (Python side). Any filtered
+  // subset preserves that order, so percentile bookmarks are just index math.
+  let currentList = data.targets;
+
+  function activeList() {
+    return successOnly.checked
+      ? data.targets.filter((t) => t.status === "SUCCESS")
+      : data.targets;
+  }
 
   function populateTargets() {
+    const prev = currentList[+targetSel.value];
+    currentList = activeList();
     targetSel.innerHTML = "";
-    const fold = data.folds[foldSel.value];
-    fold.targets.forEach((t, i) => {
+    currentList.forEach((t, i) => {
       const o = document.createElement("option");
       o.value = String(i);
-      const err = t.error_km != null ? t.error_km.toFixed(0) : "—";
-      o.textContent = `${t.target_id} — ${t.status}, error=${err} km, n=${t.n_ltd_success}/${t.n_obs}`;
+      o.textContent = targetLabel(t);
       targetSel.appendChild(o);
     });
+    let idx = 0;
+    if (pctSel.value !== "") {
+      idx = percentileIndex(+pctSel.value, currentList.length);
+    } else if (prev) {
+      // Preserve previous selection if still present in the filtered list.
+      const pIdx = currentList.findIndex(
+        (t) => t.target_id === prev.target_id && t.fold === prev.fold,
+      );
+      if (pIdx >= 0) idx = pIdx;
+    }
+    targetSel.value = String(idx);
+  }
+
+  function applyPercentile() {
+    if (pctSel.value === "") return;
+    const idx = percentileIndex(+pctSel.value, currentList.length);
+    targetSel.value = String(idx);
   }
 
   // ---- main draw ----
   function draw() {
-    const fold = data.folds[foldSel.value];
+    if (currentList.length === 0) {
+      metaDiv.innerHTML = "<i>no eval targets match the current filters</i>";
+      Plotly.react(plotDiv, [], { geo: { projection: { type: projSel.value } } }, { responsive: true });
+      return;
+    }
     const tIdx = +targetSel.value || 0;
-    const t = fold.targets[tIdx];
-    const vps = fold.vps;
+    const t = currentList[tIdx];
     const maxR = +maxRSel.value;  // 0 = no cutoff
 
     const traces = [];
@@ -440,7 +504,7 @@ HTML_TEMPLATE = """<!doctype html>
       },
       margin: { l: 0, r: 0, t: 30, b: 0 },
       legend: { x: 0.01, y: 0.99, bgcolor: "rgba(255,255,255,0.85)" },
-      title: { text: `${foldSel.value} · ${t.target_id} · ${t.status}`, font: { size: 14 } },
+      title: { text: `${t.fold} · ${t.target_id} · ${t.status}`, font: { size: 14 } },
     };
 
     const errStr = t.error_km != null ? `${t.error_km.toFixed(2)} km` : "—";
@@ -448,17 +512,22 @@ HTML_TEMPLATE = """<!doctype html>
     const filterNote = hidden > 0
       ? ` &nbsp;|&nbsp; <span style="color:#b00">${hidden} circle(s) hidden</span>`
       : "";
+    const pctNote = pctSel.value !== ""
+      ? ` &nbsp;|&nbsp; rank ${tIdx + 1}/${currentList.length} (p${pctSel.value})`
+      : ` &nbsp;|&nbsp; rank ${tIdx + 1}/${currentList.length}`;
     metaDiv.innerHTML =
-      `<b>${t.target_id}</b> — status=${t.status}, intersection=${t.intersection_kind}, ` +
+      `<b>${t.target_id}</b> (fold ${foldLabel(t.fold)}) — status=${t.status}, ` +
+      `intersection=${t.intersection_kind}, ` +
       `n_ltd_success/n_obs=${t.n_ltd_success}/${t.n_obs}, ` +
       `pre-filter kept ${totalKept}/${t.predictions.length} (${totalDropped} dropped)<br>` +
       `true=(${t.true[0]}, ${t.true[1]})  ·  predicted=${predStr}  ·  error=${errStr}` +
-      filterNote;
+      pctNote + filterNote;
 
     Plotly.react(plotDiv, traces, layout, { responsive: true });
   }
 
-  foldSel.addEventListener("change", () => { populateTargets(); draw(); });
+  pctSel.addEventListener("change", () => { applyPercentile(); draw(); });
+  successOnly.addEventListener("change", () => { populateTargets(); draw(); });
   targetSel.addEventListener("change", draw);
   maxRSel.addEventListener("change", draw);
   keptOnly.addEventListener("change", draw);
