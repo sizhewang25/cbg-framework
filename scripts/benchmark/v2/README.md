@@ -6,17 +6,19 @@ post-hoc forensic analysis.
 
 ## Components
 
-| File | Role |
-|---|---|
-| [cli.py](cli.py) | Typer commands: `materialize-inputs`, `run-combo`, `summarize` |
-| [Snakefile](Snakefile) | Parameterizes the (source × slice × combo) grid |
-| [sources/](sources/) | DataSource adapters — [generic_csv.py](sources/generic_csv.py), [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py). See [sources/README.md](sources/README.md) for the contract + how to add your own. |
-| [inputs.py](inputs.py) | Materializes a DataSource into three parquets |
-| [runner.py](runner.py) | Per-combo fit + geolocate loop with instrumentation |
-| [checkpoint.py](checkpoint.py) | Picks LTD checkpoint snapshot (or `.stateless` marker) |
-| [instrument.py](instrument.py) | Per-stage timing + tracemalloc peak collector |
-| [schema.py](schema.py) | PyArrow schemas — single source of truth for all parquets |
-| [config/](config/) | Snakemake configs (smoke, full, ...) |
+
+| File                           | Role                                                                                                                                                                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [cli.py](cli.py)               | Typer commands: `materialize-inputs`, `run-combo`, `summarize`                                                                                                                                                                   |
+| [Snakefile](Snakefile)         | Parameterizes the (source × slice × combo) grid                                                                                                                                                                                  |
+| [sources/](sources/)           | DataSource adapters — [generic_csv.py](sources/generic_csv.py), [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py). See [sources/README.md](sources/README.md) for the contract + how to add your own. |
+| [inputs.py](inputs.py)         | Materializes a DataSource into three parquets                                                                                                                                                                                    |
+| [runner.py](runner.py)         | Per-combo fit + geolocate loop with instrumentation                                                                                                                                                                              |
+| [checkpoint.py](checkpoint.py) | Picks LTD checkpoint snapshot (or `.stateless` marker)                                                                                                                                                                           |
+| [instrument.py](instrument.py) | Per-stage timing + tracemalloc peak collector                                                                                                                                                                                    |
+| [schema.py](schema.py)         | PyArrow schemas — single source of truth for all parquets                                                                                                                                                                        |
+| [config/](config/)             | Snakemake configs (smoke, full, ...)                                                                                                                                                                                             |
+
 
 ## Install
 
@@ -76,11 +78,11 @@ DataSource ──→ inputs/<source>/<slice>/{vp_configs,fit_samples,eval_observ
 ## Sources
 
 - **vultr_csv** — wraps `datasets/cbg_test/vultr_pings_us_only.csv`.
-  Slices: `all_us`, `top1`..`top10` (cumulative probe-ASN top-k, deterministic
-  ranking). Smoke runs here are fast — 7 anchor targets, 266+ VPs.
+Slices: `all_us`, `top1`..`top10` (cumulative probe-ASN top-k, deterministic
+ranking). Smoke runs here are fast — 7 anchor targets, 266+ VPs.
 - **ripe_atlas** — IMC 2023 probes → anchors (the "primary eval" dataset).
-  Slices: `all_anchors`, `n<K>`. Requires ClickHouse running with the
-  `ping_10k_to_anchors` table populated.
+Slices: `all_anchors`, `n<K>`. Requires ClickHouse running with the
+`ping_10k_to_anchors` table populated.
 
 Both adapters yield the same shape (VPs, FitSamples, EvalTargets), so a combo
 spec can be moved between sources by changing one flag.
@@ -91,11 +93,11 @@ Every CLI command (and the Snakefile config) takes a `--setup` axis that picks
 which side of the (probe, anchor) pair is treated as the vantage point:
 
 - `probes_to_anchors` *(default)* — probes are VPs, anchors are targets. Matches
-  IMC 2023's primary eval direction. `all_us` slice gives 1422 VPs × 7 targets;
-  `all_anchors` slice gives ~10K VPs × 723 hard-GT targets.
+IMC 2023's primary eval direction. `all_us` slice gives 1422 VPs × 7 targets;
+`all_anchors` slice gives ~10K VPs × 723 hard-GT targets.
 - `anchors_to_probes` — anchors are VPs, probes are targets (the pressure test
-  from the memory entry). `all_us` slice flips to 7 VPs × 1422 targets;
-  `all_anchors` flips to 723 VPs × ~12K hard-GT targets.
+from the memory entry). `all_us` slice flips to 7 VPs × 1422 targets;
+`all_anchors` flips to 723 VPs × ~12K hard-GT targets.
 
 The setup is part of the inputs/outputs path so the two configurations never
 collide:
@@ -124,10 +126,11 @@ by tracemalloc).
 ## Stats collected (per target)
 
 Per the spec, every row of `targets.parquet` carries:
+
 - **VP / RTT inputs**: `target_id`, `n_obs`, and nested `ltd_predictions` (per-VP `vp_id`, `success`, `error`, `upper_km`, `lower_km`).
 - **CBG combo**: stamped on `run.json` (one per combo dir).
 - **LTD checkpoint**: pickle in `fit_checkpoint.pkl`, or `.stateless` marker.
-- **LTDResult / MTLResult / CTRResult**: nested `ltd_predictions`; `mtl_*` and `ctr_*` columns.
+- **LTDResult / MTLResult / CTRResult**: nested `ltd_predictions`; `mtl_`* and `ctr_*` columns.
 - **CBGResult coord + status**: `pred_lat/lon`, `status`, `error`, `error_km`.
 - **Runtime per stage**: `ltd_ms`, `mtl_ms`, `ctr_ms`.
 - **Peak memory per stage**: `ltd_peak_bytes`, `mtl_peak_bytes`, `ctr_peak_bytes`.

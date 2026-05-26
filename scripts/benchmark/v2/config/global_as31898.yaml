@@ -21,6 +21,8 @@ source_kwargs:
   probe_data_dir: datasets/ripe_atlas/asn_corpora/probes/global
   probe_asn: 31898
   anchor_data_dir: datasets/ripe_atlas/asn_corpora/anchors/kfolds
+  max_rtt_ms: 10000          # RTT upper bound (ms) for compute_rtts_per_dst_src — matches the
+                            # anchor-corpus reachability bound from select_probes_and_anchors.
 
 enable_fallback: true
 seed: 42

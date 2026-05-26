@@ -45,7 +45,7 @@ _FOLD_SLICE_RE = re.compile(r"^fold_(\d+)$")
 _FOLD_FILE_RE = re.compile(r"^anchor_fold_(\d+)\.json$")
 
 _DEFAULT_FILTER = ""
-_DEFAULT_THRESHOLD = 70
+_DEFAULT_RTT_THRESHOLD_MS = 10_000
 
 
 class RipeAtlasASNCorporaSource(DataSource):
@@ -62,7 +62,7 @@ class RipeAtlasASNCorporaSource(DataSource):
         probe_asn: int,
         anchor_data_dir: str | Path,
         ping_table: Optional[str] = None,
-        threshold: int = _DEFAULT_THRESHOLD,
+        max_rtt_ms: int = _DEFAULT_RTT_THRESHOLD_MS,
         filter_clause: str = _DEFAULT_FILTER,
         rtt_query: Optional[Callable[..., dict[str, dict[str, list[float]]]]] = None,
     ) -> None:
@@ -90,7 +90,7 @@ class RipeAtlasASNCorporaSource(DataSource):
             ping_table if ping_table is not None
             else default.PROBES_TO_ANCHORS_PING_TABLE
         )
-        self._threshold = threshold
+        self._max_rtt_ms = max_rtt_ms
         self._filter_clause = filter_clause
         # Tests inject `rtt_query=`; production keeps it None and we
         # lazy-import compute_rtts_per_dst_src on first iteration so importing
@@ -301,7 +301,7 @@ class RipeAtlasASNCorporaSource(DataSource):
         raw = query(
             self._ping_table,
             self._filter_clause,
-            self._threshold,
+            self._max_rtt_ms,
             is_per_prefix=False,
         )
 
