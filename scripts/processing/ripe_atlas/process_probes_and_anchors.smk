@@ -7,13 +7,19 @@ the leakage-free CBG eval protocol.
 
 Pipeline:
 
-  reproducibility_probes.json  ─→ sanitize_probes  ─→ filtered_probes.json   ─┐
-                                                                              ├─→ select_corpora ─→ asn_corpora/anchors/anchors.json
-  reproducibility_anchors.json ─→ sanitize_anchors ─→ filtered_anchors.json ──┘                  + asn_corpora/probes/<continent>/probes_of_as_*.json
-                                                                                                                  │
-                                                                                                                  ▼
-                                                                                       stratify_anchors → asn_corpora/anchors/stratification.json
-                                                                                                          + asn_corpora/anchors/kfolds/anchor_fold_<0..4>.json
+  reproducibility_probes.json  ─→ sanitize_probes  ─→ filtered_probes.json  ─→ append_geo_info_probes  ─┐
+                                                                                                        ├─→ select_corpora ─→ asn_corpora/anchors/anchors.json
+  reproducibility_anchors.json ─→ sanitize_anchors ─→ filtered_anchors.json ─→ append_geo_info_anchors ─┘                  + asn_corpora/probes/<continent>/probes_of_as_*.json
+                                                                                                                                            │
+                                                                                                                                            ▼
+                                                                                                                 stratify_anchors → asn_corpora/anchors/stratification.json
+                                                                                                                                    + asn_corpora/anchors/kfolds/anchor_fold_<0..4>.json
+
+`append_geo_info_*` rewrite filtered_{anchors,probes}.json in place to attach
+`continent` (from country_code via continents.py) and `city` (from the
+`{anchor,probe}_city.json` sidecars, if produced by the geocoding pipeline).
+DAG ordering is encoded via sentinel flag files under datasets/ripe_atlas/.flags/
+because the rules edit the same json they read.
 
 The first three rules hit ClickHouse:
 
@@ -46,6 +52,14 @@ ASN_CORPORA = DATASETS / "asn_corpora"
 ANCHORS_DIR = ASN_CORPORA / "anchors"
 PROBES_DIR = ASN_CORPORA / "probes"
 
+# Sentinels for the in-place `append_geo_info_to_probe_anchor` step. The
+# rules edit `filtered_{anchors,probes}.json` in place, so we use empty
+# flag files to encode DAG ordering instead of declaring the json as
+# both input and output (which snakemake would reject).
+GEO_FLAG_DIR = DATASETS / ".flags"
+ANCHORS_GEO_FLAG = GEO_FLAG_DIR / "anchors_geo_appended"
+PROBES_GEO_FLAG = GEO_FLAG_DIR / "probes_geo_appended"
+
 # Stratification config — matches the leakage-free eval protocol (DistGeo
 # K-fold, top-20 ASN buckets + others, k=5, seed=42).
 STRAT_ALGO = "distgeo"
@@ -58,6 +72,8 @@ rule all:
     input:
         DATASETS / "filtered_anchors.json",
         DATASETS / "filtered_probes.json",
+        ANCHORS_GEO_FLAG,
+        PROBES_GEO_FLAG,
         ANCHORS_DIR / "anchors.json",
         ANCHORS_DIR / "stratification.json",
         *[ANCHORS_DIR / "kfolds" / f"anchor_fold_{n}.json" for n in range(STRAT_K)],
@@ -84,10 +100,37 @@ rule sanitize_probes:
         "--probes-file {input} --output {output}"
 
 
+rule append_geo_info_anchors:
+    """In-place: attach `continent` (from country_code) + `city` (from
+    anchor_city.json sidecar, if present) to each entry in filtered_anchors.json."""
+    input:
+        DATASETS / "filtered_anchors.json",
+    output:
+        touch(ANCHORS_GEO_FLAG),
+    shell:
+        "python -m scripts.processing.ripe_atlas.append_geo_info_to_probe_anchor "
+        "--side anchors --datasets-dir {DATASETS} --sentinel {output}"
+
+
+rule append_geo_info_probes:
+    """In-place: attach `continent` (from country_code) + `city` (from
+    probe_city.json sidecar, if present) to each entry in filtered_probes.json."""
+    input:
+        DATASETS / "filtered_probes.json",
+    output:
+        touch(PROBES_GEO_FLAG),
+    shell:
+        "python -m scripts.processing.ripe_atlas.append_geo_info_to_probe_anchor "
+        "--side probes --datasets-dir {DATASETS} --sentinel {output}"
+
+
 rule select_corpora:
     input:
         probes=DATASETS / "filtered_probes.json",
         anchors=DATASETS / "filtered_anchors.json",
+        # Ensure geo-enrichment lands before downstream selection consumes the corpora.
+        anchors_geo_flag=ANCHORS_GEO_FLAG,
+        probes_geo_flag=PROBES_GEO_FLAG,
     output:
         # Sentinel outputs declared so snakemake re-triggers if any are missing.
         # The script writes additional `*_stats.json` siblings beside each one.

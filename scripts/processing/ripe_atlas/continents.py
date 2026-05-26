@@ -37,7 +37,7 @@ CONTINENT_OF: dict[str, str] = {
         "FI", "FR", "DE", "GI", "GR", "GG", "HU", "IS", "IE", "IM", "IT", "JE",
         "XK", "LV", "LI", "LT", "LU", "MT", "MD", "MC", "ME", "NL", "MK", "NO",
         "PL", "PT", "RO", "RU", "SM", "RS", "SK", "SI", "ES", "SE", "CH", "UA",
-        "GB", "VA", "AX",
+        "GB", "VA", "AX", "SJ",
     ), "Europe"),
     # North America (incl. Caribbean + Central America)
     **dict.fromkeys((
