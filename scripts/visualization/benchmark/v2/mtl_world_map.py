@@ -27,6 +27,8 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from scripts.libs.cbg.rtt_model import haversine_distance
+
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 EARTH_RADIUS_KM = 6371.0
@@ -43,6 +45,39 @@ def _fold_output_dir(
         REPO_ROOT / "scripts" / "benchmark" / "v2" / "outputs" / run_id / source
         / setup / fold / combo
     )
+
+
+def _kept_after_filter(
+    preds: list[tuple[str, float, float, float]],
+) -> set[str]:
+    """Return the set of vp_ids that survive `circle_preprocessing`.
+
+    Mirrors [scripts/framework/geometry.py::circle_preprocessing] (the path
+    `SphericalCircleMTL` walks when `enable_circle_filter=True`): a disk is
+    redundant — and therefore dropped — when it fully contains another disk,
+    i.e. `radius_i > haversine(center_i, center_j) + radius_j`. We break out
+    of the inner loop as soon as `i` is marked redundant; later removals are
+    still picked up when those entries take their turn as the outer.
+
+    `preds` items are `(vp_id, lat, lon, radius_km)`.
+    """
+    ignored: set[str] = set()
+    n = len(preds)
+    for i in range(n):
+        vp_i, lat_i, lon_i, r_i = preds[i]
+        if vp_i in ignored:
+            continue
+        for j in range(i + 1, n):
+            vp_j, lat_j, lon_j, r_j = preds[j]
+            if vp_j in ignored:
+                continue
+            d = float(haversine_distance(lat_i, lon_i, lat_j, lon_j))
+            if r_i > d + r_j:
+                ignored.add(vp_i)
+                break
+            if r_j > d + r_i:
+                ignored.add(vp_j)
+    return {p[0] for p in preds} - ignored
 
 
 def _safe_float(x: Any) -> float | None:
@@ -82,17 +117,26 @@ def _build_fold_payload(
 
     target_rows: list[dict[str, Any]] = []
     for row in targets.itertuples(index=False):
-        preds = []
+        # First collect (vp_id, lat, lon, radius) for kept-set computation,
+        # then emit the compact array form embedded in JSON.
+        raw: list[tuple[str, float, float, float]] = []
         for p in row.ltd_predictions:
             if not p.get("success"):
                 continue
             vp_id = str(p["vp_id"])
-            if vp_id not in vps:
+            coord = vps.get(vp_id)
+            if coord is None:
                 continue
             radius = _safe_float(p.get("upper_km"))
             if radius is None or radius <= 0:
                 continue
-            preds.append([vp_id, round(radius, 4)])
+            raw.append((vp_id, coord[0], coord[1], float(radius)))
+
+        kept = _kept_after_filter(raw)
+        preds = [
+            [vp_id, round(r, 4), 1 if vp_id in kept else 0]
+            for vp_id, _lat, _lon, r in raw
+        ]
 
         pred_lat = _safe_float(row.pred_lat)
         pred_lon = _safe_float(row.pred_lon)
@@ -174,6 +218,7 @@ HTML_TEMPLATE = """<!doctype html>
 <div class="controls">
   <label>Fold <select id="fold"></select></label>
   <label>Eval target <select id="target" class="wide"></select></label>
+  <label><input type="checkbox" id="keptOnly"> only post-filter circles</label>
   <label>Hide circles ≥ <select id="maxR">
     <option value="10000" selected>10 000 km (¼ Earth circumf.)</option>
     <option value="20000">20 000 km (½ Earth circumf.)</option>
@@ -198,6 +243,7 @@ HTML_TEMPLATE = """<!doctype html>
   const foldSel = document.getElementById("fold");
   const targetSel = document.getElementById("target");
   const maxRSel = document.getElementById("maxR");
+  const keptOnly = document.getElementById("keptOnly");
   const projSel = document.getElementById("proj");
   const metaDiv = document.getElementById("meta");
   const plotDiv = document.getElementById("plot");
@@ -269,19 +315,29 @@ HTML_TEMPLATE = """<!doctype html>
 
     const traces = [];
 
-    // 1) per-VP great-circle rings (filtered by maxR).
-    // Anything whose cap covers ~the entire Earth (r >= π·R ≈ 20015 km) has
-    // no meaningful ring — always skip those even when "show all" is picked.
+    // 1) per-VP great-circle rings (filtered by maxR, post-filter toggle, and
+    // a hard cap covering the whole Earth — r >= π·R ≈ 20015 km — which has
+    // no meaningful ring even with "show all" picked).
     const fullEarthKm = Math.PI * EARTH;  // ≈ 20015 km
+    const onlyKept = keptOnly.checked;
+    const totalKept = t.predictions.reduce((n, p) => n + (p[2] ? 1 : 0), 0);
+    const totalDropped = t.predictions.length - totalKept;
+    function included(pred) {
+      const [, radius, isKept] = pred;
+      if (radius >= fullEarthKm) return false;
+      if (maxR > 0 && radius >= maxR) return false;
+      if (onlyKept && !isKept) return false;
+      return true;
+    }
+
     const ringLats = [], ringLons = [];
-    let kept = 0, hidden = 0;
-    for (const [vpId, radius] of t.predictions) {
-      if (radius >= fullEarthKm) { hidden++; continue; }
-      if (maxR > 0 && radius >= maxR) { hidden++; continue; }
-      const coord = vps[vpId];
+    let kept = 0;
+    for (const pred of t.predictions) {
+      if (!included(pred)) continue;
+      const coord = vps[pred[0]];
       if (!coord) continue;
       kept++;
-      const ring = ringLatLon(coord[0], coord[1], radius, 96);
+      const ring = ringLatLon(coord[0], coord[1], pred[1], 96);
       ringLats.push(...ring.lats, null);
       ringLons.push(...ring.lons, null);
     }
@@ -298,13 +354,13 @@ HTML_TEMPLATE = """<!doctype html>
 
     // 2) per-VP markers (only those whose circle is shown).
     const mkLat = [], mkLon = [], mkText = [];
-    for (const [vpId, radius] of t.predictions) {
-      if (radius >= fullEarthKm) continue;
-      if (maxR > 0 && radius >= maxR) continue;
-      const coord = vps[vpId];
+    for (const pred of t.predictions) {
+      if (!included(pred)) continue;
+      const coord = vps[pred[0]];
       if (!coord) continue;
       mkLat.push(coord[0]); mkLon.push(coord[1]);
-      mkText.push(`VP ${vpId}<br>radius = ${radius.toFixed(1)} km`);
+      const flag = pred[2] ? "kept" : "dropped by pre-filter";
+      mkText.push(`VP ${pred[0]}<br>radius = ${pred[1].toFixed(1)} km<br>${flag}`);
     }
     traces.push({
       type: "scattergeo",
@@ -315,6 +371,8 @@ HTML_TEMPLATE = """<!doctype html>
       marker: { size: 5, color: "rgba(40,60,120,0.75)" },
       name: `VPs (${kept})`,
     });
+
+    const hidden = t.predictions.length - kept;
 
     // 3) shortest-ping VP marker (drawn before true target so the star sits on top).
     if (t.shortest_ping) {
@@ -388,11 +446,12 @@ HTML_TEMPLATE = """<!doctype html>
     const errStr = t.error_km != null ? `${t.error_km.toFixed(2)} km` : "—";
     const predStr = t.pred ? `(${t.pred[0]}, ${t.pred[1]})` : "(none)";
     const filterNote = hidden > 0
-      ? ` &nbsp;|&nbsp; <span style="color:#b00">${hidden} circle(s) hidden by ≥${maxR} km filter</span>`
+      ? ` &nbsp;|&nbsp; <span style="color:#b00">${hidden} circle(s) hidden</span>`
       : "";
     metaDiv.innerHTML =
       `<b>${t.target_id}</b> — status=${t.status}, intersection=${t.intersection_kind}, ` +
-      `n_ltd_success/n_obs=${t.n_ltd_success}/${t.n_obs}<br>` +
+      `n_ltd_success/n_obs=${t.n_ltd_success}/${t.n_obs}, ` +
+      `pre-filter kept ${totalKept}/${t.predictions.length} (${totalDropped} dropped)<br>` +
       `true=(${t.true[0]}, ${t.true[1]})  ·  predicted=${predStr}  ·  error=${errStr}` +
       filterNote;
 
@@ -402,6 +461,7 @@ HTML_TEMPLATE = """<!doctype html>
   foldSel.addEventListener("change", () => { populateTargets(); draw(); });
   targetSel.addEventListener("change", draw);
   maxRSel.addEventListener("change", draw);
+  keptOnly.addEventListener("change", draw);
   projSel.addEventListener("change", draw);
 
   populateTargets();
