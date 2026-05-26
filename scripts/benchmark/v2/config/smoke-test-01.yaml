@@ -78,7 +78,6 @@ combos:
     mtl: planar_annulus
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      sample_coverage: 0.9          # k chosen so ±k·sigma covers ~90% of training pairs
       n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
       min_per_bin: 30               # bins with fewer points are dropped before polyfit
       deg_mu: 3                     # mu(rtt) is a deg-3 polynomial

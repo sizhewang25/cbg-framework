@@ -9,7 +9,14 @@
 run_id: full-us-002
 source: vultr_csv
 setup: anchors_to_probes
-slices: [all_us]
+slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+# DistGeo K-fold stratification of the probe-target set so eval and fit
+# never share a probe — same protocol as ripe_atlas_asn_corpora.
+source_kwargs:
+  k: 5
+  seed: 42
+  asn_bucket_top_n: 20
 
 enable_fallback: true
 
@@ -177,7 +184,6 @@ combos:
     mtl: planar_annulus
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      sample_coverage: 0.9          # k chosen so ±k·sigma covers ~90% of training pairs
       n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
       min_per_bin: 30               # bins with fewer points are dropped before polyfit
       deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
@@ -197,7 +203,6 @@ combos:
     mtl: planar_annulus_weighted
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      sample_coverage: 0.9
       n_bins: 40
       min_per_bin: 30
       deg_mu: 3
@@ -216,7 +221,6 @@ combos:
     mtl: planar_annulus
     ctr: geometric_centroid
     ltd_kwargs:
-      sample_coverage: 0.9          # k chosen so ±k·sigma covers ~90% of training pairs
       n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
       min_per_bin: 30               # bins with fewer points are dropped before polyfit
       deg_mu: 3                     # mu(rtt) is a deg-3 polynomial

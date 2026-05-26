@@ -40,29 +40,34 @@ class TestCLI(unittest.TestCase):
         self.tmp.cleanup()
 
     def _materialize(
-        self, source: str = "vultr_csv", slice: str = "all_us", run_id: str = "cli-test",
+        self, source: str = "vultr_csv", slice: str = "fold_0", run_id: str = "cli-test",
     ) -> Path:
         # Patch the default CSV path by setting the env variable on the source.
         # Simpler: call the source directly with our synth path via inputs.materialize_inputs.
         from scripts.benchmark.v2.inputs import materialize_inputs
         from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource
 
-        src = VultrCSVSource(slice=slice, csv_path=self.csv_path)
+        src = VultrCSVSource(
+            slice=slice, setup="anchors_to_probes",
+            csv_path=self.csv_path, k=4,
+        )
         return materialize_inputs(src, root=self.inputs_root, run_id=run_id)
 
     def test_run_combo_command_writes_outputs(self) -> None:
         self._materialize()
         result = self.runner.invoke(app, [
             "run-combo",
-            "--source", "vultr_csv", "--slice", "all_us",
+            "--source", "vultr_csv", "--slice", "fold_0",
+            "--setup", "anchors_to_probes",
             "--ltd", "speed_of_internet", "--mtl", "planar_circle", "--ctr", "geometric_centroid",
             "--run-id", "cli-test",
             "--inputs-root", str(self.inputs_root),
             "--outputs-root", str(self.outputs_root),
+            "--source-kwargs", json.dumps({"csv_path": str(self.csv_path), "k": 4}),
         ])
         self.assertEqual(result.exit_code, 0, msg=result.output)
         combo_dir = (
-            self.outputs_root / "cli-test" / "vultr_csv" / "probes_to_anchors" / "all_us"
+            self.outputs_root / "cli-test" / "vultr_csv" / "anchors_to_probes" / "fold_0"
             / "speed_of_internet__planar_circle__geometric_centroid"
         )
         self.assertTrue((combo_dir / "run.json").exists())
@@ -71,11 +76,13 @@ class TestCLI(unittest.TestCase):
     def test_run_combo_fails_without_materialized_inputs(self) -> None:
         result = self.runner.invoke(app, [
             "run-combo",
-            "--source", "vultr_csv", "--slice", "missing",
+            "--source", "vultr_csv", "--slice", "fold_2",
+            "--setup", "anchors_to_probes",
             "--ltd", "speed_of_internet", "--mtl", "planar_circle", "--ctr", "geometric_centroid",
             "--run-id", "cli-test",
             "--inputs-root", str(self.inputs_root),
             "--outputs-root", str(self.outputs_root),
+            "--source-kwargs", json.dumps({"csv_path": str(self.csv_path), "k": 4}),
         ])
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("materialize-inputs", result.output)
@@ -89,14 +96,15 @@ class TestCLI(unittest.TestCase):
         # Path the source through --source-kwargs rather than positional args.
         result = self.runner.invoke(app, [
             "materialize-inputs",
-            "--source", "vultr_csv", "--slice", "all_us",
+            "--source", "vultr_csv", "--slice", "fold_0",
+            "--setup", "anchors_to_probes",
             "--run-id", "kw-test",
             "--inputs-root", str(self.inputs_root),
-            "--source-kwargs", json.dumps({"csv_path": str(alt_csv)}),
+            "--source-kwargs", json.dumps({"csv_path": str(alt_csv), "k": 4}),
         ])
         self.assertEqual(result.exit_code, 0, msg=result.output)
         manifest = (
-            self.inputs_root / "vultr_csv" / "kw-test" / "probes_to_anchors" / "all_us"
+            self.inputs_root / "vultr_csv" / "kw-test" / "anchors_to_probes" / "fold_0"
             / "manifest.json"
         )
         self.assertTrue(manifest.exists())
@@ -104,7 +112,8 @@ class TestCLI(unittest.TestCase):
     def test_materialize_rejects_invalid_source_kwargs_json(self) -> None:
         result = self.runner.invoke(app, [
             "materialize-inputs",
-            "--source", "vultr_csv", "--slice", "all_us",
+            "--source", "vultr_csv", "--slice", "fold_0",
+            "--setup", "anchors_to_probes",
             "--run-id", "kw-test",
             "--inputs-root", str(self.inputs_root),
             "--source-kwargs", "not-json",
@@ -117,11 +126,13 @@ class TestCLI(unittest.TestCase):
         for ltd_name in ("speed_of_internet", "low_envelope"):
             r = self.runner.invoke(app, [
                 "run-combo",
-                "--source", "vultr_csv", "--slice", "all_us",
+                "--source", "vultr_csv", "--slice", "fold_0",
+                "--setup", "anchors_to_probes",
                 "--ltd", ltd_name, "--mtl", "planar_circle", "--ctr", "geometric_centroid",
                 "--run-id", "sum-test",
                 "--inputs-root", str(self.inputs_root),
                 "--outputs-root", str(self.outputs_root),
+                "--source-kwargs", json.dumps({"csv_path": str(self.csv_path), "k": 4}),
             ])
             self.assertEqual(r.exit_code, 0, msg=r.output)
 

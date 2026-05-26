@@ -11,7 +11,7 @@
 run_id: smoke-test-02
 source: vultr_csv
 setup: anchors_to_probes       # match the benchmark run's setup_id
-slices: [top1]
+slices: [fold_0]               # one fold is enough for a smoke check
 
 # Plot knobs
 group_by: ltd                  # "ltd" = one CDF panel per LTD model; "none" = single panel
