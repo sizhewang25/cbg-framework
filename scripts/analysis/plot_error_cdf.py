@@ -21,6 +21,7 @@ is drawn on both views as a fixed reference.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,7 @@ from scripts.analysis._v2_io import (
     palette,
 )
 from scripts.libs.cbg.rtt_model import haversine_distance
+from scripts.processing.ripe_atlas.continents import continent_of
 
 logger = logging.getLogger(__name__)
 
@@ -278,15 +280,9 @@ def _load_from_run(
     return errors_concat, successes_by_combo, totals_by_combo, combo_to_ltd
 
 
-def _load_nearest_ping_baseline(inputs_dir: Path) -> np.ndarray:
-    """Read eval_observations.parquet and compute haversine error from each
-    target to the location of its smallest-latency VP. One error per target.
-
-    If `inputs_dir/eval_observations.parquet` exists, it's read directly
-    (single-fold mode). Otherwise the directory is treated as the parent of
-    per-fold input dirs and `**/eval_observations.parquet` is globbed and
-    concatenated — the merged-folds counterpart of the merged-folds loader
-    in `_load_from_run`.
+def _load_nearest_ping_baseline_by_target(inputs_dir: Path) -> dict[str, float]:
+    """Like `_load_nearest_ping_baseline` but keyed by target_id so callers can
+    subset per-target (e.g. by continent membership).
     """
     direct = inputs_dir / "eval_observations.parquet"
     if direct.exists():
@@ -303,7 +299,7 @@ def _load_nearest_ping_baseline(inputs_dir: Path) -> np.ndarray:
     import pandas as pd
     df = pd.concat([pq.read_table(p).to_pandas() for p in paths], ignore_index=True)
     if df.empty:
-        return np.array([], dtype=float)
+        return {}
 
     idx = df.groupby("target_id")["latency_ms"].idxmin()
     nearest = df.loc[idx]
@@ -313,7 +309,204 @@ def _load_nearest_ping_baseline(inputs_dir: Path) -> np.ndarray:
         nearest["vp_lat"].to_numpy(dtype=float),
         nearest["vp_lon"].to_numpy(dtype=float),
     )
-    return np.asarray(errors, dtype=float)
+    return dict(zip(nearest["target_id"].tolist(), errors.tolist()))
+
+
+def _load_nearest_ping_baseline(inputs_dir: Path) -> np.ndarray:
+    """Read eval_observations.parquet and compute haversine error from each
+    target to the location of its smallest-latency VP. One error per target.
+
+    If `inputs_dir/eval_observations.parquet` exists, it's read directly
+    (single-fold mode). Otherwise the directory is treated as the parent of
+    per-fold input dirs and `**/eval_observations.parquet` is globbed and
+    concatenated — the merged-folds counterpart of the merged-folds loader
+    in `_load_from_run`.
+    """
+    by_target = _load_nearest_ping_baseline_by_target(inputs_dir)
+    return np.asarray(list(by_target.values()), dtype=float)
+
+
+_CONTINENT_SLUG_TO_CANON: dict[str, str] = {
+    "africa": "Africa",
+    "antarctica": "Antarctica",
+    "asia": "Asia",
+    "europe": "Europe",
+    "north_america": "North America",
+    "oceania": "Oceania",
+    "south_america": "South America",
+}
+
+
+def _normalize_continent(name: str) -> str:
+    """Accept slug (`north_america`) or canonical (`North America`) and return
+    the canonical form. Raise `ValueError` listing valid names on miss.
+    """
+    key = name.strip().lower().replace(" ", "_").replace("-", "_")
+    if key not in _CONTINENT_SLUG_TO_CANON:
+        raise ValueError(
+            f"Unknown continent {name!r}. Valid: "
+            f"{sorted(_CONTINENT_SLUG_TO_CANON.values())}"
+        )
+    return _CONTINENT_SLUG_TO_CANON[key]
+
+
+def _load_ip_to_continent(filtered_anchors_path: Path) -> dict[str, str]:
+    """Read `filtered_anchors.json` and return `{address_v4: continent}` via
+    `continent_of(country_code)`. Anchors with no `country_code` map to
+    `"Unknown"`.
+    """
+    records = json.loads(filtered_anchors_path.read_text())
+    out: dict[str, str] = {}
+    for r in records:
+        ip = r.get("address_v4")
+        if not ip:
+            continue
+        out[ip] = continent_of(r.get("country_code"))
+    return out
+
+
+def plot_error_cdf_by_continent(
+    run_dir: Path,
+    target_continent: str,
+    output_path: Path,
+    *,
+    filtered_anchors_path: Path,
+    source: Optional[str] = None,
+    slice_: Optional[str] = None,
+    inputs_dir: Optional[Path] = None,
+    max_x_km: float = 10000.0,
+    title: Optional[str] = None,
+) -> tuple[plt.Figure, plt.Figure]:
+    """SUCCESS-only error CDF split by whether each target sits in
+    `target_continent`. Writes two figures derived from `output_path`:
+    `<stem>_<slug>.png` (in-continent) and `<stem>_rest.png` (everything else).
+
+    Rationale: per-ASN VP corpora are continent-bounded fleets; regional
+    VPs are expected to recover well in their home continent and degrade
+    outside it. A single overall CDF averages those two regimes together
+    and hides the asymmetry — splitting the eval rows makes it visible.
+
+    The lookup uses `target_id` (an IPv4 anchor address) joined against
+    `filtered_anchors.json`'s `address_v4` field; the per-target continent
+    comes from `continent_of(country_code)`. Anchor IPs that are missing
+    from `filtered_anchors.json` or whose continent resolves to "Unknown"
+    are dropped from both groups with a single warning naming the count.
+    """
+    canon = _normalize_continent(target_continent)
+    ip_to_continent = _load_ip_to_continent(filtered_anchors_path)
+
+    combo_dirs = discover_combos(run_dir, source, slice_)
+    if not combo_dirs:
+        raise FileNotFoundError(f"No combos found under {run_dir}")
+
+    in_errors: dict[str, list[float]] = {}
+    in_succ: dict[str, int] = {}
+    in_total: dict[str, int] = {}
+    rest_errors: dict[str, list[float]] = {}
+    rest_succ: dict[str, int] = {}
+    rest_total: dict[str, int] = {}
+    unknown_target_ids: set[str] = set()
+
+    for combo_dir in combo_dirs:
+        cid = combo_dir.name
+        tbl = load_targets(combo_dir)
+        target_ids = tbl.column("target_id").to_pylist()
+        status_arr = tbl.column("status").to_pylist()
+        error_arr = tbl.column("error_km").to_numpy(zero_copy_only=False)
+
+        for tid, st, err in zip(target_ids, status_arr, error_arr):
+            cont = ip_to_continent.get(tid, "Unknown")
+            if cont == "Unknown":
+                unknown_target_ids.add(tid)
+                continue
+            in_grp = cont == canon
+            if in_grp:
+                in_total[cid] = in_total.get(cid, 0) + 1
+                if st == "SUCCESS":
+                    in_succ[cid] = in_succ.get(cid, 0) + 1
+                    if not np.isnan(err):
+                        in_errors.setdefault(cid, []).append(float(err))
+            else:
+                rest_total[cid] = rest_total.get(cid, 0) + 1
+                if st == "SUCCESS":
+                    rest_succ[cid] = rest_succ.get(cid, 0) + 1
+                    if not np.isnan(err):
+                        rest_errors.setdefault(cid, []).append(float(err))
+
+    if unknown_target_ids:
+        logger.warning(
+            "%d anchor IPs missing from %s or with unknown country_code; "
+            "their eval rows were dropped",
+            len(unknown_target_ids), filtered_anchors_path,
+        )
+
+    all_cids = sorted({d.name for d in combo_dirs})
+    in_errors_np: dict[str, np.ndarray] = {
+        cid: np.asarray(in_errors.get(cid, []), dtype=float) for cid in all_cids
+    }
+    rest_errors_np: dict[str, np.ndarray] = {
+        cid: np.asarray(rest_errors.get(cid, []), dtype=float) for cid in all_cids
+    }
+    for cid in all_cids:
+        in_succ.setdefault(cid, 0)
+        in_total.setdefault(cid, 0)
+        rest_succ.setdefault(cid, 0)
+        rest_total.setdefault(cid, 0)
+
+    summary = load_summary(run_dir)
+    combo_to_ltd = dict(zip(
+        summary.column("combo_id").to_pylist(),
+        summary.column("ltd").to_pylist(),
+    ))
+
+    in_baseline: Optional[np.ndarray] = None
+    rest_baseline: Optional[np.ndarray] = None
+    if inputs_dir is not None:
+        baseline_by_target = _load_nearest_ping_baseline_by_target(inputs_dir)
+        in_b, rest_b = [], []
+        for tid, err in baseline_by_target.items():
+            cont = ip_to_continent.get(tid, "Unknown")
+            if cont == "Unknown":
+                continue
+            (in_b if cont == canon else rest_b).append(err)
+        in_baseline = np.asarray(in_b, dtype=float) if in_b else None
+        rest_baseline = np.asarray(rest_b, dtype=float) if rest_b else None
+        logger.info(
+            "shortest_ping baseline split: in=%d, rest=%d",
+            len(in_b), len(rest_b),
+        )
+
+    slug = canon.lower().replace(" ", "_")
+    in_path = output_path.with_stem(f"{output_path.stem}_{slug}")
+    rest_path = output_path.with_stem(f"{output_path.stem}_rest")
+    base_title = title or "Error CDF — SUCCESS only by LTD"
+
+    colors = palette(all_cids)
+    fig_in = plot_error_cdf(
+        in_errors_np,
+        in_path,
+        successes_by_combo=in_succ,
+        totals_by_combo=in_total,
+        baseline_errors=in_baseline,
+        group_by="ltd",
+        combo_to_ltd=combo_to_ltd,
+        max_x_km=max_x_km,
+        colors=colors,
+        title=f"{base_title} — in {canon}",
+    )
+    fig_rest = plot_error_cdf(
+        rest_errors_np,
+        rest_path,
+        successes_by_combo=rest_succ,
+        totals_by_combo=rest_total,
+        baseline_errors=rest_baseline,
+        group_by="ltd",
+        combo_to_ltd=combo_to_ltd,
+        max_x_km=max_x_km,
+        colors=colors,
+        title=f"{base_title} — rest of world",
+    )
+    return fig_in, fig_rest
 
 
 def main() -> None:
@@ -350,9 +543,41 @@ def main() -> None:
     parser.add_argument("--max-x-km", type=float, default=10000.0)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--title", default=None)
+    parser.add_argument(
+        "--split-by-main-continent",
+        default=None,
+        help="When set, write two SUCCESS-only CDF figures split by whether "
+             "each target sits in this continent (e.g. 'north_america', "
+             "'europe'). Output paths: <out_stem>_<slug>.png and "
+             "<out_stem>_rest.png. Ignores --success-only (always SUCCESS).",
+    )
+    parser.add_argument(
+        "--filtered-anchors",
+        type=Path,
+        default=Path("datasets/ripe_atlas/filtered_anchors.json"),
+        help="Anchor metadata for target→continent lookup. Used only with "
+             "--split-by-main-continent.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if args.split_by_main_continent is not None:
+        fig_in, fig_rest = plot_error_cdf_by_continent(
+            args.run_dir,
+            args.split_by_main_continent,
+            args.out,
+            filtered_anchors_path=args.filtered_anchors,
+            source=args.source,
+            slice_=args.slice_,
+            inputs_dir=args.inputs_dir,
+            max_x_km=args.max_x_km,
+            title=args.title,
+        )
+        plt.close(fig_in)
+        plt.close(fig_rest)
+        return
+
     errors_by_combo, successes_by_combo, totals_by_combo, combo_to_ltd = _load_from_run(
         args.run_dir, args.source, args.slice_, success_only=args.success_only,
     )

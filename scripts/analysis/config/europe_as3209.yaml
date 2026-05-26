@@ -18,6 +18,11 @@ phase_stat: p95                # which per-stage summary stat to stack: p5/p25/p
 include_fit: true              # add a FIT bar from each combo's run.json (max-of-folds)
 runtime_stat: p50              # plot_phase_runtime bars — median per-stage
 
+# Regional VP corpus: split SUCCESS CDFs by in-continent vs rest to surface
+# the home-continent recovery / out-of-continent degradation expected from
+# per-ASN fleets.
+split_by_main_continent: europe
+
 diff_pairs:
   - [million_scale_cbg, vanilla_cbg]
   - [octant_cbg,        vanilla_cbg]

@@ -42,6 +42,19 @@ INCLUDE_FIT = bool(config.get("include_fit", True))
 RUNTIME_STAT = config.get("runtime_stat", "p50")  # bars on plot_phase_runtime — default median
 # Diff pairs: list of [A, B] combo_id pairs. Required for the diff plot.
 DIFF_PAIRS = config.get("diff_pairs", [])
+# Continent split: when set, plot_error_cdf gets two extra outputs that split
+# SUCCESS-only rows by whether the target sits in this continent — used for
+# the per-ASN regional VP corpora (rationale: regional fleets should recover
+# in-continent and degrade outside). Accepts slug ('north_america') or
+# canonical name ('North America'). Leave unset for global corpora.
+SPLIT_CONT = config.get("split_by_main_continent", None)
+FILTERED_ANCHORS = config.get(
+    "filtered_anchors", "datasets/ripe_atlas/filtered_anchors.json"
+)
+_CONT_SLUG = (
+    SPLIT_CONT.strip().lower().replace(" ", "_").replace("-", "_")
+    if SPLIT_CONT else None
+)
 
 if not SLICES and not MERGE_FOLDS:
     raise ValueError(
@@ -73,8 +86,20 @@ def _all_targets():
     targets = []
     if SLICES:
         targets.extend(expand(str(SLICE_OUT / "{plot}.png"), slice=SLICES, plot=_PLOTS))
+        if SPLIT_CONT:
+            targets.extend(expand(
+                str(SLICE_OUT / f"plot_error_cdf_by_continent_{_CONT_SLUG}.png"),
+                slice=SLICES,
+            ))
+            targets.extend(expand(
+                str(SLICE_OUT / "plot_error_cdf_by_continent_rest.png"),
+                slice=SLICES,
+            ))
     if MERGE_FOLDS:
         targets.extend(expand(str(MERGED_OUT / "{plot}.png"), plot=_PLOTS))
+        if SPLIT_CONT:
+            targets.append(str(MERGED_OUT / f"plot_error_cdf_by_continent_{_CONT_SLUG}.png"))
+            targets.append(str(MERGED_OUT / "plot_error_cdf_by_continent_rest.png"))
     return targets
 
 rule all:
@@ -122,6 +147,32 @@ rule error_cdf_success:
         " --inputs-dir {params.inputs_dir}"
         " --success-only"
         " --out {output.png}"
+
+if SPLIT_CONT:
+    rule error_cdf_by_continent:
+        input:
+            summary = RUN_DIR / "summary.parquet",
+            eval_obs = INPUTS_DIR / "eval_observations.parquet",
+            filtered_anchors = FILTERED_ANCHORS,
+        output:
+            in_png = SLICE_OUT / f"plot_error_cdf_by_continent_{_CONT_SLUG}.png",
+            rest_png = SLICE_OUT / "plot_error_cdf_by_continent_rest.png",
+        params:
+            run_dir = str(RUN_DIR),
+            source = SOURCE,
+            inputs_dir = str(INPUTS_DIR),
+            cont = SPLIT_CONT,
+            anchors = FILTERED_ANCHORS,
+            base_out = str(SLICE_OUT / "plot_error_cdf_by_continent.png"),
+        shell:
+            CLI + ".plot_error_cdf"
+            " --run-dir {params.run_dir}"
+            " --source {params.source}"
+            " --slice {wildcards.slice}"
+            " --inputs-dir {params.inputs_dir}"
+            " --split-by-main-continent {params.cont}"
+            " --filtered-anchors {params.anchors}"
+            " --out {params.base_out}"
 
 rule phase_memory:
     input:
@@ -217,6 +268,29 @@ rule error_cdf_success_merged:
         " --inputs-dir {params.inputs_dir}"
         " --success-only"
         " --out {output.png}"
+
+if SPLIT_CONT:
+    rule error_cdf_by_continent_merged:
+        input:
+            summary = RUN_DIR / "summary.parquet",
+        output:
+            in_png = MERGED_OUT / f"plot_error_cdf_by_continent_{_CONT_SLUG}.png",
+            rest_png = MERGED_OUT / "plot_error_cdf_by_continent_rest.png",
+        params:
+            run_dir = str(RUN_DIR),
+            source = SOURCE,
+            inputs_dir = str(MERGED_INPUTS_DIR),
+            cont = SPLIT_CONT,
+            anchors = FILTERED_ANCHORS,
+            base_out = str(MERGED_OUT / "plot_error_cdf_by_continent.png"),
+        shell:
+            CLI + ".plot_error_cdf"
+            " --run-dir {params.run_dir}"
+            " --source {params.source}"
+            " --inputs-dir {params.inputs_dir}"
+            " --split-by-main-continent {params.cont}"
+            " --filtered-anchors {params.anchors}"
+            " --out {params.base_out}"
 
 rule phase_memory_merged:
     input:

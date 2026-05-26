@@ -18,6 +18,11 @@ phase_stat: p95
 include_fit: true
 runtime_stat: p50
 
+# Regional VP corpus: split SUCCESS CDFs by in-continent vs rest to surface
+# the home-continent recovery / out-of-continent degradation expected from
+# per-ASN fleets.
+split_by_main_continent: north_america
+
 diff_pairs:
   - [million_scale_cbg, vanilla_cbg]
   - [octant_cbg,        vanilla_cbg]
