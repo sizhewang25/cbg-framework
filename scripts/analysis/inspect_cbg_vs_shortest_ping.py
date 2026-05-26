@@ -32,6 +32,10 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from scripts.analysis._v2_io import discover_combos, load_targets
+from scripts.analysis.plot_error_cdf import (
+    _load_ip_to_continent,
+    _normalize_continent,
+)
 from scripts.analysis.plot_error_diff_cdf import plot_error_diff_cdf
 from scripts.libs.cbg.rtt_model import haversine_distance
 
@@ -203,6 +207,38 @@ def pick_percentile_examples(
     return rows
 
 
+def _partition_by_continent(
+    joined: dict[str, list[dict]],
+    ip_to_continent: dict[str, str],
+    target_continent_canon: str,
+) -> tuple[dict[str, list[dict]], dict[str, list[dict]], set[str]]:
+    """Split each combo's joined records by whether the target sits in
+    `target_continent_canon`. Anchors with unknown continent are dropped
+    from both groups; their target_ids are returned for logging.
+    """
+    in_grp: dict[str, list[dict]] = {}
+    rest_grp: dict[str, list[dict]] = {}
+    unknown_ids: set[str] = set()
+    for combo_id, records in joined.items():
+        in_grp[combo_id] = []
+        rest_grp[combo_id] = []
+        for r in records:
+            cont = ip_to_continent.get(r["target_id"], "Unknown")
+            if cont == "Unknown":
+                unknown_ids.add(r["target_id"])
+                continue
+            if cont == target_continent_canon:
+                in_grp[combo_id].append(r)
+            else:
+                rest_grp[combo_id].append(r)
+    return in_grp, rest_grp, unknown_ids
+
+
+def _suffix_path(p: Path, suffix: str) -> Path:
+    """`/dir/foo.png` + `north_america` -> `/dir/foo_north_america.png`."""
+    return p.with_name(f"{p.stem}_{suffix}{p.suffix}")
+
+
 def write_percentile_csv(rows: list[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     cols = [
@@ -217,6 +253,33 @@ def write_percentile_csv(rows: list[dict], path: Path) -> None:
         for r in rows:
             w.writerow({c: r.get(c) for c in cols})
     logger.info("Saved percentile CSV: %s (%d rows)", path, len(rows))
+
+
+def _emit(
+    joined: dict[str, list[dict]],
+    cbg_combo_ids: list[str],
+    out_png: Path,
+    out_csv: Path,
+    title: str,
+) -> None:
+    """Diff CDF PNG + percentile CSV from one (possibly continent-filtered)
+    joined dict. Synthesizes a `shortest_ping` pseudo-combo over the same
+    record set so the inner-join in `plot_error_diff_cdf` lines up."""
+    target_errors_by_combo: dict[str, dict[str, float]] = {}
+    baseline_errors: dict[str, float] = {}
+    for combo_id, records in joined.items():
+        target_errors_by_combo[combo_id] = {
+            f"{r['fold']}/{r['target_id']}": r["error_cbg_km"] for r in records
+        }
+        for r in records:
+            baseline_errors[f"{r['fold']}/{r['target_id']}"] = r["error_baseline_km"]
+    target_errors_by_combo[_BASELINE_NAME] = baseline_errors
+
+    pairs = [(cid, _BASELINE_NAME) for cid in cbg_combo_ids]
+    fig = plot_error_diff_cdf(target_errors_by_combo, pairs, out_png, title=title)
+    plt.close(fig)
+
+    write_percentile_csv(pick_percentile_examples(joined), out_csv)
 
 
 def main() -> None:
@@ -238,6 +301,22 @@ def main() -> None:
     parser.add_argument("--out-png", type=Path, required=True)
     parser.add_argument("--out-csv", type=Path, required=True)
     parser.add_argument("--title", default=None)
+    parser.add_argument(
+        "--split-by-main-continent",
+        default=None,
+        help=("When set, partition joined records by whether each target sits in "
+              "this continent (e.g. 'north_america') and emit TWO PNG/CSV pairs "
+              "derived from --out-png/--out-csv: <stem>_<slug>{.png,.csv} and "
+              "<stem>_rest{.png,.csv}. Suppresses the unsplit outputs."),
+    )
+    parser.add_argument(
+        "--filtered-anchors",
+        type=Path,
+        default=Path("datasets/ripe_atlas/filtered_anchors.json"),
+        help=("Anchor metadata for target→continent lookup via address_v4 + "
+              "continent_of(country_code). Used only with "
+              "--split-by-main-continent."),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -253,25 +332,38 @@ def main() -> None:
         len(cbg_combo_ids), cbg_combo_ids,
     )
 
-    # Diff CDF: synthesize a `shortest_ping` pseudo-combo and reuse the existing
-    # plotter. Inner-join on shared keys happens inside compute_error_diff.
-    target_errors_by_combo: dict[str, dict[str, float]] = {
-        cid: {k: row["error_km"] for k, row in rows.items()}
-        for cid, rows in cbg.items()
-    }
-    target_errors_by_combo[_BASELINE_NAME] = {
-        k: row["error_km"] for k, row in baseline.items()
-    }
-    pairs = [(cid, _BASELINE_NAME) for cid in cbg_combo_ids]
-    title = args.title or f"CBG vs shortest_ping ({args.run_dir.name}, SUCCESS-only)"
-    fig = plot_error_diff_cdf(
-        target_errors_by_combo, pairs, args.out_png, title=title,
-    )
-    plt.close(fig)
-
     joined = _join_deltas(cbg, baseline)
-    rows = pick_percentile_examples(joined)
-    write_percentile_csv(rows, args.out_csv)
+    base_title = args.title or f"CBG vs shortest_ping ({args.run_dir.name}, SUCCESS-only)"
+
+    if args.split_by_main_continent is None:
+        _emit(joined, cbg_combo_ids, args.out_png, args.out_csv, base_title)
+        return
+
+    canon = _normalize_continent(args.split_by_main_continent)
+    ip_to_continent = _load_ip_to_continent(args.filtered_anchors)
+    in_grp, rest_grp, unknown_ids = _partition_by_continent(
+        joined, ip_to_continent, canon,
+    )
+    if unknown_ids:
+        logger.warning(
+            "%d anchor IPs missing from %s or with unknown country_code; "
+            "dropped from both subsets",
+            len(unknown_ids), args.filtered_anchors,
+        )
+
+    slug = canon.lower().replace(" ", "_")
+    _emit(
+        in_grp, cbg_combo_ids,
+        _suffix_path(args.out_png, slug),
+        _suffix_path(args.out_csv, slug),
+        f"{base_title} — in {canon}",
+    )
+    _emit(
+        rest_grp, cbg_combo_ids,
+        _suffix_path(args.out_png, "rest"),
+        _suffix_path(args.out_csv, "rest"),
+        f"{base_title} — rest of world",
+    )
 
 
 if __name__ == "__main__":
