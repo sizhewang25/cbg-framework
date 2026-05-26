@@ -2,27 +2,36 @@
 
 Six setups (two NA eyeball telcos, two EU eyeball telcos, two global CDN/cloud)
 each materialize as a separate probe JSON plus a stats JSON. Anchors are
-*shared* across all setups: a single eval corpus that excludes the union of
-all setup ASNs, which keeps cross-setup comparisons apples-to-apples and
-removes institutional-proximity leakage in one go.
+*shared* across all setups: a single eval corpus formed by intersecting the
+anchor sets each setup's deduped probes can reach in `ping_10k_to_anchors`
+within `--max-rtt-ms` (default 10000 ms), then dropping any anchor whose ASN
+is one of the setup ASNs (institutional-proximity guard). This guarantees
+every setup has ping data for every kept anchor → apples-to-apples eval and
+no per-fold "this anchor isn't reachable from this AS" gaps.
 
-Each setup's probes go through a **city-cell deduplication** step after the
-ASN + continent filter: probes binned by 0.1° lat/lon cell (~11 km) are
-collapsed to one representative per cell. The winner per cell is the probe
-with (a) the most RTT records to the shared anchor set in `ping_10k_to_anchors`,
-(b) tiebroken by best (lowest) median RTT, (c) finally by probe id for
-determinism. Rationale: extra probes inside one metro contribute redundant
-geometry to CBG, but a probe with denser + lower-RTT measurements is a
-materially better VP.
+Pipeline per setup:
+  filtered_probes.json
+    → ASN filter (probe.asn_v4 == setup.asn)
+    → continent filter (country code + coord bbox; skipped for global setups)
+    → city-cell dedup (0.1° bins → one probe per cell, ranked by RTT-record
+      count then median RTT in `ping_10k_to_anchors`)
+    → probes_of_as_<asn>.json
+
+Shared anchors:
+  filtered_anchors.json
+    → drop anchors in any setup ASN
+    → keep only anchors reached by *every* setup's deduped probes at
+      `min` ∈ (0, --max-rtt-ms) in ping_10k_to_anchors
+    → anchors.json
 
 Inputs:
   datasets/ripe_atlas/filtered_probes.json   (produced by sanitize_probes.py)
   datasets/ripe_atlas/filtered_anchors.json  (produced by sanitize_anchors.py)
-  ClickHouse `ping_10k_to_anchors` table     (for the dedup ranking)
+  ClickHouse `ping_10k_to_anchors` table     (for dedup ranking + reachability)
 
 Outputs (under datasets/ripe_atlas/asn_corpora/):
-  anchors/anchors.json                          # shared eval set
-  anchors/anchors_stats.json                    # union-exclusion audit trail
+  anchors/anchors.json                          # shared eval set (intersection)
+  anchors/anchors_stats.json                    # per-setup reach + dropped audit
   probes/north_america/probes_of_as_7922.json   + _stats.json
   probes/north_america/probes_of_as_7018.json   + _stats.json
   probes/europe/probes_of_as_3209.json          + _stats.json
@@ -164,35 +173,108 @@ def select_probes(setup: Setup, probes: list[dict]) -> tuple[list[dict], dict]:
     return kept, stats
 
 
-def select_shared_anchors(setups: list[Setup], anchors: list[dict]) -> tuple[list[dict], dict]:
-    """Single anchor corpus shared across all setups.
+def select_common_anchors(
+    setups: list[Setup],
+    setup_probe_ips: dict[int, list[str]],
+    anchors: list[dict],
+    *,
+    table: str = "ping_10k_to_anchors",
+    max_rtt_ms: float = 10000.0,
+) -> tuple[list[dict], dict]:
+    """Shared anchor corpus = ∩(anchors reachable from each setup's probes).
 
-    Excludes any anchor whose `asn_v4` matches *any* setup's ASN — so the same
-    eval set is apples-to-apples across all six deployment scenarios. We pay
-    the price of the union of dropped anchors once instead of per-setup, which
-    keeps cross-setup comparisons honest and the downstream pipeline simpler
-    (one anchor file, not six).
+    Two filters compose:
+      1. **Same-ASN exclusion** (institutional-proximity guard): drop any
+         anchor whose `asn_v4` is one of the setup ASNs. Otherwise the setup
+         that owns the anchor's host network would see ~0ms RTT and an
+         unfairly tight CBG constraint.
+      2. **Reachability intersection**: of the remaining candidates, keep
+         only those reached by *every* setup's deduped probes with
+         `min ∈ (0, max_rtt_ms)` in `table`. Guarantees the per-setup
+         K-fold eval will have observations for every kept anchor.
+
+    One ClickHouse round-trip pulls all (src, dst) pairs across all setups'
+    probes; per-setup sets are formed in Python and intersected.
     """
-    excluded_asns = {s.asn for s in setups}
-    dropped = [a for a in anchors if a.get("asn_v4") in excluded_asns]
-    kept = [a for a in anchors if a.get("asn_v4") not in excluded_asns]
+    from scripts.utils.clickhouse import Clickhouse
 
-    # Trim dropped entries to a small audit record (id + addr + asn + cc).
-    dropped_compact = [
+    excluded_asns = {s.asn for s in setups}
+    dropped_same_asn = [a for a in anchors if a.get("asn_v4") in excluded_asns]
+    candidate_anchors = [a for a in anchors if a.get("asn_v4") not in excluded_asns]
+    candidate_ips = [
+        a["address_v4"] for a in candidate_anchors if a.get("address_v4")
+    ]
+
+    # Map probe_ip → setup ASN so we can split CH rows back into per-setup sets.
+    probe_to_setup_asn: dict[str, int] = {}
+    for asn, ips in setup_probe_ips.items():
+        for ip in ips:
+            probe_to_setup_asn[ip] = asn
+    all_probe_ips = sorted(probe_to_setup_asn)
+
+    src_ints = [int(ipaddress.IPv4Address(ip)) for ip in all_probe_ips]
+    dst_ints = [int(ipaddress.IPv4Address(ip)) for ip in candidate_ips]
+    if not src_ints or not dst_ints:
+        raise RuntimeError(
+            "select_common_anchors: empty probe or candidate set "
+            f"(probes={len(src_ints)}, anchors={len(dst_ints)})"
+        )
+
+    ch = Clickhouse()
+    query = f"""
+        SELECT IPv4NumToString(src) AS src_ip,
+               IPv4NumToString(dst) AS dst_ip
+        FROM {ch.database}.{table}
+        WHERE src IN ({','.join(map(str, src_ints))})
+          AND dst IN ({','.join(map(str, dst_ints))})
+          AND `min` > 0 AND `min` < {max_rtt_ms}
+        GROUP BY src, dst
+    """
+    logger.info(
+        "query reachable (src, dst) pairs from %s.%s: %d probes × %d candidate anchors at `min` < %.0f ms",
+        ch.database, table, len(src_ints), len(dst_ints), max_rtt_ms,
+    )
+    pairs = list(ch.client.execute_iter(query))
+    ch.client.disconnect()
+    logger.info("  pulled %d distinct (probe, anchor) pairs", len(pairs))
+
+    reached_per_setup: dict[int, set[str]] = {asn: set() for asn in setup_probe_ips}
+    for src_ip, dst_ip in pairs:
+        asn = probe_to_setup_asn.get(src_ip)
+        if asn is not None:
+            reached_per_setup[asn].add(dst_ip)
+
+    # Intersection across all setups.
+    common_ips: set[str] = (
+        set.intersection(*reached_per_setup.values())
+        if reached_per_setup else set()
+    )
+    kept = [a for a in candidate_anchors if a.get("address_v4") in common_ips]
+
+    dropped_unreachable_count = len(candidate_anchors) - len(kept)
+
+    dropped_same_asn_compact = [
         {
             "id": a.get("id"),
             "address_v4": a.get("address_v4"),
             "asn_v4": a.get("asn_v4"),
             "country_code": a.get("country_code"),
         }
-        for a in dropped
+        for a in dropped_same_asn
     ]
 
     stats = {
         "input_total": len(anchors),
         "excluded_asns": sorted(excluded_asns),
         "excluded_asn_operators": {s.asn: s.operator for s in setups},
-        "dropped_count": len(dropped),
+        "dropped_same_asn_count": len(dropped_same_asn),
+        "rtt_table": table,
+        "max_rtt_ms": max_rtt_ms,
+        "candidate_count": len(candidate_anchors),
+        "reached_per_setup": {
+            asn: len(reached_per_setup[asn]) for asn in sorted(reached_per_setup)
+        },
+        "dropped_unreachable_count": dropped_unreachable_count,
         "kept": len(kept),
         "kept_by_continent": _breakdown_by(
             kept, lambda e: continent_of(e.get("country_code"))
@@ -200,7 +282,7 @@ def select_shared_anchors(setups: list[Setup], anchors: list[dict]) -> tuple[lis
         "kept_by_country": _breakdown_by(
             kept, lambda e: e.get("country_code") or "Unknown"
         ),
-        "dropped_anchors": dropped_compact,
+        "dropped_same_asn": dropped_same_asn_compact,
     }
     return kept, stats
 
@@ -314,8 +396,12 @@ def run_setup(
     out_root: Path,
     quality_map: Optional[dict[str, tuple[int, float]]] = None,
     grid_deg: float = 0.1,
-) -> None:
-    """Probe-only per-setup output. Anchors are shared (see select_shared_anchors)."""
+) -> list[dict]:
+    """Probe-only per-setup output. Anchors are shared (see select_common_anchors).
+
+    Returns the city-deduped probe list so the caller can compute the
+    cross-setup reachability intersection for the shared anchor corpus.
+    """
     folder = out_root / "probes" / setup.folder
     folder.mkdir(parents=True, exist_ok=True)
 
@@ -354,6 +440,7 @@ def run_setup(
             setup.asn, setup.operator, setup.setup_continent,
             probe_stats["kept"], probe_stats["input_total"], probe_stats["matched_asn"],
         )
+    return kept_probes
 
 
 def main() -> int:
@@ -404,35 +491,54 @@ def main() -> int:
     anchors = _load_json(args.anchors_file)
     logger.info("  %d anchors", len(anchors))
 
-    # One shared anchor eval set for all setups. Dropping the union of all
-    # setup ASNs keeps cross-setup comparisons apples-to-apples.
-    shared_anchors, anchor_stats = select_shared_anchors(SETUPS, anchors)
-    anchors_dir = args.output_dir / "anchors"
-    anchors_dir.mkdir(parents=True, exist_ok=True)
-    _save_json(anchors_dir / "anchors.json", shared_anchors)
-    _save_json(anchors_dir / "anchors_stats.json", anchor_stats)
-    logger.info(
-        "shared anchors: %d/%d (excluded ASNs: %s; dropped %d)",
-        anchor_stats["kept"], anchor_stats["input_total"],
-        anchor_stats["excluded_asns"], anchor_stats["dropped_count"],
-    )
-
-    # One ClickHouse query gives us per-probe (n_records, median_rtt) against
-    # the shared anchor set; reused across all six setups for the city dedup.
-    anchor_ips = [a.get("address_v4") for a in shared_anchors if a.get("address_v4")]
+    # Probe quality (n_records, median_rtt) is computed against *all*
+    # sanitized anchor IPs — independent of the shared anchor set, since the
+    # shared set is itself derived from the deduped probes (circular if we
+    # used it here). The dedup ranking only cares about which probes are
+    # active in ping_10k_to_anchors, so using the broader anchor pool is fine.
+    all_anchor_ips = [a.get("address_v4") for a in anchors if a.get("address_v4")]
     quality_map = compute_probe_quality(
-        anchor_ips,
+        all_anchor_ips,
         table=args.rtt_table,
         max_rtt_ms=args.max_rtt_ms,
     )
     logger.info("  probe quality records: %d src IPs", len(quality_map))
 
+    # Per-setup probe selection + city dedup. Collect deduped probe IPs per
+    # setup so we can intersect their reachable-anchor sets next.
+    setup_probe_ips: dict[int, list[str]] = {}
     for setup in SETUPS:
-        run_setup(
+        kept_probes = run_setup(
             setup, probes, args.output_dir,
             quality_map=quality_map,
             grid_deg=args.city_grid_deg,
         )
+        setup_probe_ips[setup.asn] = [
+            p["address_v4"] for p in kept_probes if p.get("address_v4")
+        ]
+
+    # Shared anchor corpus = ∩(reachable anchors per setup) with same-ASN guard.
+    common_anchors, anchor_stats = select_common_anchors(
+        SETUPS, setup_probe_ips, anchors,
+        table=args.rtt_table,
+        max_rtt_ms=args.max_rtt_ms,
+    )
+    anchors_dir = args.output_dir / "anchors"
+    anchors_dir.mkdir(parents=True, exist_ok=True)
+    _save_json(anchors_dir / "anchors.json", common_anchors)
+    _save_json(anchors_dir / "anchors_stats.json", anchor_stats)
+    logger.info(
+        "shared anchors: kept=%d / %d candidates "
+        "(dropped %d same-ASN, %d unreachable at `min` < %.0f ms)",
+        anchor_stats["kept"], anchor_stats["candidate_count"],
+        anchor_stats["dropped_same_asn_count"],
+        anchor_stats["dropped_unreachable_count"],
+        anchor_stats["max_rtt_ms"],
+    )
+    logger.info(
+        "  per-setup reachable counts (pre-intersection): %s",
+        anchor_stats["reached_per_setup"],
+    )
 
     logger.info("done. wrote %d probe corpora + shared anchors under %s",
                 len(SETUPS), args.output_dir)

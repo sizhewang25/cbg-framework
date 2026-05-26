@@ -1,0 +1,24 @@
+# Merged-folds analysis for the europe_as3209 benchmark run.
+#
+# Concatenates per-target results from fold_0..fold_4 (disjoint K-fold test
+# sets) and recomputes per-stage percentiles from raw — see scripts/analysis/Snakefile.
+#
+# Run with:
+#   snakemake -s scripts/analysis/Snakefile \
+#       --configfile scripts/analysis/config/europe_as3209.yaml -j 3
+
+run_id: europe_as3209
+source: ripe_atlas_asn_corpora
+setup: probes_to_anchors
+slices: []
+merge_folds: true
+
+group_by: ltd                  # "ltd" = one CDF panel per LTD model; "none" = single panel
+phase_stat: p95                # which per-stage summary stat to stack: p5/p25/p50/p75/p95/mean
+include_fit: true              # add a FIT bar from each combo's run.json (max-of-folds)
+runtime_stat: p50              # plot_phase_runtime bars — median per-stage
+
+diff_pairs:
+  - [million_scale_cbg, vanilla_cbg]
+  - [octant_cbg,        vanilla_cbg]
+  - [spotter_cbg,       vanilla_cbg]

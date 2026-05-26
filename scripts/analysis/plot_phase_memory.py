@@ -20,7 +20,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pyarrow as pa
 
-from scripts.analysis._v2_io import discover_combos, load_run_json, load_summary
+from scripts.analysis._v2_io import (
+    discover_combos,
+    group_combos_by_id,
+    load_run_json,
+    load_summary,
+    load_targets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -157,26 +163,114 @@ def plot_phase_memory(
     return fig
 
 
+_PHASE_PEAK_COLS = ("ltd_peak_bytes", "mtl_peak_bytes", "ctr_peak_bytes")
+_STAT_NAMES = ("p5", "p25", "p50", "p75", "p95", "mean", "std")
+_STAT_QS = {"p5": 0.05, "p25": 0.25, "p50": 0.50, "p75": 0.75, "p95": 0.95}
+
+
+def _stats_from_array(arr: np.ndarray) -> dict[str, float]:
+    """Compute the SUMMARY_SCHEMA stat set (p5/p25/p50/p75/p95/mean/std)
+    from a raw numeric array. NaNs are dropped first; empty input → all NaN.
+    """
+    arr = np.asarray(arr, dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size == 0:
+        return {s: float("nan") for s in _STAT_NAMES}
+    out: dict[str, float] = {s: float(np.quantile(arr, q)) for s, q in _STAT_QS.items()}
+    out["mean"] = float(np.mean(arr))
+    out["std"] = float(np.std(arr, ddof=1)) if arr.size > 1 else float("nan")
+    return out
+
+
+def _synthesize_merged_summary(
+    grouped: dict[str, list[Path]],
+    columns: tuple[str, ...],
+) -> pa.Table:
+    """Build a one-row-per-combo summary by concatenating raw per-target
+    values across folds and recomputing the SUMMARY_SCHEMA stat columns
+    for `columns`. Returned table has `combo_id` + `<col>_<stat>` columns
+    for each col in `columns` and each stat in _STAT_NAMES.
+    """
+    cids = sorted(grouped)
+    table_data: dict[str, list] = {"combo_id": cids}
+    for col in columns:
+        for stat in _STAT_NAMES:
+            table_data[f"{col}_{stat}"] = []
+    for cid in cids:
+        for col in columns:
+            arrs = []
+            for combo_dir in grouped[cid]:
+                tbl = load_targets(combo_dir)
+                arrs.append(tbl.column(col).to_numpy(zero_copy_only=False))
+            concat = np.concatenate(arrs) if arrs else np.array([], dtype=float)
+            stats = _stats_from_array(concat)
+            for stat in _STAT_NAMES:
+                table_data[f"{col}_{stat}"].append(stats[stat])
+    return pa.table(table_data)
+
+
+def _merged_run_jsons(grouped: dict[str, list[Path]]) -> dict[str, dict]:
+    """Per-combo run.json synthesized from K fold runs.
+
+    `fit_peak_bytes` and `run_peak_rss_bytes` are reduced with max across
+    folds — both are process-level peaks and max is the worst-case bound,
+    consistent with framing the merged plot as a worst-case characterization
+    of the combo across the K cross-validation runs.
+    """
+    out: dict[str, dict] = {}
+    for cid, dirs in grouped.items():
+        fits: list[int] = []
+        rsss: list[int] = []
+        for d in dirs:
+            rj = load_run_json(d)
+            fp = rj.get("fit_peak_bytes")
+            if fp is not None:
+                fits.append(int(fp))
+            rss = rj.get("run_peak_rss_bytes")
+            if rss is not None:
+                rsss.append(int(rss))
+        out[cid] = {
+            "fit_peak_bytes": max(fits) if fits else None,
+            "run_peak_rss_bytes": max(rsss) if rsss else None,
+        }
+    return out
+
+
 def _load_from_run(
     run_dir: Path,
     source: Optional[str],
     slice_: Optional[str],
 ) -> tuple[pa.Table, dict[str, dict]]:
-    """Return (summary table filtered to source/slice, run_jsons by combo_id)."""
+    """Return (summary table, run_jsons by combo_id).
+
+    Single-fold mode (`slice_` given): filters `summary.parquet` to
+    (source, slice) and uses each combo's run.json verbatim.
+
+    Merged-folds mode (`slice_=None` on a K-fold layout): synthesizes a
+    summary by concatenating per-target peak-bytes from each fold's
+    targets.parquet and recomputing percentiles from raw, since percentiles
+    don't aggregate from per-fold percentiles. `fit_peak_bytes` and
+    `run_peak_rss_bytes` are reduced with max-of-folds.
+    """
+    combo_dirs = discover_combos(run_dir, source, slice_)
+    if not combo_dirs:
+        raise FileNotFoundError(f"No combos found under {run_dir}")
+
+    if slice_ is None:
+        grouped = group_combos_by_id(combo_dirs)
+        summary = _synthesize_merged_summary(grouped, _PHASE_PEAK_COLS)
+        run_jsons = _merged_run_jsons(grouped)
+        return summary, run_jsons
+
     summary = load_summary(run_dir)
     if source is not None:
-        mask = pa.compute.equal(summary.column("source"), source)
-        summary = summary.filter(mask)
-    if slice_ is not None:
-        mask = pa.compute.equal(summary.column("slice"), slice_)
-        summary = summary.filter(mask)
+        summary = summary.filter(pa.compute.equal(summary.column("source"), source))
+    summary = summary.filter(pa.compute.equal(summary.column("slice"), slice_))
     if summary.num_rows == 0:
         raise ValueError(
             f"No rows in summary.parquet at {run_dir} after filtering "
             f"source={source!r} slice={slice_!r}"
         )
-
-    combo_dirs = discover_combos(run_dir, source, slice_)
     run_jsons = {d.name: load_run_json(d) for d in combo_dirs}
     return summary, run_jsons
 

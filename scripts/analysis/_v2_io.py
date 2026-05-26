@@ -28,6 +28,11 @@ def discover_combos(
     A "combo directory" is any directory containing `targets.parquet`. When
     `source` / `slice_` are given, only paths whose components include them
     are kept.
+
+    With `slice_=None` on a K-fold layout (`<source>/<setup>/fold_*/<combo_id>/`)
+    the result contains one entry per (fold, combo_id); the same combo_id
+    appears K times. Use `group_combos_by_id` to fold those into one entry
+    per combo_id for merged-fold analyses.
     """
     combo_dirs = [p.parent for p in run_dir.glob("**/targets.parquet")]
     if source is not None:
@@ -35,6 +40,21 @@ def discover_combos(
     if slice_ is not None:
         combo_dirs = [d for d in combo_dirs if slice_ in d.parts]
     return sorted(combo_dirs, key=lambda d: d.name)
+
+
+def group_combos_by_id(combo_dirs: list[Path]) -> dict[str, list[Path]]:
+    """Group `discover_combos` output by combo_id (= directory name).
+
+    With per-fold output layout each combo_id appears once per fold. The
+    returned dict maps `combo_id -> [fold_0_dir, fold_1_dir, ...]` with the
+    per-combo list sorted by parent dir name (= fold id).
+    """
+    grouped: dict[str, list[Path]] = {}
+    for d in combo_dirs:
+        grouped.setdefault(d.name, []).append(d)
+    for cid in grouped:
+        grouped[cid].sort(key=lambda d: d.parent.name)
+    return grouped
 
 
 def load_targets(combo_dir: Path) -> pa.Table:

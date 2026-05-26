@@ -13,6 +13,13 @@
 #   plot_phase_runtime.png          – stacked LTD/MTL/CTR per-target runtime + total line
 # Both error-CDF plots overlay a nearest-ping VP baseline read from
 # inputs/<source>/<setup>/<slice>/eval_observations.parquet.
+#
+# With `merge_folds: true`, an additional `merged/` output dir is produced
+# whose plots aggregate across all fold subdirs of <source>/<setup>/. The
+# CDF/diff plots concatenate per-target rows across folds (K-fold test sets
+# are disjoint by construction). The phase memory/runtime plots concatenate
+# per-target stage costs and recompute percentiles from raw — percentiles
+# don't aggregate from per-fold percentiles.
 
 from pathlib import Path
 
@@ -20,7 +27,9 @@ from pathlib import Path
 RUN_ID = config["run_id"]                          # required
 SOURCE = config["source"]                          # required
 SETUP  = config.get("setup", "probes_to_anchors")  # or "anchors_to_probes"
-SLICES = config["slices"]                          # required: list[str]
+SLICES = config.get("slices", [])                  # list[str]; [] = no per-slice plots
+MERGE_FOLDS = bool(config.get("merge_folds", False))
+MERGED_DIR_NAME = config.get("merged_dir_name", "merged")
 
 V2_OUTPUTS_ROOT = Path(config.get("v2_outputs_root", "scripts/benchmark/v2/outputs"))
 V2_INPUTS_ROOT  = Path(config.get("v2_inputs_root",  "scripts/benchmark/v2/inputs"))
@@ -34,11 +43,21 @@ RUNTIME_STAT = config.get("runtime_stat", "p50")  # bars on plot_phase_runtime �
 # Diff pairs: list of [A, B] combo_id pairs. Required for the diff plot.
 DIFF_PAIRS = config.get("diff_pairs", [])
 
+if not SLICES and not MERGE_FOLDS:
+    raise ValueError(
+        "Snakefile: nothing to do — set `slices: [...]` and/or `merge_folds: true` "
+        "in the config."
+    )
+
 CLI = "python -m scripts.analysis"
 
 RUN_DIR = V2_OUTPUTS_ROOT / RUN_ID
 SLICE_OUT = ANALYSIS_ROOT / RUN_ID / SOURCE / SETUP / "{slice}"
-INPUTS_DIR = V2_INPUTS_ROOT / SOURCE / SETUP / "{slice}"
+# Matches the inputs layout written by scripts/benchmark/v2/Snakefile:
+# <inputs_root>/<source>/<run_id>/<setup>/<slice>/.
+INPUTS_DIR = V2_INPUTS_ROOT / SOURCE / RUN_ID / SETUP / "{slice}"
+MERGED_OUT = ANALYSIS_ROOT / RUN_ID / SOURCE / SETUP / MERGED_DIR_NAME
+MERGED_INPUTS_DIR = V2_INPUTS_ROOT / SOURCE / RUN_ID / SETUP  # parent of all fold dirs
 
 _PLOTS = [
     "plot_error_cdf",
@@ -50,9 +69,17 @@ if DIFF_PAIRS:
     _PLOTS.append("plot_error_diff_cdf")
 
 # ---- Targets ----------------------------------------------------------------
+def _all_targets():
+    targets = []
+    if SLICES:
+        targets.extend(expand(str(SLICE_OUT / "{plot}.png"), slice=SLICES, plot=_PLOTS))
+    if MERGE_FOLDS:
+        targets.extend(expand(str(MERGED_OUT / "{plot}.png"), plot=_PLOTS))
+    return targets
+
 rule all:
     input:
-        expand(str(SLICE_OUT / "{plot}.png"), slice=SLICES, plot=_PLOTS)
+        _all_targets()
 
 # ---- Plots ------------------------------------------------------------------
 rule error_cdf:
@@ -146,5 +173,97 @@ rule error_diff_cdf:
         " --run-dir {params.run_dir}"
         " --source {params.source}"
         " --slice {wildcards.slice}"
+        " {params.pair_args}"
+        " --out {output.png}"
+
+# ---- Merged-folds plots -----------------------------------------------------
+# These rules omit --slice; each plot CLI auto-detects merged-folds mode and
+# either concatenates per-target rows (CDF / diff CDF) or recomputes
+# per-stage percentiles from raw across folds (memory / runtime).
+
+rule error_cdf_merged:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = MERGED_OUT / "plot_error_cdf.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        group_by = GROUP_BY,
+        inputs_dir = str(MERGED_INPUTS_DIR),
+    shell:
+        CLI + ".plot_error_cdf"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --group-by {params.group_by}"
+        " --inputs-dir {params.inputs_dir}"
+        " --out {output.png}"
+
+rule error_cdf_success_merged:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = MERGED_OUT / "plot_error_cdf_for_success.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        group_by = GROUP_BY,
+        inputs_dir = str(MERGED_INPUTS_DIR),
+    shell:
+        CLI + ".plot_error_cdf"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --group-by {params.group_by}"
+        " --inputs-dir {params.inputs_dir}"
+        " --success-only"
+        " --out {output.png}"
+
+rule phase_memory_merged:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = MERGED_OUT / "plot_phase_memory.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        stat = PHASE_STAT,
+        fit_flag = "" if INCLUDE_FIT else "--no-fit",
+    shell:
+        CLI + ".plot_phase_memory"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --stat {params.stat}"
+        " {params.fit_flag}"
+        " --out {output.png}"
+
+rule phase_runtime_merged:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = MERGED_OUT / "plot_phase_runtime.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        stat = RUNTIME_STAT,
+    shell:
+        CLI + ".plot_phase_runtime"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --stat {params.stat}"
+        " --out {output.png}"
+
+rule error_diff_cdf_merged:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = MERGED_OUT / "plot_error_diff_cdf.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        pair_args = " ".join(f"--pair {a} {b}" for a, b in DIFF_PAIRS),
+    shell:
+        CLI + ".plot_error_diff_cdf"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
         " {params.pair_args}"
         " --out {output.png}"

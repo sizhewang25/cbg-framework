@@ -97,7 +97,13 @@ def _load_from_run(
     source: Optional[str],
     slice_: Optional[str],
 ) -> dict[str, dict[str, float]]:
-    """Walk `run_dir`, return {combo_id: {target_id: error_km}} for SUCCESS rows."""
+    """Walk `run_dir`, return {combo_id: {target_key: error_km}} for rows
+    with a non-null error_km.
+
+    With `slice_=None` on a K-fold layout, every combo_id collects entries
+    from every fold; target keys are prefixed with the fold dir name to
+    keep folds disjoint in the dict even if target_id is reused.
+    """
     combo_dirs = discover_combos(run_dir, source, slice_)
     if not combo_dirs:
         raise FileNotFoundError(f"No combos found under {run_dir}")
@@ -107,11 +113,12 @@ def _load_from_run(
         tbl = load_targets(combo_dir)
         target_ids = tbl.column("target_id").to_pylist()
         errors = tbl.column("error_km").to_numpy(zero_copy_only=False)
-        out[combo_dir.name] = {
-            tid: float(err)
-            for tid, err in zip(target_ids, errors)
-            if not np.isnan(err)
-        }
+        fold = combo_dir.parent.name
+        bucket = out.setdefault(combo_dir.name, {})
+        for tid, err in zip(target_ids, errors):
+            if np.isnan(err):
+                continue
+            bucket[f"{fold}/{tid}"] = float(err)
     return out
 
 

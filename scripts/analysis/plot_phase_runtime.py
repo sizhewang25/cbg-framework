@@ -23,7 +23,12 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from scripts.analysis._v2_io import discover_combos, load_summary, load_targets
+from scripts.analysis._v2_io import (
+    discover_combos,
+    group_combos_by_id,
+    load_summary,
+    load_targets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,24 +174,87 @@ def plot_phase_runtime(
     return fig
 
 
+_PHASE_MS_COLS = ("ltd_ms", "mtl_ms", "ctr_ms")
+_STAT_NAMES = ("p5", "p25", "p50", "p75", "p95", "mean", "std")
+_STAT_QS = {"p5": 0.05, "p25": 0.25, "p50": 0.50, "p75": 0.75, "p95": 0.95}
+
+
+def _stats_from_array(arr: np.ndarray) -> dict[str, float]:
+    """SUMMARY_SCHEMA stat set (p5/p25/p50/p75/p95/mean/std) for a raw array.
+    NaN-dropped; empty input returns all NaN.
+    """
+    arr = np.asarray(arr, dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size == 0:
+        return {s: float("nan") for s in _STAT_NAMES}
+    out: dict[str, float] = {s: float(np.quantile(arr, q)) for s, q in _STAT_QS.items()}
+    out["mean"] = float(np.mean(arr))
+    out["std"] = float(np.std(arr, ddof=1)) if arr.size > 1 else float("nan")
+    return out
+
+
+def _synthesize_merged_summary(
+    grouped: dict[str, list[Path]],
+    targets_by_combo: dict[str, pa.Table],
+    columns: tuple[str, ...],
+) -> pa.Table:
+    """Build a one-row-per-combo summary by recomputing the SUMMARY_SCHEMA
+    stat columns for `columns` from the already-concatenated per-combo
+    targets tables. Returns `combo_id` + `<col>_<stat>` columns.
+    """
+    cids = sorted(grouped)
+    table_data: dict[str, list] = {"combo_id": cids}
+    for col in columns:
+        for stat in _STAT_NAMES:
+            table_data[f"{col}_{stat}"] = []
+    for cid in cids:
+        tbl = targets_by_combo[cid]
+        for col in columns:
+            arr = tbl.column(col).to_numpy(zero_copy_only=False)
+            stats = _stats_from_array(arr)
+            for stat in _STAT_NAMES:
+                table_data[f"{col}_{stat}"].append(stats[stat])
+    return pa.table(table_data)
+
+
 def _load_from_run(
     run_dir: Path,
     source: Optional[str],
     slice_: Optional[str],
 ) -> tuple[pa.Table, dict[str, pa.Table]]:
-    """Return (filtered summary, combo_id -> targets table)."""
+    """Return (summary, combo_id -> targets table).
+
+    Single-fold mode (`slice_` given): filters `summary.parquet` and reads
+    each combo's targets directly.
+
+    Merged-folds mode (`slice_=None` on a K-fold layout): concatenates
+    targets.parquet across folds per combo_id and synthesizes a summary
+    whose per-stage stats are recomputed from raw — percentiles don't
+    aggregate from per-fold percentiles.
+    """
+    combo_dirs = discover_combos(run_dir, source, slice_)
+    if not combo_dirs:
+        raise FileNotFoundError(f"No combos found under {run_dir}")
+
+    if slice_ is None:
+        grouped = group_combos_by_id(combo_dirs)
+        targets_by_combo: dict[str, pa.Table] = {}
+        for cid, dirs in grouped.items():
+            tables = [load_targets(d) for d in dirs]
+            targets_by_combo[cid] = pa.concat_tables(tables, promote_options="default")
+        summary = _synthesize_merged_summary(grouped, targets_by_combo, _PHASE_MS_COLS)
+        return summary, targets_by_combo
+
     summary = load_summary(run_dir)
     if source is not None:
         summary = summary.filter(pc.equal(summary.column("source"), source))
-    if slice_ is not None:
-        summary = summary.filter(pc.equal(summary.column("slice"), slice_))
+    summary = summary.filter(pc.equal(summary.column("slice"), slice_))
     if summary.num_rows == 0:
         raise ValueError(
             f"No rows in summary.parquet at {run_dir} after filtering "
             f"source={source!r} slice={slice_!r}"
         )
 
-    combo_dirs = discover_combos(run_dir, source, slice_)
     targets_by_combo = {d.name: load_targets(d) for d in combo_dirs}
     return summary, targets_by_combo
 

@@ -33,6 +33,7 @@ import pyarrow.parquet as pq
 
 from scripts.analysis._v2_io import (
     discover_combos,
+    group_combos_by_id,
     load_summary,
     load_targets,
     palette,
@@ -219,45 +220,69 @@ def _load_from_run(
     `successes_by_combo` counts SUCCESS-status rows (independent of
     `success_only`) so the stats column shows the same success rate on both
     views. `totals_by_combo` is the total number of target rows per combo.
+
+    With `slice_=None` on a K-fold layout, error arrays and counts are
+    concatenated across folds per combo_id — K-fold test sets are disjoint
+    by construction, so this is one row per target.
     """
     combo_dirs = discover_combos(run_dir, source, slice_)
     if not combo_dirs:
         raise FileNotFoundError(f"No combos found under {run_dir}")
 
-    errors_by_combo: dict[str, np.ndarray] = {}
+    errors_by_combo: dict[str, list[np.ndarray]] = {}
     successes_by_combo: dict[str, int] = {}
     totals_by_combo: dict[str, int] = {}
     for combo_dir in combo_dirs:
+        cid = combo_dir.name
         tbl = load_targets(combo_dir)
-        totals_by_combo[combo_dir.name] = tbl.num_rows
+        totals_by_combo[cid] = totals_by_combo.get(cid, 0) + tbl.num_rows
         success_mask = pc.equal(tbl.column("status"), "SUCCESS")
-        successes_by_combo[combo_dir.name] = int(pc.sum(success_mask).as_py() or 0)
+        successes_by_combo[cid] = (
+            successes_by_combo.get(cid, 0) + int(pc.sum(success_mask).as_py() or 0)
+        )
         if success_only:
             tbl = tbl.filter(success_mask)
         arr = tbl.column("error_km").to_numpy(zero_copy_only=False)
         arr = arr[~np.isnan(arr)]
-        errors_by_combo[combo_dir.name] = arr
+        errors_by_combo.setdefault(cid, []).append(arr)
+
+    errors_concat: dict[str, np.ndarray] = {
+        cid: (np.concatenate(parts) if parts else np.array([], dtype=float))
+        for cid, parts in errors_by_combo.items()
+    }
 
     summary = load_summary(run_dir)
     combo_to_ltd = dict(zip(
         summary.column("combo_id").to_pylist(),
         summary.column("ltd").to_pylist(),
     ))
-    return errors_by_combo, successes_by_combo, totals_by_combo, combo_to_ltd
+    return errors_concat, successes_by_combo, totals_by_combo, combo_to_ltd
 
 
 def _load_nearest_ping_baseline(inputs_dir: Path) -> np.ndarray:
     """Read eval_observations.parquet and compute haversine error from each
     target to the location of its smallest-latency VP. One error per target.
+
+    If `inputs_dir/eval_observations.parquet` exists, it's read directly
+    (single-fold mode). Otherwise the directory is treated as the parent of
+    per-fold input dirs and `**/eval_observations.parquet` is globbed and
+    concatenated — the merged-folds counterpart of the merged-folds loader
+    in `_load_from_run`.
     """
-    path = inputs_dir / "eval_observations.parquet"
-    if not path.exists():
-        raise FileNotFoundError(
-            f"No eval_observations.parquet at {inputs_dir}. "
-            "Pass --inputs-dir pointing at the materialized inputs directory."
-        )
-    tbl = pq.read_table(path)
-    df = tbl.to_pandas()
+    direct = inputs_dir / "eval_observations.parquet"
+    if direct.exists():
+        paths = [direct]
+    else:
+        paths = sorted(inputs_dir.glob("*/eval_observations.parquet"))
+        if not paths:
+            raise FileNotFoundError(
+                f"No eval_observations.parquet at {inputs_dir} or under "
+                f"{inputs_dir}/*/. Pass --inputs-dir pointing at a fold "
+                "input dir or at its parent (for merged-fold mode)."
+            )
+
+    import pandas as pd
+    df = pd.concat([pq.read_table(p).to_pandas() for p in paths], ignore_index=True)
     if df.empty:
         return np.array([], dtype=float)
 
