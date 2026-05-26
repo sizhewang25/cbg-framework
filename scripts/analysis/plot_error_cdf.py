@@ -42,6 +42,22 @@ from scripts.libs.cbg.rtt_model import haversine_distance
 
 logger = logging.getLogger(__name__)
 
+# Panel order when group_by="ltd". Known LTDs follow this sequence (loosest
+# CBG geometry → tightest stat model); unknown LTDs append in name order.
+_LTD_PANEL_ORDER: tuple[str, ...] = (
+    "speed_of_internet",
+    "low_envelope",
+    "bounded_spline",
+    "normal_dist",
+)
+
+
+def _ltd_panel_sort_key(ltd: str) -> tuple[int, str]:
+    try:
+        return (_LTD_PANEL_ORDER.index(ltd), ltd)
+    except ValueError:
+        return (len(_LTD_PANEL_ORDER), ltd)
+
 
 def _short_label(cid: str) -> str:
     """Compact form of `cid` for the stats panel. Only the
@@ -64,7 +80,7 @@ def plot_error_cdf(
     group_by: Optional[str] = "ltd",
     combo_to_ltd: Optional[dict[str, str]] = None,
     thresholds: tuple[int, ...] = (100, 500, 1000),
-    max_x_km: float = 3000.0,
+    max_x_km: float = 10000.0,
     colors: Optional[dict[str, str]] = None,
     title: Optional[str] = None,
 ) -> plt.Figure:
@@ -90,7 +106,10 @@ def plot_error_cdf(
     if group_by == "ltd":
         if combo_to_ltd is None:
             raise ValueError("combo_to_ltd is required when group_by='ltd'")
-        ltds = sorted({combo_to_ltd[c] for c in errors_by_combo if c in combo_to_ltd})
+        ltds = sorted(
+            {combo_to_ltd[c] for c in errors_by_combo if c in combo_to_ltd},
+            key=_ltd_panel_sort_key,
+        )
         panels: list[tuple[str, list[str]]] = [
             (ltd, [c for c in errors_by_combo if combo_to_ltd.get(c) == ltd])
             for ltd in ltds
@@ -328,7 +347,7 @@ def main() -> None:
              "eval_observations.parquet. When given, a nearest-ping VP baseline "
              "is overlaid in every panel.",
     )
-    parser.add_argument("--max-x-km", type=float, default=3000.0)
+    parser.add_argument("--max-x-km", type=float, default=10000.0)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--title", default=None)
     args = parser.parse_args()
