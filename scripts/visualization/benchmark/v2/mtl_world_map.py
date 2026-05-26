@@ -65,10 +65,19 @@ def _build_fold_payload(
 
     vp_configs = pd.read_parquet(in_dir / "vp_configs.parquet")
     targets = pd.read_parquet(out_dir / "targets.parquet")
+    eval_obs = pd.read_parquet(in_dir / "eval_observations.parquet")
 
     vps = {
         str(row.vp_id): [round(float(row.lat), 4), round(float(row.lon), 4)]
         for row in vp_configs.itertuples(index=False)
+    }
+
+    # Per-target shortest-ping VP: idxmin on latency_ms within each target_id.
+    sp_idx = eval_obs.groupby("target_id")["latency_ms"].idxmin()
+    sp_rows = eval_obs.loc[sp_idx, ["target_id", "vp_id", "latency_ms"]]
+    shortest_ping_by_target = {
+        str(r.target_id): (str(r.vp_id), float(r.latency_ms))
+        for r in sp_rows.itertuples(index=False)
     }
 
     target_rows: list[dict[str, Any]] = []
@@ -92,6 +101,12 @@ def _build_fold_payload(
             if pred_lat is not None and pred_lon is not None
             else None
         )
+        sp = shortest_ping_by_target.get(str(row.target_id))
+        if sp is not None and sp[0] in vps:
+            shortest_ping = {"vp_id": sp[0], "latency_ms": round(sp[1], 4)}
+        else:
+            shortest_ping = None
+
         target_rows.append(
             {
                 "target_id": str(row.target_id),
@@ -103,6 +118,7 @@ def _build_fold_payload(
                 "n_obs": int(row.n_obs),
                 "n_ltd_success": int(row.n_ltd_success),
                 "predictions": preds,
+                "shortest_ping": shortest_ping,
             }
         )
 
@@ -300,7 +316,25 @@ HTML_TEMPLATE = """<!doctype html>
       name: `VPs (${kept})`,
     });
 
-    // 3) true target.
+    // 3) shortest-ping VP marker (drawn before true target so the star sits on top).
+    if (t.shortest_ping) {
+      const sp = t.shortest_ping;
+      const spCoord = vps[sp.vp_id];
+      if (spCoord) {
+        traces.push({
+          type: "scattergeo",
+          mode: "markers",
+          lat: [spCoord[0]], lon: [spCoord[1]],
+          marker: { size: 14, color: "dodgerblue", symbol: "triangle-up",
+                    line: { color: "white", width: 1.5 } },
+          name: `shortest-ping VP (${sp.latency_ms} ms)`,
+          text: [`shortest-ping VP ${sp.vp_id}<br>latency = ${sp.latency_ms} ms`],
+          hoverinfo: "text",
+        });
+      }
+    }
+
+    // 4) true target.
     traces.push({
       type: "scattergeo",
       mode: "markers",
@@ -312,7 +346,7 @@ HTML_TEMPLATE = """<!doctype html>
       hoverinfo: "text",
     });
 
-    // 4) predicted target.
+    // 5) predicted target.
     if (t.pred) {
       traces.push({
         type: "scattergeo",
@@ -325,7 +359,7 @@ HTML_TEMPLATE = """<!doctype html>
         hoverinfo: "text",
       });
 
-      // 5) connector from predicted to true (straight-projection segment).
+      // 6) connector from predicted to true (straight-projection segment).
       traces.push({
         type: "scattergeo",
         mode: "lines",
