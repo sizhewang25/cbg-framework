@@ -27,7 +27,7 @@ the two rules cannot run in parallel.
 from pathlib import Path
 
 DATASETS = Path("datasets/ripe_atlas")
-SCRIPT = "scripts/processing/append_city_to_anchors.py"
+SCRIPT = "scripts/processing/fetch_city_for_probe_anchor.py"
 
 
 rule all:
