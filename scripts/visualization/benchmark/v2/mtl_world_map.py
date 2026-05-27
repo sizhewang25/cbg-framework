@@ -146,9 +146,10 @@ def _build_fold_payload(
 
     target_rows: list[dict[str, Any]] = []
     for row in targets.itertuples(index=False):
-        # First collect (vp_id, lat, lon, radius) for kept-set computation,
-        # then emit the compact array form embedded in JSON.
-        raw: list[tuple[str, float, float, float]] = []
+        # Collect (vp_id, lat, lon, outer_km, inner_km) per surviving
+        # prediction. Annulus combos populate inner_km > 0; disk combos
+        # leave it at 0. The compact JSON form is [vp_id, outer, inner, isKept].
+        raw: list[tuple[str, float, float, float, float]] = []
         for p in row.ltd_predictions:
             if not p.get("success"):
                 continue
@@ -156,15 +157,21 @@ def _build_fold_payload(
             coord = vps.get(vp_id)
             if coord is None:
                 continue
-            radius = _safe_float(p.get("upper_km"))
-            if radius is None or radius <= 0:
+            outer = _safe_float(p.get("upper_km"))
+            if outer is None or outer <= 0:
                 continue
-            raw.append((vp_id, coord[0], coord[1], float(radius)))
+            inner = _safe_float(p.get("lower_km")) or 0.0
+            raw.append((vp_id, coord[0], coord[1], float(outer), float(inner)))
 
-        kept = _kept_after_filter(raw)
+        # `_kept_after_filter` operates on outer disks. The same heuristic
+        # runs as the pre-filter inside both PlanarCircleMTL/SphericalCircleMTL
+        # AND PlanarAnnulusMTL/PlanarAnnulusWeightedMTL (via
+        # `filter_redundant_outer_disks` on `enable_circle_filter=True`), so
+        # we can apply it uniformly here regardless of mtl_kind.
+        kept = _kept_after_filter([(v, la, lo, r) for v, la, lo, r, _ in raw])
         preds = [
-            [vp_id, round(r, 4), 1 if vp_id in kept else 0]
-            for vp_id, _lat, _lon, r in raw
+            [vp_id, round(outer, 4), round(inner, 4), 1 if vp_id in kept else 0]
+            for vp_id, _lat, _lon, outer, inner in raw
         ]
 
         pred_lat = _safe_float(row.pred_lat)
@@ -232,6 +239,14 @@ def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
 
     merged_targets.sort(key=_err_sort_key)
 
+    # Annulus combos always emit lower_km > 0 in their LTD predictions
+    # (BoundedSplineLTD, NormalDistLTD). Disk combos leave inner=0.
+    mtl_kind = "disk"
+    for t in merged_targets:
+        if any(pred[2] > 0 for pred in t["predictions"]):
+            mtl_kind = "annulus"
+            break
+
     return {
         "run_id": run_id,
         "combo_id": combo_id,
@@ -239,6 +254,7 @@ def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
         "setup": setup,
         "earth_radius_km": EARTH_RADIUS_KM,
         "same_continent": same_continent,
+        "mtl_kind": mtl_kind,
         "vps": merged_vps,
         "targets": merged_targets,
     }
@@ -281,8 +297,8 @@ HTML_TEMPLATE = """<!doctype html>
   </select></label>
   <label><input type="checkbox" id="successOnly"> SUCCESS only</label>
   <label>Eval target <select id="target" class="wide"></select></label>
-  <label><input type="checkbox" id="keptOnly"> only post-filter circles</label>
-  <label>Hide circles ≥ <select id="maxR">
+  <label id="keptOnlyLabel"><input type="checkbox" id="keptOnly"> only post-filter circles</label>
+  <label id="maxRLabel">Hide circles ≥ <select id="maxR">
     <option value="10000" selected>10 000 km (¼ Earth circumf.)</option>
     <option value="20000">20 000 km (½ Earth circumf.)</option>
     <option value="5000">5 000 km</option>
@@ -295,6 +311,7 @@ HTML_TEMPLATE = """<!doctype html>
     <option value="equirectangular">equirectangular</option>
     <option value="robinson">robinson</option>
   </select></label>
+  <span id="ringHint" style="display:none; font-size:12px; color:#555;">outer ring solid · inner ring dashed</span>
 </div>
 <div id="meta" class="meta"></div>
 <div id="plot"></div>
@@ -305,6 +322,15 @@ HTML_TEMPLATE = """<!doctype html>
   const EARTH = data.earth_radius_km;
   const vps = data.vps;
   const sameContinent = data.same_continent;  // null when not applicable
+  const isAnnulus = data.mtl_kind === "annulus";
+  if (isAnnulus) {
+    // The outer-disk pre-filter (`filter_redundant_outer_disks`) runs for
+    // annulus combos too, so the kept toggle stays active. We just relabel
+    // and add the ring-style hint.
+    const maxRLabel = document.getElementById("maxRLabel");
+    maxRLabel.firstChild.nodeValue = "Hide rings ≥ ";
+    document.getElementById("ringHint").style.display = "";
+  }
   const contSel = document.getElementById("cont");
   const contLabel = document.getElementById("contLabel");
   if (sameContinent) {
@@ -447,49 +473,76 @@ HTML_TEMPLATE = """<!doctype html>
     // 1) per-VP great-circle rings (filtered by maxR, post-filter toggle, and
     // a hard cap covering the whole Earth — r >= π·R ≈ 20015 km — which has
     // no meaningful ring even with "show all" picked).
+    // Prediction tuple: [vp_id, outer_km, inner_km, isKept]. For disk combos
+    // inner_km == 0 and only the outer ring is drawn.
     const fullEarthKm = Math.PI * EARTH;  // ≈ 20015 km
     const onlyKept = keptOnly.checked;
-    const totalKept = t.predictions.reduce((n, p) => n + (p[2] ? 1 : 0), 0);
+    const totalKept = t.predictions.reduce((n, p) => n + (p[3] ? 1 : 0), 0);
     const totalDropped = t.predictions.length - totalKept;
     function included(pred) {
-      const [, radius, isKept] = pred;
-      if (radius >= fullEarthKm) return false;
-      if (maxR > 0 && radius >= maxR) return false;
+      const outer = pred[1], isKept = pred[3];
+      if (outer >= fullEarthKm) return false;
+      if (maxR > 0 && outer >= maxR) return false;
       if (onlyKept && !isKept) return false;
       return true;
     }
 
-    const ringLats = [], ringLons = [];
+    const outerLats = [], outerLons = [];
+    const innerLats = [], innerLons = [];
+    const visibleInners = [], visibleOuters = [];
     let kept = 0;
     for (const pred of t.predictions) {
       if (!included(pred)) continue;
       const coord = vps[pred[0]];
       if (!coord) continue;
       kept++;
-      const ring = ringLatLon(coord[0], coord[1], pred[1], 96);
-      ringLats.push(...ring.lats, null);
-      ringLons.push(...ring.lons, null);
+      const outer = pred[1], inner = pred[2];
+      visibleOuters.push(outer);
+      const oRing = ringLatLon(coord[0], coord[1], outer, 96);
+      outerLats.push(...oRing.lats, null);
+      outerLons.push(...oRing.lons, null);
+      if (isAnnulus && inner > 0) {
+        visibleInners.push(inner);
+        const iRing = ringLatLon(coord[0], coord[1], inner, 96);
+        innerLats.push(...iRing.lats, null);
+        innerLons.push(...iRing.lons, null);
+      }
     }
-    if (ringLats.length) {
+    if (outerLats.length) {
       traces.push({
         type: "scattergeo",
         mode: "lines",
-        lat: ringLats, lon: ringLons,
+        lat: outerLats, lon: outerLons,
         line: { width: 0.8, color: "rgba(60,90,160,0.35)" },
-        name: `LTD circles (${kept})`,
+        name: isAnnulus ? `outer rings (${kept})` : `LTD circles (${kept})`,
+        hoverinfo: "skip",
+      });
+    }
+    if (innerLats.length) {
+      traces.push({
+        type: "scattergeo",
+        mode: "lines",
+        lat: innerLats, lon: innerLons,
+        line: { width: 0.7, color: "rgba(60,90,160,0.55)", dash: "dash" },
+        name: `inner rings (${visibleInners.length})`,
         hoverinfo: "skip",
       });
     }
 
-    // 2) per-VP markers (only those whose circle is shown).
+    // 2) per-VP markers (only those whose ring is shown).
     const mkLat = [], mkLon = [], mkText = [];
     for (const pred of t.predictions) {
       if (!included(pred)) continue;
       const coord = vps[pred[0]];
       if (!coord) continue;
       mkLat.push(coord[0]); mkLon.push(coord[1]);
-      const flag = pred[2] ? "kept" : "dropped by pre-filter";
-      mkText.push(`VP ${pred[0]}<br>radius = ${pred[1].toFixed(1)} km<br>${flag}`);
+      const outer = pred[1], inner = pred[2];
+      let line = `VP ${pred[0]}<br>outer = ${outer.toFixed(1)} km`;
+      if (isAnnulus) {
+        line += inner > 0 ? `<br>inner = ${inner.toFixed(1)} km` : `<br>inner = 0`;
+      }
+      line += `<br>${pred[3] ? "kept" : "dropped by pre-filter"}`;
+      mkText.push(line);
     }
     traces.push({
       type: "scattergeo",
@@ -574,17 +627,33 @@ HTML_TEMPLATE = """<!doctype html>
 
     const errStr = t.error_km != null ? `${t.error_km.toFixed(2)} km` : "—";
     const predStr = t.pred ? `(${t.pred[0]}, ${t.pred[1]})` : "(none)";
+    const unit = isAnnulus ? "ring(s)" : "circle(s)";
     const filterNote = hidden > 0
-      ? ` &nbsp;|&nbsp; <span style="color:#b00">${hidden} circle(s) hidden</span>`
+      ? ` &nbsp;|&nbsp; <span style="color:#b00">${hidden} ${unit} hidden</span>`
       : "";
     const pctNote = pctSel.value !== ""
       ? ` &nbsp;|&nbsp; rank ${tIdx + 1}/${currentList.length} (p${pctSel.value})`
       : ` &nbsp;|&nbsp; rank ${tIdx + 1}/${currentList.length}`;
+    const median = (arr) => {
+      if (!arr.length) return null;
+      const s = arr.slice().sort((a, b) => a - b);
+      const n = s.length;
+      return n % 2 ? s[(n - 1) / 2] : 0.5 * (s[n / 2 - 1] + s[n / 2]);
+    };
+    let constraintsClause =
+      `pre-filter kept ${totalKept}/${t.predictions.length} (${totalDropped} dropped)`;
+    if (isAnnulus) {
+      const mi = median(visibleInners), mo = median(visibleOuters);
+      const miStr = mi != null ? `${mi.toFixed(1)} km` : "—";
+      const moStr = mo != null ? `${mo.toFixed(1)} km` : "—";
+      constraintsClause +=
+        ` &nbsp;|&nbsp; annular bounds (visible): median inner=${miStr}, median outer=${moStr}`;
+    }
     metaDiv.innerHTML =
       `<b>${t.target_id}</b> (fold ${foldLabel(t.fold)}) — status=${t.status}, ` +
       `intersection=${t.intersection_kind}, ` +
       `n_ltd_success/n_obs=${t.n_ltd_success}/${t.n_obs}, ` +
-      `pre-filter kept ${totalKept}/${t.predictions.length} (${totalDropped} dropped)<br>` +
+      `${constraintsClause}<br>` +
       `true=(${t.true[0]}, ${t.true[1]})  ·  predicted=${predStr}  ·  error=${errStr}` +
       pctNote + filterNote;
 
