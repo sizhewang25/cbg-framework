@@ -55,7 +55,14 @@ class TestSphericalCircleMTL(unittest.TestCase):
         self.assertAlmostEqual(verts[1][0], TWO_CAP_LAT_DEG, places=5)
         self.assertAlmostEqual(verts[1][1], 0.5, places=5)
 
-    def test_three_circles_filter_to_northern_crossing_vertex(self):
+    def test_three_circles_yield_feasible_polygon_vertices(self):
+        # Feasible region = west ∩ east ∩ north. With the north disk clipping
+        # the top of the west+east lens, that region is a curved triangle
+        # whose three vertices are: the northern west+east boundary crossing
+        # (at the north disk's center) and the two boundary crossings of
+        # north with west and east respectively. The southern west+east
+        # crossing is excluded — it sits 254 km from the north disk's
+        # center (radius 100 km).
         result = SphericalCircleMTL().multilaterate([
             ltd_result("west", lat=0.0, lon=0.0, upper_km=CAP_RADIUS_KM),
             ltd_result("east", lat=0.0, lon=1.0, upper_km=CAP_RADIUS_KM),
@@ -63,9 +70,16 @@ class TestSphericalCircleMTL(unittest.TestCase):
         ])
 
         self.assertTrue(result.success)
-        self.assertEqual(len(result.intersection), 1)
-        self.assertAlmostEqual(result.intersection[0].lat, TWO_CAP_LAT_DEG, places=5)
-        self.assertAlmostEqual(result.intersection[0].lon, 0.5, places=5)
+        self.assertEqual(len(result.intersection), 3)
+        verts = sorted([(round(c.lat, 5), round(c.lon, 5)) for c in result.intersection])
+        # Symmetric about lon=0.5: two boundary crossings of north with west/east
+        # at the same latitude, plus the northern west+east crossing on top.
+        self.assertAlmostEqual(verts[0][0], 0.51347, places=4)
+        self.assertAlmostEqual(verts[0][1], -0.13969, places=4)
+        self.assertAlmostEqual(verts[1][0], 0.51347, places=4)
+        self.assertAlmostEqual(verts[1][1], 1.13969, places=4)
+        self.assertAlmostEqual(verts[2][0], TWO_CAP_LAT_DEG, places=5)
+        self.assertAlmostEqual(verts[2][1], 0.5, places=5)
 
     def test_non_intersecting_circles_fail_with_no_intersection(self):
         result = SphericalCircleMTL().multilaterate([

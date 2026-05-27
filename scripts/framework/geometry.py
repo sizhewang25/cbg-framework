@@ -376,11 +376,18 @@ def circle_intersections(
             ) / (np.pi / 180)
             intersect_points.append((i_lat, i_lon))
 
+    # Tolerance for the "inside every disk" filter (km). Every candidate is
+    # one of the great-circle crossings of two disks' boundaries, so by
+    # construction it sits *exactly* on those two boundaries; floating-point
+    # noise from `haversine` then puts it ~1e-7 km outside, and a strict-`<`
+    # check would reject it. EPS_KM = 1 mm is far below any meaningful disk
+    # size and only absorbs that float-edge noise.
+    EPS_KM = 1e-6
     filtered_points = []
     for point_geo in intersect_points:
         inside_all = True
         for lat_c, lon_c, _, d_c, _ in used_circles:
-            if d_c < haversine((lat_c, lon_c), point_geo):
+            if d_c + EPS_KM < haversine((lat_c, lon_c), point_geo):
                 inside_all = False
                 break
         if inside_all:
