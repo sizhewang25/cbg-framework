@@ -105,6 +105,7 @@ def _load_cbg_targets_success_only(
     run_dir: Path,
     source: Optional[str],
     slice_: Optional[str],
+    combos: Optional[list[str]] = None,
 ) -> dict[str, dict[str, dict]]:
     """Per-combo SUCCESS-only target rows keyed by `<fold>/<target_id>`.
 
@@ -112,7 +113,7 @@ def _load_cbg_targets_success_only(
     FALLBACK is literally the shortest-ping prediction (delta ≡ 0) and ERROR
     has no coord to compare.
     """
-    combo_dirs = discover_combos(run_dir, source, slice_)
+    combo_dirs = discover_combos(run_dir, source, slice_, combos)
     if not combo_dirs:
         raise FileNotFoundError(f"No combos found under {run_dir}")
 
@@ -317,11 +318,17 @@ def main() -> None:
               "continent_of(country_code). Used only with "
               "--split-by-main-continent."),
     )
+    parser.add_argument(
+        "--combos", nargs="*", default=None,
+        help="Restrict to these combo_ids (default: every combo found on disk).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    cbg = _load_cbg_targets_success_only(args.run_dir, args.source, args.slice_)
+    cbg = _load_cbg_targets_success_only(
+        args.run_dir, args.source, args.slice_, combos=args.combos,
+    )
     baseline = _load_nearest_ping_full(args.inputs_dir)
 
     cbg_combo_ids = sorted(cbg)

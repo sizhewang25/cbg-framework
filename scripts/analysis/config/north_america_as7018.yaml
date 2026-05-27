@@ -18,6 +18,15 @@ phase_stat: p95
 include_fit: true
 runtime_stat: p50
 
+# Combos to plot. Every analysis rule restricts to these via --combos.
+# Leave the list empty (or remove the key) to include every combo on disk.
+# When set, the combos referenced in diff_pairs must all appear here.
+combos:
+  - vanilla_cbg
+  - million_scale_cbg
+  - octant_cbg
+  - spotter_cbg
+
 # Regional VP corpus: split SUCCESS CDFs by in-continent vs rest to surface
 # the home-continent recovery / out-of-continent degradation expected from
 # per-ASN fleets.

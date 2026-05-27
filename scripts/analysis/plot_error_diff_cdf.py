@@ -96,6 +96,7 @@ def _load_from_run(
     run_dir: Path,
     source: Optional[str],
     slice_: Optional[str],
+    combos: Optional[list[str]] = None,
 ) -> dict[str, dict[str, float]]:
     """Walk `run_dir`, return {combo_id: {target_key: error_km}} for rows
     with a non-null error_km.
@@ -104,7 +105,7 @@ def _load_from_run(
     from every fold; target keys are prefixed with the fold dir name to
     keep folds disjoint in the dict even if target_id is reused.
     """
-    combo_dirs = discover_combos(run_dir, source, slice_)
+    combo_dirs = discover_combos(run_dir, source, slice_, combos)
     if not combo_dirs:
         raise FileNotFoundError(f"No combos found under {run_dir}")
 
@@ -142,12 +143,19 @@ def main() -> None:
         required=True,
         help="Combo IDs to compare. Repeat for multiple pairs.",
     )
+    parser.add_argument(
+        "--combos", nargs="*", default=None,
+        help="Restrict to these combo_ids (default: every combo found on disk). "
+             "All combos named in --pair must be in this set if it's non-empty.",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--title", default=None)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    target_errors = _load_from_run(args.run_dir, args.source, args.slice_)
+    target_errors = _load_from_run(
+        args.run_dir, args.source, args.slice_, combos=args.combos,
+    )
     missing = {
         cid
         for pair in args.pair

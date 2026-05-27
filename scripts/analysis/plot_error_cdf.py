@@ -234,6 +234,7 @@ def _load_from_run(
     slice_: Optional[str],
     *,
     success_only: bool = False,
+    combos: Optional[list[str]] = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, int], dict[str, int], dict[str, str]]:
     """Walk `run_dir`, return (errors_by_combo, successes_by_combo,
     totals_by_combo, combo_to_ltd).
@@ -246,7 +247,7 @@ def _load_from_run(
     concatenated across folds per combo_id — K-fold test sets are disjoint
     by construction, so this is one row per target.
     """
-    combo_dirs = discover_combos(run_dir, source, slice_)
+    combo_dirs = discover_combos(run_dir, source, slice_, combos)
     if not combo_dirs:
         raise FileNotFoundError(f"No combos found under {run_dir}")
 
@@ -376,6 +377,7 @@ def plot_error_cdf_by_continent(
     inputs_dir: Optional[Path] = None,
     max_x_km: float = 10000.0,
     title: Optional[str] = None,
+    combos: Optional[list[str]] = None,
 ) -> tuple[plt.Figure, plt.Figure]:
     """SUCCESS-only error CDF split by whether each target sits in
     `target_continent`. Writes two figures derived from `output_path`:
@@ -395,7 +397,7 @@ def plot_error_cdf_by_continent(
     canon = _normalize_continent(target_continent)
     ip_to_continent = _load_ip_to_continent(filtered_anchors_path)
 
-    combo_dirs = discover_combos(run_dir, source, slice_)
+    combo_dirs = discover_combos(run_dir, source, slice_, combos)
     if not combo_dirs:
         raise FileNotFoundError(f"No combos found under {run_dir}")
 
@@ -558,6 +560,10 @@ def main() -> None:
         help="Anchor metadata for target→continent lookup. Used only with "
              "--split-by-main-continent.",
     )
+    parser.add_argument(
+        "--combos", nargs="*", default=None,
+        help="Restrict to these combo_ids (default: every combo found on disk).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -573,13 +579,15 @@ def main() -> None:
             inputs_dir=args.inputs_dir,
             max_x_km=args.max_x_km,
             title=args.title,
+            combos=args.combos,
         )
         plt.close(fig_in)
         plt.close(fig_rest)
         return
 
     errors_by_combo, successes_by_combo, totals_by_combo, combo_to_ltd = _load_from_run(
-        args.run_dir, args.source, args.slice_, success_only=args.success_only,
+        args.run_dir, args.source, args.slice_,
+        success_only=args.success_only, combos=args.combos,
     )
     group_by = None if args.group_by == "none" else args.group_by
 

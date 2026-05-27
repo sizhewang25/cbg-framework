@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 import matplotlib.pyplot as plt
 import pyarrow as pa
@@ -22,12 +22,15 @@ def discover_combos(
     run_dir: Path,
     source: Optional[str] = None,
     slice_: Optional[str] = None,
+    combos: Optional[Iterable[str]] = None,
 ) -> list[Path]:
     """Return combo directories under `run_dir`, sorted by combo_id.
 
     A "combo directory" is any directory containing `targets.parquet`. When
     `source` / `slice_` are given, only paths whose components include them
-    are kept.
+    are kept. When `combos` is given (non-empty iterable of combo_ids), only
+    combo directories whose name is in that set are kept — None or empty
+    means "include every combo found on disk".
 
     With `slice_=None` on a K-fold layout (`<source>/<setup>/fold_*/<combo_id>/`)
     the result contains one entry per (fold, combo_id); the same combo_id
@@ -39,6 +42,9 @@ def discover_combos(
         combo_dirs = [d for d in combo_dirs if source in d.parts]
     if slice_ is not None:
         combo_dirs = [d for d in combo_dirs if slice_ in d.parts]
+    if combos:
+        allowed = set(combos)
+        combo_dirs = [d for d in combo_dirs if d.name in allowed]
     return sorted(combo_dirs, key=lambda d: d.name)
 
 

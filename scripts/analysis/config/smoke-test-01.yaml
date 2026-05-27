@@ -19,6 +19,11 @@ phase_stat: p95                # which per-stage summary stat to stack: p5/p25/p
 include_fit: true              # add a FIT bar from each combo's run.json
 runtime_stat: p50              # plot_phase_runtime bars — median per-stage
 
+# Combos to plot. Every analysis rule restricts to these via --combos.
+# Leave empty (or remove the key) to include every combo on disk.
+# When set, the combos referenced in diff_pairs must all appear here.
+combos: []
+
 # Pairs for the error-diff CDF. Each pair plots a CDF of (error_A − error_B);
 # negative deltas = A is better. Here vanilla_cbg is the baseline.
 diff_pairs:

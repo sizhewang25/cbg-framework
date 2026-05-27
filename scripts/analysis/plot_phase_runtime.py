@@ -221,6 +221,7 @@ def _load_from_run(
     run_dir: Path,
     source: Optional[str],
     slice_: Optional[str],
+    combos: Optional[list[str]] = None,
 ) -> tuple[pa.Table, dict[str, pa.Table]]:
     """Return (summary, combo_id -> targets table).
 
@@ -232,7 +233,7 @@ def _load_from_run(
     whose per-stage stats are recomputed from raw — percentiles don't
     aggregate from per-fold percentiles.
     """
-    combo_dirs = discover_combos(run_dir, source, slice_)
+    combo_dirs = discover_combos(run_dir, source, slice_, combos)
     if not combo_dirs:
         raise FileNotFoundError(f"No combos found under {run_dir}")
 
@@ -249,10 +250,14 @@ def _load_from_run(
     if source is not None:
         summary = summary.filter(pc.equal(summary.column("source"), source))
     summary = summary.filter(pc.equal(summary.column("slice"), slice_))
+    if combos:
+        summary = summary.filter(pc.is_in(
+            summary.column("combo_id"), value_set=pa.array(list(combos))
+        ))
     if summary.num_rows == 0:
         raise ValueError(
             f"No rows in summary.parquet at {run_dir} after filtering "
-            f"source={source!r} slice={slice_!r}"
+            f"source={source!r} slice={slice_!r} combos={combos!r}"
         )
 
     targets_by_combo = {d.name: load_targets(d) for d in combo_dirs}
@@ -272,12 +277,18 @@ def main() -> None:
         default="p50",
         help="Per-stage stat for the bars (default p50 = median).",
     )
+    parser.add_argument(
+        "--combos", nargs="*", default=None,
+        help="Restrict to these combo_ids (default: every combo found on disk).",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--title", default=None)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    summary, targets_by_combo = _load_from_run(args.run_dir, args.source, args.slice_)
+    summary, targets_by_combo = _load_from_run(
+        args.run_dir, args.source, args.slice_, combos=args.combos,
+    )
     fig = plot_phase_runtime(
         summary,
         targets_by_combo,

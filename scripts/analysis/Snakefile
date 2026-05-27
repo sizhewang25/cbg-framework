@@ -55,6 +55,11 @@ _CONT_SLUG = (
     SPLIT_CONT.strip().lower().replace(" ", "_").replace("-", "_")
     if SPLIT_CONT else None
 )
+# Optional combo filter: when set (non-empty list), every plot rule restricts
+# to these combo_ids via --combos. Leave empty/unset to plot every combo found
+# on disk. When set, the diff_pairs combos must all be in this list.
+COMBOS = config.get("combos", []) or []
+COMBOS_ARG = (" --combos " + " ".join(COMBOS)) if COMBOS else ""
 
 if not SLICES and not MERGE_FOLDS:
     raise ValueError(
@@ -136,7 +141,7 @@ rule error_cdf:
         " --slice {wildcards.slice}"
         " --group-by {params.group_by}"
         " --inputs-dir {params.inputs_dir}"
-        " --out {output.png}"
+        " --out {output.png}" + COMBOS_ARG
 
 rule error_cdf_success:
     input:
@@ -157,7 +162,7 @@ rule error_cdf_success:
         " --group-by {params.group_by}"
         " --inputs-dir {params.inputs_dir}"
         " --success-only"
-        " --out {output.png}"
+        " --out {output.png}" + COMBOS_ARG
 
 if SPLIT_CONT:
     rule error_cdf_by_continent:
@@ -183,7 +188,7 @@ if SPLIT_CONT:
             " --inputs-dir {params.inputs_dir}"
             " --split-by-main-continent {params.cont}"
             " --filtered-anchors {params.anchors}"
-            " --out {params.base_out}"
+            " --out {params.base_out}" + COMBOS_ARG
 
 rule phase_memory:
     input:
@@ -202,7 +207,7 @@ rule phase_memory:
         " --slice {wildcards.slice}"
         " --stat {params.stat}"
         " {params.fit_flag}"
-        " --out {output.png}"
+        " --out {output.png}" + COMBOS_ARG
 
 rule phase_runtime:
     input:
@@ -219,7 +224,7 @@ rule phase_runtime:
         " --source {params.source}"
         " --slice {wildcards.slice}"
         " --stat {params.stat}"
-        " --out {output.png}"
+        " --out {output.png}" + COMBOS_ARG
 
 rule error_diff_cdf:
     input:
@@ -236,7 +241,7 @@ rule error_diff_cdf:
         " --source {params.source}"
         " --slice {wildcards.slice}"
         " {params.pair_args}"
-        " --out {output.png}"
+        " --out {output.png}" + COMBOS_ARG
 
 rule cbg_vs_shortest_ping:
     input:
@@ -256,7 +261,7 @@ rule cbg_vs_shortest_ping:
         " --slice {wildcards.slice}"
         " --inputs-dir {params.inputs_dir}"
         " --out-png {output.png}"
-        " --out-csv {output.csv}"
+        " --out-csv {output.csv}" + COMBOS_ARG
 
 if SPLIT_CONT:
     rule cbg_vs_shortest_ping_by_continent:
@@ -286,7 +291,7 @@ if SPLIT_CONT:
             " --split-by-main-continent {params.cont}"
             " --filtered-anchors {params.anchors}"
             " --out-png {params.base_png}"
-            " --out-csv {params.base_csv}"
+            " --out-csv {params.base_csv}" + COMBOS_ARG
 
 # ---- Merged-folds plots -----------------------------------------------------
 # These rules omit --slice; each plot CLI auto-detects merged-folds mode and
@@ -309,7 +314,7 @@ rule error_cdf_merged:
         " --source {params.source}"
         " --group-by {params.group_by}"
         " --inputs-dir {params.inputs_dir}"
-        " --out {output.png}"
+        " --out {output.png}" + COMBOS_ARG
 
 rule error_cdf_success_merged:
     input:
@@ -328,7 +333,7 @@ rule error_cdf_success_merged:
         " --group-by {params.group_by}"
         " --inputs-dir {params.inputs_dir}"
         " --success-only"
-        " --out {output.png}"
+        " --out {output.png}" + COMBOS_ARG
 
 if SPLIT_CONT:
     rule error_cdf_by_continent_merged:
@@ -351,7 +356,7 @@ if SPLIT_CONT:
             " --inputs-dir {params.inputs_dir}"
             " --split-by-main-continent {params.cont}"
             " --filtered-anchors {params.anchors}"
-            " --out {params.base_out}"
+            " --out {params.base_out}" + COMBOS_ARG
 
 rule phase_memory_merged:
     input:
@@ -369,7 +374,7 @@ rule phase_memory_merged:
         " --source {params.source}"
         " --stat {params.stat}"
         " {params.fit_flag}"
-        " --out {output.png}"
+        " --out {output.png}" + COMBOS_ARG
 
 rule phase_runtime_merged:
     input:
@@ -385,7 +390,7 @@ rule phase_runtime_merged:
         " --run-dir {params.run_dir}"
         " --source {params.source}"
         " --stat {params.stat}"
-        " --out {output.png}"
+        " --out {output.png}" + COMBOS_ARG
 
 rule error_diff_cdf_merged:
     input:
@@ -401,7 +406,7 @@ rule error_diff_cdf_merged:
         " --run-dir {params.run_dir}"
         " --source {params.source}"
         " {params.pair_args}"
-        " --out {output.png}"
+        " --out {output.png}" + COMBOS_ARG
 
 rule cbg_vs_shortest_ping_merged:
     input:
@@ -419,7 +424,7 @@ rule cbg_vs_shortest_ping_merged:
         " --source {params.source}"
         " --inputs-dir {params.inputs_dir}"
         " --out-png {output.png}"
-        " --out-csv {output.csv}"
+        " --out-csv {output.csv}" + COMBOS_ARG
 
 if SPLIT_CONT:
     rule cbg_vs_shortest_ping_by_continent_merged:
@@ -447,4 +452,4 @@ if SPLIT_CONT:
             " --split-by-main-continent {params.cont}"
             " --filtered-anchors {params.anchors}"
             " --out-png {params.base_png}"
-            " --out-csv {params.base_csv}"
+            " --out-csv {params.base_csv}" + COMBOS_ARG

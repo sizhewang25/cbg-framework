@@ -18,6 +18,15 @@ phase_stat: p95                # which per-stage summary stat to stack: p5/p25/p
 include_fit: true              # add a FIT bar from each combo's run.json (max-of-folds)
 runtime_stat: p50              # plot_phase_runtime bars — median per-stage
 
+# Combos to plot. Every analysis rule restricts to these via --combos.
+# Leave empty (or remove the key) to include every combo on disk.
+# When set, the combos referenced in diff_pairs must all appear here.
+combos:
+  - vanilla_cbg
+  - million_scale_cbg
+  - octant_cbg
+  - spotter_cbg
+
 # Regional VP corpus: split SUCCESS CDFs by in-continent vs rest to surface
 # the home-continent recovery / out-of-continent degradation expected from
 # per-ASN fleets.
