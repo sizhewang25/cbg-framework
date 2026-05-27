@@ -277,7 +277,7 @@ HTML_TEMPLATE = """<!doctype html>
     <option value="25">p25</option>
     <option value="50">p50</option>
     <option value="75">p75</option>
-    <option value="90">p90</option>
+    <option value="95">p95</option>
   </select></label>
   <label><input type="checkbox" id="successOnly"> SUCCESS only</label>
   <label>Eval target <select id="target" class="wide"></select></label>
