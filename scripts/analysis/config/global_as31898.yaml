@@ -22,10 +22,22 @@ runtime_stat: p50
 # Leave empty (or remove the key) to include every combo on disk.
 # When set, the combos referenced in diff_pairs must all appear here.
 combos:
+  # Circle family
   - vanilla_cbg
+  - vanilla_cbg_centroid
+  - vanilla_cbg_planar_centroid
   - million_scale_cbg
+  - million_scale_cbg_centroid
+  - million_scale_cbg_planar_centroid
+  # Annulus family
   - octant_cbg
+  - octant_cbg_centroid
+  - octant_hull_cbg
+  - octant_weighted_cbg
+  - octant_hull_weighted_cbg
   - spotter_cbg
+  - spotter_cbg_centroid
+  - spotter_cbg_weighted
 
 diff_pairs:
   - [million_scale_cbg, vanilla_cbg]

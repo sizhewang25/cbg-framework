@@ -1,9 +1,14 @@
-"""Build an interactive world-map viewer for MTL output of `vanilla_cbg`.
+"""Build an interactive world-map viewer for MTL output of any v2 combo.
 
 Per (fold, eval target) it draws on a Plotly geo map:
-  - every participating VP with its LTD-predicted radius as a great-circle ring
+  - every participating VP with its LTD-predicted constraint as a great-circle
+    ring (single ring for disk combos; outer + dashed inner for annulus combos)
   - the MTL/CTR predicted target location (red diamond)
   - the true target location (gold star)
+
+Disk vs. annulus is auto-detected from `lower_km > 0` in the LTD predictions:
+disk combos (low_envelope, speed_of_internet) leave `lower_km = 0`; annulus
+combos (bounded_spline, normal_dist) emit a non-zero inner radius.
 
 Math reference: spherical-cap → great-circle ring as in
 `scripts/visualization/mtl/circle_intersections/inspect_percentile_cases.py`

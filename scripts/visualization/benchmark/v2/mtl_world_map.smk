@@ -17,7 +17,7 @@ BENCH_OUT  = Path("scripts/benchmark/v2/outputs")
 VIZ_OUT    = Path("scripts/visualization/benchmark/v2/outputs")
 
 # Combos we render maps for. Anything not present in a config is skipped.
-TARGET_COMBOS = ["vanilla_cbg", "million_scale_cbg"]
+TARGET_COMBOS = ["vanilla_cbg", "million_scale_cbg", "octant_cbg", "spotter_cbg"]
 
 # Discover ASN configs and remember per-run metadata for the input function.
 CONFIG_META = {}
