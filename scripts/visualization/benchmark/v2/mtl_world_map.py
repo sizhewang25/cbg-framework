@@ -28,10 +28,39 @@ import pandas as pd
 import yaml
 
 from scripts.libs.cbg.rtt_model import haversine_distance
+from scripts.processing.ripe_atlas.continents import continent_of
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 EARTH_RADIUS_KM = 6371.0
+FILTERED_ANCHORS_PATH = REPO_ROOT / "datasets" / "ripe_atlas" / "filtered_anchors.json"
+
+# Run-id prefix → canonical continent name for the same/rest selector.
+# Other prefixes leave the selector disabled (continent unknown for this run).
+_PREFIX_CONTINENT = {
+    "north_america": "North America",
+    "europe": "Europe",
+}
+
+
+def _same_continent_for_run(run_id: str) -> str | None:
+    for prefix, canon in _PREFIX_CONTINENT.items():
+        if run_id.startswith(prefix):
+            return canon
+    return None
+
+
+def _load_ip_to_continent() -> dict[str, str]:
+    """{address_v4: canonical continent name} from filtered_anchors.json,
+    via `continent_of(country_code)`. Anchors with no `country_code` map to
+    `"Unknown"`."""
+    records = json.loads(FILTERED_ANCHORS_PATH.read_text())
+    out: dict[str, str] = {}
+    for r in records:
+        ip = r.get("address_v4")
+        if ip:
+            out[ip] = continent_of(r.get("country_code"))
+    return out
 
 
 def _fold_input_dir(source: str, run_id: str, setup: str, fold: str) -> Path:
@@ -178,6 +207,9 @@ def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
     setup = cfg["setup"]
     slices = cfg["slices"]
 
+    same_continent = _same_continent_for_run(run_id)
+    ip_to_continent = _load_ip_to_continent() if same_continent else {}
+
     merged_vps: dict[str, list[float]] = {}
     merged_targets: list[dict[str, Any]] = []
     for fold in slices:
@@ -189,6 +221,8 @@ def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
             merged_vps.setdefault(vp_id, coord)
         for t in fold_pl["targets"]:
             t["fold"] = fold
+            if same_continent:
+                t["continent"] = ip_to_continent.get(t["target_id"], "Unknown")
             merged_targets.append(t)
 
     # Rank ASC by error_km; targets without a finite error_km drop to the end.
@@ -204,6 +238,7 @@ def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
         "source": source,
         "setup": setup,
         "earth_radius_km": EARTH_RADIUS_KM,
+        "same_continent": same_continent,
         "vps": merged_vps,
         "targets": merged_targets,
     }
@@ -231,6 +266,11 @@ HTML_TEMPLATE = """<!doctype html>
 <body>
 <h1>MTL world map — __TITLE__</h1>
 <div class="controls">
+  <label id="contLabel" style="display:none">Continent <select id="cont">
+    <option value="all" selected>all</option>
+    <option value="same">same continent</option>
+    <option value="rest">rest of world</option>
+  </select></label>
   <label>Percentile <select id="pct">
     <option value="" selected>(none)</option>
     <option value="5">p5</option>
@@ -264,6 +304,15 @@ HTML_TEMPLATE = """<!doctype html>
   const data = JSON.parse(document.getElementById("data").textContent);
   const EARTH = data.earth_radius_km;
   const vps = data.vps;
+  const sameContinent = data.same_continent;  // null when not applicable
+  const contSel = document.getElementById("cont");
+  const contLabel = document.getElementById("contLabel");
+  if (sameContinent) {
+    contLabel.style.display = "";
+    // Show the continent name so "same/rest" isn't ambiguous.
+    contSel.options[1].textContent = `same continent (${sameContinent})`;
+    contSel.options[2].textContent = `rest of world (≠ ${sameContinent})`;
+  }
   const pctSel = document.getElementById("pct");
   const successOnly = document.getElementById("successOnly");
   const targetSel = document.getElementById("target");
@@ -332,9 +381,15 @@ HTML_TEMPLATE = """<!doctype html>
   let currentList = data.targets;
 
   function activeList() {
-    return successOnly.checked
-      ? data.targets.filter((t) => t.status === "SUCCESS")
-      : data.targets;
+    const cont = sameContinent ? contSel.value : "all";
+    return data.targets.filter((t) => {
+      if (successOnly.checked && t.status !== "SUCCESS") return false;
+      if (cont === "same" && t.continent !== sameContinent) return false;
+      // "rest" excludes the run's continent AND drops Unknowns so the
+      // partition same+rest is clean (matches plot_error_cdf semantics).
+      if (cont === "rest" && (t.continent === sameContinent || t.continent === "Unknown")) return false;
+      return true;
+    });
   }
 
   function populateTargets() {
@@ -528,6 +583,7 @@ HTML_TEMPLATE = """<!doctype html>
 
   pctSel.addEventListener("change", () => { applyPercentile(); draw(); });
   successOnly.addEventListener("change", () => { populateTargets(); draw(); });
+  contSel.addEventListener("change", () => { populateTargets(); draw(); });
   targetSel.addEventListener("change", draw);
   maxRSel.addEventListener("change", draw);
   keptOnly.addEventListener("change", draw);
