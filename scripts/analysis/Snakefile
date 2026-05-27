@@ -92,6 +92,9 @@ def _all_targets():
     targets = []
     if SLICES:
         targets.extend(expand(str(SLICE_OUT / "{plot}.png"), slice=SLICES, plot=_PLOTS))
+        # inspect_mtl_blockers emits JSON + MD instead of a PNG.
+        targets.extend(expand(str(SLICE_OUT / "inspect_mtl_blockers.json"), slice=SLICES))
+        targets.extend(expand(str(SLICE_OUT / "inspect_mtl_blockers.md"), slice=SLICES))
         if SPLIT_CONT:
             targets.extend(expand(
                 str(SLICE_OUT / f"plot_error_cdf_by_continent_{_CONT_SLUG}.png"),
@@ -111,6 +114,8 @@ def _all_targets():
             ))
     if MERGE_FOLDS:
         targets.extend(expand(str(MERGED_OUT / "{plot}.png"), plot=_PLOTS))
+        targets.append(str(MERGED_OUT / "inspect_mtl_blockers.json"))
+        targets.append(str(MERGED_OUT / "inspect_mtl_blockers.md"))
         if SPLIT_CONT:
             targets.append(str(MERGED_OUT / f"plot_error_cdf_by_continent_{_CONT_SLUG}.png"))
             targets.append(str(MERGED_OUT / "plot_error_cdf_by_continent_rest.png"))
@@ -262,6 +267,28 @@ rule cbg_vs_shortest_ping:
         " --inputs-dir {params.inputs_dir}"
         " --out-png {output.png}"
         " --out-csv {output.csv}" + COMBOS_ARG
+
+rule mtl_blockers:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+        eval_obs = INPUTS_DIR / "eval_observations.parquet",
+    output:
+        json_ = SLICE_OUT / "inspect_mtl_blockers.json",
+        md = SLICE_OUT / "inspect_mtl_blockers.md",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        setup = SETUP,
+        inputs_dir = str(INPUTS_DIR),
+    shell:
+        CLI + ".inspect_mtl_blockers"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --setup {params.setup}"
+        " --slice {wildcards.slice}"
+        " --inputs-dir {params.inputs_dir}"
+        " --out-json {output.json_}"
+        " --out-md {output.md}" + COMBOS_ARG
 
 if SPLIT_CONT:
     rule cbg_vs_shortest_ping_by_continent:
@@ -425,6 +452,26 @@ rule cbg_vs_shortest_ping_merged:
         " --inputs-dir {params.inputs_dir}"
         " --out-png {output.png}"
         " --out-csv {output.csv}" + COMBOS_ARG
+
+rule mtl_blockers_merged:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        json_ = MERGED_OUT / "inspect_mtl_blockers.json",
+        md = MERGED_OUT / "inspect_mtl_blockers.md",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+        setup = SETUP,
+        inputs_dir = str(MERGED_INPUTS_DIR),
+    shell:
+        CLI + ".inspect_mtl_blockers"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --setup {params.setup}"
+        " --inputs-dir {params.inputs_dir}"
+        " --out-json {output.json_}"
+        " --out-md {output.md}" + COMBOS_ARG
 
 if SPLIT_CONT:
     rule cbg_vs_shortest_ping_by_continent_merged:
