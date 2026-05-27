@@ -270,6 +270,46 @@ def check_circle_inclusion(
     return None, None
 
 
+def filter_redundant_outer_disks(
+    centers_latlon: Sequence[tuple[float, float]],
+    radii_km: Sequence[float],
+) -> list[int]:
+    """Return input indices to keep after dropping disks that fully contain another.
+
+    Implements the redundant-circle rule from the legacy Million-Scale helper as a
+    container-agnostic primitive: a disk i is dropped if `radius_i > center_distance(i,j) + radius_j`
+    for some j ≠ i — i.e. the disk at i strictly engulfs another and is therefore
+    not the binding constraint among the two.
+
+    Two roles, depending on caller:
+
+    * Disk-intersection MTLs (e.g. `PlanarCircleMTL`, `SphericalCircleMTL` via
+      `circle_preprocessing`): mathematically a no-op on the intersection
+      (A ⊇ B ⇒ A ∩ B = B), so this is purely a speedup / determinism aid.
+    * Annular MTLs (`PlanarAnnulusMTL`, `PlanarAnnulusWeightedMTL`): a *heuristic*
+      that also drops the engulfing constraint's inner-disk veto. The smallest
+      disk in any chain is always kept, so the result is never empty if the input
+      was non-empty.
+    """
+    n = len(centers_latlon)
+    if n != len(radii_km):
+        raise ValueError("centers_latlon and radii_km must have the same length")
+    ignored: set[int] = set()
+    for i in range(n):
+        if i in ignored:
+            continue
+        for j in range(i + 1, n):
+            if j in ignored:
+                continue
+            cd = haversine(centers_latlon[i], centers_latlon[j])
+            if radii_km[i] > cd + radii_km[j]:
+                ignored.add(i)
+                break
+            if radii_km[j] > cd + radii_km[i]:
+                ignored.add(j)
+    return [k for k in range(n) if k not in ignored]
+
+
 def circle_preprocessing(
     circles: Iterable[Sequence[float]],
     speed_threshold: Optional[float] = None,
@@ -281,19 +321,10 @@ def circle_preprocessing(
     behavior. It is disk-only and intentionally ignores annular inner radii.
     """
     normalized = _normalize_circles(circles, speed_threshold)
-    ignored: set[CircleTuple] = set()
-
-    for i, c1 in enumerate(normalized):
-        if c1 in ignored:
-            continue
-        for c2 in normalized[i + 1 :]:
-            if c2 in ignored:
-                continue
-            remove, _ = check_circle_inclusion(c1, c2)
-            if remove is not None:
-                ignored.add(remove)
-
-    return [c for c in normalized if c not in ignored]
+    centers = [(c[0], c[1]) for c in normalized]
+    radii = [c[3] for c in normalized]
+    keep = filter_redundant_outer_disks(centers, radii)
+    return [normalized[k] for k in keep]
 
 
 def get_points_on_circle(

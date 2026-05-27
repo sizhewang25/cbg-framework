@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 
+from scripts.framework.geometry import filter_redundant_outer_disks
 from scripts.framework.v2.ltd.base import LTDResult
 from scripts.framework.v2.mtl.base import AnnulusMTLMethod, MTLResult
 from scripts.framework.v2.mtl._annulus_common import (
@@ -33,21 +34,35 @@ from scripts.libs.octant.octant_geolocation import (
 
 @register_mtl("planar_annulus_weighted")
 class PlanarAnnulusWeightedMTL(AnnulusMTLMethod):
-    """Octant weighted feasible region via planar face decomposition."""
+    """Octant weighted feasible region via planar face decomposition.
+
+    `enable_circle_filter` drops constraints whose outer disk fully contains
+    another's outer disk before the weighted face decomposition. Same heuristic
+    as PlanarAnnulusMTL; the cumulative weight Σwᵢ used by the threshold is
+    recomputed over the kept constraints.
+    """
 
     def __init__(
         self,
         weight_threshold: float = 0.5,
         weight_tau_ms: float = 50.0,
         n_pts: int = 64,
+        enable_circle_filter: bool = True,
     ) -> None:
         self.weight_threshold = weight_threshold
         self.weight_tau_ms = weight_tau_ms
         self.n_pts = n_pts
+        self.enable_circle_filter = enable_circle_filter
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
         if not results:
             return MTLResult(success=False, error=Error.INSUFFICIENT_DATA)
+
+        if self.enable_circle_filter:
+            centers = [(r.vp_coord.lat, r.vp_coord.lon) for r in results]
+            radii = [r.tg_distance.upper_km for r in results]
+            keep = filter_redundant_outer_disks(centers, radii)
+            results = [results[k] for k in keep]
 
         constraints = []
         for r in results:

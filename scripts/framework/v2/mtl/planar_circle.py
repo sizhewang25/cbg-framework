@@ -19,6 +19,7 @@ from functools import reduce
 import numpy as np
 from shapely.geometry import Polygon as ShapelyPolygon
 
+from scripts.framework.geometry import filter_redundant_outer_disks
 from scripts.framework.v2.ltd.base import LTDResult
 from scripts.framework.v2.mtl.base import CircleMTLMethod, MTLResult
 from scripts.framework.v2.registry import register_mtl
@@ -47,14 +48,27 @@ def _circle_to_planar_polygon(
 
 @register_mtl("planar_circle")
 class PlanarCircleMTL(CircleMTLMethod):
-    """Planar polygon intersection of disk constraints."""
+    """Planar polygon intersection of disk constraints.
 
-    def __init__(self, n_pts: int = 64) -> None:
+    `enable_circle_filter` runs the redundant-disk preprocessing from
+    `filter_redundant_outer_disks` before polygonization. For pure disk
+    intersection this is a no-op on the result (A ⊇ B ⇒ A ∩ B = B), purely
+    a speedup. Default on for consistency with the annular MTLs.
+    """
+
+    def __init__(self, n_pts: int = 64, enable_circle_filter: bool = True) -> None:
         self.n_pts = n_pts
+        self.enable_circle_filter = enable_circle_filter
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
         if not results:
             return MTLResult(success=False, error=Error.INSUFFICIENT_DATA)
+
+        if self.enable_circle_filter:
+            centers = [(r.vp_coord.lat, r.vp_coord.lon) for r in results]
+            radii = [r.tg_distance.upper_km for r in results]
+            keep = filter_redundant_outer_disks(centers, radii)
+            results = [results[k] for k in keep]
 
         polys = []
         for r in results:

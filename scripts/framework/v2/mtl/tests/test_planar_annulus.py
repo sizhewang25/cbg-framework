@@ -70,9 +70,14 @@ class TestPlanarAnnulusMTL(unittest.TestCase):
         shrink the outer intersection) but inner disks at lon ∈ {-3, 0, 3},
         each r=2.5°. Their union is a horizontal band that fully crosses the
         outer disk, splitting it into a top crescent and a bottom crescent.
+
+        `enable_circle_filter=False` because the three inner_* constraints are
+        deliberately engulfing — the default filter would drop them and erase
+        the bridge cut. The filter's behavior on this fixture is asserted in
+        `test_circle_filter_drops_engulfing_inner_constraints`.
         """
         R_KM = 111.0  # km per degree at the equator
-        result = PlanarAnnulusMTL().multilaterate([
+        result = PlanarAnnulusMTL(enable_circle_filter=False).multilaterate([
             # Defines the outer overlap (4° disk at origin).
             ltd_result("outer", lat=0.0, lon=0.0, upper_km=4.0 * R_KM),
             # Huge outers (no effect on intersection); inner disks form the band.
@@ -101,6 +106,27 @@ class TestPlanarAnnulusMTL(unittest.TestCase):
         ])
 
         self.assertFalse(result.success)
+
+    def test_circle_filter_drops_engulfing_inner_constraints(self):
+        """With the filter on (default), the three engulfing inner_* constraints
+        from the bridge-cut fixture are pruned, so the 4° anchor disk survives
+        intact as a plain Polygon — no bridge cut, and the truth at the origin
+        is contained again."""
+        R_KM = 111.0
+        from shapely.geometry import Point
+        result = PlanarAnnulusMTL().multilaterate([
+            ltd_result("outer", lat=0.0, lon=0.0, upper_km=4.0 * R_KM),
+            ltd_result("inner_left", lat=0.0, lon=-3.0,
+                       upper_km=100.0 * R_KM, lower_km=2.5 * R_KM),
+            ltd_result("inner_mid", lat=0.0, lon=0.0,
+                       upper_km=100.0 * R_KM, lower_km=2.5 * R_KM),
+            ltd_result("inner_right", lat=0.0, lon=3.0,
+                       upper_km=100.0 * R_KM, lower_km=2.5 * R_KM),
+        ])
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.intersection.geom_type, "Polygon")
+        self.assertTrue(result.intersection.contains(Point(0.0, 0.0)))
 
     def test_registered_in_mtl_registry(self):
         self.assertIn("planar_annulus", MTL_REGISTRY)

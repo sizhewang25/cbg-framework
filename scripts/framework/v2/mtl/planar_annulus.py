@@ -13,6 +13,7 @@ we pass placeholders.
 
 from __future__ import annotations
 
+from scripts.framework.geometry import filter_redundant_outer_disks
 from scripts.framework.v2.ltd.base import LTDResult
 from scripts.framework.v2.mtl.base import AnnulusMTLMethod, MTLResult
 from scripts.framework.v2.mtl._annulus_common import (
@@ -28,14 +29,29 @@ from scripts.libs.octant.octant_geolocation import (
 
 @register_mtl("planar_annulus")
 class PlanarAnnulusMTL(AnnulusMTLMethod):
-    """Octant unweighted feasible-region intersection."""
+    """Octant unweighted feasible-region intersection.
 
-    def __init__(self, n_pts: int = 64) -> None:
+    `enable_circle_filter` drops constraints whose *outer* disk fully contains
+    another's outer disk before the annular intersection. Heuristic: the
+    engulfing constraint is non-binding on the outer-disk intersection and is
+    typically a wide-RTT VP whose inner disk is the most likely to falsely
+    exclude the truth on dense local fleets (see AS7018 NA collapse). The
+    smallest outer disk in any chain is always kept.
+    """
+
+    def __init__(self, n_pts: int = 64, enable_circle_filter: bool = True) -> None:
         self.n_pts = n_pts
+        self.enable_circle_filter = enable_circle_filter
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
         if not results:
             return MTLResult(success=False, error=Error.INSUFFICIENT_DATA)
+
+        if self.enable_circle_filter:
+            centers = [(r.vp_coord.lat, r.vp_coord.lon) for r in results]
+            radii = [r.tg_distance.upper_km for r in results]
+            keep = filter_redundant_outer_disks(centers, radii)
+            results = [results[k] for k in keep]
 
         constraints = [
             annular_constraint_from_ltd(r, rtt_ms=0.0, weight=1.0)
