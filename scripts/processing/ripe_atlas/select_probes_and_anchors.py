@@ -650,6 +650,9 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    # File-handler is attached after we know `args.output_dir` (below) so the
+    # log lives alongside the corpora it documents.
+
     parser = argparse.ArgumentParser(
         description="Select per-ASN VP corpora for the deployment-scenario benchmark.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -690,6 +693,20 @@ def main() -> int:
              "Use --no-cbg-sanitize to skip.",
     )
     args = parser.parse_args()
+
+    # Tee the script's logging into a file alongside the corpora so the run is
+    # auditable after the fact (per-setup drop counts, CBG mislocation filter
+    # evidence, anchor reachability, etc.). Overwrites on each run.
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    log_path = args.output_dir / "processing.log"
+    file_handler = logging.FileHandler(log_path, mode="w")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    logging.getLogger().addHandler(file_handler)
+    logger.info("logging to %s", log_path)
+    logger.info("invocation: %s", " ".join(sys.argv))
 
     logger.info("loading probes from %s", args.probes_file)
     probes = _load_json(args.probes_file)
