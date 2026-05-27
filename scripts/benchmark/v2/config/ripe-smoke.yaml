@@ -70,6 +70,7 @@ combos:
       bin_size_ms: 5.0              # RTT bucket width for spline knots
     mtl_kwargs:
       n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
     ctr_kwargs:
       n_samples: 1024               # power of 2 — Sobol sampler likes that
   
@@ -87,12 +88,13 @@ combos:
       # width is implicit in (deg_mu, deg_sigma) fits. Re-add when/if the
       # LTD exposes a sigma-multiplier knob.
       n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
-      min_per_bin: 30               # bins with fewer points are dropped before polyfit
+      min_per_bin: 5               # bins with fewer points are dropped before polyfit
       deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
       deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
       bin_size_ms: 5.0              # RTT bin width (ms)
-      cutoff_min_points: 30         # right-edge cutoff: dense-bin support threshold
+      cutoff_min_points: 5         # right-edge cutoff: dense-bin support threshold
     mtl_kwargs:
       n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
     ctr_kwargs:
       n_samples: 1024               # power of 2 — Sobol sampler likes that

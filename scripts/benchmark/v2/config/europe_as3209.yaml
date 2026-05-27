@@ -30,14 +30,38 @@ seed: 42
 
 combos:
   # ---- Circle family ---------------------------------------------------------
+  # Vanilla CBG: per-VP min-RTT-fit (low_envelope) + spherical intersection +
+  # mean of feasible-region vertices. low_envelope takes no kwargs.
   - combo_id: vanilla_cbg
     ltd: low_envelope
     mtl: spherical_circle
     ctr: boundary_vertex_mean
     mtl_kwargs:
+      speed_ratio: 0.6667           # 2/3 c — Internet speed-of-light fraction
+      enable_circle_filter: true    # redundant-circle preprocessing (IMC 2012)
+
+  - combo_id: vanilla_cbg_centroid
+    ltd: low_envelope
+    mtl: spherical_circle
+    ctr: geometric_centroid
+    mtl_kwargs:
       speed_ratio: 0.6667
       enable_circle_filter: true
 
+  # Vanilla LTD through the planar disk-intersection MTL. PlanarCircleMTL takes
+  # only n_pts — the disk radius comes from low_envelope's per-VP fit, and the
+  # spherical-circle filter has no analogue in the Shapely intersection path.
+  - combo_id: vanilla_cbg_planar_centroid
+    ltd: low_envelope
+    mtl: planar_circle
+    ctr: geometric_centroid
+    mtl_kwargs:
+      n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
+
+  # Million-scale variant: same skeleton as vanilla but the LTD is a closed-form
+  # disk of radius (RTT/2) * speed. Pair the LTD and MTL speed_ratio for
+  # self-consistency — both should describe the same physical bound.
   - combo_id: million_scale_cbg
     ltd: speed_of_internet
     mtl: spherical_circle
@@ -48,10 +72,89 @@ combos:
       speed_ratio: 0.6667
       enable_circle_filter: true
 
+  - combo_id: million_scale_cbg_centroid
+    ltd: speed_of_internet
+    mtl: spherical_circle
+    ctr: geometric_centroid
+    ltd_kwargs:
+      speed_ratio: 0.6667
+    mtl_kwargs:
+      speed_ratio: 0.6667
+      enable_circle_filter: true
+
+  # Million-scale LTD through the planar disk-intersection MTL. The 2/3·c
+  # disk radius is set by speed_of_internet (ltd_kwargs); PlanarCircleMTL just
+  # polygonizes and intersects.
+  - combo_id: million_scale_cbg_planar_centroid
+    ltd: speed_of_internet
+    mtl: planar_circle
+    ctr: geometric_centroid
+    ltd_kwargs:
+      speed_ratio: 0.6667
+    mtl_kwargs:
+      n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
+
   # ---- Annulus family --------------------------------------------------------
+  # Octant: per-VP RTT-to-distance learned as a (lower, upper) band; planar
+  # intersection of those annuli; Monte Carlo Sobol sampling inside the
+  # feasible region; sampled L1-medoid as the centroid.
   - combo_id: octant_cbg
     ltd: bounded_spline
     mtl: planar_annulus
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9          # band width target: ~90% of training pairs covered
+      cutoff_min_points: 5          # min samples per VP before fitting a spline
+      fit_spline: true              # else use per-bucket envelope only
+      spline_n_knots: 4
+      bin_size_ms: 5.0              # RTT bucket width for spline knots
+    mtl_kwargs:
+      n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
+    ctr_kwargs:
+      n_samples: 1024               # power of 2 — Sobol sampler likes that
+
+  - combo_id: octant_cbg_centroid
+    ltd: bounded_spline
+    mtl: planar_annulus
+    ctr: geometric_centroid
+    ltd_kwargs:
+      target_coverage: 0.9          # band width target: ~90% of training pairs covered
+      cutoff_min_points: 5          # min samples per VP before fitting a spline
+      fit_spline: true              # else use per-bucket envelope only
+      spline_n_knots: 4
+      bin_size_ms: 5.0              # RTT bucket width for spline knots
+    mtl_kwargs:
+      n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
+
+  # Octant hull-only: same per-VP convex-hull fit as octant but skip the spline
+  # + per-VP δ-band. predict_distance_bounds falls into its delta=None branch
+  # and returns the raw hull bounds. Isolates the spline+δ contribution to
+  # octant's accuracy. NOTE: target_coverage / spline_n_knots are inert when
+  # fit_spline=false (δ search is gated on a fitted spline), so they're omitted.
+  - combo_id: octant_hull_cbg
+    ltd: bounded_spline
+    mtl: planar_annulus
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      fit_spline: false             # raw convex-hull bounds; no spline / no δ band
+      cutoff_min_points: 5          # min samples per RTT bin for the cutoff scan
+      bin_size_ms: 5.0              # RTT bin width for the cutoff scan
+    mtl_kwargs:
+      n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
+    ctr_kwargs:
+      n_samples: 1024               # power of 2 — Sobol sampler likes that
+
+  # Octant-weighted: same LTD + CTR as octant, but the MTL down-weights
+  # high-RTT VPs (their RTT noise floor is wider, so their constraint is
+  # less informative). weight = exp(-rtt / weight_tau_ms); constraints with
+  # weight < weight_threshold are dropped entirely.
+  - combo_id: octant_weighted_cbg
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
     ctr: monte_carlo_medoid
     ltd_kwargs:
       target_coverage: 0.9
@@ -60,22 +163,85 @@ combos:
       spline_n_knots: 4
       bin_size_ms: 5.0
     mtl_kwargs:
-      n_pts: 64
+      n_pts: 64                     # vertices per annulus polygon approximation
+      weight_threshold: 0.9         # union covers ≥ this fraction of Σwᵢ (higher = larger region)
+      weight_tau_ms: 50.0           # exp-decay scale on RTT: rtt=tau → constraint weight=0.37
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
     ctr_kwargs:
       n_samples: 1024
 
+  # Hull-only LTD through the weighted MTL — same dead-knob omission as above.
+  - combo_id: octant_hull_weighted_cbg
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      fit_spline: false
+      cutoff_min_points: 5
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64                     # vertices per annulus polygon approximation
+      weight_threshold: 0.9         # union covers ≥ this fraction of Σwᵢ (higher = larger region)
+      weight_tau_ms: 50.0           # exp-decay scale on RTT: rtt=tau → constraint weight=0.37
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
+    ctr_kwargs:
+      n_samples: 1024
+
+  # Spotter (Laki et al. 2011): pooled-normal RTT→distance model. One global
+  # (mu(d), sigma(d), k) fit across all VPs, then per-VP prediction is
+  # [mu±k·sigma] clipped to the 2/3c envelope. Same MTL+CTR as octant so the
+  # head-to-head isolates the LTD: bounded-spline (per-VP band) vs Spotter
+  # (pooled deg-3/deg-2 polynomials).
   - combo_id: spotter_cbg
     ltd: normal_dist
     mtl: planar_annulus
     ctr: monte_carlo_medoid
     ltd_kwargs:
+      n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
+      min_per_bin: 5               # bins with fewer points are dropped before polyfit
+      deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
+      deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
+      bin_size_ms: 5.0              # RTT bin width (ms)
+      cutoff_min_points: 5         # right-edge cutoff: dense-bin support threshold
+    mtl_kwargs:
+      n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
+    ctr_kwargs:
+      n_samples: 1024               # power of 2 — Sobol sampler likes that
+
+  # Spotter LTD through the weighted planar-annulus MTL — high-RTT VPs get
+  # exp(-rtt/tau) weight; faces covering ≥ weight_threshold of Σwᵢ form the
+  # feasible region.
+  - combo_id: spotter_cbg_weighted
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
       n_bins: 40
-      min_per_bin: 30
+      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
-      cutoff_min_points: 30
+      cutoff_min_points: 5
     mtl_kwargs:
-      n_pts: 64
+      n_pts: 64                     # vertices per annulus polygon approximation
+      weight_threshold: 0.9         # union covers ≥ this fraction of Σwᵢ (higher = larger region)
+      weight_tau_ms: 50.0           # exp-decay scale on RTT: rtt=tau → constraint weight=0.37
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
     ctr_kwargs:
       n_samples: 1024
+
+  - combo_id: spotter_cbg_centroid
+    ltd: normal_dist
+    mtl: planar_annulus
+    ctr: geometric_centroid
+    ltd_kwargs:
+      n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
+      min_per_bin: 5               # bins with fewer points are dropped before polyfit
+      deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
+      deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
+      bin_size_ms: 5.0              # RTT bin width (ms)
+      cutoff_min_points: 5         # right-edge cutoff: dense-bin support threshold
+    mtl_kwargs:
+      n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)

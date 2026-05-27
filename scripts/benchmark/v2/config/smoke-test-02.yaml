@@ -59,6 +59,7 @@ combos:
     ctr: geometric_centroid
     mtl_kwargs:
       n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
 
   # Million-scale variant: same skeleton as vanilla but the LTD is a closed-form
   # disk of radius (RTT/2) * speed. Pair the LTD and MTL speed_ratio for
@@ -94,6 +95,7 @@ combos:
       speed_ratio: 0.6667
     mtl_kwargs:
       n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
 
   # ---- Annulus family --------------------------------------------------------
   # Octant: per-VP RTT-to-distance learned as a (lower, upper) band; planar
@@ -111,6 +113,7 @@ combos:
       bin_size_ms: 5.0              # RTT bucket width for spline knots
     mtl_kwargs:
       n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
     ctr_kwargs:
       n_samples: 1024               # power of 2 — Sobol sampler likes that
 
@@ -126,6 +129,7 @@ combos:
       bin_size_ms: 5.0              # RTT bucket width for spline knots
     mtl_kwargs:
       n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
 
   # Octant hull-only: same per-VP convex-hull fit as octant but skip the spline
   # + per-VP δ-band. predict_distance_bounds falls into its delta=None branch
@@ -142,6 +146,7 @@ combos:
       bin_size_ms: 5.0              # RTT bin width for the cutoff scan
     mtl_kwargs:
       n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
     ctr_kwargs:
       n_samples: 1024               # power of 2 — Sobol sampler likes that
 
@@ -163,6 +168,7 @@ combos:
       n_pts: 64                     # vertices per annulus polygon approximation
       weight_threshold: 0.9         # union covers ≥ this fraction of Σwᵢ (higher = larger region)
       weight_tau_ms: 50.0           # exp-decay scale on RTT: rtt=tau → constraint weight=0.37
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
     ctr_kwargs:
       n_samples: 1024
 
@@ -179,6 +185,7 @@ combos:
       n_pts: 64                     # vertices per annulus polygon approximation
       weight_threshold: 0.9         # union covers ≥ this fraction of Σwᵢ (higher = larger region)
       weight_tau_ms: 50.0           # exp-decay scale on RTT: rtt=tau → constraint weight=0.37
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
     ctr_kwargs:
       n_samples: 1024
 
@@ -193,13 +200,14 @@ combos:
     ctr: monte_carlo_medoid
     ltd_kwargs:
       n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
-      min_per_bin: 30               # bins with fewer points are dropped before polyfit
+      min_per_bin: 5               # bins with fewer points are dropped before polyfit
       deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
       deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
       bin_size_ms: 5.0              # RTT bin width (ms)
-      cutoff_min_points: 30         # right-edge cutoff: dense-bin support threshold
+      cutoff_min_points: 5         # right-edge cutoff: dense-bin support threshold
     mtl_kwargs:
       n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
     ctr_kwargs:
       n_samples: 1024               # power of 2 — Sobol sampler likes that
 
@@ -212,15 +220,16 @@ combos:
     ctr: monte_carlo_medoid
     ltd_kwargs:
       n_bins: 40
-      min_per_bin: 30
+      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
-      cutoff_min_points: 30
+      cutoff_min_points: 5
     mtl_kwargs:
       n_pts: 64                     # vertices per annulus polygon approximation
       weight_threshold: 0.9         # union covers ≥ this fraction of Σwᵢ (higher = larger region)
       weight_tau_ms: 50.0           # exp-decay scale on RTT: rtt=tau → constraint weight=0.37
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
     ctr_kwargs:
       n_samples: 1024
 
@@ -230,10 +239,12 @@ combos:
     ctr: geometric_centroid
     ltd_kwargs:
       n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
-      min_per_bin: 30               # bins with fewer points are dropped before polyfit
+      min_per_bin: 5               # bins with fewer points are dropped before polyfit
       deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
       deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
       bin_size_ms: 5.0              # RTT bin width (ms)
-      cutoff_min_points: 30         # right-edge cutoff: dense-bin support threshold
+      cutoff_min_points: 5         # right-edge cutoff: dense-bin support threshold
     mtl_kwargs:
       n_pts: 64                     # circle discretization for Shapely intersection
+      enable_circle_filter: true    # drop outer-disk-redundant constraints (filter_redundant_outer_disks)
+
