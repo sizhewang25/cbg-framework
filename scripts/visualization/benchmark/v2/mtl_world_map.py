@@ -331,8 +331,18 @@ HTML_TEMPLATE = """<!doctype html>
     return `${t.target_id} (fold ${foldLabel(t.fold)}), error=${err} km, ${statusLabel(t.status)}`;
   }
   function percentileIndex(p, n) {
+    // Match numpy.percentile(method="nearest") exactly — including its tie
+    // rule (round half to even, a.k.a. banker's rounding). plot_error_cdf.py's
+    // percentile table uses the same method, so the CDF table values and the
+    // map's p-value bookmarks land on the same sample for any subset.
     if (n === 0) return 0;
-    const i = Math.round((p / 100) * (n - 1));
+    const raw = (p / 100) * (n - 1);
+    const lo = Math.floor(raw);
+    const frac = raw - lo;
+    let i;
+    if (frac < 0.5)       i = lo;
+    else if (frac > 0.5)  i = lo + 1;
+    else                  i = (lo % 2 === 0) ? lo : lo + 1;  // half-to-even
     return Math.max(0, Math.min(n - 1, i));
   }
 

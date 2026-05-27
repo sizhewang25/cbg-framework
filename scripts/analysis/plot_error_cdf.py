@@ -189,24 +189,24 @@ def plot_error_cdf(
         ax.set_ylim(0, 1)
 
         if panel_data or baseline_sorted is not None:
+            # `method="nearest"` snaps each percentile to an existing sample
+            # so values here align with what the MTL world-map viewer shows
+            # when you pick the same percentile bookmark.
+            def _pcts(xs):
+                return np.percentile(xs, [5, 25, 50, 75, 95], method="nearest")
+
             lines = [f"{'':<16} {count_header:>{count_width}}    p5   p25   p50   p75   p95"]
             for cid, errors, count_str in panel_data:
+                p5, p25, p50, p75, p95 = _pcts(errors)
                 lines.append(
                     f"{_short_label(cid)[:16]:<16} {count_str:>{count_width}} "
-                    f"{np.percentile(errors, 5):5.0f} "
-                    f"{np.percentile(errors, 25):5.0f} "
-                    f"{np.median(errors):5.0f} "
-                    f"{np.percentile(errors, 75):5.0f} "
-                    f"{np.percentile(errors, 95):5.0f}"
+                    f"{p5:5.0f} {p25:5.0f} {p50:5.0f} {p75:5.0f} {p95:5.0f}"
                 )
             if baseline_sorted is not None:
+                p5, p25, p50, p75, p95 = _pcts(baseline_sorted)
                 lines.append(
                     f"{baseline_label[:16]:<16} {str(len(baseline_sorted)):>{count_width}} "
-                    f"{np.percentile(baseline_sorted, 5):5.0f} "
-                    f"{np.percentile(baseline_sorted, 25):5.0f} "
-                    f"{np.median(baseline_sorted):5.0f} "
-                    f"{np.percentile(baseline_sorted, 75):5.0f} "
-                    f"{np.percentile(baseline_sorted, 95):5.0f}"
+                    f"{p5:5.0f} {p25:5.0f} {p50:5.0f} {p75:5.0f} {p95:5.0f}"
                 )
             ax.text(
                 0.98, 0.02, "\n".join(lines),
