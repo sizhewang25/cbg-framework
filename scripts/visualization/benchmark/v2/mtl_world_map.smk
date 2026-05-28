@@ -2,6 +2,13 @@
 # benchmark v2 run, covering the `vanilla_cbg` and `million_scale_cbg`
 # combos. ASN configs are auto-discovered by glob (`*_as*.yaml`).
 #
+# Per (run_id, combo) this produces:
+#   <VIZ_OUT>/<run_id>/<combo>_map.html
+#   <VIZ_OUT>/<run_id>/static/<combo>/<fold>__<target_id>.json
+# The HTML lazy-fetches the per-target polygon JSONs at view time, so the
+# directory tree must be served via a local web server
+# (`python -m http.server`) — opening the HTML via file:// will block fetch().
+#
 # Run from the repo root:
 #   snakemake -s scripts/visualization/benchmark/v2/mtl_world_map.smk -j 4
 #
@@ -61,7 +68,12 @@ rule render_map:
         config  = lambda wc: CONFIG_META[wc.run_id]["path"],
         script  = "scripts/visualization/benchmark/v2/mtl_world_map.py",
     output:
-        html = VIZ_OUT / "{run_id}" / "{combo}_map.html",
+        html   = VIZ_OUT / "{run_id}" / "{combo}_map.html",
+        # Declared so Snakemake tracks the per-target polygon JSONs and
+        # re-runs the script if the directory is deleted. The script
+        # populates it lazily; declaring it as `directory(...)` lets us
+        # avoid enumerating every <fold>__<target_id>.json.
+        static = directory(VIZ_OUT / "{run_id}" / "static" / "{combo}"),
     params:
         out_dir = str(VIZ_OUT),
     shell:

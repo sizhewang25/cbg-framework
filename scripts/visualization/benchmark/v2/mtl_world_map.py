@@ -31,7 +31,14 @@ from typing import Any
 
 import pandas as pd
 import yaml
+from shapely.geometry import MultiPolygon, Polygon
 
+# Importing `scripts.framework.v2` populates LTD/MTL/CTR_REGISTRY via the
+# `@register_*` decorators on each subclass module.
+import scripts.framework.v2  # noqa: F401
+from scripts.framework.v2.ltd.base import LTDResult
+from scripts.framework.v2.registry import MTL_REGISTRY
+from scripts.framework.v2.types import Coord, Distance, Error, Latency, VpId
 from scripts.libs.cbg.rtt_model import haversine_distance
 from scripts.processing.ripe_atlas.continents import continent_of
 
@@ -66,6 +73,134 @@ def _load_ip_to_continent() -> dict[str, str]:
         if ip:
             out[ip] = continent_of(r.get("country_code"))
     return out
+
+
+# ---- intersection polygons -------------------------------------------------
+#
+# The MTL intersection (Shapely Polygon/MultiPolygon for planar; list[Coord]
+# of feasible-region vertices for spherical) is the actual feasible set the
+# CTR stage collapses to a single coord. We recompute it from the saved
+# ltd_predictions (re-instantiating the MTL via MTL_REGISTRY with the
+# combo's mtl_kwargs) and write per-target JSON under
+# `<viz_out>/<run_id>/static/<combo>/<fold>__<target_id>.json`.
+# The HTML lazy-fetches them on target select to keep the page lean.
+
+def _polygon_to_ring(poly: Polygon) -> dict[str, Any]:
+    """Shapely stores coords as (x, y) = (lon, lat) in degree space (the
+    planar combos build polygons in `_circle_to_planar_polygon`). Swap to
+    `[lat, lon]` so the JSON matches the rest of the payload."""
+    outer = [[round(y, 4), round(x, 4)] for x, y in poly.exterior.coords]
+    holes = [
+        [[round(y, 4), round(x, 4)] for x, y in inner.coords]
+        for inner in poly.interiors
+    ]
+    return {"outer": outer, "holes": holes}
+
+
+def _serialize_intersection(intersection: Any) -> dict[str, Any] | None:
+    """Convert MTLResult.intersection to a JSON-serializable dict.
+
+    Returns None when the intersection is empty / unsupported, so the caller
+    can skip writing the file (the JS treats a missing file as "no polygon").
+    """
+    if intersection is None:
+        return None
+    # Spherical (list[Coord]) — feasible-region vertices on the sphere. The
+    # region is convex, so ordering by azimuth around the centroid yields a
+    # closed polygon that approximates the (arc-bounded) boundary; coarse but
+    # consistent with the existing planar approximation.
+    if isinstance(intersection, list):
+        if not intersection:
+            return None
+        lat_c = sum(c.lat for c in intersection) / len(intersection)
+        lon_c = sum(c.lon for c in intersection) / len(intersection)
+        ordered = sorted(
+            intersection, key=lambda c: math.atan2(c.lat - lat_c, c.lon - lon_c)
+        )
+        outer = [[round(c.lat, 4), round(c.lon, 4)] for c in ordered]
+        # Close the ring.
+        if outer and outer[0] != outer[-1]:
+            outer.append(outer[0])
+        return {"kind": "spherical_vertices",
+                "rings": [{"outer": outer, "holes": []}]}
+    if isinstance(intersection, Polygon):
+        return {"kind": "polygon", "rings": [_polygon_to_ring(intersection)]}
+    if isinstance(intersection, MultiPolygon):
+        return {"kind": "multipolygon",
+                "rings": [_polygon_to_ring(p) for p in intersection.geoms]}
+    return None
+
+
+def _reconstruct_ltd_result(
+    pred: dict[str, Any],
+    vp_coord: Coord,
+    latency_ms: float | None,
+) -> LTDResult:
+    """Rebuild an LTDResult from a `targets.parquet:ltd_predictions` row.
+
+    The MTL stage reads `vp_coord`, `tg_distance.upper_km`, and (for
+    weighted annulus) `latency` / `tg_distance.lower_km`. We rebuild the
+    fields the MTL needs and fill the rest with what the saved row knows.
+    """
+    error_name = pred.get("error")
+    error = Error[error_name] if error_name else None
+    upper = pred.get("upper_km")
+    lower = pred.get("lower_km") or 0.0
+    if upper is not None:
+        tg_distance: Distance | None = Distance(upper_km=float(upper),
+                                                lower_km=float(lower))
+    else:
+        tg_distance = None
+    vp_id_raw = pred.get("vp_id")
+    return LTDResult(
+        success=bool(pred.get("success")),
+        error=error,
+        vp_id=VpId(str(vp_id_raw)) if vp_id_raw is not None else None,
+        vp_coord=vp_coord,
+        latency=Latency(float(latency_ms)) if latency_ms is not None else None,
+        tg_distance=tg_distance,
+    )
+
+
+def _run_mtl_for_target(
+    mtl_name: str,
+    mtl_kwargs: dict[str, Any],
+    ltd_predictions: list[dict[str, Any]],
+    vps: dict[str, list[float]],
+    latency_by_vp: dict[str, float],
+) -> Any:
+    """Instantiate the MTL with its saved kwargs and re-run multilateration.
+
+    Returns `MTLResult.intersection` (Shapely geometry / list[Coord] / None).
+    """
+    if mtl_name not in MTL_REGISTRY:
+        raise KeyError(f"MTL {mtl_name!r} not registered")
+    mtl = MTL_REGISTRY[mtl_name](**(mtl_kwargs or {}))
+
+    ok: list[LTDResult] = []
+    for pred in ltd_predictions:
+        if not pred.get("success"):
+            continue
+        vp_id = str(pred["vp_id"])
+        coord = vps.get(vp_id)
+        if coord is None:
+            continue
+        upper = pred.get("upper_km")
+        if upper is None or upper <= 0:
+            continue
+        ok.append(
+            _reconstruct_ltd_result(
+                pred,
+                Coord(lat=coord[0], lon=coord[1]),
+                latency_by_vp.get(vp_id),
+            )
+        )
+    if not ok:
+        return None
+    result = mtl.multilaterate(ok)
+    if not result.success:
+        return None
+    return result.intersection
 
 
 def _fold_input_dir(source: str, run_id: str, setup: str, fold: str) -> Path:
@@ -127,7 +262,12 @@ def _safe_float(x: Any) -> float | None:
 
 
 def _build_fold_payload(
-    source: str, run_id: str, setup: str, fold: str, combo: str
+    source: str,
+    run_id: str,
+    setup: str,
+    fold: str,
+    combo: str,
+    static_dir: Path | None = None,
 ) -> dict[str, Any]:
     in_dir = _fold_input_dir(source, run_id, setup, fold)
     out_dir = _fold_output_dir(source, run_id, setup, fold, combo)
@@ -135,6 +275,13 @@ def _build_fold_payload(
     vp_configs = pd.read_parquet(in_dir / "vp_configs.parquet")
     targets = pd.read_parquet(out_dir / "targets.parquet")
     eval_obs = pd.read_parquet(in_dir / "eval_observations.parquet")
+
+    # Load the combo's MTL spec from run.json so we can re-instantiate it
+    # with the exact kwargs used at bench time (n_pts, enable_circle_filter,
+    # speed_ratio, …). Read once per fold.
+    run_meta = json.loads((out_dir / "run.json").read_text())
+    mtl_name = run_meta.get("mtl")
+    mtl_kwargs = run_meta.get("mtl_kwargs") or {}
 
     vps = {
         str(row.vp_id): [round(float(row.lat), 4), round(float(row.lon), 4)]
@@ -147,6 +294,14 @@ def _build_fold_payload(
     shortest_ping_by_target = {
         str(r.target_id): (str(r.vp_id), float(r.latency_ms))
         for r in sp_rows.itertuples(index=False)
+    }
+
+    # Per-(target_id, vp_id) latency map — weighted-annulus MTL derives its
+    # constraint weight from `latency`, so re-running MTL needs the real
+    # value, not a placeholder. Tiny memory hit (<1 MB per fold).
+    latency_lookup: dict[tuple[str, str], float] = {
+        (str(r.target_id), str(r.vp_id)): float(r.latency_ms)
+        for r in eval_obs[["target_id", "vp_id", "latency_ms"]].itertuples(index=False)
     }
 
     target_rows: list[dict[str, Any]] = []
@@ -192,6 +347,34 @@ def _build_fold_payload(
         else:
             shortest_ping = None
 
+        # Recompute the MTL intersection from saved LTD predictions and write
+        # it to a per-target JSON for the HTML to lazy-fetch. We do this even
+        # when the bench-time MTL succeeded but the row's own MTL kind was
+        # something Plotly can't render (e.g. degenerate); the JS just skips
+        # rendering when the file is missing or empty.
+        has_polygon = False
+        if static_dir is not None and mtl_name:
+            latency_by_vp: dict[str, float] = {}
+            for p in row.ltd_predictions:
+                vp_id_str = str(p["vp_id"])
+                lat_ms = latency_lookup.get((str(row.target_id), vp_id_str))
+                if lat_ms is not None:
+                    latency_by_vp[vp_id_str] = lat_ms
+            intersection = _run_mtl_for_target(
+                mtl_name=mtl_name,
+                mtl_kwargs=mtl_kwargs,
+                ltd_predictions=list(row.ltd_predictions),
+                vps=vps,
+                latency_by_vp=latency_by_vp,
+            )
+            poly_json = _serialize_intersection(intersection)
+            if poly_json is not None:
+                out_path = static_dir / f"{fold}__{row.target_id}.json"
+                out_path.write_text(
+                    json.dumps(poly_json, allow_nan=False, separators=(",", ":"))
+                )
+                has_polygon = True
+
         target_rows.append(
             {
                 "target_id": str(row.target_id),
@@ -204,13 +387,18 @@ def _build_fold_payload(
                 "n_ltd_success": int(row.n_ltd_success),
                 "predictions": preds,
                 "shortest_ping": shortest_ping,
+                "has_polygon": has_polygon,
             }
         )
 
     return {"vps": vps, "targets": target_rows}
 
 
-def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
+def build_payload(
+    config_path: Path,
+    combo_id: str,
+    static_dir: Path | None = None,
+) -> dict[str, Any]:
     with open(config_path) as fh:
         cfg = yaml.safe_load(fh)
 
@@ -222,11 +410,16 @@ def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
     same_continent = _same_continent_for_run(run_id)
     ip_to_continent = _load_ip_to_continent() if same_continent else {}
 
+    if static_dir is not None:
+        static_dir.mkdir(parents=True, exist_ok=True)
+
     merged_vps: dict[str, list[float]] = {}
     merged_targets: list[dict[str, Any]] = []
     for fold in slices:
         print(f"  fold {fold}: loading…", flush=True)
-        fold_pl = _build_fold_payload(source, run_id, setup, fold, combo_id)
+        fold_pl = _build_fold_payload(
+            source, run_id, setup, fold, combo_id, static_dir=static_dir
+        )
         # VPs are identical across folds for an ASN corpus (k-fold splits
         # anchors, not probes); first-seen wins on any conflict.
         for vp_id, coord in fold_pl["vps"].items():
@@ -252,6 +445,11 @@ def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
             mtl_kind = "annulus"
             break
 
+    # The HTML lazy-fetches polygons from this prefix on target select. Sibling
+    # of the HTML (both under `<viz_out>/<run_id>/`) so it works against a
+    # local static server with no rewriting.
+    polygon_url_prefix = f"static/{combo_id}/" if static_dir is not None else None
+
     return {
         "run_id": run_id,
         "combo_id": combo_id,
@@ -260,6 +458,7 @@ def build_payload(config_path: Path, combo_id: str) -> dict[str, Any]:
         "earth_radius_km": EARTH_RADIUS_KM,
         "same_continent": same_continent,
         "mtl_kind": mtl_kind,
+        "polygon_url_prefix": polygon_url_prefix,
         "vps": merged_vps,
         "targets": merged_targets,
     }
@@ -316,6 +515,7 @@ HTML_TEMPLATE = """<!doctype html>
     <option value="equirectangular">equirectangular</option>
     <option value="robinson">robinson</option>
   </select></label>
+  <label><input type="checkbox" id="showRegion"> feasible region</label>
   <span id="ringHint" style="display:none; font-size:12px; color:#555;">outer ring solid · inner ring dashed</span>
 </div>
 <div id="meta" class="meta"></div>
@@ -350,8 +550,44 @@ HTML_TEMPLATE = """<!doctype html>
   const maxRSel = document.getElementById("maxR");
   const keptOnly = document.getElementById("keptOnly");
   const projSel = document.getElementById("proj");
+  const showRegion = document.getElementById("showRegion");
   const metaDiv = document.getElementById("meta");
   const plotDiv = document.getElementById("plot");
+
+  // ---- feasible-region lazy loader ----
+  // Per-target JSON written by build_payload(). Key is "<fold>__<target_id>".
+  // Values: a polygon dict on success, `null` on 404 (no feasible region),
+  // or a Promise during fetch (handled by chaining .then on draw()).
+  const POLY_URL_PREFIX = data.polygon_url_prefix;  // null when --static-dir wasn't passed
+  const REGION_FILL = "rgba(220,40,60,0.18)";      // crimson, low alpha — fits the predicted-diamond color
+  const REGION_LINE = "rgba(160,20,40,0.55)";
+  // Ocean color matches the Plotly geo background so holes "subtract" cleanly.
+  const HOLE_FILL = "rgb(225,235,245)";
+  const HOLE_LINE = "rgba(160,20,40,0.45)";
+  const polyCache = new Map();
+
+  function polyKey(t) { return `${t.fold}__${t.target_id}`; }
+  function polyUrl(t) { return `${POLY_URL_PREFIX}${polyKey(t)}.json`; }
+
+  function ensurePolygon(t) {
+    // Returns a Promise<polygon|null>. Cached for repeated draws of the
+    // same target. has_polygon=false → resolve immediately without a fetch.
+    if (!POLY_URL_PREFIX || !t.has_polygon) return Promise.resolve(null);
+    const key = polyKey(t);
+    if (polyCache.has(key)) {
+      const v = polyCache.get(key);
+      return v instanceof Promise ? v : Promise.resolve(v);
+    }
+    const p = fetch(polyUrl(t))
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((json) => {
+        polyCache.set(key, json);
+        return json;
+      });
+    polyCache.set(key, p);
+    return p;
+  }
 
   function foldLabel(f) {
     return f.startsWith("fold_") ? f.slice(5) : f;
@@ -534,6 +770,52 @@ HTML_TEMPLATE = """<!doctype html>
       });
     }
 
+    // 1b) feasible-region polygon (cached lazy fetch). Drawn after VP rings so
+    //     the rings stay visible underneath, before markers so the markers sit
+    //     on top. Holes are rendered as separate ocean-colored fills (Plotly's
+    //     scattergeo doesn't natively support polygon-with-holes).
+    const cached = polyCache.get(polyKey(t));
+    const poly = (cached && !(cached instanceof Promise)) ? cached : null;
+    if (showRegion.checked && poly) {
+      const fillRings = [];   // outer rings (feasible)
+      const holeRings = [];   // inner rings (holes inside feasible)
+      for (const ring of (poly.rings || [])) {
+        if (ring.outer && ring.outer.length) fillRings.push(ring.outer);
+        for (const h of (ring.holes || [])) {
+          if (h.length) holeRings.push(h);
+        }
+      }
+      function ringsToTrace(rings, fillColor, lineColor) {
+        const lat = [], lon = [];
+        for (const r of rings) {
+          for (const [la, lo] of r) { lat.push(la); lon.push(lo); }
+          // null breaks separate multiple rings in one trace.
+          lat.push(null); lon.push(null);
+        }
+        return {
+          type: "scattergeo", mode: "lines",
+          lat, lon,
+          fill: "toself", fillcolor: fillColor,
+          line: { color: lineColor, width: 1.2 },
+          hoverinfo: "skip",
+        };
+      }
+      if (fillRings.length) {
+        traces.push(Object.assign(
+          ringsToTrace(fillRings, REGION_FILL, REGION_LINE),
+          { name: `feasible region (${fillRings.length})` },
+        ));
+      }
+      if (holeRings.length) {
+        // Holes drawn on top of the fill in the ocean color → visually
+        // subtractive. Border keeps the hole edge legible.
+        traces.push(Object.assign(
+          ringsToTrace(holeRings, HOLE_FILL, HOLE_LINE),
+          { name: `holes (${holeRings.length})`, showlegend: false },
+        ));
+      }
+    }
+
     // 2) per-VP markers (only those whose ring is shown).
     const mkLat = [], mkLon = [], mkText = [];
     for (const pred of t.predictions) {
@@ -663,6 +945,22 @@ HTML_TEMPLATE = """<!doctype html>
       pctNote + filterNote;
 
     Plotly.react(plotDiv, traces, layout, { responsive: true });
+
+    // Kick off the lazy fetch only when the cache hasn't seen this target yet.
+    // Once the fetch resolves it populates the cache and re-calls draw(); on
+    // that second pass the cache hit is consumed above and we MUST NOT re-fire
+    // — otherwise the resolved-Promise path loops draw() infinitely.
+    if (
+      showRegion.checked && t.has_polygon && POLY_URL_PREFIX
+      && !polyCache.has(polyKey(t))
+    ) {
+      const cur = polyKey(t);
+      ensurePolygon(t).then((p) => {
+        if (!p) return;
+        const tNow = currentList[+targetSel.value || 0];
+        if (tNow && polyKey(tNow) === cur) draw();
+      });
+    }
   }
 
   pctSel.addEventListener("change", () => { applyPercentile(); draw(); });
@@ -672,6 +970,7 @@ HTML_TEMPLATE = """<!doctype html>
   maxRSel.addEventListener("change", draw);
   keptOnly.addEventListener("change", draw);
   projSel.addEventListener("change", draw);
+  showRegion.addEventListener("change", draw);
 
   populateTargets();
   draw();
@@ -711,16 +1010,26 @@ def main() -> None:
     args = parser.parse_args()
 
     print(f"Loading config: {args.config}")
-    payload = build_payload(args.config, args.combo)
 
-    out_dir = args.out_dir / payload["run_id"]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{payload['combo_id']}_map.html"
+    # Build the run/combo output dirs first so build_payload can stream per-
+    # target polygon JSONs into <run_dir>/static/<combo>/ as it walks folds.
+    with open(args.config) as fh:
+        run_id = yaml.safe_load(fh)["run_id"]
+    run_dir = args.out_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    static_dir = run_dir / "static" / args.combo
 
+    payload = build_payload(args.config, args.combo, static_dir=static_dir)
+
+    out_path = run_dir / f"{payload['combo_id']}_map.html"
     html = render_html(payload)
     out_path.write_text(html, encoding="utf-8")
     size_mb = out_path.stat().st_size / 1024 / 1024
-    print(f"Wrote {out_path} ({size_mb:.2f} MB)")
+    n_poly = sum(1 for t in payload["targets"] if t.get("has_polygon"))
+    print(
+        f"Wrote {out_path} ({size_mb:.2f} MB) "
+        f"+ {n_poly} polygon JSONs under {static_dir}"
+    )
 
 
 if __name__ == "__main__":
