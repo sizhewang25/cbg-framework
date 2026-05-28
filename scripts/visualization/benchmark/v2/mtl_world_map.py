@@ -109,13 +109,22 @@ def _serialize_intersection(intersection: Any) -> dict[str, Any] | None:
     # region is convex, so ordering by azimuth around the centroid yields a
     # closed polygon that approximates the (arc-bounded) boundary; coarse but
     # consistent with the existing planar approximation.
+    #
+    # Emit CW in (lon, lat). Plotly scattergeo's `fill: "toself"` treats a
+    # closed lat/lon path as a *spherical* polygon and uses the right-hand
+    # convention (interior on the right of the walk). CCW vertices end up
+    # filling the antipodal hemisphere (whole world minus the diamond);
+    # `reverse=True` flips the atan2 ascending order to CW so the small
+    # feasible region is the one filled.
     if isinstance(intersection, list):
         if not intersection:
             return None
         lat_c = sum(c.lat for c in intersection) / len(intersection)
         lon_c = sum(c.lon for c in intersection) / len(intersection)
         ordered = sorted(
-            intersection, key=lambda c: math.atan2(c.lat - lat_c, c.lon - lon_c)
+            intersection,
+            key=lambda c: math.atan2(c.lat - lat_c, c.lon - lon_c),
+            reverse=True,
         )
         outer = [[round(c.lat, 4), round(c.lon, 4)] for c in ordered]
         # Close the ring.
