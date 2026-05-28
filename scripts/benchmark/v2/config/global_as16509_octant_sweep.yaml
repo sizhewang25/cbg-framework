@@ -1,0 +1,215 @@
+# Weight-threshold sweep for octant_weighted_cbg on the AS16509 probe corpus.
+#
+# Reuses the same source_kwargs / fold layout as global_as16509.yaml; the
+# only thing that changes between combos is `mtl_kwargs.weight_threshold`. Each
+# variant is named `octant_cbg_tNN` where NN is the threshold ×100
+# (e.g., t90 = 0.9, the value used in the parent config). Output paths key off
+# `run_id`, so this run lands in a sibling directory and does not collide with
+# global_as16509's outputs.
+#
+# Requires the same inputs as the parent run:
+#   - datasets/ripe_atlas/asn_corpora/probes/global/probes_of_as_16509.json
+#   - datasets/ripe_atlas/asn_corpora/anchors/kfolds/anchor_fold_<0..4>.json
+#
+# Run with:
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile scripts/benchmark/v2/config/global_as16509_octant_sweep.yaml -j 4
+
+run_id: global_as16509_octant_sweep
+source: ripe_atlas_asn_corpora
+setup: probes_to_anchors
+slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+source_kwargs:
+  probe_data_dir: datasets/ripe_atlas/asn_corpora/probes/global
+  probe_asn: 16509
+  anchor_data_dir: datasets/ripe_atlas/asn_corpora/anchors/kfolds
+  max_rtt_ms: 10000
+
+enable_fallback: true
+seed: 42
+
+# Sweep the union-coverage threshold from 1.0 (every face required, largest
+# feasible region) down to 0.1 (top-weighted faces only, smallest region). The
+# rest of the octant_weighted_cbg knobs match the parent config so the only
+# moving part is weight_threshold.
+combos:
+  - combo_id: octant_cbg_t100
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 1.0
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_t90
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.9
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_t80
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.8
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_t70
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.7
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_t60
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.6
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_t50
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.5
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_t40
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.4
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_t30
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.3
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_t20
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.2
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_t10
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.1
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024

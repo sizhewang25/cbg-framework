@@ -1,0 +1,50 @@
+# Merged-folds analysis for the octant_weighted_cbg weight_threshold sweep
+# on the AS3215 corpus.
+#
+# Concatenates per-target results from fold_0..fold_4 (disjoint K-fold test
+# sets) and recomputes per-stage percentiles from raw — see scripts/analysis/Snakefile.
+#
+# Run with:
+#   snakemake -s scripts/analysis/Snakefile \
+#       --configfile scripts/analysis/config/europe_as3215_octant_sweep.yaml -j 3
+
+run_id: europe_as3215_octant_sweep
+source: ripe_atlas_asn_corpora
+setup: probes_to_anchors
+slices: []
+merge_folds: true
+
+group_by: none                 # all 10 sweep variants share the same LTD; one CDF panel
+phase_stat: p95
+include_fit: true
+runtime_stat: p50
+
+# Every sweep variant. The Snakefile threads these through --combos so the CDF,
+# diff-CDF, phase, and inspect plots only consider this list.
+combos:
+  - octant_cbg_t100
+  - octant_cbg_t90
+  - octant_cbg_t80
+  - octant_cbg_t70
+  - octant_cbg_t60
+  - octant_cbg_t50
+  - octant_cbg_t40
+  - octant_cbg_t30
+  - octant_cbg_t20
+  - octant_cbg_t10
+
+# Regional VP corpus: same split as the parent AS3215 run.
+split_by_main_continent: europe
+
+# Each off-default threshold compared to the parent's default (0.9). Negative
+# delta = lower threshold improves; positive = it hurts.
+diff_pairs:
+  - [octant_cbg_t100, octant_cbg_t90]
+  - [octant_cbg_t80,  octant_cbg_t90]
+  - [octant_cbg_t70,  octant_cbg_t90]
+  - [octant_cbg_t60,  octant_cbg_t90]
+  - [octant_cbg_t50,  octant_cbg_t90]
+  - [octant_cbg_t40,  octant_cbg_t90]
+  - [octant_cbg_t30,  octant_cbg_t90]
+  - [octant_cbg_t20,  octant_cbg_t90]
+  - [octant_cbg_t10,  octant_cbg_t90]
