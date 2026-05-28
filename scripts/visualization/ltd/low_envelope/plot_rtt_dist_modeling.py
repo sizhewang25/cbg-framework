@@ -160,8 +160,7 @@ def main() -> None:
     output_dir.mkdir(exist_ok=True)
     csv_path = (
         Path(__file__).resolve().parents[4]
-        / "scripts" / "libs" / "cbg_feasibility" / "data"
-        / "vultr_pings_us_only.csv"
+        / "datasets" / "vultr_pings_us_only.csv"
     )
 
     print(f"Loading samples from {csv_path}")
