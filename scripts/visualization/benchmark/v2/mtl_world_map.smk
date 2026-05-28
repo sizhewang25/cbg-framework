@@ -16,6 +16,7 @@
 # produced `targets.parquet` for each (run, source, setup, fold, combo)
 # cell — this workflow only renders, it does not re-run the pipeline.
 
+import re
 import yaml
 from pathlib import Path
 
@@ -24,20 +25,26 @@ BENCH_OUT  = Path("scripts/benchmark/v2/outputs")
 VIZ_OUT    = Path("scripts/visualization/benchmark/v2/outputs")
 
 # Combos we render maps for. Anything not present in a config is skipped.
-TARGET_COMBOS = ["vanilla_cbg", "million_scale_cbg", "octant_cbg", "spotter_cbg"]
+# Named combos cover the parent per-ASN configs; SWEEP_COMBO_RE picks up every
+# octant_weighted_cbg weight_threshold variant (octant_cbg_t10..t100) from the
+# *_octant_sweep configs without enumerating them.
+NAMED_COMBOS = ["vanilla_cbg", "million_scale_cbg", "octant_cbg", "spotter_cbg"]
+SWEEP_COMBO_RE = re.compile(r"^octant_cbg_t\d+$")
 
 # Discover ASN configs and remember per-run metadata for the input function.
 CONFIG_META = {}
 for path in sorted(CONFIG_DIR.glob("*_as*.yaml")):
     with open(path) as fh:
         cfg = yaml.safe_load(fh)
-    available = {c.get("combo_id") for c in cfg.get("combos", [])}
+    available = [c.get("combo_id") for c in cfg.get("combos", [])]
+    combos = [c for c in NAMED_COMBOS if c in available]
+    combos += sorted(c for c in available if SWEEP_COMBO_RE.match(c) and c not in combos)
     CONFIG_META[cfg["run_id"]] = {
         "path": str(path),
         "source": cfg["source"],
         "setup": cfg.get("setup", "probes_to_anchors"),
         "slices": cfg["slices"],
-        "combos": [c for c in TARGET_COMBOS if c in available],
+        "combos": combos,
     }
 
 PAIRS = [
