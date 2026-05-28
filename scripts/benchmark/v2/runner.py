@@ -117,6 +117,10 @@ def run_one_combo(
             writer.write_table(_row_to_table(row))
 
     # --- 5. Write run.json ---------------------------------------------------
+    # `rss_start` was sampled before fit/per-target work — that's the
+    # baseline (Python + libs + inputs). `rss_end` is the lifetime peak.
+    # Both come from `getrusage().ru_maxrss`, which is monotonic, so
+    # `rss_end >= rss_start` by construction (no max() needed).
     rss_end = peak_rss_bytes()
     run_meta = {
         "run_id": run_id,
@@ -139,10 +143,10 @@ def run_one_combo(
         "fit_success": fit_result.success,
         "fit_error": fit_result.error.name if fit_result.error else None,
         "fit_ms": fit_meas["duration_ns"] / 1e6,
-        "fit_peak_bytes": fit_meas["peak_bytes"],
-        "rss_bytes_start": rss_start,
-        "rss_bytes_end": rss_end,
-        "run_peak_rss_bytes": max(rss_start, rss_end),
+        "fit_alloc_peak_bytes": fit_meas["alloc_peak_bytes"],
+        "fit_rss_peak_bytes": fit_meas["rss_peak_bytes"],
+        "run_baseline_rss_bytes": rss_start,
+        "run_peak_rss_bytes": rss_end,
     }
     (out_dir / "run.json").write_text(json.dumps(run_meta, indent=2) + "\n")
     return out_dir
@@ -209,11 +213,14 @@ def _build_target_row(
         "error": geo_result.error.name if geo_result.error else None,
         "error_km": error_km,
         "ltd_ms": (ltd_rec.duration_ns / 1e6) if ltd_rec else 0.0,
-        "ltd_peak_bytes": ltd_rec.peak_bytes if ltd_rec else 0,
+        "ltd_alloc_peak_bytes": ltd_rec.alloc_peak_bytes if ltd_rec else 0,
+        "ltd_rss_peak_bytes": ltd_rec.rss_peak_bytes if ltd_rec else 0,
         "mtl_ms": (mtl_rec.duration_ns / 1e6) if mtl_rec else None,
-        "mtl_peak_bytes": mtl_rec.peak_bytes if mtl_rec else None,
+        "mtl_alloc_peak_bytes": mtl_rec.alloc_peak_bytes if mtl_rec else None,
+        "mtl_rss_peak_bytes": mtl_rec.rss_peak_bytes if mtl_rec else None,
         "ctr_ms": (ctr_rec.duration_ns / 1e6) if ctr_rec else None,
-        "ctr_peak_bytes": ctr_rec.peak_bytes if ctr_rec else None,
+        "ctr_alloc_peak_bytes": ctr_rec.alloc_peak_bytes if ctr_rec else None,
+        "ctr_rss_peak_bytes": ctr_rec.rss_peak_bytes if ctr_rec else None,
         "n_ltd_success": sum(1 for r in geo_result.ltd_results if r.success),
         "ltd_predictions": ltd_predictions,
         "mtl_success": mtl_result.success if mtl_result else None,

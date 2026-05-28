@@ -1,9 +1,16 @@
 """Phase-local peak memory per v2 combo: stacked LTD / MTL / CTR (+ FIT) with
 a process-max-RSS line.
 
-Reads `{ltd,mtl,ctr}_peak_bytes_<stat>` from `summary.parquet` (one row per
-combo, SUMMARY_SCHEMA) and `fit_peak_bytes` / `run_peak_rss_bytes` from each
-combo's `run.json`.
+Two memory channels available per phase, selected by `--channel`:
+  * `rss` (default) — `{ltd,mtl,ctr}_rss_peak_bytes_<stat>`: max RSS-delta over
+    the stage window from the background sampler. Catches Shapely/GEOS C
+    allocations. The honest "how much memory did this stage need" number.
+  * `alloc` — `{ltd,mtl,ctr}_alloc_peak_bytes_<stat>`: tracemalloc Python
+    allocator peak. Catches NumPy/SciPy but blind to libc C allocations.
+    Useful for Python-side attribution but materially underreports MTL.
+
+Run-level: `fit_<channel>_peak_bytes` / `run_baseline_rss_bytes` /
+`run_peak_rss_bytes` from each combo's `run.json`.
 """
 
 from __future__ import annotations
@@ -54,26 +61,32 @@ def plot_phase_memory(
     *,
     stat: str = "p95",
     include_fit: bool = True,
+    channel: str = "rss",
     title: Optional[str] = None,
 ) -> plt.Figure:
     """Stacked phase-memory bars (MB) + process max-RSS line.
 
     Args:
         summary: SUMMARY_SCHEMA table, already filtered to one run.
-        run_jsons: combo_id -> run.json contents (for fit_peak_bytes and
-            run_peak_rss_bytes).
+        run_jsons: combo_id -> run.json contents (for fit_<channel>_peak_bytes
+            and run_peak_rss_bytes).
         output_path: Where to save the PNG.
         stat: Which per-stage stat to plot — "p5"/"p25"/"p50"/"p75"/"p95"/"mean".
-        include_fit: Whether to add a stacked FIT bar from run.json fit_peak_bytes.
+        include_fit: Whether to add a stacked FIT bar from run.json
+            fit_<channel>_peak_bytes.
+        channel: "rss" (honest, catches Shapely C allocations) or "alloc"
+            (tracemalloc Python-only, Shapely-blind).
         title: Figure title.
     """
+    if channel not in ("rss", "alloc"):
+        raise ValueError(f"channel must be 'rss' or 'alloc'; got {channel!r}")
     combo_ids = summary.column("combo_id").to_pylist()
     phase_mb: dict[str, list[float]] = {}
     for phase in ("ltd", "mtl", "ctr"):
-        col = f"{phase}_peak_bytes_{stat}"
+        col = f"{phase}_{channel}_peak_bytes_{stat}"
         if col not in summary.column_names:
             raise ValueError(
-                f"Column {col!r} not in summary.parquet — check --stat. "
+                f"Column {col!r} not in summary.parquet — check --stat / --channel. "
                 f"Available: {sorted(c for c in summary.column_names if c.endswith(tuple(['_p5','_p25','_p50','_p75','_p95','_mean','_std'])))}"
             )
         values = summary.column(col).to_numpy(zero_copy_only=False).astype(float)
@@ -81,9 +94,10 @@ def plot_phase_memory(
             v / _BYTES_PER_MB if not np.isnan(v) else 0.0 for v in values
         ]
 
+    fit_key = f"fit_{channel}_peak_bytes"
     if include_fit:
         phase_mb["fit"] = [
-            float(run_jsons.get(cid, {}).get("fit_peak_bytes") or 0.0) / _BYTES_PER_MB
+            float(run_jsons.get(cid, {}).get(fit_key) or 0.0) / _BYTES_PER_MB
             for cid in combo_ids
         ]
 
@@ -149,9 +163,13 @@ def plot_phase_memory(
     )
     ax_rss.legend(rss_handles, rss_labels, loc="upper right", fontsize=8, frameon=True)
 
+    channel_blurb = {
+        "rss": "RSS-sampled peak (catches Shapely C allocations)",
+        "alloc": "tracemalloc Python-allocator peak (Shapely-blind)",
+    }[channel]
     fig.text(
         0.01, 0.01,
-        f"Bars: per-stage tracemalloc peak (summary {stat}). "
+        f"Bars: per-stage {channel_blurb} (summary {stat}). "
         f"Stacks are attribution aids, not concurrent totals.",
         fontsize=8, color="#495057",
     )
@@ -163,7 +181,10 @@ def plot_phase_memory(
     return fig
 
 
-_PHASE_PEAK_COLS = ("ltd_peak_bytes", "mtl_peak_bytes", "ctr_peak_bytes")
+def _phase_peak_cols(channel: str) -> tuple[str, ...]:
+    return tuple(f"{p}_{channel}_peak_bytes" for p in ("ltd", "mtl", "ctr"))
+
+
 _STAT_NAMES = ("p5", "p25", "p50", "p75", "p95", "mean", "std")
 _STAT_QS = {"p5": 0.05, "p25": 0.25, "p50": 0.50, "p75": 0.75, "p95": 0.95}
 
@@ -209,28 +230,29 @@ def _synthesize_merged_summary(
     return pa.table(table_data)
 
 
-def _merged_run_jsons(grouped: dict[str, list[Path]]) -> dict[str, dict]:
+def _merged_run_jsons(grouped: dict[str, list[Path]], channel: str) -> dict[str, dict]:
     """Per-combo run.json synthesized from K fold runs.
 
-    `fit_peak_bytes` and `run_peak_rss_bytes` are reduced with max across
-    folds — both are process-level peaks and max is the worst-case bound,
-    consistent with framing the merged plot as a worst-case characterization
-    of the combo across the K cross-validation runs.
+    `fit_<channel>_peak_bytes` and `run_peak_rss_bytes` are reduced with max
+    across folds — both are process-level peaks and max is the worst-case
+    bound, consistent with framing the merged plot as a worst-case
+    characterization of the combo across the K cross-validation runs.
     """
+    fit_key = f"fit_{channel}_peak_bytes"
     out: dict[str, dict] = {}
     for cid, dirs in grouped.items():
         fits: list[int] = []
         rsss: list[int] = []
         for d in dirs:
             rj = load_run_json(d)
-            fp = rj.get("fit_peak_bytes")
+            fp = rj.get(fit_key)
             if fp is not None:
                 fits.append(int(fp))
             rss = rj.get("run_peak_rss_bytes")
             if rss is not None:
                 rsss.append(int(rss))
         out[cid] = {
-            "fit_peak_bytes": max(fits) if fits else None,
+            fit_key: max(fits) if fits else None,
             "run_peak_rss_bytes": max(rsss) if rsss else None,
         }
     return out
@@ -241,6 +263,8 @@ def _load_from_run(
     source: Optional[str],
     slice_: Optional[str],
     combos: Optional[list[str]] = None,
+    *,
+    channel: str = "rss",
 ) -> tuple[pa.Table, dict[str, dict]]:
     """Return (summary table, run_jsons by combo_id).
 
@@ -250,8 +274,8 @@ def _load_from_run(
     Merged-folds mode (`slice_=None` on a K-fold layout): synthesizes a
     summary by concatenating per-target peak-bytes from each fold's
     targets.parquet and recomputing percentiles from raw, since percentiles
-    don't aggregate from per-fold percentiles. `fit_peak_bytes` and
-    `run_peak_rss_bytes` are reduced with max-of-folds.
+    don't aggregate from per-fold percentiles. `fit_<channel>_peak_bytes`
+    and `run_peak_rss_bytes` are reduced with max-of-folds.
     """
     combo_dirs = discover_combos(run_dir, source, slice_, combos)
     if not combo_dirs:
@@ -259,8 +283,8 @@ def _load_from_run(
 
     if slice_ is None:
         grouped = group_combos_by_id(combo_dirs)
-        summary = _synthesize_merged_summary(grouped, _PHASE_PEAK_COLS)
-        run_jsons = _merged_run_jsons(grouped)
+        summary = _synthesize_merged_summary(grouped, _phase_peak_cols(channel))
+        run_jsons = _merged_run_jsons(grouped, channel)
         return summary, run_jsons
 
     summary = load_summary(run_dir)
@@ -294,6 +318,14 @@ def main() -> None:
     )
     parser.add_argument("--no-fit", action="store_true", help="Hide the FIT bar.")
     parser.add_argument(
+        "--channel", choices=("rss", "alloc"), default="rss",
+        help=(
+            "Memory channel to plot. 'rss' (default) = RSS-sampled peak, "
+            "catches Shapely C allocations (honest MTL). 'alloc' = tracemalloc "
+            "Python-allocator peak, Shapely-blind."
+        ),
+    )
+    parser.add_argument(
         "--combos", nargs="*", default=None,
         help="Restrict to these combo_ids (default: every combo found on disk).",
     )
@@ -304,6 +336,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     summary, run_jsons = _load_from_run(
         args.run_dir, args.source, args.slice_, combos=args.combos,
+        channel=args.channel,
     )
     fig = plot_phase_memory(
         summary,
@@ -311,6 +344,7 @@ def main() -> None:
         args.out,
         stat=args.stat,
         include_fit=not args.no_fit,
+        channel=args.channel,
         title=args.title,
     )
     plt.close(fig)

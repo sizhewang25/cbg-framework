@@ -251,7 +251,9 @@ def _summarize_combo(run_json: Path) -> dict:
         "n_fallback": int(sc.get("FALLBACK", 0)),
         "n_error": int(sc.get("ERROR", 0)),
         "fit_ms": float(meta.get("fit_ms", 0.0)),
-        "fit_peak_bytes": int(meta.get("fit_peak_bytes", 0)),
+        "fit_alloc_peak_bytes": int(meta.get("fit_alloc_peak_bytes", 0)),
+        "fit_rss_peak_bytes": int(meta.get("fit_rss_peak_bytes", 0)),
+        "run_baseline_rss_bytes": int(meta.get("run_baseline_rss_bytes", 0)),
         "run_peak_rss_bytes": int(meta["run_peak_rss_bytes"]),
     }
     # Aggregate every per-target metric over the SUCCESS+FALLBACK subset.

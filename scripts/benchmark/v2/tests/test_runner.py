@@ -66,9 +66,16 @@ class TestRunOneCombo(unittest.TestCase):
         self.assertEqual(run_meta["combo_id"], "combo1")
         self.assertEqual(run_meta["n_targets"], 1)
         self.assertGreater(run_meta["fit_ms"], 0.0)
-        self.assertGreaterEqual(run_meta["fit_peak_bytes"], 0)
+        self.assertGreaterEqual(run_meta["fit_alloc_peak_bytes"], 0)
+        self.assertGreaterEqual(run_meta["fit_rss_peak_bytes"], 0)
         self.assertIn("status_counts", run_meta)
         self.assertGreater(run_meta["run_peak_rss_bytes"], 1_000_000)
+        self.assertGreater(run_meta["run_baseline_rss_bytes"], 1_000_000)
+        # Baseline is captured before any combo work, true peak is captured
+        # at run end → getrusage monotonicity makes the inequality strict-or-equal.
+        self.assertGreaterEqual(
+            run_meta["run_peak_rss_bytes"], run_meta["run_baseline_rss_bytes"]
+        )
 
         # 2. .stateless marker (SoI LTD has no fitted state)
         self.assertTrue((self.out_dir / ".stateless").exists())
@@ -86,6 +93,15 @@ class TestRunOneCombo(unittest.TestCase):
         self.assertGreater(row["ltd_ms"], 0.0)
         self.assertIsNotNone(row["mtl_ms"])
         self.assertIsNotNone(row["ctr_ms"])
+        # Both memory channels present on every stage. alloc_peak is
+        # tracemalloc (always >= 0); rss_peak is sampler delta (may be 0
+        # for sub-5ms stages — assert presence, not magnitude).
+        self.assertGreaterEqual(row["ltd_alloc_peak_bytes"], 0)
+        self.assertGreaterEqual(row["ltd_rss_peak_bytes"], 0)
+        self.assertGreaterEqual(row["mtl_alloc_peak_bytes"], 0)
+        self.assertGreaterEqual(row["mtl_rss_peak_bytes"], 0)
+        self.assertGreaterEqual(row["ctr_alloc_peak_bytes"], 0)
+        self.assertGreaterEqual(row["ctr_rss_peak_bytes"], 0)
         # Under anchors_to_probes the lone anchor (1.1.1.1) is the single VP
         # observing each probe target → n_obs == 1.
         self.assertEqual(row["n_obs"], 1)

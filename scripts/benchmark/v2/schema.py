@@ -89,14 +89,21 @@ TARGETS_SCHEMA = pa.schema([
     pa.field("error", pa.string(), nullable=True),           # Error.name or None
     pa.field("error_km", pa.float64(), nullable=True),       # haversine(true, pred)
 
-    # Per-stage timing + memory (nanoseconds, bytes). Nullable because MTL/CTR
-    # are skipped on early failures.
+    # Per-stage timing + memory (ms, bytes). Two memory channels per stage:
+    # `*_alloc_peak_bytes` = tracemalloc Python-allocator peak (catches NumPy,
+    # blind to Shapely/GEOS C allocations); `*_rss_peak_bytes` = RSS-delta
+    # high-water mark sampled by background thread (catches everything,
+    # incl. C; may report 0 for stages shorter than the 5 ms sample window).
+    # MTL/CTR fields nullable because both are skipped on early failures.
     pa.field("ltd_ms", pa.float64(), nullable=False),
-    pa.field("ltd_peak_bytes", pa.int64(), nullable=False),
+    pa.field("ltd_alloc_peak_bytes", pa.int64(), nullable=False),
+    pa.field("ltd_rss_peak_bytes", pa.int64(), nullable=False),
     pa.field("mtl_ms", pa.float64(), nullable=True),
-    pa.field("mtl_peak_bytes", pa.int64(), nullable=True),
+    pa.field("mtl_alloc_peak_bytes", pa.int64(), nullable=True),
+    pa.field("mtl_rss_peak_bytes", pa.int64(), nullable=True),
     pa.field("ctr_ms", pa.float64(), nullable=True),
-    pa.field("ctr_peak_bytes", pa.int64(), nullable=True),
+    pa.field("ctr_alloc_peak_bytes", pa.int64(), nullable=True),
+    pa.field("ctr_rss_peak_bytes", pa.int64(), nullable=True),
 
     # Stage outcome summaries (in addition to nested per-VP LTD)
     pa.field("n_ltd_success", pa.int32(), nullable=False),
@@ -121,11 +128,14 @@ SUMMARY_STATS = ("p5", "p25", "p50", "p75", "p95", "mean", "std")
 SUMMARY_METRICS = (
     "error_km",
     "ltd_ms",
-    "ltd_peak_bytes",
+    "ltd_alloc_peak_bytes",
+    "ltd_rss_peak_bytes",
     "mtl_ms",
-    "mtl_peak_bytes",
+    "mtl_alloc_peak_bytes",
+    "mtl_rss_peak_bytes",
     "ctr_ms",
-    "ctr_peak_bytes",
+    "ctr_alloc_peak_bytes",
+    "ctr_rss_peak_bytes",
 )
 
 
@@ -153,12 +163,18 @@ SUMMARY_SCHEMA = pa.schema(
         pa.field("n_fallback", pa.int32(), nullable=False),
         pa.field("n_error", pa.int32(), nullable=False),
     ]
-    # 7 metrics × 7 stats = 49 fields, in (metric, stat) order.
+    # 10 metrics × 7 stats = 70 fields, in (metric, stat) order.
     + [field for metric in SUMMARY_METRICS for field in _stat_fields(metric)]
     + [
-        # Run-level singletons from run.json.
+        # Run-level singletons from run.json. `run_baseline_rss_bytes` is
+        # captured before any per-target work — subtract from
+        # `run_peak_rss_bytes` to get the CBG-attributable peak delta
+        # (the always-on Python+libs+inputs overhead is roughly the
+        # baseline number; the delta is what CBG itself committed).
         pa.field("fit_ms", pa.float64(), nullable=True),
-        pa.field("fit_peak_bytes", pa.int64(), nullable=True),
+        pa.field("fit_alloc_peak_bytes", pa.int64(), nullable=True),
+        pa.field("fit_rss_peak_bytes", pa.int64(), nullable=True),
+        pa.field("run_baseline_rss_bytes", pa.int64(), nullable=True),
         pa.field("run_peak_rss_bytes", pa.int64(), nullable=True),
     ]
 )
