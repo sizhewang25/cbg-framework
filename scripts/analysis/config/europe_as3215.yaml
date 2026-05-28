@@ -48,3 +48,9 @@ diff_pairs:
   - [million_scale_cbg, vanilla_cbg]
   - [octant_cbg,        vanilla_cbg]
   - [spotter_cbg,       vanilla_cbg]
+
+merge_pairs:
+  - vanilla_cbg
+  - million_scale_cbg
+  - octant_cbg
+  - spotter_cbg

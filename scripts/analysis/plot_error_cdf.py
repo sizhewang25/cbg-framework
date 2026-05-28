@@ -31,6 +31,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from matplotlib.ticker import ScalarFormatter
 
 from scripts.analysis._v2_io import (
     discover_combos,
@@ -85,6 +86,8 @@ def plot_error_cdf(
     max_x_km: float = 10000.0,
     colors: Optional[dict[str, str]] = None,
     title: Optional[str] = None,
+    figsize_per_panel: tuple[float, float] = (6.0, 7.0),
+    stats_box_loc: str = "upper left",
 ) -> plt.Figure:
     """Plot error CDFs from a {combo_id: error_km array} dict.
 
@@ -104,6 +107,11 @@ def plot_error_cdf(
         max_x_km: X-axis upper bound.
         colors: Optional combo_id -> hex color. Defaults to tab20 by sorted id.
         title: Figure title.
+        figsize_per_panel: (width, height) inches per panel. Total figure
+            width is `panels × width`.
+        stats_box_loc: "upper left" (default — anchored just below the
+            upper-left legend) or "lower right" (renders in the
+            lower-right corner; useful when the legend area is crowded).
     """
     if group_by == "ltd":
         if combo_to_ltd is None:
@@ -128,11 +136,15 @@ def plot_error_cdf(
     count_width = 11
 
     n_panels = len(panels)
+    pw, ph = figsize_per_panel
     fig, axes = plt.subplots(
-        1, n_panels, figsize=(6 * n_panels, 7), sharey=True, squeeze=False,
+        1, n_panels, figsize=(pw * n_panels, ph), sharey=True, squeeze=False,
     )
     axes = axes[0]
     threshold_colors = {100: "green", 500: "orange", 1000: "red"}
+    # Deferred stats-box state, populated in the panel loop and rendered
+    # AFTER tight_layout so the legend bbox we read off is the final one.
+    deferred_stats: list[tuple] = []
 
     baseline_sorted = None
     baseline_cdf = None
@@ -182,9 +194,13 @@ def plot_error_cdf(
         if panel_title:
             ax.set_title(panel_title, fontsize=12, fontweight="bold")
         ax.set_xlabel("Error distance (km)", fontsize=11)
-        ax.legend(loc="upper left", fontsize=8)
+        legend = ax.legend(loc="upper left", fontsize=8)
         ax.grid(True, which="both", alpha=0.3)
         ax.set_xscale("log")
+        # Plain-number tick labels (1, 10, 100, ...) instead of 10^k form.
+        x_fmt = ScalarFormatter()
+        x_fmt.set_scientific(False)
+        ax.xaxis.set_major_formatter(x_fmt)
         ax.set_xlim(1, max_x_km)
         ax.set_ylim(0, 1)
 
@@ -208,13 +224,8 @@ def plot_error_cdf(
                     f"{baseline_label[:16]:<16} {str(len(baseline_sorted)):>{count_width}} "
                     f"{p5:5.0f} {p25:5.0f} {p50:5.0f} {p75:5.0f} {p95:5.0f}"
                 )
-            ax.text(
-                0.98, 0.02, "\n".join(lines),
-                transform=ax.transAxes, fontsize=7,
-                verticalalignment="bottom", horizontalalignment="right",
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
-                family="monospace",
-            )
+
+            deferred_stats.append((ax, legend, "\n".join(lines)))
 
     axes[0].set_ylabel("CDF", fontsize=12)
     fig.suptitle(
@@ -222,6 +233,33 @@ def plot_error_cdf(
         fontsize=14, fontweight="bold",
     )
     plt.tight_layout(rect=(0, 0, 1, 0.95))
+
+    # Render stats boxes after tight_layout so legend bboxes are final.
+    fig.canvas.draw()
+    for ax, legend, text in deferred_stats:
+        if stats_box_loc == "upper left":
+            leg_bbox = legend.get_window_extent().transformed(
+                ax.transAxes.inverted()
+            )
+            # Generous gap (~3% of axes height) so the stat box sits cleanly
+            # below the legend even with display-vs-render rounding.
+            text_x, text_y = 0.02, leg_bbox.ymin - 0.03
+            va, ha = "top", "left"
+        elif stats_box_loc == "lower right":
+            text_x, text_y, va, ha = 0.98, 0.02, "bottom", "right"
+        else:
+            raise ValueError(
+                f"unsupported stats_box_loc={stats_box_loc!r}; "
+                "use 'lower right' or 'upper left'"
+            )
+        ax.text(
+            text_x, text_y, text,
+            transform=ax.transAxes, fontsize=7,
+            verticalalignment=va, horizontalalignment=ha,
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+            family="monospace",
+        )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     logger.info("Saved: %s", output_path)
@@ -511,6 +549,214 @@ def plot_error_cdf_by_continent(
     return fig_in, fig_rest
 
 
+def plot_error_cdf_merge(
+    run_dir: Path,
+    combos_to_merge: list[str],
+    output_path: Path,
+    *,
+    source: Optional[str] = None,
+    slice_: Optional[str] = None,
+    inputs_dir: Optional[Path] = None,
+    success_only: bool = False,
+    max_x_km: float = 10000.0,
+    title: Optional[str] = None,
+) -> plt.Figure:
+    """Plot error CDFs for `combos_to_merge` overlaid on a single panel
+    (no LTD grouping).
+
+    Driven by the `merge_pairs` config field: callers pass the resolved list of
+    combo_ids they want stacked on one CDF for a tight head-to-head read. The
+    palette is derived from *every* combo found under `run_dir` (not just the
+    merged subset), so each combo keeps the same color as on the LTD-grouped
+    `plot_error_cdf` figures.
+
+    When `inputs_dir` is provided a shortest-ping baseline is overlaid (same
+    semantics as `plot_error_cdf`).
+    """
+    errors_by_combo, successes_by_combo, totals_by_combo, _ = _load_from_run(
+        run_dir, source, slice_,
+        success_only=success_only, combos=combos_to_merge,
+    )
+
+    # Reorder loaded dicts to follow `combos_to_merge` order — this becomes the
+    # plot order in both the legend and the stats box (Python dicts preserve
+    # insertion order; the single-panel branch of plot_error_cdf iterates them
+    # in that order).
+    errors_by_combo = {
+        c: errors_by_combo[c] for c in combos_to_merge if c in errors_by_combo
+    }
+    successes_by_combo = {
+        c: successes_by_combo[c] for c in combos_to_merge if c in successes_by_combo
+    }
+    totals_by_combo = {
+        c: totals_by_combo[c] for c in combos_to_merge if c in totals_by_combo
+    }
+
+    # Palette over the full combo set in the run so colors stay aligned with
+    # the LTD-grouped plots.
+    all_dirs = discover_combos(run_dir, source, slice_)
+    colors = palette(sorted({d.name for d in all_dirs}))
+
+    baseline_errors = None
+    if inputs_dir is not None:
+        baseline_errors = _load_nearest_ping_baseline(inputs_dir)
+
+    base_title = title or (
+        "Error CDF — SUCCESS only (merged combos)" if success_only
+        else "Error CDF (merged combos)"
+    )
+    return plot_error_cdf(
+        errors_by_combo,
+        output_path,
+        successes_by_combo=successes_by_combo,
+        totals_by_combo=totals_by_combo,
+        baseline_errors=baseline_errors,
+        group_by=None,
+        max_x_km=max_x_km,
+        colors=colors,
+        title=base_title,
+        figsize_per_panel=(8.0, 6.0),  # 4:3
+        stats_box_loc="upper left",
+    )
+
+
+def plot_error_cdf_merge_by_continent(
+    run_dir: Path,
+    combos_to_merge: list[str],
+    target_continent: str,
+    output_path: Path,
+    *,
+    filtered_anchors_path: Path,
+    source: Optional[str] = None,
+    slice_: Optional[str] = None,
+    inputs_dir: Optional[Path] = None,
+    max_x_km: float = 10000.0,
+    title: Optional[str] = None,
+) -> tuple[plt.Figure, plt.Figure]:
+    """Continent-split, SUCCESS-only single-panel CDF for `combos_to_merge`.
+
+    Writes `<output_path stem>_<continent_slug>.png` and `<stem>_rest.png`.
+    Colors are derived from every combo found under `run_dir`, matching the
+    LTD-grouped `plot_error_cdf_by_continent` outputs.
+    """
+    canon = _normalize_continent(target_continent)
+    ip_to_continent = _load_ip_to_continent(filtered_anchors_path)
+
+    combo_dirs = discover_combos(run_dir, source, slice_, combos_to_merge)
+    if not combo_dirs:
+        raise FileNotFoundError(
+            f"No combos in {combos_to_merge} found under {run_dir}"
+        )
+
+    in_errors: dict[str, list[float]] = {}
+    in_succ: dict[str, int] = {}
+    in_total: dict[str, int] = {}
+    rest_errors: dict[str, list[float]] = {}
+    rest_succ: dict[str, int] = {}
+    rest_total: dict[str, int] = {}
+    unknown_target_ids: set[str] = set()
+
+    for combo_dir in combo_dirs:
+        cid = combo_dir.name
+        tbl = load_targets(combo_dir)
+        target_ids = tbl.column("target_id").to_pylist()
+        status_arr = tbl.column("status").to_pylist()
+        error_arr = tbl.column("error_km").to_numpy(zero_copy_only=False)
+        for tid, st, err in zip(target_ids, status_arr, error_arr):
+            cont = ip_to_continent.get(tid, "Unknown")
+            if cont == "Unknown":
+                unknown_target_ids.add(tid)
+                continue
+            in_grp = cont == canon
+            if in_grp:
+                in_total[cid] = in_total.get(cid, 0) + 1
+                if st == "SUCCESS":
+                    in_succ[cid] = in_succ.get(cid, 0) + 1
+                    if not np.isnan(err):
+                        in_errors.setdefault(cid, []).append(float(err))
+            else:
+                rest_total[cid] = rest_total.get(cid, 0) + 1
+                if st == "SUCCESS":
+                    rest_succ[cid] = rest_succ.get(cid, 0) + 1
+                    if not np.isnan(err):
+                        rest_errors.setdefault(cid, []).append(float(err))
+
+    if unknown_target_ids:
+        logger.warning(
+            "%d anchor IPs missing from %s or with unknown country_code; "
+            "their eval rows were dropped",
+            len(unknown_target_ids), filtered_anchors_path,
+        )
+
+    # Follow `combos_to_merge` order so the legend and stats box match the
+    # config — single-panel rendering iterates dict order.
+    discovered = {d.name for d in combo_dirs}
+    requested_cids = [c for c in combos_to_merge if c in discovered]
+    in_errors_np = {
+        cid: np.asarray(in_errors.get(cid, []), dtype=float)
+        for cid in requested_cids
+    }
+    rest_errors_np = {
+        cid: np.asarray(rest_errors.get(cid, []), dtype=float)
+        for cid in requested_cids
+    }
+    for cid in requested_cids:
+        in_succ.setdefault(cid, 0)
+        in_total.setdefault(cid, 0)
+        rest_succ.setdefault(cid, 0)
+        rest_total.setdefault(cid, 0)
+
+    # Palette over the full combo set in the run for color consistency.
+    all_dirs = discover_combos(run_dir, source, slice_)
+    colors = palette(sorted({d.name for d in all_dirs}))
+
+    in_baseline: Optional[np.ndarray] = None
+    rest_baseline: Optional[np.ndarray] = None
+    if inputs_dir is not None:
+        baseline_by_target = _load_nearest_ping_baseline_by_target(inputs_dir)
+        in_b, rest_b = [], []
+        for tid, err in baseline_by_target.items():
+            cont = ip_to_continent.get(tid, "Unknown")
+            if cont == "Unknown":
+                continue
+            (in_b if cont == canon else rest_b).append(err)
+        in_baseline = np.asarray(in_b, dtype=float) if in_b else None
+        rest_baseline = np.asarray(rest_b, dtype=float) if rest_b else None
+
+    slug = canon.lower().replace(" ", "_")
+    in_path = output_path.with_stem(f"{output_path.stem}_{slug}")
+    rest_path = output_path.with_stem(f"{output_path.stem}_rest")
+    base_title = title or "Error CDF — SUCCESS only (merged combos)"
+
+    fig_in = plot_error_cdf(
+        in_errors_np,
+        in_path,
+        successes_by_combo=in_succ,
+        totals_by_combo=in_total,
+        baseline_errors=in_baseline,
+        group_by=None,
+        max_x_km=max_x_km,
+        colors=colors,
+        title=f"{base_title} — in {canon}",
+        figsize_per_panel=(8.0, 6.0),  # 4:3
+        stats_box_loc="upper left",
+    )
+    fig_rest = plot_error_cdf(
+        rest_errors_np,
+        rest_path,
+        successes_by_combo=rest_succ,
+        totals_by_combo=rest_total,
+        baseline_errors=rest_baseline,
+        group_by=None,
+        max_x_km=max_x_km,
+        colors=colors,
+        title=f"{base_title} — rest of world",
+        figsize_per_panel=(8.0, 6.0),
+        stats_box_loc="upper left",
+    )
+    return fig_in, fig_rest
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot error CDF from a v2 benchmark run.",
@@ -564,9 +810,47 @@ def main() -> None:
         "--combos", nargs="*", default=None,
         help="Restrict to these combo_ids (default: every combo found on disk).",
     )
+    parser.add_argument(
+        "--merge-combos", nargs="*", default=None,
+        help="Overlay these combo_ids onto a single CDF panel (no LTD "
+             "grouping). Drives the merged-CDF outputs. Colors stay aligned "
+             "with the LTD-grouped plots. Combines with "
+             "--split-by-main-continent.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if args.merge_combos:
+        if args.split_by_main_continent is not None:
+            fig_in, fig_rest = plot_error_cdf_merge_by_continent(
+                args.run_dir,
+                args.merge_combos,
+                args.split_by_main_continent,
+                args.out,
+                filtered_anchors_path=args.filtered_anchors,
+                source=args.source,
+                slice_=args.slice_,
+                inputs_dir=args.inputs_dir,
+                max_x_km=args.max_x_km,
+                title=args.title,
+            )
+            plt.close(fig_in)
+            plt.close(fig_rest)
+        else:
+            fig = plot_error_cdf_merge(
+                args.run_dir,
+                args.merge_combos,
+                args.out,
+                source=args.source,
+                slice_=args.slice_,
+                inputs_dir=args.inputs_dir,
+                success_only=args.success_only,
+                max_x_km=args.max_x_km,
+                title=args.title,
+            )
+            plt.close(fig)
+        return
 
     if args.split_by_main_continent is not None:
         fig_in, fig_rest = plot_error_cdf_by_continent(

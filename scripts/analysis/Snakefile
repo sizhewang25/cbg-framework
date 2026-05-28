@@ -61,6 +61,12 @@ _CONT_SLUG = (
 COMBOS = config.get("combos", []) or []
 COMBOS_ARG = (" --combos " + " ".join(COMBOS)) if COMBOS else ""
 
+# Optional list of combo_ids to overlay on a single CDF (no LTD grouping).
+# Drives the plot_error_cdf_merge.png / plot_error_cdf_merge_by_continent_*.png
+# outputs. Empty/unset → those outputs are skipped.
+MERGE_PAIRS = config.get("merge_pairs", []) or []
+MERGE_ARG = (" --merge-combos " + " ".join(MERGE_PAIRS)) if MERGE_PAIRS else ""
+
 if not SLICES and not MERGE_FOLDS:
     raise ValueError(
         "Snakefile: nothing to do — set `slices: [...]` and/or `merge_folds: true` "
@@ -112,6 +118,17 @@ def _all_targets():
                 str(SLICE_OUT / "inspect_cbg_vs_shortest_ping_rest.png"),
                 slice=SLICES,
             ))
+        if MERGE_PAIRS:
+            targets.extend(expand(str(SLICE_OUT / "plot_error_cdf_merge.png"), slice=SLICES))
+            if SPLIT_CONT:
+                targets.extend(expand(
+                    str(SLICE_OUT / f"plot_error_cdf_merge_by_continent_{_CONT_SLUG}.png"),
+                    slice=SLICES,
+                ))
+                targets.extend(expand(
+                    str(SLICE_OUT / "plot_error_cdf_merge_by_continent_rest.png"),
+                    slice=SLICES,
+                ))
     if MERGE_FOLDS:
         targets.extend(expand(str(MERGED_OUT / "{plot}.png"), plot=_PLOTS))
         targets.append(str(MERGED_OUT / "inspect_mtl_blockers.json"))
@@ -121,6 +138,11 @@ def _all_targets():
             targets.append(str(MERGED_OUT / "plot_error_cdf_by_continent_rest.png"))
             targets.append(str(MERGED_OUT / f"inspect_cbg_vs_shortest_ping_{_CONT_SLUG}.png"))
             targets.append(str(MERGED_OUT / "inspect_cbg_vs_shortest_ping_rest.png"))
+        if MERGE_PAIRS:
+            targets.append(str(MERGED_OUT / "plot_error_cdf_merge.png"))
+            if SPLIT_CONT:
+                targets.append(str(MERGED_OUT / f"plot_error_cdf_merge_by_continent_{_CONT_SLUG}.png"))
+                targets.append(str(MERGED_OUT / "plot_error_cdf_merge_by_continent_rest.png"))
     return targets
 
 rule all:
@@ -267,6 +289,52 @@ rule cbg_vs_shortest_ping:
         " --inputs-dir {params.inputs_dir}"
         " --out-png {output.png}"
         " --out-csv {output.csv}" + COMBOS_ARG
+
+if MERGE_PAIRS:
+    rule error_cdf_merge:
+        input:
+            summary = RUN_DIR / "summary.parquet",
+            eval_obs = INPUTS_DIR / "eval_observations.parquet",
+        output:
+            png = SLICE_OUT / "plot_error_cdf_merge.png",
+        params:
+            run_dir = str(RUN_DIR),
+            source = SOURCE,
+            inputs_dir = str(INPUTS_DIR),
+        shell:
+            CLI + ".plot_error_cdf"
+            " --run-dir {params.run_dir}"
+            " --source {params.source}"
+            " --slice {wildcards.slice}"
+            " --inputs-dir {params.inputs_dir}"
+            " --success-only"
+            " --out {output.png}" + MERGE_ARG
+
+if MERGE_PAIRS and SPLIT_CONT:
+    rule error_cdf_merge_by_continent:
+        input:
+            summary = RUN_DIR / "summary.parquet",
+            eval_obs = INPUTS_DIR / "eval_observations.parquet",
+            filtered_anchors = FILTERED_ANCHORS,
+        output:
+            in_png = SLICE_OUT / f"plot_error_cdf_merge_by_continent_{_CONT_SLUG}.png",
+            rest_png = SLICE_OUT / "plot_error_cdf_merge_by_continent_rest.png",
+        params:
+            run_dir = str(RUN_DIR),
+            source = SOURCE,
+            inputs_dir = str(INPUTS_DIR),
+            cont = SPLIT_CONT,
+            anchors = FILTERED_ANCHORS,
+            base_out = str(SLICE_OUT / "plot_error_cdf_merge_by_continent.png"),
+        shell:
+            CLI + ".plot_error_cdf"
+            " --run-dir {params.run_dir}"
+            " --source {params.source}"
+            " --slice {wildcards.slice}"
+            " --inputs-dir {params.inputs_dir}"
+            " --split-by-main-continent {params.cont}"
+            " --filtered-anchors {params.anchors}"
+            " --out {params.base_out}" + MERGE_ARG
 
 rule mtl_blockers:
     input:
@@ -452,6 +520,48 @@ rule cbg_vs_shortest_ping_merged:
         " --inputs-dir {params.inputs_dir}"
         " --out-png {output.png}"
         " --out-csv {output.csv}" + COMBOS_ARG
+
+if MERGE_PAIRS:
+    rule error_cdf_merge_merged:
+        input:
+            summary = RUN_DIR / "summary.parquet",
+        output:
+            png = MERGED_OUT / "plot_error_cdf_merge.png",
+        params:
+            run_dir = str(RUN_DIR),
+            source = SOURCE,
+            inputs_dir = str(MERGED_INPUTS_DIR),
+        shell:
+            CLI + ".plot_error_cdf"
+            " --run-dir {params.run_dir}"
+            " --source {params.source}"
+            " --inputs-dir {params.inputs_dir}"
+            " --success-only"
+            " --out {output.png}" + MERGE_ARG
+
+if MERGE_PAIRS and SPLIT_CONT:
+    rule error_cdf_merge_by_continent_merged:
+        input:
+            summary = RUN_DIR / "summary.parquet",
+            filtered_anchors = FILTERED_ANCHORS,
+        output:
+            in_png = MERGED_OUT / f"plot_error_cdf_merge_by_continent_{_CONT_SLUG}.png",
+            rest_png = MERGED_OUT / "plot_error_cdf_merge_by_continent_rest.png",
+        params:
+            run_dir = str(RUN_DIR),
+            source = SOURCE,
+            inputs_dir = str(MERGED_INPUTS_DIR),
+            cont = SPLIT_CONT,
+            anchors = FILTERED_ANCHORS,
+            base_out = str(MERGED_OUT / "plot_error_cdf_merge_by_continent.png"),
+        shell:
+            CLI + ".plot_error_cdf"
+            " --run-dir {params.run_dir}"
+            " --source {params.source}"
+            " --inputs-dir {params.inputs_dir}"
+            " --split-by-main-continent {params.cont}"
+            " --filtered-anchors {params.anchors}"
+            " --out {params.base_out}" + MERGE_ARG
 
 rule mtl_blockers_merged:
     input:
