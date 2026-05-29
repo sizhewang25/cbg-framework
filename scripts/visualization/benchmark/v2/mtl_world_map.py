@@ -88,10 +88,23 @@ def _load_ip_to_continent() -> dict[str, str]:
 def _polygon_to_ring(poly: Polygon) -> dict[str, Any]:
     """Shapely stores coords as (x, y) = (lon, lat) in degree space (the
     planar combos build polygons in `_circle_to_planar_polygon`). Swap to
-    `[lat, lon]` so the JSON matches the rest of the payload."""
-    outer = [[round(y, 4), round(x, 4)] for x, y in poly.exterior.coords]
+    `[lat, lon]` so the JSON matches the rest of the payload.
+
+    Force every ring (outer + holes) to CW orientation in (lon, lat).
+    Plotly scattergeo's `fill: "toself"` uses the right-hand convention
+    on closed lat/lon paths, and the JS renders holes as a *separate*
+    ocean-colored fill that subtracts visually — both rings need their
+    bounded interior to be the filled side, so both must be CW. Source
+    MTLs disagree on winding (Shapely ops can return either), so
+    normalize here instead of relying on the upstream convention.
+    """
+    def _cw_coords(ring: Any) -> list[tuple[float, float]]:
+        pts = list(ring.coords)
+        return pts[::-1] if ring.is_ccw else pts
+
+    outer = [[round(y, 4), round(x, 4)] for x, y in _cw_coords(poly.exterior)]
     holes = [
-        [[round(y, 4), round(x, 4)] for x, y in inner.coords]
+        [[round(y, 4), round(x, 4)] for x, y in _cw_coords(inner)]
         for inner in poly.interiors
     ]
     return {"outer": outer, "holes": holes}
