@@ -213,3 +213,24 @@ combos:
       enable_circle_filter: true
     ctr_kwargs:
       n_samples: 1024
+
+  # Single-face variant: short-circuits the cumulative-weight loop and emits
+  # only the top-weighted face. `weight_threshold` has no effect on this path
+  # (compute_feasible_region_weighted ignores it when highest_weight_only is on).
+  - combo_id: octant_cbg_top
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
