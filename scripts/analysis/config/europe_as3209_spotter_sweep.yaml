@@ -1,5 +1,8 @@
-# Merged-folds analysis for the spotter_cbg_weighted target_coverage sweep
-# on the AS3209 corpus.
+# Merged-folds analysis for the Spotter target_coverage sweep on the AS3209
+# corpus. Covers two families per t-value:
+#
+#   • spotter_cbg_tNN          — planar_annulus (unweighted)
+#   • spotter_cbg_weighted_tNN — planar_annulus_weighted (highest_weight_only)
 #
 # Concatenates per-target results from fold_0..fold_4 (disjoint K-fold test
 # sets) and recomputes per-stage percentiles from raw — see scripts/analysis/Snakefile.
@@ -14,13 +17,13 @@ setup: probes_to_anchors
 slices: []
 merge_folds: true
 
-group_by: none                 # all 6 sweep variants share the same LTD; one CDF panel
+group_by: none                 # 12 sweep variants share the same LTD; one CDF panel
 phase_stat: p95
 include_fit: true
 runtime_stat: p50
 
-# Every sweep variant. The Snakefile threads these through --combos so the CDF,
-# diff-CDF, phase, and inspect plots only consider this list.
+# Every sweep variant. Listed unweighted first, then weighted, so the legend
+# orders cleanly in the CDF + diff plots.
 combos:
   - spotter_cbg_t100
   - spotter_cbg_t90
@@ -28,15 +31,28 @@ combos:
   - spotter_cbg_t70
   - spotter_cbg_t60
   - spotter_cbg_t50
+  - spotter_cbg_weighted_t100
+  - spotter_cbg_weighted_t90
+  - spotter_cbg_weighted_t80
+  - spotter_cbg_weighted_t70
+  - spotter_cbg_weighted_t60
+  - spotter_cbg_weighted_t50
 
 # Regional VP corpus: same split as the parent AS3209 run.
 split_by_main_continent: europe
 
-# Each off-baseline target_coverage compared to t90 (k ≈ 1.645 on N(0,1),
-# the closest analogue to Octant's target_coverage=0.9 default).
+# Within each family, compare every off-baseline target_coverage to t90
+# (k ≈ 1.645 on N(0,1) — closest analogue to Octant's target_coverage=0.9
+# default). Across families, t90 vs weighted_t90 isolates the MTL choice.
 diff_pairs:
   - [spotter_cbg_t100, spotter_cbg_t90]
   - [spotter_cbg_t80,  spotter_cbg_t90]
   - [spotter_cbg_t70,  spotter_cbg_t90]
   - [spotter_cbg_t60,  spotter_cbg_t90]
   - [spotter_cbg_t50,  spotter_cbg_t90]
+  - [spotter_cbg_weighted_t100, spotter_cbg_weighted_t90]
+  - [spotter_cbg_weighted_t80,  spotter_cbg_weighted_t90]
+  - [spotter_cbg_weighted_t70,  spotter_cbg_weighted_t90]
+  - [spotter_cbg_weighted_t60,  spotter_cbg_weighted_t90]
+  - [spotter_cbg_weighted_t50,  spotter_cbg_weighted_t90]
+  - [spotter_cbg_weighted_t90,  spotter_cbg_t90]

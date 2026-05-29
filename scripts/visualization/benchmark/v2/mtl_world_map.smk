@@ -26,11 +26,14 @@ VIZ_OUT    = Path("scripts/visualization/benchmark/v2/outputs")
 
 # Combos we render maps for. Anything not present in a config is skipped.
 # Named combos cover the parent per-ASN configs; SWEEP_COMBO_RE picks up every
-# octant_weighted_cbg sweep variant (octant_cbg_t10..t100 plus the threshold-
-# free `octant_cbg_top` / highest_weight_only=true variant) from the
-# *_octant_sweep configs without enumerating them.
+# sweep variant (octant_cbg_t10..t100 plus the threshold-free `octant_cbg_top`
+# / highest_weight_only=true variant from the *_octant_sweep configs, and
+# spotter_cbg_t50..t100 + spotter_cbg_weighted_t50..t100 from the
+# *_spotter_sweep configs) without enumerating them.
 NAMED_COMBOS = ["vanilla_cbg", "million_scale_cbg", "octant_cbg", "spotter_cbg"]
-SWEEP_COMBO_RE = re.compile(r"^octant_cbg_(?:t\d+|top)$")
+SWEEP_COMBO_RE = re.compile(
+    r"^(?:octant_cbg_(?:t\d+|top)|spotter_cbg(?:_weighted)?_t\d+)$"
+)
 
 # Discover ASN configs and remember per-run metadata for the input function.
 CONFIG_META = {}
