@@ -86,7 +86,7 @@ def plot_error_cdf(
     max_x_km: float = 10000.0,
     colors: Optional[dict[str, str]] = None,
     title: Optional[str] = None,
-    figsize_per_panel: tuple[float, float] = (6.0, 7.0),
+    figsize_per_panel: Optional[tuple[float, float]] = None,
     stats_box_loc: str = "upper left",
 ) -> plt.Figure:
     """Plot error CDFs from a {combo_id: error_km array} dict.
@@ -108,7 +108,11 @@ def plot_error_cdf(
         colors: Optional combo_id -> hex color. Defaults to tab20 by sorted id.
         title: Figure title.
         figsize_per_panel: (width, height) inches per panel. Total figure
-            width is `panels × width`.
+            width is `panels × width`. Default depends on the resolved panel
+            count: (10, 7) when only one panel renders (either group_by=None
+            or group_by="ltd" with a single LTD across all combos — wider so
+            the upper-left stats box doesn't cover the CDF curves), and
+            (6, 7) when multiple LTD panels render side-by-side.
         stats_box_loc: "upper left" (default — anchored just below the
             upper-left legend) or "lower right" (renders in the
             lower-right corner; useful when the legend area is crowded).
@@ -128,6 +132,9 @@ def plot_error_cdf(
         panels = [("", list(errors_by_combo))]
     else:
         raise ValueError(f"unsupported group_by={group_by!r}")
+
+    if figsize_per_panel is None:
+        figsize_per_panel = (10.0, 7.0) if len(panels) == 1 else (6.0, 7.0)
 
     if colors is None:
         colors = palette(list(errors_by_combo))
