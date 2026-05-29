@@ -1,0 +1,71 @@
+# Merged-folds analysis for the global_as16509_final benchmark run.
+#
+# Concatenates per-target results from fold_0..fold_4 (disjoint K-fold test
+# sets) and recomputes per-stage percentiles from raw — see scripts/analysis/Snakefile.
+#
+# Companion to the *_final bench config (4 LTD families × CTR ablation, 16
+# combos total). The diff_pairs section organizes the comparisons into three
+# groups: (a) cross-family — is the new family better than vanilla; (b) CTR
+# ablation — does geometric_centroid help/hurt vs the family's default CTR;
+# (c) within-family ablations.
+#
+# Run with:
+#   snakemake -s scripts/analysis/Snakefile \
+#       --configfile scripts/analysis/config/global_as16509_final.yaml -j 12
+
+run_id: global_as16509_final
+source: ripe_atlas_asn_corpora
+setup: probes_to_anchors
+slices: []
+merge_folds: true
+
+group_by: ltd
+phase_stat: p95
+include_fit: true
+runtime_stat: p50
+
+# All 16 combos from the bench config. group_by=ltd will produce 4 panels:
+#   low_envelope      → vanilla_cbg, vanilla_cbg_geo
+#   speed_of_internet → million_scale_cbg, million_scale_cbg_geo
+#   bounded_spline    → octant_cbg{,_top,_top_geo,_hull,_hull_geo}
+#   normal_dist       → spotter_cbg{,_top,_top_geo,_c100,_c100_geo,_c80,_c80_geo}
+combos:
+  - vanilla_cbg
+  - vanilla_cbg_geo
+  - million_scale_cbg
+  - million_scale_cbg_geo
+  - octant_cbg
+  - octant_cbg_top
+  - octant_cbg_top_geo
+  - octant_cbg_hull
+  - octant_cbg_hull_geo
+  - spotter_cbg
+  - spotter_cbg_top
+  - spotter_cbg_top_geo
+  - spotter_cbg_c100
+  - spotter_cbg_c100_geo
+  - spotter_cbg_c80
+  - spotter_cbg_c80_geo
+
+# Global VP corpus: no continent split — probes are spread across regions,
+# so there is no "home continent" baseline to compare against.
+
+# Diff CDFs are read as (left − right) per target; negative = left is closer.
+diff_pairs:
+  # ---- (a) Cross-family: best-of-family vs vanilla_cbg --------------------
+  - [million_scale_cbg, vanilla_cbg]
+  - [octant_cbg,    vanilla_cbg]
+  - [spotter_cbg,   vanilla_cbg]
+
+# Best-of-family overlay on a single panel.
+merge_pairs:
+  - vanilla_cbg
+  - vanilla_cbg_geo
+  - million_scale_cbg
+  - million_scale_cbg_geo
+  - octant_cbg
+  - octant_cbg_top_geo
+  - octant_cbg_hull_geo
+  - spotter_cbg
+  - spotter_cbg_c100_geo
+  - spotter_cbg_c80_geo
