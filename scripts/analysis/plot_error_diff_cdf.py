@@ -49,10 +49,17 @@ def plot_error_diff_cdf(
     *,
     title: Optional[str] = None,
 ) -> plt.Figure:
-    """CDF of error_A − error_B for each (A, B) pair."""
+    """CDF of error_A − error_B for each (A, B) pair.
+
+    Legend (and color cycle) is ranked by %-A-better DESC, so the pair
+    where A wins most often sits on top with the first color.
+    """
     fig, ax = plt.subplots(figsize=(12, 8))
 
-    for i, (id_a, id_b) in enumerate(pairs):
+    # First pass: compute deltas + summary stats for each pair so we can
+    # rank by %-A-better before assigning colors / labels.
+    computed = []
+    for id_a, id_b in pairs:
         deltas = compute_error_diff(
             target_errors_by_combo[id_a],
             target_errors_by_combo[id_b],
@@ -60,20 +67,27 @@ def plot_error_diff_cdf(
         if len(deltas) == 0:
             logger.warning("Pair (%s, %s): no shared targets, skipping", id_a, id_b)
             continue
-        sorted_d = np.sort(deltas)
-        cdf = np.arange(1, len(sorted_d) + 1) / len(sorted_d)
-        pct_a_better = float(np.mean(deltas < 0) * 100)
-        median_delta = float(np.median(deltas))
+        computed.append({
+            "id_a": id_a,
+            "id_b": id_b,
+            "deltas": deltas,
+            "pct_a_better": float(np.mean(deltas < 0) * 100),
+            "median_delta": float(np.median(deltas)),
+        })
+    computed.sort(key=lambda r: r["pct_a_better"], reverse=True)
 
-        a_short, b_short = _short_label(id_a), _short_label(id_b)
+    for i, rec in enumerate(computed):
+        sorted_d = np.sort(rec["deltas"])
+        cdf = np.arange(1, len(sorted_d) + 1) / len(sorted_d)
+        a_short, b_short = _short_label(rec["id_a"]), _short_label(rec["id_b"])
         ax.plot(
             sorted_d, cdf,
             color=_DIFF_COLORS[i % len(_DIFF_COLORS)],
             linewidth=2,
             label=(
                 f"{a_short} − {b_short}\n"
-                f"  {a_short} better: {pct_a_better:.0f}%, "
-                f"med Δ={median_delta:+.0f} km, N={len(deltas)}"
+                f"  {a_short} better: {rec['pct_a_better']:.0f}%, "
+                f"med Δ={rec['median_delta']:+.0f} km, N={len(rec['deltas'])}"
             ),
         )
 
