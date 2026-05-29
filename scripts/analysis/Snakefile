@@ -88,7 +88,6 @@ _PLOTS = [
     "plot_error_cdf_for_success",
     "plot_phase_memory",
     "plot_phase_runtime",
-    "inspect_cbg_vs_shortest_ping",
 ]
 if DIFF_PAIRS:
     _PLOTS.append("plot_error_diff_cdf")
@@ -110,14 +109,6 @@ def _all_targets():
                 str(SLICE_OUT / "plot_error_cdf_by_continent_rest.png"),
                 slice=SLICES,
             ))
-            targets.extend(expand(
-                str(SLICE_OUT / f"inspect_cbg_vs_shortest_ping_{_CONT_SLUG}.png"),
-                slice=SLICES,
-            ))
-            targets.extend(expand(
-                str(SLICE_OUT / "inspect_cbg_vs_shortest_ping_rest.png"),
-                slice=SLICES,
-            ))
         if MERGE_PAIRS:
             targets.extend(expand(str(SLICE_OUT / "plot_error_cdf_merge.png"), slice=SLICES))
             if SPLIT_CONT:
@@ -136,8 +127,6 @@ def _all_targets():
         if SPLIT_CONT:
             targets.append(str(MERGED_OUT / f"plot_error_cdf_by_continent_{_CONT_SLUG}.png"))
             targets.append(str(MERGED_OUT / "plot_error_cdf_by_continent_rest.png"))
-            targets.append(str(MERGED_OUT / f"inspect_cbg_vs_shortest_ping_{_CONT_SLUG}.png"))
-            targets.append(str(MERGED_OUT / "inspect_cbg_vs_shortest_ping_rest.png"))
         if MERGE_PAIRS:
             targets.append(str(MERGED_OUT / "plot_error_cdf_merge.png"))
             if SPLIT_CONT:
@@ -270,26 +259,6 @@ rule error_diff_cdf:
         " {params.pair_args}"
         " --out {output.png}" + COMBOS_ARG
 
-rule cbg_vs_shortest_ping:
-    input:
-        summary = RUN_DIR / "summary.parquet",
-        eval_obs = INPUTS_DIR / "eval_observations.parquet",
-    output:
-        png = SLICE_OUT / "inspect_cbg_vs_shortest_ping.png",
-        csv = SLICE_OUT / "inspect_cbg_vs_shortest_ping_percentiles.csv",
-    params:
-        run_dir = str(RUN_DIR),
-        source = SOURCE,
-        inputs_dir = str(INPUTS_DIR),
-    shell:
-        CLI + ".inspect_cbg_vs_shortest_ping"
-        " --run-dir {params.run_dir}"
-        " --source {params.source}"
-        " --slice {wildcards.slice}"
-        " --inputs-dir {params.inputs_dir}"
-        " --out-png {output.png}"
-        " --out-csv {output.csv}" + COMBOS_ARG
-
 if MERGE_PAIRS:
     rule error_cdf_merge:
         input:
@@ -357,36 +326,6 @@ rule mtl_blockers:
         " --inputs-dir {params.inputs_dir}"
         " --out-json {output.json_}"
         " --out-md {output.md}" + COMBOS_ARG
-
-if SPLIT_CONT:
-    rule cbg_vs_shortest_ping_by_continent:
-        input:
-            summary = RUN_DIR / "summary.parquet",
-            eval_obs = INPUTS_DIR / "eval_observations.parquet",
-            filtered_anchors = FILTERED_ANCHORS,
-        output:
-            in_png = SLICE_OUT / f"inspect_cbg_vs_shortest_ping_{_CONT_SLUG}.png",
-            rest_png = SLICE_OUT / "inspect_cbg_vs_shortest_ping_rest.png",
-            in_csv = SLICE_OUT / f"inspect_cbg_vs_shortest_ping_percentiles_{_CONT_SLUG}.csv",
-            rest_csv = SLICE_OUT / "inspect_cbg_vs_shortest_ping_percentiles_rest.csv",
-        params:
-            run_dir = str(RUN_DIR),
-            source = SOURCE,
-            inputs_dir = str(INPUTS_DIR),
-            cont = SPLIT_CONT,
-            anchors = FILTERED_ANCHORS,
-            base_png = str(SLICE_OUT / "inspect_cbg_vs_shortest_ping.png"),
-            base_csv = str(SLICE_OUT / "inspect_cbg_vs_shortest_ping_percentiles.csv"),
-        shell:
-            CLI + ".inspect_cbg_vs_shortest_ping"
-            " --run-dir {params.run_dir}"
-            " --source {params.source}"
-            " --slice {wildcards.slice}"
-            " --inputs-dir {params.inputs_dir}"
-            " --split-by-main-continent {params.cont}"
-            " --filtered-anchors {params.anchors}"
-            " --out-png {params.base_png}"
-            " --out-csv {params.base_csv}" + COMBOS_ARG
 
 # ---- Merged-folds plots -----------------------------------------------------
 # These rules omit --slice; each plot CLI auto-detects merged-folds mode and
@@ -503,24 +442,6 @@ rule error_diff_cdf_merged:
         " {params.pair_args}"
         " --out {output.png}" + COMBOS_ARG
 
-rule cbg_vs_shortest_ping_merged:
-    input:
-        summary = RUN_DIR / "summary.parquet",
-    output:
-        png = MERGED_OUT / "inspect_cbg_vs_shortest_ping.png",
-        csv = MERGED_OUT / "inspect_cbg_vs_shortest_ping_percentiles.csv",
-    params:
-        run_dir = str(RUN_DIR),
-        source = SOURCE,
-        inputs_dir = str(MERGED_INPUTS_DIR),
-    shell:
-        CLI + ".inspect_cbg_vs_shortest_ping"
-        " --run-dir {params.run_dir}"
-        " --source {params.source}"
-        " --inputs-dir {params.inputs_dir}"
-        " --out-png {output.png}"
-        " --out-csv {output.csv}" + COMBOS_ARG
-
 if MERGE_PAIRS:
     rule error_cdf_merge_merged:
         input:
@@ -583,30 +504,3 @@ rule mtl_blockers_merged:
         " --out-json {output.json_}"
         " --out-md {output.md}" + COMBOS_ARG
 
-if SPLIT_CONT:
-    rule cbg_vs_shortest_ping_by_continent_merged:
-        input:
-            summary = RUN_DIR / "summary.parquet",
-            filtered_anchors = FILTERED_ANCHORS,
-        output:
-            in_png = MERGED_OUT / f"inspect_cbg_vs_shortest_ping_{_CONT_SLUG}.png",
-            rest_png = MERGED_OUT / "inspect_cbg_vs_shortest_ping_rest.png",
-            in_csv = MERGED_OUT / f"inspect_cbg_vs_shortest_ping_percentiles_{_CONT_SLUG}.csv",
-            rest_csv = MERGED_OUT / "inspect_cbg_vs_shortest_ping_percentiles_rest.csv",
-        params:
-            run_dir = str(RUN_DIR),
-            source = SOURCE,
-            inputs_dir = str(MERGED_INPUTS_DIR),
-            cont = SPLIT_CONT,
-            anchors = FILTERED_ANCHORS,
-            base_png = str(MERGED_OUT / "inspect_cbg_vs_shortest_ping.png"),
-            base_csv = str(MERGED_OUT / "inspect_cbg_vs_shortest_ping_percentiles.csv"),
-        shell:
-            CLI + ".inspect_cbg_vs_shortest_ping"
-            " --run-dir {params.run_dir}"
-            " --source {params.source}"
-            " --inputs-dir {params.inputs_dir}"
-            " --split-by-main-continent {params.cont}"
-            " --filtered-anchors {params.anchors}"
-            " --out-png {params.base_png}"
-            " --out-csv {params.base_csv}" + COMBOS_ARG
