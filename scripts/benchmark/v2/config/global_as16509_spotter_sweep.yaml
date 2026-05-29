@@ -1,0 +1,160 @@
+# target_coverage sweep for spotter_cbg_weighted on the AS16509 probe corpus.
+#
+# Reuses the same source_kwargs / fold layout as global_as16509.yaml; the
+# only thing that changes between combos is `ltd_kwargs.target_coverage` (the
+# Spotter k-σ calibration introduced in 120c850). Each variant is named
+# `spotter_cbg_tNN` where NN is target_coverage × 100 (t100 = 1.0, t50 = 0.5).
+# MTL is planar_annulus_weighted with highest_weight_only=true (keep only the
+# face(s) with the largest cumulative weight).
+#
+# Requires the same inputs as the parent run:
+#   - datasets/ripe_atlas/asn_corpora/probes/global/probes_of_as_16509.json
+#   - datasets/ripe_atlas/asn_corpora/anchors/kfolds/anchor_fold_<0..4>.json
+#
+# Run with:
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile scripts/benchmark/v2/config/global_as16509_spotter_sweep.yaml -j 4
+
+run_id: global_as16509_spotter_sweep
+source: ripe_atlas_asn_corpora
+setup: probes_to_anchors
+slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+source_kwargs:
+  probe_data_dir: datasets/ripe_atlas/asn_corpora/probes/global
+  probe_asn: 16509
+  anchor_data_dir: datasets/ripe_atlas/asn_corpora/anchors/kfolds
+  max_rtt_ms: 10000
+
+enable_fallback: true
+seed: 42
+
+# Sweep target_coverage from 1.0 (k = max |z|, widest band) down to 0.5
+# (k ≈ 0.67 for normal residuals — tightest band). Other ltd / mtl / ctr
+# knobs match the spotter_cbg_weighted combo in global_as16509.yaml.
+combos:
+  - combo_id: spotter_cbg_t100
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 1.0
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.9
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_t90
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 0.9
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.9
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_t80
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 0.8
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.9
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_t70
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 0.7
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.9
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_t60
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 0.6
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.9
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_t50
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 0.5
+    mtl_kwargs:
+      n_pts: 64
+      weight_threshold: 0.9
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024

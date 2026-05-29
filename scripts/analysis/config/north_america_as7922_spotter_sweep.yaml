@@ -1,0 +1,42 @@
+# Merged-folds analysis for the spotter_cbg_weighted target_coverage sweep
+# on the AS7922 corpus.
+#
+# Concatenates per-target results from fold_0..fold_4 (disjoint K-fold test
+# sets) and recomputes per-stage percentiles from raw — see scripts/analysis/Snakefile.
+#
+# Run with:
+#   snakemake -s scripts/analysis/Snakefile \
+#       --configfile scripts/analysis/config/north_america_as7922_spotter_sweep.yaml -j 3
+
+run_id: north_america_as7922_spotter_sweep
+source: ripe_atlas_asn_corpora
+setup: probes_to_anchors
+slices: []
+merge_folds: true
+
+group_by: none                 # all 6 sweep variants share the same LTD; one CDF panel
+phase_stat: p95
+include_fit: true
+runtime_stat: p50
+
+# Every sweep variant. The Snakefile threads these through --combos so the CDF,
+# diff-CDF, phase, and inspect plots only consider this list.
+combos:
+  - spotter_cbg_t100
+  - spotter_cbg_t90
+  - spotter_cbg_t80
+  - spotter_cbg_t70
+  - spotter_cbg_t60
+  - spotter_cbg_t50
+
+# Regional VP corpus: same split as the parent AS7922 run.
+split_by_main_continent: north_america
+
+# Each off-baseline target_coverage compared to t90 (k ≈ 1.645 on N(0,1),
+# the closest analogue to Octant's target_coverage=0.9 default).
+diff_pairs:
+  - [spotter_cbg_t100, spotter_cbg_t90]
+  - [spotter_cbg_t80,  spotter_cbg_t90]
+  - [spotter_cbg_t70,  spotter_cbg_t90]
+  - [spotter_cbg_t60,  spotter_cbg_t90]
+  - [spotter_cbg_t50,  spotter_cbg_t90]
