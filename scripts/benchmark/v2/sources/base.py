@@ -15,8 +15,9 @@ to LTD training and to evaluation without the source needing to know whether
 it's in a fit or eval phase.
 
 Concrete subclasses currently:
-  * VultrCSVSource   — datasets/cbg_test/vultr_pings_us_only.csv
-  * RipeAtlasSource  — ClickHouse, ping_10k_to_anchors (probes → anchors)
+  * GenericCSVSource         — canonical-schema CSV (vp_*, target_*, rtt_ms)
+  * RipeAtlasSource          — ClickHouse, ping_10k_to_anchors (probes → anchors)
+  * RipeAtlasASNCorporaSource — per-ASN VP corpus vs K-fold-stratified anchors
 """
 
 from __future__ import annotations

@@ -14,10 +14,8 @@ from scripts.benchmark.v2.sources.ripe_atlas import RipeAtlasSource
 from scripts.benchmark.v2.sources.ripe_atlas_asn_corpora import (
     RipeAtlasASNCorporaSource,
 )
-from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource
 
 SOURCES: dict[str, type[DataSource]] = {
-    VultrCSVSource.name: VultrCSVSource,
     RipeAtlasSource.name: RipeAtlasSource,
     RipeAtlasASNCorporaSource.name: RipeAtlasASNCorporaSource,
     GenericCSVSource.name: GenericCSVSource,
@@ -27,7 +25,6 @@ __all__ = [
     "DataSource",
     "EvalTarget",
     "VpConfig",
-    "VultrCSVSource",
     "RipeAtlasSource",
     "RipeAtlasASNCorporaSource",
     "GenericCSVSource",

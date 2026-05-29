@@ -1,8 +1,8 @@
 """DataSource adapter tests.
 
-VultrCSVSource is exercised against a synthetic in-memory CSV (no dependency
-on the real Vultr CSV being present on disk). RipeAtlasSource is exercised
-only for its JSON coord-loading half — ClickHouse is mocked out.
+GenericCSVSource is exercised against a synthetic in-memory canonical-schema
+CSV (no dependency on any real CSV being present on disk). RipeAtlasSource is
+exercised only for its JSON coord-loading half — ClickHouse is mocked out.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ import unittest
 from pathlib import Path
 
 from scripts.benchmark.v2.sources import SOURCES
+from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
 from scripts.benchmark.v2.sources.ripe_atlas import RipeAtlasSource
-from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource
 
 
 def _write_stratification(
@@ -48,36 +48,40 @@ def _write_stratification(
     return path
 
 
+# Canonical-schema synth CSV: vp_* = anchor side (acting as VP),
+# target_* = probe side (the entity being geolocated). 2 unique VPs ×
+# 6 unique targets = 12 rows, mirroring the original Vultr layout.
 _SYNTH_CSV = textwrap.dedent("""
-    src_ip,dst_ip,prb_id,min_rtt,mean_rtt,sent,rcvd,msm_id,date,probe_asn,probe_country,probe_latitude,probe_longitude,anchor_asn,anchor_country,anchor_latitude,anchor_longitude,anchor_city
-    10.0.0.1,1.1.1.1,1001,10.0,10.0,3,3,1,2023-05-01,7922,US,40.0,-100.0,20473,US,33.0,-84.0,Atlanta
-    10.0.0.2,1.1.1.1,1002,12.0,12.0,3,3,2,2023-05-01,7922,US,41.0,-101.0,20473,US,33.0,-84.0,Atlanta
-    10.0.0.3,1.1.1.1,1003,13.0,13.0,3,3,3,2023-05-01,3356,US,42.0,-102.0,20473,US,33.0,-84.0,Atlanta
-    10.0.0.4,1.1.1.1,1004,14.0,14.0,3,3,4,2023-05-01,3356,US,43.0,-103.0,20473,US,33.0,-84.0,Atlanta
-    10.0.0.5,1.1.1.1,1005,15.0,15.0,3,3,5,2023-05-01,7018,US,44.0,-104.0,20473,US,33.0,-84.0,Atlanta
-    10.0.0.6,1.1.1.1,1006,16.0,16.0,3,3,6,2023-05-01,7018,US,45.0,-105.0,20473,US,33.0,-84.0,Atlanta
-    10.0.0.7,2.2.2.2,1001,11.0,11.0,3,3,7,2023-05-01,7922,US,40.0,-100.0,40,US,47.0,-122.0,Seattle
-    10.0.0.8,2.2.2.2,1002,11.5,11.5,3,3,8,2023-05-01,7922,US,41.0,-101.0,40,US,47.0,-122.0,Seattle
-    10.0.0.9,2.2.2.2,1003,12.5,12.5,3,3,9,2023-05-01,3356,US,42.0,-102.0,40,US,47.0,-122.0,Seattle
-    10.0.0.10,2.2.2.2,1004,13.5,13.5,3,3,10,2023-05-01,3356,US,43.0,-103.0,40,US,47.0,-122.0,Seattle
-    10.0.0.11,2.2.2.2,1005,14.5,14.5,3,3,11,2023-05-01,7018,US,44.0,-104.0,40,US,47.0,-122.0,Seattle
-    10.0.0.12,2.2.2.2,1006,15.5,15.5,3,3,12,2023-05-01,7018,US,45.0,-105.0,40,US,47.0,-122.0,Seattle
+    vp_id,vp_lat,vp_lon,vp_asn,vp_country,target_id,target_lat,target_lon,target_asn,target_country,rtt_ms
+    1.1.1.1,33.0,-84.0,20473,US,1001,40.0,-100.0,7922,US,10.0
+    1.1.1.1,33.0,-84.0,20473,US,1002,41.0,-101.0,7922,US,12.0
+    1.1.1.1,33.0,-84.0,20473,US,1003,42.0,-102.0,3356,US,13.0
+    1.1.1.1,33.0,-84.0,20473,US,1004,43.0,-103.0,3356,US,14.0
+    1.1.1.1,33.0,-84.0,20473,US,1005,44.0,-104.0,7018,US,15.0
+    1.1.1.1,33.0,-84.0,20473,US,1006,45.0,-105.0,7018,US,16.0
+    2.2.2.2,47.0,-122.0,40,US,1001,40.0,-100.0,7922,US,11.0
+    2.2.2.2,47.0,-122.0,40,US,1002,41.0,-101.0,7922,US,11.5
+    2.2.2.2,47.0,-122.0,40,US,1003,42.0,-102.0,3356,US,12.5
+    2.2.2.2,47.0,-122.0,40,US,1004,43.0,-103.0,3356,US,13.5
+    2.2.2.2,47.0,-122.0,40,US,1005,44.0,-104.0,7018,US,14.5
+    2.2.2.2,47.0,-122.0,40,US,1006,45.0,-105.0,7018,US,15.5
 """).strip() + "\n"
 
 
-class TestVultrCSVSource(unittest.TestCase):
+class TestGenericCSVSource_Stratified(unittest.TestCase):
+    """Stratified `fold_N` slice path — the leakage-free contract under
+    GenericCSVSource. Uses the canonical-schema synthetic CSV."""
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.csv_path = Path(self.tmp.name) / "vultr_smoke.csv"
+        self.csv_path = Path(self.tmp.name) / "canonical_smoke.csv"
         self.csv_path.write_text(_SYNTH_CSV)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _make(self, slice: str = "fold_0", k: int = 2) -> VultrCSVSource:
-        # All tests use the only supported setup (anchors_to_probes) — anchors
-        # are VPs, probes are the stratified targets.
-        return VultrCSVSource(
+    def _make(self, slice: str = "fold_0", k: int = 2) -> GenericCSVSource:
+        return GenericCSVSource(
             slice=slice, setup="anchors_to_probes",
             csv_path=self.csv_path, k=k,
         )
@@ -86,103 +90,101 @@ class TestVultrCSVSource(unittest.TestCase):
         src = self._make(slice="fold_1", k=2)
         self.assertEqual(src.slice_id(), "fold_1")
         self.assertEqual(src.setup_id(), "anchors_to_probes")
-        self.assertEqual(src.name, "vultr_csv")
+        self.assertEqual(src.name, "generic_csv")
 
-    def test_vp_configs_yield_unique_anchors(self) -> None:
+    def test_vp_configs_yield_unique_vps(self) -> None:
         src = self._make()
         vps = list(src.iter_vp_configs())
-        # 2 unique anchors in the synthetic CSV.
+        # 2 unique vp_ids in the synthetic CSV.
         self.assertEqual(len(vps), 2)
         self.assertEqual({vp.vp_id for vp in vps}, {"1.1.1.1", "2.2.2.2"})
 
-    def test_tg_configs_yield_all_unique_probes(self) -> None:
+    def test_tg_configs_yield_all_unique_targets(self) -> None:
         """The static catalog (tg_configs.parquet) covers eval ∪ fit — i.e.
-        every unique probe in the CSV, regardless of fold."""
+        every unique target_id in the CSV, regardless of fold."""
         src = self._make()
         tg_ids = {t.tg_id for t in src.iter_tg_configs()}
-        # 6 unique prb_ids in the synthetic CSV: 1001..1006.
         self.assertEqual(tg_ids, {"1001", "1002", "1003", "1004", "1005", "1006"})
 
     def test_fold_eval_fit_disjoint(self) -> None:
-        """The leakage-free contract: no probe ID appears in both the eval
-        target set and the fit sample set. FitSample doesn't carry the probe
-        id directly (its vp_id is the anchor IP under anchors_to_probes), so
-        we cross-check via the source's cached partition sets."""
+        """The leakage-free contract: no target_id appears in both the eval
+        target set and the fit sample set."""
         src = self._make()
         eval_ids = {t.target_id for t in src.iter_eval_targets()}
         assert src._eval_targets is not None and src._fit_targets is not None
         self.assertEqual(src._eval_targets, eval_ids)
         self.assertTrue(src._eval_targets.isdisjoint(src._fit_targets))
-        # Sanity: both sets are non-empty for K=2 with 6 unique probes.
         self.assertGreater(len(src._eval_targets), 0)
         self.assertGreater(len(src._fit_targets), 0)
 
     def test_fold_partition_covers_all_targets(self) -> None:
-        """Across folds 0..k-1 the eval sets are disjoint and their union
-        equals the full target set. Here we just check that fold 0 + its
-        complement (cached on the instance) covers everything."""
+        """fold_N + complement (cached on the instance) covers every target."""
         src = self._make()
-        # Force loading.
-        list(src.iter_tg_configs())
+        list(src.iter_tg_configs())  # force loading
         assert src._eval_targets is not None and src._fit_targets is not None
         all_targets = src._eval_targets | src._fit_targets
-        # 6 unique prb_ids.
         self.assertEqual(all_targets, {"1001", "1002", "1003", "1004", "1005", "1006"})
 
-    def test_fit_sample_maps_anchor_coords_into_vp_coord_field(self) -> None:
-        """The v2 FitSample contract puts the VP side in `vp_coord` and the
-        target's ground-truth coord in `probe_coord`. Under anchors_to_probes
-        the VP is an anchor and the target is a probe, so vp_coord = anchor
-        coord and probe_coord = probe coord."""
+    def test_fold_partition_deterministic(self) -> None:
+        """Same (k, seed, asn_bucket_top_n) → identical eval set across runs."""
+        src_a = self._make()
+        src_b = self._make()
+        list(src_a.iter_eval_targets())
+        list(src_b.iter_eval_targets())
+        self.assertEqual(src_a._eval_targets, src_b._eval_targets)
+
+    def test_fit_sample_routes_canonical_columns(self) -> None:
+        """`vp_*` columns always populate vp_coord; `target_*` columns always
+        populate probe_coord (the v2 FitSample 'probe_coord' field is the
+        ground-truth target coord, despite the historical name)."""
         src = self._make()
         sample = next(iter(src.iter_fit_samples()))
-        # First fit-set row's anchor coords are among Atlanta (33.0,-84.0)
-        # or Seattle (47.0,-122.0). Probe coords come from the row's prb_id.
-        # Just assert vp_coord matches the row's anchor side; field order
-        # is what we want to lock in.
-        # The first row whose prb_id ∈ fit_targets — we can identify by ip lookup.
-        assert src._fit_targets is not None
-        # All anchors live in either Atlanta or Seattle; both lat sets:
+        # vp_* side: lat ∈ {33.0, 47.0}.
         self.assertIn(sample.vp_coord.lat, (33.0, 47.0))
-        self.assertIn(sample.vp_coord.lon, (-84.0, -122.0))
-        # probe_coord must be the probe (35-45 lat range).
-        self.assertGreaterEqual(sample.probe_coord.lat, 30.0)
-        self.assertLessEqual(sample.probe_coord.lat, 50.0)
+        # target_* side: lat ∈ [40, 45] for the 6 unique targets.
+        self.assertGreaterEqual(sample.probe_coord.lat, 40.0)
+        self.assertLessEqual(sample.probe_coord.lat, 45.0)
 
-    def test_eval_obs_count_matches_anchor_count_per_probe(self) -> None:
-        """Each eval target carries one obs per anchor that pinged it."""
+    def test_eval_obs_count_matches_vp_count_per_target(self) -> None:
+        """Each eval target carries one obs per VP that measured it."""
         src = self._make()
         targets = list(src.iter_eval_targets())
-        # Every probe pings every anchor in the synthetic CSV — 2 obs each.
         for t in targets:
             self.assertEqual(len(t.obs), 2)
 
     def test_unknown_slice_raises(self) -> None:
         with self.assertRaises(ValueError):
-            VultrCSVSource(slice="all_us", csv_path=self.csv_path, k=2)
+            GenericCSVSource(slice="all_us", csv_path=self.csv_path, k=2)
         with self.assertRaises(ValueError):
-            VultrCSVSource(slice="garbage", csv_path=self.csv_path, k=2)
+            GenericCSVSource(slice="garbage", csv_path=self.csv_path, k=2)
 
     def test_fold_out_of_range_raises(self) -> None:
         with self.assertRaises(ValueError):
-            VultrCSVSource(slice="fold_5", csv_path=self.csv_path, k=2)
-
-    def test_probes_to_anchors_setup_raises(self) -> None:
-        """The legacy direction is no longer supported; points users at the
-        sibling `ripe_atlas_asn_corpora` source."""
-        with self.assertRaises(ValueError) as cm:
-            VultrCSVSource(
-                slice="fold_0", setup="probes_to_anchors",
-                csv_path=self.csv_path, k=2,
-            )
-        self.assertIn("ripe_atlas_asn_corpora", str(cm.exception))
+            GenericCSVSource(slice="fold_5", csv_path=self.csv_path, k=2)
 
     def test_unknown_setup_raises(self) -> None:
         with self.assertRaises(ValueError):
-            VultrCSVSource(
+            GenericCSVSource(
                 slice="fold_0", setup="bogus",
                 csv_path=self.csv_path, k=2,
             )
+
+    def test_missing_csv_path_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            GenericCSVSource(slice="fold_0", csv_path=None)
+
+    def test_all_slice_skips_stratification(self) -> None:
+        """`slice='all'` yields every row from both iterators and leaves the
+        partition caches as None (no stratification)."""
+        src = GenericCSVSource(slice="all", csv_path=self.csv_path)
+        fit_targets = {fs.probe_coord.lat for fs in src.iter_fit_samples()}
+        eval_targets = {t.target_id for t in src.iter_eval_targets()}
+        self.assertIsNone(src._eval_targets)
+        self.assertIsNone(src._fit_targets)
+        # 6 unique targets contribute fit samples (every row goes to both
+        # iterators under no-stratification mode).
+        self.assertEqual(len(eval_targets), 6)
+        self.assertEqual(len(fit_targets), 6)
 
 
 class TestRipeAtlasSourceCoordLoad(unittest.TestCase):
@@ -353,28 +355,28 @@ class TestRipeAtlasAnchorCityEnrichment(unittest.TestCase):
 
 
 class TestTgConfigsEmission(unittest.TestCase):
-    """tg_configs.parquet rows: VultrCSV side. Only anchors_to_probes is
-    supported, so targets are always probes (no city column)."""
+    """tg_configs.parquet rows: GenericCSV side. Targets are always the
+    target_* side of the canonical schema."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.csv_path = Path(self.tmp.name) / "vultr_smoke.csv"
+        self.csv_path = Path(self.tmp.name) / "canonical_smoke.csv"
         self.csv_path.write_text(_SYNTH_CSV)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_anchors_to_probes_targets_are_probes_without_city(self) -> None:
-        src = VultrCSVSource(
+    def test_targets_emitted_with_canonical_schema(self) -> None:
+        src = GenericCSVSource(
             slice="fold_0", setup="anchors_to_probes",
             csv_path=self.csv_path, k=2,
         )
         tgs = list(src.iter_tg_configs())
-        # 6 unique probes; none have city data in the Vultr CSV schema.
+        # 6 unique target_ids; city is always None (no city column in canonical).
         self.assertEqual(len(tgs), 6)
         for t in tgs:
             self.assertIsNone(t.city)
-        # Spot-check one: prb_id 1001 → (40, -100), ASN 7922
+        # Spot-check one: target_id 1001 → (40, -100), target_asn 7922
         t1001 = next(t for t in tgs if t.tg_id == "1001")
         self.assertAlmostEqual(t1001.lat, 40.0)
         self.assertEqual(t1001.asn, 7922)
@@ -393,7 +395,7 @@ class TestTgConfigsParquetWriter(unittest.TestCase):
             tmp_path = Path(tmp)
             csv = tmp_path / "synth.csv"
             csv.write_text(_SYNTH_CSV)
-            src = VultrCSVSource(
+            src = GenericCSVSource(
                 slice="fold_0", setup="anchors_to_probes",
                 csv_path=csv, k=2,
             )
@@ -403,11 +405,11 @@ class TestTgConfigsParquetWriter(unittest.TestCase):
 
             table = pq.read_table(tg_path)
             self.assertEqual(table.schema, bench_schema.TG_CONFIGS_SCHEMA)
-            # 6 unique probes → 6 tg_config rows (catalog covers eval ∪ fit).
+            # 6 unique targets → 6 tg_config rows (catalog covers eval ∪ fit).
             self.assertEqual(table.num_rows, 6)
             row_by_id = {r["tg_id"]: r for r in table.to_pylist()}
             self.assertIn("1001", row_by_id)
-            # Probes have no city in the Vultr CSV schema.
+            # Canonical schema has no city column.
             self.assertIsNone(row_by_id["1001"]["city"])
 
             # Manifest reflects the new artifact's row count.
@@ -494,8 +496,9 @@ class TestRipeAtlasTgConfigs(unittest.TestCase):
 
 class TestSourceRegistry(unittest.TestCase):
     def test_known_sources_registered(self) -> None:
-        self.assertIn("vultr_csv", SOURCES)
+        self.assertIn("generic_csv", SOURCES)
         self.assertIn("ripe_atlas", SOURCES)
+        self.assertIn("ripe_atlas_asn_corpora", SOURCES)
 
 
 class TestRipeAtlasSourceStratification(unittest.TestCase):

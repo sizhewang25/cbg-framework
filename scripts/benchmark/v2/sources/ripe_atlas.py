@@ -6,7 +6,7 @@ VPs are the ~12K probes in `reproducibility_probes.json`. RTTs come from the
 `scripts.analysis.analysis.compute_rtts_per_dst_src` query helper.
 
 This source reaches out to ClickHouse on first iteration. Cache the materialized
-parquets and avoid re-querying. For unit testing, prefer VultrCSVSource (file-only).
+parquets and avoid re-querying. For unit testing, prefer GenericCSVSource (file-only).
 
 The slice IS the fold for anchor-targeted setups: `slice="fold_N"` selects
 the Nth fold from the stratification JSON at `stratification_path` as the

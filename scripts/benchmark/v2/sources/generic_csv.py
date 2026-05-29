@@ -1,59 +1,63 @@
-"""GenericCSVSource — adapt any well-formed CSV into the v2 benchmark.
+"""GenericCSVSource — adapt any CSV with the canonical schema into the v2 benchmark.
 
-How to use:
-  1. Produce a CSV with the required columns listed below (one row per
-     (vp, target, RTT) observation).
-  2. Point `DEFAULT_CSV` (see CONFIG block) at it.
-  3. Run:
-        python -m scripts.benchmark.v2.cli materialize-inputs \\
-            --source generic_csv --slice all
+Canonical schema (one row per `(vp, target, rtt)` observation):
 
-Required columns (every row):
-  vp_id          : str    — stable VP identifier (probe id, IP, hostname, …)
-  vp_lat         : float  — VP latitude in degrees
-  vp_lon         : float  — VP longitude in degrees
-  target_id      : str    — stable target identifier (must have hard-GT coords)
-  target_lat     : float  — target latitude in degrees
-  target_lon     : float  — target longitude in degrees
-  rtt_ms         : float  — strictly positive RTT in milliseconds
+  required:
+    vp_id, vp_lat, vp_lon            str, float, float    — entity acting as VP
+    target_id, target_lat, target_lon str, float, float   — entity being geolocated
+    rtt_ms                           float (>0)           — strictly positive RTT
+  optional:
+    vp_asn, vp_country, target_asn, target_country
 
-Optional columns (auto-detected, only used when present):
-  vp_asn, vp_country, target_asn, target_country
+`vp_*` columns **always** supply the VP-role data; `target_*` columns **always**
+supply the target-role data. The `setup` flag is descriptive metadata only —
+it does not affect column routing. Users canonicalize their CSV per the
+desired role assignment before pointing this source at it. For RIPE Atlas /
+Vultr-style data (anchors-as-VPs by convention), anchor data goes into the
+`vp_*` columns and probe data goes into the `target_*` columns; for
+IMC-2023-style data (probes-as-VPs) the mapping is reversed.
 
 Slicing (`--slice`):
-  all       — every row (after column validation + NaN drop)
-  head<k>   — keep the k targets that sort first by target_id (deterministic,
-              cheap smoke-test slice)
+  all        — every row, no fit/eval split (smoke-test mode; leaks for stateful LTDs).
+  head<k>    — keep the k targets that sort first by target_id (deterministic
+               smoke slice; same no-stratification semantics as `all`).
+  fold_N     — K-fold partition driven by `DistGeoStratification`. Eval = the
+               targets in fold N; fit = the targets in the other K-1 folds.
+               Deterministic in (k, seed, asn_bucket_top_n) source_kwargs.
+               When `target_asn` is absent / missing, those targets land in
+               the `asn_none` bucket and still round-robin into the K folds.
 
-To benchmark several different CSVs in parallel, subclass and set a
-different `name` per CSV — the on-disk inputs/outputs tree is keyed off
-`<name>/<setup>/<slice>/`, so distinct names get parallel directory trees.
+Source kwargs (defaults match the prior VultrCSVSource):
+  csv_path           : Path | str   — required; canonical-schema CSV path.
+  k                  : int = 5      — fold count for `fold_N`.
+  seed               : int = 42     — DistGeo RNG seed.
+  asn_bucket_top_n   : int = 20     — DistGeo bucket cap.
 """
 
 from __future__ import annotations
 
+import logging
+import re
 from pathlib import Path
 from typing import Iterator, Optional
 
 import pandas as pd
 
-from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, VpConfig
+from scripts.benchmark.v2.sources.base import (
+    DataSource,
+    EvalTarget,
+    TgConfig,
+    VpConfig,
+)
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
-
-# ============================================================================
-# CONFIG — edit this block to point at your CSV.
-# ============================================================================
-#
-# DEFAULT_CSV is the only thing most users need to change. It's relative to
-# the repo root by default; absolute paths work too.
-
-DEFAULT_CSV = (
-    Path(__file__).resolve().parents[4]
-    / "datasets" / "smoke-test.csv"
+from scripts.processing.ripe_atlas.stratification import (
+    AnchorInfo,
+    DistGeoStratification,
 )
 
-# ============================================================================
+logger = logging.getLogger(__name__)
+
 
 _REQUIRED = (
     "vp_id", "vp_lat", "vp_lon",
@@ -63,30 +67,64 @@ _REQUIRED = (
 
 _OPTIONAL = ("vp_asn", "vp_country", "target_asn", "target_country")
 
+_FOLD_SLICE_RE = re.compile(r"^fold_(\d+)$")
+
 
 class GenericCSVSource(DataSource):
-    """CSV-backed source with a fixed canonical schema (see module docstring).
+    """CSV-backed source with a fixed canonical schema + DistGeo K-fold stratification.
 
-    Both setups are supported by swapping which side of each pair acts as the
-    VP — column names stay the same; only the role assignment flips.
+    See module docstring for the column contract and slice grammar.
     """
 
     name = "generic_csv"
 
     def __init__(
         self,
-        slice: str = "all",
-        setup: str = DataSource.PROBES_TO_ANCHORS,
+        slice: str,
+        setup: str = DataSource.ANCHORS_TO_PROBES,
         csv_path: Optional[Path] = None,
+        *,
+        k: int = 5,
+        seed: int = 42,
+        asn_bucket_top_n: int = 20,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
                 f"unknown setup {setup!r}; expected one of {DataSource.ALLOWED_SETUPS}"
             )
+        if csv_path is None:
+            raise ValueError(
+                f"{self.name!r} requires `csv_path` (path to a canonical-schema CSV)"
+            )
+        fold_match = _FOLD_SLICE_RE.match(slice)
+        if fold_match is not None:
+            fold_index = int(fold_match.group(1))
+            if fold_index >= k:
+                raise ValueError(
+                    f"slice fold index {fold_index} >= k={k} "
+                    f"(available: fold_0..fold_{k - 1})"
+                )
+        elif slice == "all" or slice.startswith("head"):
+            # `head<k>` is fully validated inside _apply_slice when the row
+            # parser runs; constructor only confirms the prefix is legal.
+            fold_index = None
+        else:
+            raise ValueError(
+                f"unknown slice {slice!r}; expected 'all', 'head<k>', or 'fold_N'"
+            )
+
         self._slice = slice
         self._setup = setup
-        self._csv_path = Path(csv_path) if csv_path is not None else DEFAULT_CSV
-        self._df: Optional[pd.DataFrame] = None  # lazy-loaded
+        self._csv_path = Path(csv_path)
+        self._fold_index = fold_index
+        self._k = k
+        self._seed = seed
+        self._asn_bucket_top_n = asn_bucket_top_n
+
+        # Lazily populated by `_ensure_loaded`.
+        self._df: Optional[pd.DataFrame] = None
+        self._eval_targets: Optional[set[str]] = None
+        self._fit_targets: Optional[set[str]] = None
 
     # ---- DataSource API ------------------------------------------------------
 
@@ -97,103 +135,155 @@ class GenericCSVSource(DataSource):
         return self._setup
 
     def iter_vp_configs(self) -> Iterator[VpConfig]:
-        df = self._load()
-        vp_id_col, lat_col, lon_col, asn_col, country_col = self._vp_columns()
-        for _, row in df.drop_duplicates(vp_id_col).iterrows():
+        df = self._ensure_loaded()
+        asn_col = "vp_asn" if "vp_asn" in df.columns else None
+        country_col = "vp_country" if "vp_country" in df.columns else None
+        for _, row in df.drop_duplicates("vp_id").iterrows():
             yield VpConfig(
-                vp_id=str(row[vp_id_col]),
-                lat=float(row[lat_col]),
-                lon=float(row[lon_col]),
+                vp_id=str(row["vp_id"]),
+                lat=float(row["vp_lat"]),
+                lon=float(row["vp_lon"]),
                 asn=_opt_int(row.get(asn_col)) if asn_col else None,
                 country=_opt_str(row.get(country_col)) if country_col else None,
             )
 
+    def iter_tg_configs(self) -> Iterator[TgConfig]:
+        # Static catalog of every target the source knows about (eval ∪ fit).
+        # The eval/fit split is enforced inside iter_eval_targets /
+        # iter_fit_samples. Matches the convention at
+        # ripe_atlas_asn_corpora.py:137-158.
+        df = self._ensure_loaded()
+        asn_col = "target_asn" if "target_asn" in df.columns else None
+        country_col = "target_country" if "target_country" in df.columns else None
+        for _, row in df.drop_duplicates("target_id").iterrows():
+            yield TgConfig(
+                tg_id=str(row["target_id"]),
+                lat=float(row["target_lat"]),
+                lon=float(row["target_lon"]),
+                asn=_opt_int(row.get(asn_col)) if asn_col else None,
+                country=_opt_str(row.get(country_col)) if country_col else None,
+                city=None,
+            )
+
     def iter_fit_samples(self) -> Iterator[FitSample]:
-        df = self._load()
-        vp_id_col, vp_lat, vp_lon, _, _ = self._vp_columns()
-        _, tg_lat, tg_lon = self._target_columns()
+        df = self._ensure_loaded()
         for row in df.itertuples(index=False):
+            tg_id = str(row.target_id)
+            if self._fit_targets is not None and tg_id not in self._fit_targets:
+                continue
             yield FitSample(
-                vp_id=VpId(str(getattr(row, vp_id_col))),
-                vp_coord=Coord(lat=float(getattr(row, vp_lat)), lon=float(getattr(row, vp_lon))),
-                probe_coord=Coord(lat=float(getattr(row, tg_lat)), lon=float(getattr(row, tg_lon))),
+                vp_id=VpId(str(row.vp_id)),
+                vp_coord=Coord(lat=float(row.vp_lat), lon=float(row.vp_lon)),
+                probe_coord=Coord(lat=float(row.target_lat), lon=float(row.target_lon)),
                 latency=Latency(float(row.rtt_ms)),
             )
 
     def iter_eval_targets(self) -> Iterator[EvalTarget]:
-        df = self._load()
-        vp_id_col, vp_lat, vp_lon, _, _ = self._vp_columns()
-        tg_id_col, tg_lat, tg_lon = self._target_columns()
-        for tg_id, group in df.groupby(tg_id_col, sort=True):
+        df = self._ensure_loaded()
+        for tg_id, group in df.groupby("target_id", sort=True):
+            tg_id_str = str(tg_id)
+            if self._eval_targets is not None and tg_id_str not in self._eval_targets:
+                continue
             first = group.iloc[0]
-            true_coord = Coord(lat=float(first[tg_lat]), lon=float(first[tg_lon]))
+            true_coord = Coord(
+                lat=float(first["target_lat"]),
+                lon=float(first["target_lon"]),
+            )
             obs: list[tuple[VpId, Coord, Latency]] = [
                 (
-                    VpId(str(getattr(r, vp_id_col))),
-                    Coord(lat=float(getattr(r, vp_lat)), lon=float(getattr(r, vp_lon))),
+                    VpId(str(r.vp_id)),
+                    Coord(lat=float(r.vp_lat), lon=float(r.vp_lon)),
                     Latency(float(r.rtt_ms)),
                 )
                 for r in group.itertuples(index=False)
             ]
-            yield EvalTarget(target_id=str(tg_id), true_coord=true_coord, obs=obs)
+            yield EvalTarget(target_id=tg_id_str, true_coord=true_coord, obs=obs)
 
     # ---- internals -----------------------------------------------------------
 
-    def _vp_columns(self) -> tuple[str, str, str, Optional[str], Optional[str]]:
-        """Resolve which CSV columns play the VP role for this setup.
-
-        Returns (id, lat, lon, asn-or-None, country-or-None). The asn/country
-        slots are None when the corresponding optional columns aren't present.
-        """
-        df = self._load()
-        if self._setup == DataSource.PROBES_TO_ANCHORS:
-            asn = "vp_asn" if "vp_asn" in df.columns else None
-            country = "vp_country" if "vp_country" in df.columns else None
-            return "vp_id", "vp_lat", "vp_lon", asn, country
-        # ANCHORS_TO_PROBES: target side becomes VP.
-        asn = "target_asn" if "target_asn" in df.columns else None
-        country = "target_country" if "target_country" in df.columns else None
-        return "target_id", "target_lat", "target_lon", asn, country
-
-    def _target_columns(self) -> tuple[str, str, str]:
-        """Resolve which CSV columns play the target role for this setup."""
-        if self._setup == DataSource.PROBES_TO_ANCHORS:
-            return "target_id", "target_lat", "target_lon"
-        return "vp_id", "vp_lat", "vp_lon"
-
-    def _load(self) -> pd.DataFrame:
+    def _ensure_loaded(self) -> pd.DataFrame:
         if self._df is None:
-            df = pd.read_csv(self._csv_path)
-            missing = [c for c in _REQUIRED if c not in df.columns]
-            if missing:
-                raise ValueError(
-                    f"CSV {self._csv_path} missing required columns: {missing}. "
-                    f"Required: {list(_REQUIRED)}; optional: {list(_OPTIONAL)}."
-                )
-            df = df.dropna(subset=list(_REQUIRED))
-            df = df[df["rtt_ms"] > 0].copy()
-            df = self._apply_slice(df, self._slice)
-            self._df = df.reset_index(drop=True)
+            self._load_csv()
+            if self._fold_index is not None:
+                self._apply_stratification()
+        assert self._df is not None
         return self._df
+
+    def _load_csv(self) -> None:
+        df = pd.read_csv(self._csv_path)
+        missing = [c for c in _REQUIRED if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"CSV {self._csv_path} missing required columns: {missing}. "
+                f"Required: {list(_REQUIRED)}; optional: {list(_OPTIONAL)}."
+            )
+        df = df.dropna(subset=list(_REQUIRED))
+        df = df[df["rtt_ms"] > 0].copy()
+        df = self._apply_slice(df, self._slice)
+        self._df = df.reset_index(drop=True)
 
     @staticmethod
     def _apply_slice(df: pd.DataFrame, slice_name: str) -> pd.DataFrame:
+        """Row-level slice. `fold_N` keeps every row — the eval/fit partition
+        lives in cached id sets, not in row drops."""
         if slice_name == "all":
             return df
-        if not slice_name.startswith("head"):
-            raise ValueError(
-                f"unknown slice {slice_name!r}; expected 'all' or 'head<k>'"
-            )
-        try:
-            k = int(slice_name.removeprefix("head"))
-        except ValueError as e:
-            raise ValueError(f"invalid head-k slice: {slice_name!r}") from e
-        if k < 1:
-            raise ValueError(f"head-k must be >=1, got {k}")
-        keep = sorted(df["target_id"].astype(str).unique())[:k]
-        if not keep:
-            raise ValueError(f"slice {slice_name!r} selected no targets (empty CSV?)")
-        return df[df["target_id"].astype(str).isin(keep)].copy()
+        if _FOLD_SLICE_RE.match(slice_name):
+            return df
+        if slice_name.startswith("head"):
+            try:
+                k = int(slice_name.removeprefix("head"))
+            except ValueError as e:
+                raise ValueError(f"invalid head-k slice: {slice_name!r}") from e
+            if k < 1:
+                raise ValueError(f"head-k must be >=1, got {k}")
+            keep = sorted(df["target_id"].astype(str).unique())[:k]
+            if not keep:
+                raise ValueError(
+                    f"slice {slice_name!r} selected no targets (empty CSV?)"
+                )
+            return df[df["target_id"].astype(str).isin(keep)].copy()
+        raise ValueError(
+            f"unknown slice {slice_name!r}; expected 'all', 'head<k>', or 'fold_N'"
+        )
+
+    def _apply_stratification(self) -> None:
+        """Stratify unique target_ids into K folds via DistGeo and cache
+        the eval / fit target-id sets."""
+        assert self._df is not None and self._fold_index is not None
+        unique = self._df.drop_duplicates("target_id")
+        targets: list[AnchorInfo] = []
+        for _, row in unique.iterrows():
+            asn = row.get("target_asn")
+            country = row.get("target_country")
+            targets.append(AnchorInfo(
+                ip=str(row["target_id"]),
+                lat=float(row["target_lat"]),
+                lon=float(row["target_lon"]),
+                country=str(country) if pd.notna(country) else None,
+                asn=int(asn) if pd.notna(asn) else None,
+            ))
+
+        algo = DistGeoStratification(
+            k=self._k,
+            fold_index=0,  # full assignment is fold-index-independent
+            seed=self._seed,
+            asn_bucket_top_n=self._asn_bucket_top_n,
+        )
+        fold_by_id = algo.compute_fold_assignments(targets)
+
+        eval_targets: set[str] = set()
+        fit_targets: set[str] = set()
+        for tg_id, fold in fold_by_id.items():
+            (eval_targets if fold == self._fold_index else fit_targets).add(tg_id)
+        self._eval_targets = eval_targets
+        self._fit_targets = fit_targets
+        logger.info(
+            "stratified %d targets into K=%d folds: eval=fold_%d (%d targets), "
+            "fit=union of %d other folds (%d targets)",
+            len(targets), self._k, self._fold_index,
+            len(eval_targets), self._k - 1, len(fit_targets),
+        )
 
 
 def _opt_int(value: object) -> Optional[int]:

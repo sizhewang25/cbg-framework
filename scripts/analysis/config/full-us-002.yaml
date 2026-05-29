@@ -5,7 +5,7 @@
 #       --configfile scripts/analysis/config/full-us-002.yaml -j 3
 
 run_id: full-us-002
-source: vultr_csv
+source: generic_csv
 setup: anchors_to_probes
 slices: []
 merge_folds: true   # 5 K-fold slices → one merged plot per metric

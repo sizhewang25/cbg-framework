@@ -18,15 +18,17 @@ import pyarrow.parquet as pq
 
 from scripts.benchmark.v2.inputs import materialize_inputs, outputs_combo_dir
 from scripts.benchmark.v2.runner import ComboSpec, run_one_combo
-from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource
+from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
 
 
+# Canonical-schema synth CSV: vp_* = anchor side (acting as VP),
+# target_* = probe side.
 _SYNTH_CSV = textwrap.dedent("""
-    src_ip,dst_ip,prb_id,min_rtt,mean_rtt,sent,rcvd,msm_id,date,probe_asn,probe_country,probe_latitude,probe_longitude,anchor_asn,anchor_country,anchor_latitude,anchor_longitude,anchor_city
-    10.0.0.1,1.1.1.1,1001,5.0,5.0,3,3,1,2023-05-01,7922,US,33.5,-84.5,20473,US,33.0,-84.0,Atlanta
-    10.0.0.2,1.1.1.1,1002,6.0,6.0,3,3,2,2023-05-01,7922,US,32.5,-83.5,20473,US,33.0,-84.0,Atlanta
-    10.0.0.3,1.1.1.1,1003,7.0,7.0,3,3,3,2023-05-01,7922,US,33.5,-83.5,20473,US,33.0,-84.0,Atlanta
-    10.0.0.4,1.1.1.1,1004,5.5,5.5,3,3,4,2023-05-01,7922,US,32.5,-84.5,20473,US,33.0,-84.0,Atlanta
+    vp_id,vp_lat,vp_lon,vp_asn,vp_country,target_id,target_lat,target_lon,target_asn,target_country,rtt_ms
+    1.1.1.1,33.0,-84.0,20473,US,1001,33.5,-84.5,7922,US,5.0
+    1.1.1.1,33.0,-84.0,20473,US,1002,32.5,-83.5,7922,US,6.0
+    1.1.1.1,33.0,-84.0,20473,US,1003,33.5,-83.5,7922,US,7.0
+    1.1.1.1,33.0,-84.0,20473,US,1004,32.5,-84.5,7922,US,5.5
 """).strip() + "\n"
 
 
@@ -39,7 +41,7 @@ class TestRunOneCombo(unittest.TestCase):
         # k=4 with 4 single-ASN probes deterministically places exactly one
         # probe per fold under DistGeo's per-bucket round-robin → fold_0 has
         # n_targets == 1, matching the original test's "one target" shape.
-        src = VultrCSVSource(
+        src = GenericCSVSource(
             slice="fold_0", setup="anchors_to_probes",
             csv_path=self.csv_path, k=4,
         )
@@ -58,7 +60,7 @@ class TestRunOneCombo(unittest.TestCase):
         )
         run_one_combo(
             spec, inputs_dir=self.inputs_dir, out_dir=self.out_dir,
-            run_id="test-run", source_name="vultr_csv", slice_name="fold_0",
+            run_id="test-run", source_name="generic_csv", slice_name="fold_0",
         )
 
         # 1. run.json populated
@@ -114,7 +116,7 @@ class TestRunOneCombo(unittest.TestCase):
 
     def test_seed_recorded_and_makes_stochastic_combo_deterministic(self) -> None:
         """Same base_seed → byte-identical predictions on a stochastic combo."""
-        from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource as _Src
+        from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource as _Src
 
         # Need a richer fixture: MonteCarloMedoidCTR over PlanarAnnulusMTL
         # requires an annular feasible region. Use the NormalDist LTD which
@@ -135,11 +137,11 @@ class TestRunOneCombo(unittest.TestCase):
         out_b = outputs_combo_dir(self.out_dir.parents[3], "test-run", self.src, "mc_b")
         run_one_combo(
             spec, inputs_dir=self.inputs_dir, out_dir=out_a,
-            run_id="seed-test", source_name="vultr_csv", slice_name="fold_0",
+            run_id="seed-test", source_name="generic_csv", slice_name="fold_0",
         )
         run_one_combo(
             spec, inputs_dir=self.inputs_dir, out_dir=out_b,
-            run_id="seed-test", source_name="vultr_csv", slice_name="fold_0",
+            run_id="seed-test", source_name="generic_csv", slice_name="fold_0",
         )
 
         # seed column populated (one row per target).
@@ -167,7 +169,7 @@ class TestRunOneCombo(unittest.TestCase):
         out_dir = outputs_combo_dir(self.out_dir.parents[3], "no-seed-test", self.src, "mc_no_seed")
         run_one_combo(
             spec, inputs_dir=self.inputs_dir, out_dir=out_dir,
-            run_id="no-seed-test", source_name="vultr_csv", slice_name="fold_0",
+            run_id="no-seed-test", source_name="generic_csv", slice_name="fold_0",
         )
         rows = pq.read_table(out_dir / "targets.parquet").to_pylist()
         self.assertEqual(rows[0]["seed"], None)
@@ -183,7 +185,7 @@ class TestRunOneCombo(unittest.TestCase):
         out_dir = outputs_combo_dir(self.out_dir.parents[3], "test-run", self.src, "combo_le")
         run_one_combo(
             spec, inputs_dir=self.inputs_dir, out_dir=out_dir,
-            run_id="test-run", source_name="vultr_csv", slice_name="fold_0",
+            run_id="test-run", source_name="generic_csv", slice_name="fold_0",
         )
         # LowEnvelopeLTD carries per-VP fitted state → pickle should exist.
         pickle_path = out_dir / "fit_checkpoint.pkl"

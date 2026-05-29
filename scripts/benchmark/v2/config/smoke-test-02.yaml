@@ -10,13 +10,16 @@
 #       --configfile scripts/benchmark/v2/config/smoke.yaml -j 4
 
 run_id: smoke-test-02
-source: vultr_csv
+source: generic_csv
 setup: anchors_to_probes   # anchors are VPs, probes are eval targets (pressure test)
 slices: [fold_0]           # one fold is enough for a smoke check
 
 # DistGeo K-fold stratification of the probe-target set so eval and fit
-# never share a probe — same protocol as ripe_atlas_asn_corpora.
+# never share a probe — same protocol as ripe_atlas_asn_corpora. Run
+# `python -m scripts.benchmark.v2.sources.canonicalize_vultr_csv` once to
+# produce the canonical-schema CSV.
 source_kwargs:
+  csv_path: datasets/vultr_pings_us_canonical.csv
   k: 5
   seed: 42
   asn_bucket_top_n: 20

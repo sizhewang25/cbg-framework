@@ -14,7 +14,7 @@ from pathlib import Path
 RUN_ID  = config.get("run_id",  "default")
 SOURCE  = config["source"]                       # required
 SETUP   = config.get("setup", "probes_to_anchors")  # or "anchors_to_probes"
-SLICES  = config.get("slices", ["all_us"] if SOURCE == "vultr_csv" else ["fold_0"])
+SLICES  = config.get("slices", [])
 SOURCE_KWARGS = config.get("source_kwargs", {})
 COMBOS  = config["combos"]                       # required: list of dicts
 INPUTS_ROOT  = Path(config.get("inputs_root",  "scripts/benchmark/v2/inputs"))

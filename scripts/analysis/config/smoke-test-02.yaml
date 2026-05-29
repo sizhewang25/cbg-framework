@@ -9,7 +9,7 @@
 #       --configfile scripts/analysis/config/smoke-003.yaml -j 3
 
 run_id: smoke-test-02
-source: vultr_csv
+source: generic_csv
 setup: anchors_to_probes       # match the benchmark run's setup_id
 slices: [fold_0]               # one fold is enough for a smoke check
 

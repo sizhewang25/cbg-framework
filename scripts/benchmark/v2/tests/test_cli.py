@@ -14,15 +14,17 @@ from typer.testing import CliRunner
 from scripts.benchmark.v2.cli import app
 
 
+# Canonical-schema synth CSV: vp_* = anchor side (acting as VP),
+# target_* = probe side (the entity being geolocated).
 _SYNTH_CSV = textwrap.dedent("""
-    src_ip,dst_ip,prb_id,min_rtt,mean_rtt,sent,rcvd,msm_id,date,probe_asn,probe_country,probe_latitude,probe_longitude,anchor_asn,anchor_country,anchor_latitude,anchor_longitude,anchor_city
-    10.0.0.1,1.1.1.1,1001,5.0,5.0,3,3,1,2023-05-01,7922,US,33.5,-84.5,20473,US,33.0,-84.0,Atlanta
-    10.0.0.2,1.1.1.1,1002,6.0,6.0,3,3,2,2023-05-01,7922,US,32.5,-83.5,20473,US,33.0,-84.0,Atlanta
-    10.0.0.3,1.1.1.1,1003,7.0,7.0,3,3,3,2023-05-01,7922,US,33.5,-83.5,20473,US,33.0,-84.0,Atlanta
-    10.0.0.4,1.1.1.1,1004,5.5,5.5,3,3,4,2023-05-01,7922,US,32.5,-84.5,20473,US,33.0,-84.0,Atlanta
-    10.0.0.5,2.2.2.2,1005,8.0,8.0,3,3,5,2023-05-01,7922,US,46.5,-122.5,40,US,47.0,-122.0,Seattle
-    10.0.0.6,2.2.2.2,1006,9.0,9.0,3,3,6,2023-05-01,7922,US,47.5,-122.5,40,US,47.0,-122.0,Seattle
-    10.0.0.7,2.2.2.2,1007,7.5,7.5,3,3,7,2023-05-01,7922,US,47.5,-121.5,40,US,47.0,-122.0,Seattle
+    vp_id,vp_lat,vp_lon,vp_asn,vp_country,target_id,target_lat,target_lon,target_asn,target_country,rtt_ms
+    1.1.1.1,33.0,-84.0,20473,US,1001,33.5,-84.5,7922,US,5.0
+    1.1.1.1,33.0,-84.0,20473,US,1002,32.5,-83.5,7922,US,6.0
+    1.1.1.1,33.0,-84.0,20473,US,1003,33.5,-83.5,7922,US,7.0
+    1.1.1.1,33.0,-84.0,20473,US,1004,32.5,-84.5,7922,US,5.5
+    2.2.2.2,47.0,-122.0,40,US,1005,46.5,-122.5,7922,US,8.0
+    2.2.2.2,47.0,-122.0,40,US,1006,47.5,-122.5,7922,US,9.0
+    2.2.2.2,47.0,-122.0,40,US,1007,47.5,-121.5,7922,US,7.5
 """).strip() + "\n"
 
 
@@ -31,7 +33,7 @@ class TestCLI(unittest.TestCase):
         self.runner = CliRunner()
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
-        self.csv_path = root / "vultr.csv"
+        self.csv_path = root / "canonical.csv"
         self.csv_path.write_text(_SYNTH_CSV)
         self.inputs_root = root / "inputs"
         self.outputs_root = root / "outputs"
@@ -40,14 +42,13 @@ class TestCLI(unittest.TestCase):
         self.tmp.cleanup()
 
     def _materialize(
-        self, source: str = "vultr_csv", slice: str = "fold_0", run_id: str = "cli-test",
+        self, source: str = "generic_csv", slice: str = "fold_0", run_id: str = "cli-test",
     ) -> Path:
-        # Patch the default CSV path by setting the env variable on the source.
-        # Simpler: call the source directly with our synth path via inputs.materialize_inputs.
+        # Call the source directly with our synth path via inputs.materialize_inputs.
         from scripts.benchmark.v2.inputs import materialize_inputs
-        from scripts.benchmark.v2.sources.vultr_csv import VultrCSVSource
+        from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
 
-        src = VultrCSVSource(
+        src = GenericCSVSource(
             slice=slice, setup="anchors_to_probes",
             csv_path=self.csv_path, k=4,
         )
@@ -57,7 +58,7 @@ class TestCLI(unittest.TestCase):
         self._materialize()
         result = self.runner.invoke(app, [
             "run-combo",
-            "--source", "vultr_csv", "--slice", "fold_0",
+            "--source", "generic_csv", "--slice", "fold_0",
             "--setup", "anchors_to_probes",
             "--ltd", "speed_of_internet", "--mtl", "planar_circle", "--ctr", "geometric_centroid",
             "--run-id", "cli-test",
@@ -67,7 +68,7 @@ class TestCLI(unittest.TestCase):
         ])
         self.assertEqual(result.exit_code, 0, msg=result.output)
         combo_dir = (
-            self.outputs_root / "cli-test" / "vultr_csv" / "anchors_to_probes" / "fold_0"
+            self.outputs_root / "cli-test" / "generic_csv" / "anchors_to_probes" / "fold_0"
             / "speed_of_internet__planar_circle__geometric_centroid"
         )
         self.assertTrue((combo_dir / "run.json").exists())
@@ -76,7 +77,7 @@ class TestCLI(unittest.TestCase):
     def test_run_combo_fails_without_materialized_inputs(self) -> None:
         result = self.runner.invoke(app, [
             "run-combo",
-            "--source", "vultr_csv", "--slice", "fold_2",
+            "--source", "generic_csv", "--slice", "fold_2",
             "--setup", "anchors_to_probes",
             "--ltd", "speed_of_internet", "--mtl", "planar_circle", "--ctr", "geometric_centroid",
             "--run-id", "cli-test",
@@ -89,14 +90,14 @@ class TestCLI(unittest.TestCase):
 
     def test_materialize_forwards_source_kwargs(self) -> None:
         """`--source-kwargs` JSON is parsed and forwarded as **kwargs to the
-        source constructor — exercised here with a vultr_csv override that
+        source constructor — exercised here with a generic_csv override that
         points at a temp CSV."""
         alt_csv = Path(self.tmp.name) / "alt.csv"
         alt_csv.write_text(_SYNTH_CSV)
         # Path the source through --source-kwargs rather than positional args.
         result = self.runner.invoke(app, [
             "materialize-inputs",
-            "--source", "vultr_csv", "--slice", "fold_0",
+            "--source", "generic_csv", "--slice", "fold_0",
             "--setup", "anchors_to_probes",
             "--run-id", "kw-test",
             "--inputs-root", str(self.inputs_root),
@@ -104,7 +105,7 @@ class TestCLI(unittest.TestCase):
         ])
         self.assertEqual(result.exit_code, 0, msg=result.output)
         manifest = (
-            self.inputs_root / "vultr_csv" / "kw-test" / "anchors_to_probes" / "fold_0"
+            self.inputs_root / "generic_csv" / "kw-test" / "anchors_to_probes" / "fold_0"
             / "manifest.json"
         )
         self.assertTrue(manifest.exists())
@@ -112,7 +113,7 @@ class TestCLI(unittest.TestCase):
     def test_materialize_rejects_invalid_source_kwargs_json(self) -> None:
         result = self.runner.invoke(app, [
             "materialize-inputs",
-            "--source", "vultr_csv", "--slice", "fold_0",
+            "--source", "generic_csv", "--slice", "fold_0",
             "--setup", "anchors_to_probes",
             "--run-id", "kw-test",
             "--inputs-root", str(self.inputs_root),
@@ -126,7 +127,7 @@ class TestCLI(unittest.TestCase):
         for ltd_name in ("speed_of_internet", "low_envelope"):
             r = self.runner.invoke(app, [
                 "run-combo",
-                "--source", "vultr_csv", "--slice", "fold_0",
+                "--source", "generic_csv", "--slice", "fold_0",
                 "--setup", "anchors_to_probes",
                 "--ltd", ltd_name, "--mtl", "planar_circle", "--ctr", "geometric_centroid",
                 "--run-id", "sum-test",

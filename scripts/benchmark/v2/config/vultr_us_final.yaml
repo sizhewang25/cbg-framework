@@ -1,0 +1,288 @@
+# Final 16-combo benchmark on the Vultr US-only ping CSV.
+#
+# Structural twin of north_america_as7018_final.yaml (16 LTD × MTL × CTR
+# combos across the vanilla/million_scale/octant/spotter families with a
+# `_geo` CTR ablation per family). Drives generic_csv against the
+# canonicalized Vultr CSV — anchor data plays the VP role, probe data plays
+# the target role.
+#
+# Prereq: run the canonicalize helper once to rename Vultr's columns to the
+# generic_csv canonical schema:
+#   python -m scripts.benchmark.v2.sources.canonicalize_vultr_csv
+#   # writes datasets/vultr_pings_us_canonical.csv
+#
+# Run with:
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile scripts/benchmark/v2/config/vultr_us_final.yaml -j 4
+
+run_id: vultr_us_final
+source: generic_csv
+setup: anchors_to_probes   # anchors are VPs, probes are eval targets
+slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+source_kwargs:
+  csv_path: datasets/vultr_pings_us_canonical.csv
+  k: 5
+  seed: 42
+  asn_bucket_top_n: 20
+
+enable_fallback: true
+seed: 42
+
+combos:
+  # ---- Vanilla CBG family ---------------------------------------------------
+  - combo_id: vanilla_cbg
+    ltd: low_envelope
+    mtl: spherical_circle
+    ctr: boundary_vertex_mean
+    mtl_kwargs:
+      speed_ratio: 0.6667
+      enable_circle_filter: true
+
+  - combo_id: vanilla_cbg_geo
+    ltd: low_envelope
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    mtl_kwargs:
+      n_pts: 64
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+
+  # ---- Million-scale variants ----------------------------------------------
+  - combo_id: million_scale_cbg
+    ltd: speed_of_internet
+    mtl: spherical_circle
+    ctr: boundary_vertex_mean
+    ltd_kwargs:
+      speed_ratio: 0.6667
+    mtl_kwargs:
+      speed_ratio: 0.6667
+      enable_circle_filter: true
+
+  - combo_id: million_scale_cbg_geo
+    ltd: speed_of_internet
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      speed_ratio: 0.6667
+    mtl_kwargs:
+      n_pts: 64
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+
+  # ---- Octant family --------------------------------------------------------
+  - combo_id: octant_cbg
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      weight_threshold: 0.9
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_top
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_top_geo
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+
+  - combo_id: octant_cbg_hull
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      fit_spline: false
+      cutoff_min_points: 5
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_hull_geo
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      fit_spline: false
+      cutoff_min_points: 5
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+
+  # ---- Spotter family (Laki et al. 2011) -----------------------------------
+  - combo_id: spotter_cbg
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      weight_threshold: 0.9
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_top
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_top_geo
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+
+  - combo_id: spotter_cbg_c100
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 1.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_c100_geo
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 1.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+
+  - combo_id: spotter_cbg_c80
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 0.8
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_c80_geo
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 0.8
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
