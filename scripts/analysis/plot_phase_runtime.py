@@ -29,6 +29,7 @@ from scripts.analysis._v2_io import (
     load_summary,
     load_targets,
 )
+from scripts.analysis.plot_error_cdf import _short_label
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,9 @@ def plot_phase_runtime(
         bottoms += values
 
     ax.set_xticks(x)
-    ax.set_xticklabels(combo_ids, rotation=30, ha="right", fontsize=8)
+    ax.set_xticklabels(
+        [_short_label(c) for c in combo_ids], rotation=30, ha="right", fontsize=8,
+    )
     ax.set_ylabel(f"Per-target stage runtime ({stat}) (ms)")
     ax.set_title(
         title or f"Per-target stage runtime ({stat}) — bars stack LTD/MTL/CTR; line = total",

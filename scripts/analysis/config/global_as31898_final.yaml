@@ -53,9 +53,17 @@ combos:
 # Diff CDFs are read as (left − right) per target; negative = left is closer.
 diff_pairs:
   # ---- (a) Cross-family: best-of-family vs vanilla_cbg --------------------
-  - [million_scale_cbg, vanilla_cbg]
-  - [octant_cbg,    vanilla_cbg]
-  - [spotter_cbg,   vanilla_cbg]
+  - [vanilla_cbg, shortest_ping]
+  - [million_scale_cbg, shortest_ping]
+  - [octant_cbg,    shortest_ping]
+  - [spotter_cbg,   shortest_ping]
+  # -- improved variants
+  - [vanilla_cbg_geo, shortest_ping]
+  - [million_scale_cbg_geo, shortest_ping]
+  - [octant_cbg_top_geo,    shortest_ping]
+  - [octant_cbg_hull_geo,   shortest_ping]
+  - [spotter_cbg_c100_geo,   shortest_ping]
+  - [spotter_cbg_c80_geo,   shortest_ping]
 
 # Best-of-family overlay on a single panel.
 merge_pairs:

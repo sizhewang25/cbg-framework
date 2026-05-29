@@ -88,6 +88,8 @@ _PLOTS = [
     "plot_error_cdf_for_success",
     "plot_phase_memory",
     "plot_phase_runtime",
+    "plot_accuracy_runtime",
+    "plot_accuracy_memory",
 ]
 if DIFF_PAIRS:
     _PLOTS.append("plot_error_diff_cdf")
@@ -242,20 +244,55 @@ rule phase_runtime:
         " --stat {params.stat}"
         " --out {output.png}" + COMBOS_ARG
 
+rule accuracy_runtime_box:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = SLICE_OUT / "plot_accuracy_runtime.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+    shell:
+        CLI + ".plot_accuracy_cost_box"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --slice {wildcards.slice}"
+        " --cost runtime"
+        " --out {output.png}" + COMBOS_ARG
+
+rule accuracy_memory_box:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = SLICE_OUT / "plot_accuracy_memory.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+    shell:
+        CLI + ".plot_accuracy_cost_box"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --slice {wildcards.slice}"
+        " --cost memory_alloc"
+        " --out {output.png}" + COMBOS_ARG
+
 rule error_diff_cdf:
     input:
         summary = RUN_DIR / "summary.parquet",
+        eval_obs = INPUTS_DIR / "eval_observations.parquet",
     output:
         png = SLICE_OUT / "plot_error_diff_cdf.png",
     params:
         run_dir = str(RUN_DIR),
         source = SOURCE,
+        inputs_dir = str(INPUTS_DIR),
         pair_args = " ".join(f"--pair {a} {b}" for a, b in DIFF_PAIRS),
     shell:
         CLI + ".plot_error_diff_cdf"
         " --run-dir {params.run_dir}"
         " --source {params.source}"
         " --slice {wildcards.slice}"
+        " --inputs-dir {params.inputs_dir}"
         " {params.pair_args}"
         " --out {output.png}" + COMBOS_ARG
 
@@ -426,6 +463,36 @@ rule phase_runtime_merged:
         " --stat {params.stat}"
         " --out {output.png}" + COMBOS_ARG
 
+rule accuracy_runtime_box_merged:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = MERGED_OUT / "plot_accuracy_runtime.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+    shell:
+        CLI + ".plot_accuracy_cost_box"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --cost runtime"
+        " --out {output.png}" + COMBOS_ARG
+
+rule accuracy_memory_box_merged:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        png = MERGED_OUT / "plot_accuracy_memory.png",
+    params:
+        run_dir = str(RUN_DIR),
+        source = SOURCE,
+    shell:
+        CLI + ".plot_accuracy_cost_box"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --cost memory_alloc"
+        " --out {output.png}" + COMBOS_ARG
+
 rule error_diff_cdf_merged:
     input:
         summary = RUN_DIR / "summary.parquet",
@@ -434,11 +501,13 @@ rule error_diff_cdf_merged:
     params:
         run_dir = str(RUN_DIR),
         source = SOURCE,
+        inputs_dir = str(MERGED_INPUTS_DIR),
         pair_args = " ".join(f"--pair {a} {b}" for a, b in DIFF_PAIRS),
     shell:
         CLI + ".plot_error_diff_cdf"
         " --run-dir {params.run_dir}"
         " --source {params.source}"
+        " --inputs-dir {params.inputs_dir}"
         " {params.pair_args}"
         " --out {output.png}" + COMBOS_ARG
 

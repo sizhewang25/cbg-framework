@@ -62,13 +62,24 @@ def _ltd_panel_sort_key(ltd: str) -> tuple[int, str]:
         return (len(_LTD_PANEL_ORDER), ltd)
 
 
+# CBG variant prefix → two-letter abbreviation, applied to both the stats
+# panel (which truncates at 16 chars) and legend labels. Order doesn't
+# matter — prefixes are mutually exclusive on the existing combo set.
+_LABEL_PREFIX_ABBREV: dict[str, str] = {
+    "vanilla_": "va_",
+    "million_scale_": "ms_",
+    "octant_": "oc_",
+    "spotter_": "sp_",
+}
+
+
 def _short_label(cid: str) -> str:
-    """Compact form of `cid` for the stats panel. Only the
-    `million_scale_` prefix is abbreviated — it's the single combo family
-    long enough to truncate at the 16-char label width.
-    """
-    if cid.startswith("million_scale_"):
-        return "ms_" + cid[len("million_scale_"):]
+    """Compact form of `cid` for legends and the stats panel: replaces the
+    leading CBG-variant family name with a two-letter abbreviation so labels
+    fit inside the 16-char stats-panel column and keep the legend tidy."""
+    for prefix, short in _LABEL_PREFIX_ABBREV.items():
+        if cid.startswith(prefix):
+            return short + cid[len(prefix):]
     return cid
 
 
@@ -172,7 +183,7 @@ def plot_error_cdf(
                 color=colors.get(cid, "#4E79A7"),
                 linewidth=2,
                 alpha=0.8,
-                label=cid,
+                label=_short_label(cid),
             )
             n_success = successes_by_combo.get(cid, len(errors))
             total = totals_by_combo.get(cid, len(errors))
@@ -356,6 +367,57 @@ def _load_nearest_ping_baseline_by_target(inputs_dir: Path) -> dict[str, float]:
         nearest["vp_lon"].to_numpy(dtype=float),
     )
     return dict(zip(nearest["target_id"].tolist(), errors.tolist()))
+
+
+def _load_nearest_ping_baseline_by_fold_target(inputs_dir: Path) -> dict[str, float]:
+    """Like `_load_nearest_ping_baseline_by_target` but keys by
+    `<fold>/<target_id>` to match the fold-prefixed convention used in
+    diff-CDF joins (`plot_error_diff_cdf._load_from_run`).
+
+    Single-fold mode (`<inputs_dir>/eval_observations.parquet` exists):
+    fold name is `inputs_dir.name`. Merged-folds mode: globs
+    `<inputs_dir>/*/eval_observations.parquet` and pulls each fold name
+    from the parent dir.
+    """
+    direct = inputs_dir / "eval_observations.parquet"
+    if direct.exists():
+        per_fold = [(inputs_dir.name, direct)]
+    else:
+        paths = sorted(inputs_dir.glob("*/eval_observations.parquet"))
+        if not paths:
+            raise FileNotFoundError(
+                f"No eval_observations.parquet at {inputs_dir} or under "
+                f"{inputs_dir}/*/. Pass --inputs-dir pointing at a fold "
+                "input dir or at its parent (for merged-fold mode)."
+            )
+        per_fold = [(p.parent.name, p) for p in paths]
+
+    import pandas as pd
+    frames = []
+    for fold, p in per_fold:
+        df = pq.read_table(p).to_pandas()
+        df["__fold"] = fold
+        frames.append(df)
+    df = pd.concat(frames, ignore_index=True)
+    if df.empty:
+        return {}
+
+    idx = df.groupby(["__fold", "target_id"])["latency_ms"].idxmin()
+    nearest = df.loc[idx]
+    errors = haversine_distance(
+        nearest["target_lat"].to_numpy(dtype=float),
+        nearest["target_lon"].to_numpy(dtype=float),
+        nearest["vp_lat"].to_numpy(dtype=float),
+        nearest["vp_lon"].to_numpy(dtype=float),
+    )
+    return {
+        f"{f}/{t}": float(e)
+        for f, t, e in zip(
+            nearest["__fold"].tolist(),
+            nearest["target_id"].tolist(),
+            errors.tolist(),
+        )
+    }
 
 
 def _load_nearest_ping_baseline(inputs_dir: Path) -> np.ndarray:

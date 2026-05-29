@@ -16,6 +16,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from scripts.analysis._v2_io import discover_combos, load_targets
+from scripts.analysis.plot_error_cdf import (
+    _load_nearest_ping_baseline_by_fold_target,
+    _short_label,
+)
+
+_BASELINE_NAME = "shortest_ping"
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +65,14 @@ def plot_error_diff_cdf(
         pct_a_better = float(np.mean(deltas < 0) * 100)
         median_delta = float(np.median(deltas))
 
+        a_short, b_short = _short_label(id_a), _short_label(id_b)
         ax.plot(
             sorted_d, cdf,
             color=_DIFF_COLORS[i % len(_DIFF_COLORS)],
             linewidth=2,
             label=(
-                f"{id_a} − {id_b}\n"
-                f"  {id_a} better: {pct_a_better:.0f}%, "
+                f"{a_short} − {b_short}\n"
+                f"  {a_short} better: {pct_a_better:.0f}%, "
                 f"med Δ={median_delta:+.0f} km, N={len(deltas)}"
             ),
         )
@@ -148,6 +155,18 @@ def main() -> None:
         help="Restrict to these combo_ids (default: every combo found on disk). "
              "All combos named in --pair must be in this set if it's non-empty.",
     )
+    parser.add_argument(
+        "--inputs-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Path to inputs/<source>/<setup>/<slice>/ (single-fold) or its "
+            "parent (merged-folds). Required when any --pair references the "
+            f"synthetic '{_BASELINE_NAME}' pseudo-combo: nearest-VP error is "
+            "computed on the fly per <fold>/<target_id> and injected as a "
+            "pseudo-combo so the existing join works unchanged."
+        ),
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--title", default=None)
     args = parser.parse_args()
@@ -156,6 +175,25 @@ def main() -> None:
     target_errors = _load_from_run(
         args.run_dir, args.source, args.slice_, combos=args.combos,
     )
+
+    # Synthesize the `shortest_ping` pseudo-combo on the fly when referenced
+    # by any pair — keys land on the same `<fold>/<target_id>` shape as the
+    # CBG side, so the existing inner-join in `compute_error_diff` Just Works.
+    if any(_BASELINE_NAME in pair for pair in args.pair):
+        if args.inputs_dir is None:
+            raise SystemExit(
+                f"--pair references '{_BASELINE_NAME}' but --inputs-dir was not "
+                "given. Pass --inputs-dir pointing at the eval_observations.parquet "
+                "directory (single-fold) or its parent (merged-folds)."
+            )
+        target_errors[_BASELINE_NAME] = _load_nearest_ping_baseline_by_fold_target(
+            args.inputs_dir,
+        )
+        logger.info(
+            "%s baseline: %d targets loaded",
+            _BASELINE_NAME, len(target_errors[_BASELINE_NAME]),
+        )
+
     missing = {
         cid
         for pair in args.pair
