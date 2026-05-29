@@ -24,6 +24,7 @@ import numpy as np
 from scripts.libs.spotter.spotter_model import (
     SpotterRTTModel,
     THEORETICAL_SLOPE,
+    calibrate_k,
     compute_cutoff_rtt,
     fit_mu_sigma,
 )
@@ -86,6 +87,49 @@ class TestFitMuSigma(unittest.TestCase):
         self.assertTrue(np.all(centers < 40.0))
 
 
+class TestCalibrateK(unittest.TestCase):
+    """Empirical k = quantile(|z|, target_coverage)."""
+
+    def test_k_recovers_normal_quantile_at_95(self):
+        """For N(0,1) residuals, k(0.95) should be near 1.96."""
+        rng = np.random.default_rng(7)
+        rtts = rng.uniform(0, 100, size=20000)
+        true_mu = 50.0 * rtts
+        true_sigma = 200.0
+        dists = true_mu + rng.normal(0, true_sigma, size=20000)
+
+        p_mu = np.array([50.0, 0.0])
+        p_sigma = np.array([true_sigma])
+        k = calibrate_k(rtts, dists, p_mu, p_sigma, target_coverage=0.95)
+
+        self.assertAlmostEqual(k, 1.96, delta=0.05)
+
+    def test_k_recovers_normal_quantile_at_50(self):
+        rng = np.random.default_rng(8)
+        rtts = rng.uniform(0, 100, size=20000)
+        dists = 50.0 * rtts + rng.normal(0, 200, size=20000)
+        p_mu = np.array([50.0, 0.0])
+        p_sigma = np.array([200.0])
+
+        k = calibrate_k(rtts, dists, p_mu, p_sigma, target_coverage=0.50)
+
+        # |z| has half-normal-like distribution; 50th percentile ~ 0.674
+        self.assertAlmostEqual(k, 0.674, delta=0.05)
+
+    def test_k_is_pooled_and_symmetric(self):
+        """k is a single scalar -- one number for both inner and outer bound."""
+        rng = np.random.default_rng(9)
+        rtts = rng.uniform(0, 100, size=5000)
+        dists = 50.0 * rtts + rng.normal(0, 200, size=5000)
+        p_mu = np.array([50.0, 0.0])
+        p_sigma = np.array([200.0])
+
+        k = calibrate_k(rtts, dists, p_mu, p_sigma, target_coverage=0.95)
+
+        self.assertIsInstance(k, float)
+        self.assertGreater(k, 0.0)
+
+
 class TestComputeCutoffRtt(unittest.TestCase):
     """The Octant-style sparse-tail cutoff scan."""
 
@@ -141,6 +185,36 @@ class TestSpotterRTTModel(unittest.TestCase):
         self.assertGreater(model.cutoff_rtt, model.rtt_min)
         self.assertLessEqual(model.cutoff_rtt, model.rtt_max)
 
+    def test_fit_without_target_coverage_keeps_k_at_one(self):
+        """Default fit leaves k = 1.0 -- the paper's mu +/- sigma band."""
+        rng = np.random.default_rng(43)
+        rtts = rng.uniform(0, 100, size=5000)
+        dists = 50.0 * rtts + rng.normal(0, 200, size=5000)
+
+        model = SpotterRTTModel()
+        ok = model.fit(rtts, dists)
+
+        self.assertTrue(ok)
+        self.assertEqual(model.k, 1.0)
+        self.assertNotIn("target_coverage", model.metadata)
+        self.assertEqual(model.metadata["k"], 1.0)
+
+    def test_fit_with_target_coverage_calibrates_k(self):
+        """Passing target_coverage triggers empirical k calibration."""
+        rng = np.random.default_rng(44)
+        rtts = rng.uniform(0, 100, size=20000)
+        dists = 50.0 * rtts + rng.normal(0, 200, size=20000)
+
+        model = SpotterRTTModel()
+        ok = model.fit(rtts, dists, target_coverage=0.95)
+
+        self.assertTrue(ok)
+        # |z| ~ half-normal; 95th percentile ~ 1.96 for well-fit residuals.
+        self.assertGreater(model.k, 1.5)
+        self.assertLess(model.k, 2.5)
+        self.assertAlmostEqual(model.metadata["target_coverage"], 0.95)
+        self.assertEqual(model.metadata["k"], model.k)
+
     def test_fit_drops_sub_baseline_rows(self):
         """Rows where rtt < THEORETICAL_SLOPE * dist are physically impossible
         and must be dropped before binning."""
@@ -178,6 +252,25 @@ class TestSpotterRTTModel(unittest.TestCase):
         self.assertAlmostEqual(inner, 1450.0, places=3)
         self.assertAlmostEqual(outer, 1550.0, places=3)
         self.assertLess(inner, outer)
+
+    def test_predict_distance_bounds_uses_k_when_set(self):
+        """With k = 2.0 the band widens to mu +/- 2*sigma.
+
+        mu = 50*d, sigma = 50, k = 2 -> half-band = 100. At rtt=30: mu=1500,
+        raw outer=1600, baseline=3000 -> no clip; raw inner=1400 (no clip).
+        """
+        model = SpotterRTTModel(
+            p_mu=np.array([50.0, 0.0]),
+            p_sigma=np.array([50.0]),
+            k=2.0,
+            rtt_min=10.0,
+            rtt_max=60.0,
+            fitted=True,
+        )
+
+        inner, outer = model.predict_distance_bounds(30.0)
+        self.assertAlmostEqual(inner, 1400.0, places=3)
+        self.assertAlmostEqual(outer, 1600.0, places=3)
 
     def test_predict_distance_bounds_clips_inner_at_zero(self):
         """When mu - sigma < 0, inner clamps to 0; baseline cap may still apply."""

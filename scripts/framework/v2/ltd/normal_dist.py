@@ -3,10 +3,13 @@
 A single (mu(d), sigma(d)) shared across all VPs — the pooled-normal claim.
 Maps an RTT to an annular Distance:
 
-    lower_km = max(0, mu(rtt) - sigma(rtt))
-    upper_km = min(max(0, mu(rtt) + sigma(rtt)), rtt / THEORETICAL_SLOPE)
+    lower_km = max(0, mu(rtt) - k * sigma(rtt))
+    upper_km = min(max(0, mu(rtt) + k * sigma(rtt)), rtt / THEORETICAL_SLOPE)
 
-This is the paper's published band (Figure 3a in Laki et al. 2011).
+With the default `target_coverage=None`, k = 1.0 and the band reproduces the
+paper's published Figure 3a (Laki et al. 2011). Setting `target_coverage`
+switches to a calibrated k = quantile(|z|, target_coverage) — the Spotter
+analogue of Octant's δ-search (see bounded_spline.py for the parallel knob).
 Above `cutoff_rtt` (the right edge of the last dense RTT bin) mu and sigma are
 held flat at the cutoff value — Octant-style graceful degradation when the
 deg-3 / deg-2 polynomial extrapolation would otherwise diverge in the sparse
@@ -53,6 +56,7 @@ class NormalDistLTD(AnnulusLTDModel):
         bin_size_ms: float = 5.0,
         cutoff_min_points: int = 30,
         sentinel_rtt: float = 10000.0,
+        target_coverage: Optional[float] = None,
     ) -> None:
         self.n_bins = n_bins
         self.min_per_bin = min_per_bin
@@ -61,6 +65,7 @@ class NormalDistLTD(AnnulusLTDModel):
         self.bin_size_ms = bin_size_ms
         self.cutoff_min_points = cutoff_min_points
         self.sentinel_rtt = sentinel_rtt
+        self.target_coverage = target_coverage
         self._model: Optional[SpotterRTTModel] = None
 
     def _fit(self, samples: list[FitSample]) -> FittingResult:
@@ -90,6 +95,7 @@ class NormalDistLTD(AnnulusLTDModel):
                 min_per_bin=self.min_per_bin,
                 deg_mu=self.deg_mu,
                 deg_sigma=self.deg_sigma,
+                target_coverage=self.target_coverage,
                 bin_size_ms=self.bin_size_ms,
                 cutoff_min_points=self.cutoff_min_points,
             )
