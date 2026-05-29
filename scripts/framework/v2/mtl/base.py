@@ -56,18 +56,18 @@ class MTLMethod(ABC):
 class CircleMTLMethod(MTLMethod, ABC):
     """Reads only `tg_distance.upper_km` from each LTDResult.
 
-    Accepts either a CircleLTDModel (the native pairing) or an
-    AnnulusLTDModel (the inner bound is discarded — a deliberate
-    degradation that CBGModel allows).
+    Accepts any LTDModel (CircleLTDModel natively, AnnulusLTDModel with the
+    inner bound silently discarded — a deliberate degradation that lets
+    annulus LTDs be benchmarked against disk MTLs).
     """
 
 
 class AnnulusMTLMethod(MTLMethod, ABC):
-    """Designed around annular constraints (lower_km may be > 0).
+    """Reads both `tg_distance.lower_km` and `tg_distance.upper_km`.
 
-    Must be paired with an AnnulusLTDModel: lower_km is part of the
-    method's information budget, so pairing with a CircleLTDModel —
-    which always emits lower_km=0 — would silently strip the method
-    of what makes it different from a Circle MTL. CBGModel rejects
-    that pairing.
+    Native pairing is with AnnulusLTDModel. Circle LTDs (a subclass of
+    AnnulusLTDModel with `lower_km` always 0) are also legal: the annular
+    region collapses to a disk and the wrapper still produces a polygon —
+    useful when downstream stages (e.g. GeometricCentroidCTR) require a
+    polygon-shape output that the spherical Circle MTLs don't emit.
     """

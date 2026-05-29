@@ -1,14 +1,12 @@
-"""Composition-time guard: only the unsafe cross-family pair raises.
+"""Composition-time guard: every (LTD family × MTL family) pair is legal.
 
-CBGModel's family check is asymmetric:
-  * AnnulusMTLMethod + CircleLTDModel  → IncompatibleStagesError
-        Annulus MTLs are built around the inner bound; pairing them with
-        a Circle LTD (which always emits lower_km=0) would silently strip
-        their distinguishing information.
-  * AnnulusLTDModel + CircleMTLMethod  → allowed, degraded
-        Circle MTLs only consume upper_km, so the annular constraint
-        degrades cleanly to a disk. The inner bound is dropped; the
-        pipeline still runs.
+Historical context: CBGModel used to reject Circle LTD + Annulus MTL with
+`IncompatibleStagesError` to prevent silent degradation. That wall was
+removed once CircleLTDModel became a subclass of AnnulusLTDModel — a disk
+is just an annulus with inner radius 0, so the pairing is semantically
+well-defined and downstream code already handles it. These tests pin the
+new contract: all four (LTD family × MTL family) combinations construct
+and run.
 """
 
 from __future__ import annotations
@@ -16,11 +14,12 @@ from __future__ import annotations
 import unittest
 
 from scripts.framework.v2 import (
+    AnnulusLTDModel,
     BoundaryVertexMeanCTR,
     BoundedSplineLTD,
     CBGModel,
+    CircleLTDModel,
     GeometricCentroidCTR,
-    IncompatibleStagesError,
     LowEnvelopeLTD,
     NormalDistLTD,
     PlanarAnnulusMTL,
@@ -31,9 +30,16 @@ from scripts.framework.v2 import (
 )
 
 
-class TestFamilyValidation(unittest.TestCase):
-    def test_circle_ltd_with_annulus_mtl_raises(self) -> None:
-        """CircleLTDModel produces disks; an AnnulusMTLMethod must reject it."""
+class TestFamilyComposition(unittest.TestCase):
+    def test_circle_ltd_is_a_subclass_of_annulus_ltd(self) -> None:
+        """The hierarchy itself encodes 'a disk is an annulus with inner=0'."""
+        self.assertTrue(issubclass(CircleLTDModel, AnnulusLTDModel))
+        for ltd_cls in (SpeedOfInternetLTD, LowEnvelopeLTD):
+            with self.subTest(ltd=ltd_cls.__name__):
+                self.assertTrue(issubclass(ltd_cls, AnnulusLTDModel))
+
+    def test_circle_ltd_with_annulus_mtl_is_allowed(self) -> None:
+        """Previously rejected pairing; now legal — inner radius is 0."""
         cross_pairs = [
             (SpeedOfInternetLTD(), PlanarAnnulusMTL()),
             (SpeedOfInternetLTD(), PlanarAnnulusWeightedMTL()),
@@ -42,14 +48,13 @@ class TestFamilyValidation(unittest.TestCase):
         ]
         for ltd, mtl in cross_pairs:
             with self.subTest(ltd=type(ltd).__name__, mtl=type(mtl).__name__):
-                with self.assertRaises(IncompatibleStagesError):
-                    CBGModel(ltd, mtl, GeometricCentroidCTR())
+                model = CBGModel(ltd, mtl, GeometricCentroidCTR())
+                self.assertIs(model.ltd, ltd)
+                self.assertIs(model.mtl, mtl)
 
     def test_annulus_ltd_with_circle_mtl_is_allowed_degraded(self) -> None:
-        """AnnulusLTDModel + CircleMTLMethod is the deliberate degraded path.
-
-        Circle MTLs only read `tg_distance.upper_km`, so an annular constraint
-        works — the inner bound is dropped. CBGModel allows it.
+        """Circle MTLs only read `tg_distance.upper_km`, so an annular
+        constraint works — the inner bound is dropped.
         """
         permitted_pairs = [
             (NormalDistLTD(), PlanarCircleMTL()),
@@ -64,7 +69,8 @@ class TestFamilyValidation(unittest.TestCase):
                 self.assertIs(model.mtl, mtl)
 
     def test_matching_families_construct_successfully(self) -> None:
-        """Matched pairs build without raising — the negative test above means nothing if these fail."""
+        """Native pairings keep working — sanity check that the cross-family
+        unblock didn't break the same-family cases."""
         ok_pairs = [
             (SpeedOfInternetLTD(), PlanarCircleMTL()),
             (LowEnvelopeLTD(), SphericalCircleMTL()),
@@ -76,19 +82,6 @@ class TestFamilyValidation(unittest.TestCase):
                 model = CBGModel(ltd, mtl, BoundaryVertexMeanCTR())
                 self.assertIs(model.ltd, ltd)
                 self.assertIs(model.mtl, mtl)
-
-    def test_incompatible_stages_error_is_typeerror(self) -> None:
-        """Catching TypeError must continue to catch IncompatibleStagesError."""
-        with self.assertRaises(TypeError):
-            CBGModel(SpeedOfInternetLTD(), PlanarAnnulusMTL(), GeometricCentroidCTR())
-
-    def test_incompatible_stages_error_message_names_both_classes(self) -> None:
-        """Error message must identify both offending stages for debuggability."""
-        with self.assertRaises(IncompatibleStagesError) as exc:
-            CBGModel(SpeedOfInternetLTD(), PlanarAnnulusMTL(), GeometricCentroidCTR())
-        message = str(exc.exception)
-        self.assertIn("PlanarAnnulusMTL", message)
-        self.assertIn("SpeedOfInternetLTD", message)
 
 
 if __name__ == "__main__":

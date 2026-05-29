@@ -3,13 +3,17 @@
 See scripts/framework/docs/framework_v2_design.md for the design rationale.
 
 Top-level entry points:
-    CBGModel(ltd, mtl, ctr)            direct composition (validates families)
+    CBGModel(ltd, mtl, ctr)            direct composition
     CBGModel.from_config(ltd, mtl, ctr) registry-driven composition
 
 Subclass one of the family bases when implementing a new stage:
-    LTDModel  → CircleLTDModel | AnnulusLTDModel
+    LTDModel  → AnnulusLTDModel → CircleLTDModel (specialization with lower_km=0)
     MTLMethod → CircleMTLMethod | AnnulusMTLMethod
     CTRMethod → (no family split)
+
+Any LTDModel composes with any MTLMethod: Circle LTDs feed Annulus MTLs as
+annuli with inner radius 0; Annulus LTDs feed Circle MTLs with the inner
+bound discarded.
 """
 
 from scripts.framework.v2.ctr.base import CTRMethod, CTRResult
@@ -29,7 +33,7 @@ from scripts.framework.v2.ltd.bounded_spline import BoundedSplineLTD
 from scripts.framework.v2.ltd.low_envelope import LowEnvelopeLTD
 from scripts.framework.v2.ltd.normal_dist import NormalDistLTD
 from scripts.framework.v2.ltd.speed_of_internet import SpeedOfInternetLTD
-from scripts.framework.v2.model import CBGModel, GeoResult, IncompatibleStagesError
+from scripts.framework.v2.model import CBGModel, GeoResult
 from scripts.framework.v2.mtl.base import (
     AnnulusMTLMethod,
     CircleMTLMethod,
@@ -97,7 +101,6 @@ __all__ = [
     # composition
     "CBGModel",
     "GeoResult",
-    "IncompatibleStagesError",
     # registry
     "CTR_REGISTRY",
     "LTD_REGISTRY",

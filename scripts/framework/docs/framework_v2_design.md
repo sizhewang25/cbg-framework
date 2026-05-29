@@ -22,7 +22,7 @@ Filtering is **not** a first-class stage. In v1 it was leaky (built into `planar
 | 3 | `MTLResult.intersection: Polygon \| List[Coord] \| None` | Preserves v1's dual representation: spherical multilateration produces lat/lon vertices, planar multilateration produces Shapely geometries |
 | 4 | `success: bool; error: Optional[Error] = None` per stage result | Beats stringly-typed status; `Error` is a shared enum |
 | 5 | `CBGModel.geolocate` owns the fallback (closest VP by min latency) and returns `GeoResult{coord, status, error}` where `status ∈ {SUCCESS, FALLBACK, ERROR}` | Fallback rate is a real metric the benchmark layer reports; needs a place to live |
-| 6 | Compatibility between LTD and MTL stages is encoded in the type system via Circle/Annulus family bases (`CircleLTDModel` / `AnnulusLTDModel`, `CircleMTLMethod` / `AnnulusMTLMethod`). `CBGModel.__init__` validates the pairing with `isinstance`. | Replaces v1's hard-coded `if` ladder in `from_config`. Concrete impls pick a family; mismatched compositions raise `IncompatibleStagesError`. |
+| 6 | LTD/MTL family bases (`CircleLTDModel ⊂ AnnulusLTDModel`, `CircleMTLMethod` / `AnnulusMTLMethod`) document the geometry of each stage but no longer gate composition: every (LTD × MTL) pair is legal. A disk is just an annulus with inner radius 0, so Circle LTDs flow into Annulus MTLs cleanly; Circle MTLs read only the outer bound so any LTD flows the other way too. | Replaces v1's hard-coded `if` ladder in `from_config`. Concrete impls pick a family for clarity, not enforcement. |
 
 ## Shared types
 
@@ -72,29 +72,27 @@ Decision #6 expresses Circle/Annulus compatibility in the type system:
 
 ```
 LTDModel (abstract)
-├── CircleLTDModel (abstract)              produces Distance(lower_km == 0)
-│   ├── (concrete impls go here)
-│   └── ...
 └── AnnulusLTDModel (abstract)             produces Distance(lower_km >= 0, annular allowed)
-    └── ...
+    └── CircleLTDModel (abstract)          specialization: lower_km always 0
+        └── (concrete circle impls)
 
 MTLMethod (abstract)
-├── CircleMTLMethod (abstract)             consumes disk constraints only
+├── CircleMTLMethod (abstract)             reads only tg_distance.upper_km
 │   └── ...
-└── AnnulusMTLMethod (abstract)            requires annular constraints
+└── AnnulusMTLMethod (abstract)            reads both lower_km and upper_km
     └── ...
 
 CTRMethod (abstract)                       orthogonal to circle/annulus
 ```
 
-Compatibility rule: **same family on both sides** (Circle×Circle or Annulus×Annulus). Validated in `CBGModel.__init__` via `isinstance`. Compatibility matrix:
+Compatibility rule: **all four LTD × MTL combinations are legal.** A disk is just an annulus with inner radius 0, so `CircleLTDModel` is a subclass of `AnnulusLTDModel`; Circle LTDs flow into Annulus MTLs as `inner_radius_km=0`, and Annulus LTDs flow into Circle MTLs with the inner bound silently discarded (Circle MTLs read only `upper_km`).
 
 | LTD ↓ \ MTL → | `CircleMTLMethod` | `AnnulusMTLMethod` |
 |---|:-:|:-:|
-| `CircleLTDModel` | ✓ | ✗ |
-| `AnnulusLTDModel` | ✗ | ✓ |
+| `CircleLTDModel` | native | inner=0 (polygon-shape output) |
+| `AnnulusLTDModel` | inner bound discarded | native |
 
-Mismatched pairings raise `IncompatibleStagesError` at composition time. The registration decorators (`register_ltd`, `register_mtl`) also reject any class that subclasses `LTDModel` / `MTLMethod` directly without picking a family — so typos surface at import.
+The registration decorators (`register_ltd`, `register_mtl`) reject any class that subclasses `LTDModel` / `MTLMethod` directly without picking a family — so typos surface at import.
 
 ## Stage 1 — Latency-to-distance model (`LTDModel`)
 
@@ -142,12 +140,12 @@ class LTDModel(ABC):
         return [self.predict(vp, c, lat) for vp, c, lat in obs]
 
 
-class CircleLTDModel(LTDModel, ABC):
-    """Produces disk constraints (Distance.lower_km is always 0)."""
-
-
 class AnnulusLTDModel(LTDModel, ABC):
     """Produces possibly-annular constraints (Distance.lower_km may be > 0)."""
+
+
+class CircleLTDModel(AnnulusLTDModel, ABC):
+    """Specialization of AnnulusLTDModel where Distance.lower_km is always 0."""
 ```
 
 > **Why `predict` takes `vp_coord` explicitly rather than looking it up:** the model would otherwise have to cache VP coords from fit time, which couples fitting to prediction. The `CBGModel` layer knows the live VP coords from the observation set; passing them in keeps `LTDModel` stateless about geometry.
@@ -215,18 +213,10 @@ class GeoResult:
 class CBGModel:
     def __init__(self, latency_distance_model, multilateration_method, centroid_method,
                  *, enable_fallback: bool = True):
-        self._validate_family_pairing(latency_distance_model, multilateration_method)
         self.ltd = latency_distance_model
         self.mtl = multilateration_method
         self.ctr = centroid_method
         self.enable_fallback = enable_fallback
-
-    @staticmethod
-    def _validate_family_pairing(ltd, mtl):
-        if isinstance(mtl, AnnulusMTLMethod) and not isinstance(ltd, AnnulusLTDModel):
-            raise IncompatibleStagesError(...)
-        if isinstance(mtl, CircleMTLMethod) and not isinstance(ltd, CircleLTDModel):
-            raise IncompatibleStagesError(...)
 
     def fit(self, samples): ...
 
@@ -237,8 +227,7 @@ class CBGModel:
 
     @classmethod
     def from_config(cls, ltd: str, mtl: str, ctr: str, *, ltd_kwargs=None, ...):
-        # registry-driven composition; raises KeyError on unknown names
-        # and IncompatibleStagesError on mismatched families
+        # registry-driven composition; raises KeyError on unknown names.
         ...
 ```
 
@@ -266,7 +255,7 @@ scripts/framework/v2/
   __init__.py                 re-exports the headline public API
   types.py                    Coord, Distance, Latency, VpId, Error, GeoStatus
   registry.py                 LTD/MTL/CTR registries + register_* decorators
-  model.py                    CBGModel, GeoResult, IncompatibleStagesError
+  model.py                    CBGModel, GeoResult
   ltd/
     __init__.py
     base.py                   LTDModel, CircleLTDModel, AnnulusLTDModel + data classes

@@ -123,20 +123,25 @@ class LTDModel(ABC):
         return [self.predict(vp_id, vp_coord, lat) for vp_id, vp_coord, lat in obs]
 
 
-class CircleLTDModel(LTDModel, ABC):
-    """Produces disk constraints (Distance.lower_km is always 0).
-
-    Pairs with CircleMTLMethod. Cannot pair with AnnulusMTLMethod —
-    annular MTLs are designed around an inner bound this family doesn't
-    produce, and CBGModel rejects the pairing.
-    """
-
-
 class AnnulusLTDModel(LTDModel, ABC):
     """Produces possibly-annular constraints (Distance.lower_km may be > 0).
 
     Pairs natively with AnnulusMTLMethod. Also pairs with CircleMTLMethod
     in a degraded mode: Circle MTLs read only `tg_distance.upper_km`, so
-    the inner bound is silently discarded. CBGModel allows this so
-    Annulus LTDs can be benchmarked against Circle MTL baselines.
+    the inner bound is silently discarded.
+    """
+
+
+class CircleLTDModel(AnnulusLTDModel, ABC):
+    """Disk constraints — the inner-bound-is-zero specialization of
+    AnnulusLTDModel.
+
+    Concrete subclasses emit `Distance(lower_km=0, upper_km=...)`. Pairs
+    natively with CircleMTLMethod; the AnnulusMTLMethod direction is also
+    legal (a disk is just an annulus with inner radius 0) and the annulus
+    wrappers see `inner_radius_km=0`, which `compute_feasible_region`
+    handles as the degenerate annulus = disk case. Use a Circle MTL when
+    you want a disk pipeline; reach for an Annulus MTL with a Circle LTD
+    only when you need the Annulus MTL's polygon-shape output (e.g. so
+    GeometricCentroidCTR can consume it).
     """

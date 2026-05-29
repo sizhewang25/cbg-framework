@@ -1,14 +1,13 @@
-"""Cross-product integration tests: every permitted LTD × MTL × CTR composition.
+"""Cross-product integration tests: every LTD × MTL × CTR composition.
 
-The framework permits three groups of pairings (CTR is orthogonal):
+The framework permits all four family-pair combinations (CTR is orthogonal):
   1. CircleLTDModel  + CircleMTLMethod   — native Circle
   2. AnnulusLTDModel + AnnulusMTLMethod  — native Annulus
-  3. AnnulusLTDModel + CircleMTLMethod   — degraded; inner bound discarded
+  3. AnnulusLTDModel + CircleMTLMethod   — Circle MTL discards the inner bound
+  4. CircleLTDModel  + AnnulusMTLMethod  — Annulus MTL sees inner_radius_km=0
+                                           (CircleLTDModel ⊂ AnnulusLTDModel)
 
-That's 2×2×4 = 16 native Circle, 2×2×4 = 16 native Annulus, and 2×2×4 = 16
-degraded combinations — 48 total. CircleLTD + AnnulusMTL is the only
-cross-family pair the framework still rejects (covered in
-test_family_validation.py).
+That's 2×2×4 = 16 per group × 4 groups = 64 total exercised here.
 
 Each combination is exercised against a single shared scenario (see
 `helpers.py`): four ~500 km VPs around TARGET (0, 0). For each combo we
@@ -178,6 +177,23 @@ class TestPipelineCombinations(unittest.TestCase):
             for mtl_name, mtl_cls in _CIRCLE_MTLS:
                 for ctr_name, ctr_cls in _CTRS:
                     combo = f"{ltd_spec.name} | {mtl_name} | {ctr_name} (degraded)"
+                    with self.subTest(combo=combo):
+                        self._assert_success(combo, ltd_spec, mtl_cls, ctr_cls)
+
+    def test_circle_ltd_through_annulus_mtl_runs_with_zero_inner_radius(self) -> None:
+        """Permitted cross-family: CircleLTDModel + AnnulusMTLMethod.
+
+        CircleLTDModel is a subclass of AnnulusLTDModel — concrete circle
+        LTDs emit `Distance(lower_km=0, upper_km=...)`. Annulus MTLs read
+        both bounds and the wrapper passes `inner_radius_km=0` through to
+        the octant geometry, which handles the degenerate annulus as a
+        disk. Useful when downstream stages (e.g. GeometricCentroidCTR)
+        require a polygon-shape MTL output.
+        """
+        for ltd_spec in _CIRCLE_LTDS:
+            for mtl_name, mtl_cls in _ANNULUS_MTLS:
+                for ctr_name, ctr_cls in _CTRS:
+                    combo = f"{ltd_spec.name} | {mtl_name} | {ctr_name} (inner=0)"
                     with self.subTest(combo=combo):
                         self._assert_success(combo, ltd_spec, mtl_cls, ctr_cls)
 

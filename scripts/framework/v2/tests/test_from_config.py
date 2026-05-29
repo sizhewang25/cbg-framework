@@ -2,7 +2,7 @@
 
 Mirrors test_pipeline_combinations on a smaller scale — one Circle and
 one Annulus combo built via `from_config` — plus the negative paths
-(unknown name → KeyError; family mismatch → IncompatibleStagesError).
+(unknown LTD/MTL/CTR name → KeyError).
 
 The from_config path does NOT accept pre-built stage state, so models
 that need fitted submodels (LowEnvelopeLTD, NormalDistLTD, BoundedSpline)
@@ -20,7 +20,6 @@ from scripts.framework.v2 import (
     CBGModel,
     GeometricCentroidCTR,
     GeoStatus,
-    IncompatibleStagesError,
     PlanarCircleMTL,
     SpeedOfInternetLTD,
 )
@@ -98,13 +97,6 @@ class TestFromConfig(unittest.TestCase):
     def test_unknown_ctr_raises_keyerror(self) -> None:
         with self.assertRaises(KeyError):
             CBGModel.from_config("speed_of_internet", "planar_circle", "not_a_ctr")
-
-    def test_family_mismatch_via_from_config_raises(self) -> None:
-        """from_config goes through CBGModel(...), so the family guard still fires."""
-        with self.assertRaises(IncompatibleStagesError):
-            CBGModel.from_config(
-                "speed_of_internet", "planar_annulus", "geometric_centroid",
-            )
 
     def test_kwargs_forwarded_to_stage_constructors(self) -> None:
         """ltd_kwargs / mtl_kwargs / ctr_kwargs reach the underlying classes."""
