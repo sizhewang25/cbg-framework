@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import unittest
 
+from shapely.geometry import Point
+
 from scripts.framework.v2.mtl.base import AnnulusMTLMethod
 from scripts.framework.v2.mtl.planar_annulus_weighted import PlanarAnnulusWeightedMTL
 from scripts.framework.v2.mtl.tests.helpers import (
@@ -69,6 +71,29 @@ class TestPlanarAnnulusWeightedMTL(unittest.TestCase):
 
     def test_is_annulus_family(self):
         self.assertTrue(issubclass(PlanarAnnulusWeightedMTL, AnnulusMTLMethod))
+
+    def test_highest_weight_only_collapses_disconnected_union(self):
+        """Two far-apart VP pairs would union to a MultiPolygon under the
+        legacy path. Pair (A,B) gets latency 0 (weight≈1.0) and pair (C,D)
+        gets latency 50 ms (weight≈0.368), so the heavy pair's face is
+        unambiguously face #1. With highest_weight_only=True the wrapper
+        returns just that face — Polygon, contains the heavy-pair centroid,
+        excludes the light-pair centroid."""
+        results = [
+            ltd_result_with_latency("A", 0.0,  0.0, upper_km=222.0, lower_km=0.0, latency=0.0),
+            ltd_result_with_latency("B", 0.0, -1.0, upper_km=222.0, lower_km=0.0, latency=0.0),
+            ltd_result_with_latency("C", 0.0,  5.0, upper_km=222.0, lower_km=0.0, latency=50.0),
+            ltd_result_with_latency("D", 0.0,  6.0, upper_km=222.0, lower_km=0.0, latency=50.0),
+        ]
+        mtl = PlanarAnnulusWeightedMTL(
+            highest_weight_only=True,
+            enable_circle_filter=False,
+        )
+        result = mtl.multilaterate(results)
+        self.assertTrue(result.success)
+        self.assertEqual(result.intersection.geom_type, "Polygon")
+        self.assertTrue(result.intersection.contains(Point(-0.5, 0.0)))   # heavy pair
+        self.assertFalse(result.intersection.contains(Point(5.5, 0.0)))   # light pair excluded
 
 
 if __name__ == "__main__":

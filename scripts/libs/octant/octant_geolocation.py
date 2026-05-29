@@ -302,6 +302,7 @@ def compute_feasible_region_weighted(
     constraints: List[AnnularConstraint],
     weight_threshold: float = 0.9,
     n_pts: int = 64,
+    highest_weight_only: bool = False,
 ) -> Optional[Any]:
     """Compute weighted feasible region by face decomposition (Wong et al.).
 
@@ -310,10 +311,21 @@ def compute_feasible_region_weighted(
     its representative point, then takes the union of the highest-weight
     faces until cumulative face-weight clears `weight_threshold * Σwᵢ`.
 
+    When `highest_weight_only` is True, returns just the single top-weighted
+    face instead of the cumulative union — `weight_threshold` is ignored in
+    that branch. Useful when downstream centroid selection (e.g. Monte Carlo
+    medoid) would otherwise lose the densest-overlap signal: `unary_union`
+    of a multi-face MultiPolygon discards per-face weights, and area-biased
+    sampling can land outside the component holding the top-weighted face.
+
     Args:
         constraints: List of annular constraints
-        weight_threshold: Fraction of total annulus weight required
+        weight_threshold: Fraction of total annulus weight required (ignored
+            when `highest_weight_only=True`)
         n_pts: Vertices per annulus polygon approximation
+        highest_weight_only: If True, return only the single top-weighted
+            face (deterministic, always a Polygon). Default False reproduces
+            the legacy cumulative-union behavior.
 
     Returns:
         Shapely Polygon/MultiPolygon or None if empty
@@ -352,19 +364,23 @@ def compute_feasible_region_weighted(
     if not weighted_faces:
         return None
 
-    # Sort by face weight desc, accumulate until cumulative weight ≥ target.
+    # Sort by face weight desc.
     weighted_faces.sort(key=lambda fw: fw[1], reverse=True)
-    target = weight_threshold * sum(c.weight for c, _ in annuli)
 
-    cumulative = 0.0
-    selected: List[Any] = []
-    for face, w in weighted_faces:
-        selected.append(face)
-        cumulative += w
-        if cumulative >= target:
-            break
+    if highest_weight_only:
+        region = weighted_faces[0][0]
+    else:
+        # Accumulate top-weighted faces until cumulative weight ≥ target.
+        target = weight_threshold * sum(c.weight for c, _ in annuli)
+        cumulative = 0.0
+        selected: List[Any] = []
+        for face, w in weighted_faces:
+            selected.append(face)
+            cumulative += w
+            if cumulative >= target:
+                break
+        region = unary_union(selected)
 
-    region = unary_union(selected)
     if region.is_empty:
         return None
     return region

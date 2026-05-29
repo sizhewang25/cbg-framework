@@ -5,6 +5,12 @@ planar arrangement of all annulus boundaries. The top-weighted faces are
 unioned until their cumulative weight clears `weight_threshold * Σwᵢ`,
 yielding the feasible region.
 
+`highest_weight_only=True` bypasses the cumulative-weight aggregation and
+returns just the single top-weighted face — deterministic, always Polygon,
+and avoids the MultiPolygon-discards-weights failure mode where downstream
+area-biased sampling drifts off the densest overlap. `weight_threshold`
+has no effect in that branch.
+
 The original RTT is required for the exponential weight. v2's `LTDResult`
 does not yet carry latency; this wrapper reads `getattr(r, "latency", None)`
 so it stays forward-compatible. Once `LTDResult.latency` lands, the happy
@@ -48,11 +54,13 @@ class PlanarAnnulusWeightedMTL(AnnulusMTLMethod):
         weight_tau_ms: float = 50.0,
         n_pts: int = 64,
         enable_circle_filter: bool = True,
+        highest_weight_only: bool = False,
     ) -> None:
         self.weight_threshold = weight_threshold
         self.weight_tau_ms = weight_tau_ms
         self.n_pts = n_pts
         self.enable_circle_filter = enable_circle_filter
+        self.highest_weight_only = highest_weight_only
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
         if not results:
@@ -81,5 +89,6 @@ class PlanarAnnulusWeightedMTL(AnnulusMTLMethod):
             constraints,
             weight_threshold=self.weight_threshold,
             n_pts=self.n_pts,
+            highest_weight_only=self.highest_weight_only,
         )
         return wrap_region_as_mtl_result(region)

@@ -403,6 +403,49 @@ class TestComputeFeasibleRegionWeightedFaceDecomposition(unittest.TestCase):
         self.assertEqual(region.geom_type, 'MultiPolygon')
         self.assertEqual(len(region.geoms), 3)
 
+    def test_highest_weight_only_returns_single_face_on_disconnected_selection(self):
+        """Same setup as test_disconnected_result_is_multipolygon, but with
+        skewed weights so face #1 is unambiguous: pair (A,B) at lon=-0.5 has
+        Σw=2.0, pair (C,D) at lon=5.5 has Σw=1.8. The legacy path would union
+        both pair-overlaps; highest_weight_only must return only the heavy
+        pair's face."""
+        constraints = [
+            AnnularConstraint(0.0,  0.0, 'A', 0.0, 0.0, 222.0, 1.0),
+            AnnularConstraint(0.0, -1.0, 'B', 0.0, 0.0, 222.0, 1.0),
+            AnnularConstraint(0.0,  5.0, 'C', 0.0, 0.0, 222.0, 0.9),
+            AnnularConstraint(0.0,  6.0, 'D', 0.0, 0.0, 222.0, 0.9),
+        ]
+        region = compute_feasible_region_weighted(
+            constraints, weight_threshold=0.6, highest_weight_only=True,
+        )
+        self.assertIsNotNone(region)
+        self.assertEqual(region.geom_type, 'Polygon')
+        self.assertTrue(region.contains(Point(-0.5, 0.0)))   # heavy pair
+        self.assertFalse(region.contains(Point(5.5, 0.0)))   # light pair excluded
+
+    def test_highest_weight_only_ignores_weight_threshold(self):
+        """highest_weight_only short-circuits before the cumulative loop, so
+        the result is invariant under weight_threshold (which would otherwise
+        change how many faces enter `selected` and thereby the union)."""
+        constraints = [
+            AnnularConstraint(0.0,  0.0, 'A', 0.0, 0.0, 111.0, 0.5),
+            AnnularConstraint(0.0, 10.0, 'B', 0.0, 0.0, 111.0, 0.3),
+            AnnularConstraint(0.0, 20.0, 'C', 0.0, 0.0, 111.0, 0.2),
+        ]
+        r_low = compute_feasible_region_weighted(
+            constraints, weight_threshold=0.1, highest_weight_only=True,
+        )
+        r_high = compute_feasible_region_weighted(
+            constraints, weight_threshold=0.99, highest_weight_only=True,
+        )
+        for region in (r_low, r_high):
+            self.assertIsNotNone(region)
+            self.assertEqual(region.geom_type, 'Polygon')
+            # Top face is the highest-weighted disk's interior (A at lon=0).
+            self.assertTrue(region.contains(Point(0.0, 0.0)))
+            self.assertFalse(region.contains(Point(10.0, 0.0)))
+            self.assertFalse(region.contains(Point(20.0, 0.0)))
+
 
 # =============================================================================
 # Test: Point Selection
