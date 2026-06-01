@@ -64,9 +64,10 @@ tar --exclude='./.git' \
     --exclude='./analysis/figures' \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
-    --exclude='./scripts/benchmark/v2/inputs' \
-    --exclude='./scripts/benchmark/v2/outputs' \
-    --exclude='./scripts/analysis/outputs' \
+    --exclude='*/benchmark/v2/inputs' \
+    --exclude='./logs' \
+    --exclude='./scripts/*/logs' \
+    --exclude='./scripts/*/outputs' \
     --exclude="./$TARBALL" \
     --exclude='./geoscale-offline-*.tar.gz' \
     -czf "$TARBALL" \
