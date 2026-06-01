@@ -54,8 +54,19 @@ else
 fi
 
 # 3. Tar the repo + .venv, excluding heavy / regenerable directories.
+# In the benchmark/analysis config dirs, keep only template.yaml and drop the
+# rest (per-run configs are regenerable). tar has no "exclude all but one", so
+# build the exclude list dynamically from what's on disk.
+CONFIG_EXCLUDES="$(mktemp)"
+trap 'rm -f "$CONFIG_EXCLUDES"' EXIT
+for cfgdir in ./scripts/analysis/config ./scripts/benchmark/v2/config; do
+    [[ -d "$cfgdir" ]] && find "$cfgdir" -type f ! -name 'template.yaml' >> "$CONFIG_EXCLUDES"
+done
+echo "✔ keeping only template.yaml in config dirs ($(wc -l < "$CONFIG_EXCLUDES") files excluded)"
+
 TARBALL="geoscale-offline-$(date -u +%Y%m%d-%H%M%S).tar.gz"
-tar --exclude='./.git' \
+tar --exclude-from="$CONFIG_EXCLUDES" \
+    --exclude='./.git' \
     --exclude='./datasets' \
     --exclude='./clickhouse_files' \
     --exclude='./.snakemake' \
