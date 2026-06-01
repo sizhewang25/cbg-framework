@@ -127,6 +127,10 @@ def plot_error_cdf(
         stats_box_loc: "upper left" (default — anchored just below the
             upper-left legend) or "lower right" (renders in the
             lower-right corner; useful when the legend area is crowded).
+
+    The stats-panel combo rows are ordered by p50 (median) error ascending
+    (best first), independent of curve/legend order. The baseline row (if
+    any) stays pinned at the bottom as a fixed reference.
     """
     if group_by == "ltd":
         if combo_to_ltd is None:
@@ -230,7 +234,11 @@ def plot_error_cdf(
                 return np.percentile(xs, [5, 25, 50, 75, 95], method="nearest")
 
             lines = [f"{'':<16} {count_header:>{count_width}}    p5   p25   p50   p75   p95"]
-            for cid, errors, count_str in panel_data:
+            stats_rows = sorted(
+                panel_data,
+                key=lambda row: _pcts(row[1])[2],  # p50
+            )
+            for cid, errors, count_str in stats_rows:
                 p5, p25, p50, p75, p95 = _pcts(errors)
                 lines.append(
                     f"{_short_label(cid)[:16]:<16} {count_str:>{count_width}} "
