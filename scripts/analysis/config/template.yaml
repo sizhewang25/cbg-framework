@@ -1,0 +1,71 @@
+# Template merged-folds analysis config — sibling of the bench template.
+#
+# Pair this with scripts/benchmark/v2/config/template.yaml. Rename
+# `run_id` to match the bench run, keep `source: generic_csv` and `setup`
+# consistent, and adjust the combo / diff / merge lists if you trim the
+# combo set on the bench side.
+#
+# Run with:
+#   snakemake -s scripts/analysis/Snakefile \
+#       --configfile scripts/analysis/config/template.yaml -j 12
+
+run_id: TEMPLATE_RUN_ID         # must match the bench config's run_id
+source: generic_csv
+setup: anchors_to_probes
+slices: []
+merge_folds: true
+
+group_by: ltd
+phase_stat: p95
+include_fit: true
+runtime_stat: p50
+
+# All 16 combos from the bench template. group_by=ltd produces 4 panels:
+#   low_envelope      → vanilla_cbg, vanilla_cbg_geo
+#   speed_of_internet → million_scale_cbg, million_scale_cbg_geo
+#   bounded_spline    → octant_cbg{,_top,_top_geo,_hull,_hull_geo}
+#   normal_dist       → spotter_cbg{,_top,_top_geo,_c100,_c100_geo,_c80,_c80_geo}
+combos:
+  - vanilla_cbg
+  - vanilla_cbg_geo
+  - million_scale_cbg
+  - million_scale_cbg_geo
+  - octant_cbg
+  - octant_cbg_top
+  - octant_cbg_top_geo
+  - octant_cbg_hull
+  - octant_cbg_hull_geo
+  - spotter_cbg
+  - spotter_cbg_top
+  - spotter_cbg_top_geo
+  - spotter_cbg_c100
+  - spotter_cbg_c100_geo
+  - spotter_cbg_c80
+  - spotter_cbg_c80_geo
+
+# Diff CDFs are read as (left − right) per target; negative = left is closer.
+# Each entry compares a combo against the shortest_ping baseline.
+diff_pairs:
+  - [vanilla_cbg, shortest_ping]
+  - [million_scale_cbg, shortest_ping]
+  - [octant_cbg,    shortest_ping]
+  - [spotter_cbg,   shortest_ping]
+  - [vanilla_cbg_geo, shortest_ping]
+  - [million_scale_cbg_geo, shortest_ping]
+  - [octant_cbg_top_geo,    shortest_ping]
+  - [octant_cbg_hull_geo,   shortest_ping]
+  - [spotter_cbg_c100_geo,   shortest_ping]
+  - [spotter_cbg_c80_geo,   shortest_ping]
+
+# Best-of-family overlay on a single panel.
+merge_pairs:
+  - vanilla_cbg
+  - vanilla_cbg_geo
+  - million_scale_cbg
+  - million_scale_cbg_geo
+  - octant_cbg
+  - octant_cbg_top_geo
+  - octant_cbg_hull_geo
+  - spotter_cbg
+  - spotter_cbg_c100_geo
+  - spotter_cbg_c80_geo
