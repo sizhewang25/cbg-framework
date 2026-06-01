@@ -30,14 +30,22 @@ VIZ_OUT    = Path("scripts/visualization/benchmark/v2/outputs")
 # / highest_weight_only=true variant from the *_octant_sweep configs, and
 # spotter_cbg_t50..t100 + spotter_cbg_weighted_t50..t100 from the
 # *_spotter_sweep configs) without enumerating them.
-NAMED_COMBOS = ["vanilla_cbg", "million_scale_cbg", "octant_cbg", "spotter_cbg"]
+NAMED_COMBOS = [
+    "vanilla_cbg", "vanilla_cbg_geo",
+    "million_scale_cbg", "million_scale_cbg_geo",
+    "octant_cbg", "octant_cbg_top", "octant_cbg_top_geo",
+    "octant_cbg_hull", "octant_cbg_hull_geo",
+    "spotter_cbg", "spotter_cbg_top", "spotter_cbg_top_geo",
+    "spotter_cbg_c100", "spotter_cbg_c100_geo",
+    "spotter_cbg_c80", "spotter_cbg_c80_geo",
+]
 SWEEP_COMBO_RE = re.compile(
     r"^(?:octant_cbg_(?:t\d+|top)|spotter_cbg(?:_weighted)?_t\d+)$"
 )
 
 # Discover ASN configs and remember per-run metadata for the input function.
 CONFIG_META = {}
-for path in sorted(CONFIG_DIR.glob("*_as*.yaml")):
+for path in sorted({*CONFIG_DIR.glob("*_final.yaml"), *CONFIG_DIR.glob("*_as*.yaml")}):
     with open(path) as fh:
         cfg = yaml.safe_load(fh)
     available = [c.get("combo_id") for c in cfg.get("combos", [])]
