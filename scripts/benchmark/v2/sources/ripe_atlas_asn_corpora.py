@@ -38,6 +38,7 @@ import default
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
+from scripts.processing.ripe_atlas.stratification import normalize_asn
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class RipeAtlasASNCorporaSource(DataSource):
         setup: str = DataSource.PROBES_TO_ANCHORS,
         *,
         probe_data_dir: str | Path,
-        probe_asn: int,
+        probe_asn: int | str,
         anchor_data_dir: str | Path,
         ping_table: Optional[str] = None,
         max_rtt_ms: int = _DEFAULT_RTT_THRESHOLD_MS,
@@ -83,7 +84,11 @@ class RipeAtlasASNCorporaSource(DataSource):
         self._fold_index = int(match.group(1))
 
         self._probe_data_dir = Path(probe_data_dir)
-        self._probe_asn = int(probe_asn)
+        # Accept "AS3356"/"3356"/3356 for the corpus selector; the on-disk file
+        # `probes_of_as_<n>.json` is named with the plain integer.
+        self._probe_asn = normalize_asn(probe_asn)
+        if self._probe_asn is None:
+            raise ValueError(f"probe_asn must be a numeric ASN, got {probe_asn!r}")
         self._anchor_data_dir = Path(anchor_data_dir)
 
         self._ping_table = (
@@ -228,7 +233,7 @@ class RipeAtlasASNCorporaSource(DataSource):
                 continue
             lon, lat = geom[0], geom[1]
             coords[ip] = Coord(lat=float(lat), lon=float(lon))
-            self._probe_asn_by_ip[ip] = p.get("asn_v4")
+            self._probe_asn_by_ip[ip] = normalize_asn(p.get("asn_v4"))
             self._probe_country_by_ip[ip] = p.get("country_code")
         self._probe_coords = coords
         logger.info(
@@ -273,7 +278,7 @@ class RipeAtlasASNCorporaSource(DataSource):
                     continue
                 lon, lat = geom[0], geom[1]
                 coords[ip] = Coord(lat=float(lat), lon=float(lon))
-                self._anchor_asn_by_ip[ip] = a.get("asn_v4")
+                self._anchor_asn_by_ip[ip] = normalize_asn(a.get("asn_v4"))
                 self._anchor_country_by_ip[ip] = a.get("country_code")
                 target_set.add(ip)
         self._anchor_coords = coords

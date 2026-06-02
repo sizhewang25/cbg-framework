@@ -518,7 +518,7 @@ class TestRipeAtlasSourceStratification(unittest.TestCase):
         DistGeoStratification and write the stratification JSON to `path`
         (matching `stratify.py`'s output schema)."""
         from scripts.processing.ripe_atlas.stratification import (
-            AnchorInfo, DistGeoStratification,
+            AnchorInfo, DistGeoStratification, normalize_asn,
         )
         anchor_infos = [
             AnchorInfo(
@@ -526,7 +526,7 @@ class TestRipeAtlasSourceStratification(unittest.TestCase):
                 lat=e["geometry"]["coordinates"][1],
                 lon=e["geometry"]["coordinates"][0],
                 country=e["country_code"],
-                asn=e["asn_v4"],
+                asn=normalize_asn(e["asn_v4"]),
             )
             for e in anchor_entries
         ]

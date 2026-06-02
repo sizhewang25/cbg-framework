@@ -54,6 +54,7 @@ from scripts.framework.v2.types import Coord, Latency, VpId
 from scripts.processing.ripe_atlas.stratification import (
     AnchorInfo,
     DistGeoStratification,
+    normalize_asn,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ class GenericCSVSource(DataSource):
                 vp_id=str(row["vp_id"]),
                 lat=float(row["vp_lat"]),
                 lon=float(row["vp_lon"]),
-                asn=_opt_int(row.get(asn_col)) if asn_col else None,
+                asn=normalize_asn(row.get(asn_col)) if asn_col else None,
                 country=_opt_str(row.get(country_col)) if country_col else None,
             )
 
@@ -160,7 +161,7 @@ class GenericCSVSource(DataSource):
                 tg_id=str(row["target_id"]),
                 lat=float(row["target_lat"]),
                 lon=float(row["target_lon"]),
-                asn=_opt_int(row.get(asn_col)) if asn_col else None,
+                asn=normalize_asn(row.get(asn_col)) if asn_col else None,
                 country=_opt_str(row.get(country_col)) if country_col else None,
                 city=None,
             )
@@ -261,7 +262,7 @@ class GenericCSVSource(DataSource):
                 lat=float(row["target_lat"]),
                 lon=float(row["target_lon"]),
                 country=str(country) if pd.notna(country) else None,
-                asn=int(asn) if pd.notna(asn) else None,
+                asn=normalize_asn(asn),
             ))
 
         algo = DistGeoStratification(
@@ -284,10 +285,6 @@ class GenericCSVSource(DataSource):
             len(targets), self._k, self._fold_index,
             len(eval_targets), self._k - 1, len(fit_targets),
         )
-
-
-def _opt_int(value: object) -> Optional[int]:
-    return int(value) if pd.notna(value) else None  # type: ignore[arg-type]
 
 
 def _opt_str(value: object) -> Optional[str]:

@@ -63,6 +63,7 @@ from scripts.processing.ripe_atlas.stratification import (  # noqa: E402
     AnchorInfo,
     DistGeoStratification,
     SechidisStratification,
+    normalize_asn,
 )
 
 
@@ -92,7 +93,7 @@ def load_anchors(anchors_file: Path) -> tuple[list[AnchorInfo], dict[str, dict]]
             lat=float(lat),
             lon=float(lon),
             country=e.get("country_code"),
-            asn=e.get("asn_v4"),
+            asn=normalize_asn(e.get("asn_v4")),
         ))
         raw_by_ip[ip] = e
     return anchors, raw_by_ip

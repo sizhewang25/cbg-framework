@@ -48,6 +48,9 @@ class AnchorInfo(NamedTuple):
     `asn` and `country` may be None for malformed entries; they're treated as
     their own ('asn_none', 'country_none') labels for stratification purposes
     so missing-metadata anchors don't all pile into a single fold.
+
+    `asn` is the integer AS number — normalize raw inputs through
+    `normalize_asn` (handles "AS3356"/float encodings) before constructing.
     """
 
     ip: str
@@ -55,6 +58,41 @@ class AnchorInfo(NamedTuple):
     lon: float
     country: Optional[str]
     asn: Optional[int]
+
+
+def normalize_asn(value: object) -> Optional[int]:
+    """Coerce a raw ASN value to its integer AS number, or None.
+
+    An ASN is a 32-bit integer; the textual ``"AS"`` prefix and pandas' float
+    coercion are just encodings. This collapses every encoding of the *same*
+    AS to one int so different sources don't split it into separate buckets:
+
+      - ints (incl. numpy integers) pass through;
+      - integral floats (``3356.0`` — how pandas loads an int column that has
+        any missing cells) → ``3356``;
+      - the text form ``"AS3356"`` / ``"as3356"`` / ``"3356"`` (e.g. a CSV
+        ``vp_asn`` cell) → ``3356``;
+      - anything non-numeric (junk strings, synthetic labels), a bool, and
+        None / NaN / empty → None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        s = value.strip()
+        if s[:2].lower() == "as":  # drop the optional textual prefix
+            s = s[2:]
+        return int(s) if s.isdigit() else None
+    if isinstance(value, bool):
+        return None  # bool is an int subclass but never a valid ASN
+    # Numeric, incl. numpy scalars and pandas sentinels: float() normalizes
+    # them and lets us reject NaN / pd.NA / non-integral values uniformly.
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or not f.is_integer():
+        return None
+    return int(f)
 
 
 @dataclass(frozen=True)

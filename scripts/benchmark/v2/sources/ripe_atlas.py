@@ -36,7 +36,11 @@ from typing import Any, Callable, Iterator, Optional
 import default
 
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
-from scripts.processing.ripe_atlas.stratification import AnchorInfo, LoadedStratification
+from scripts.processing.ripe_atlas.stratification import (
+    AnchorInfo,
+    LoadedStratification,
+    normalize_asn,
+)
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
 
@@ -320,7 +324,7 @@ class RipeAtlasSource(DataSource):
                 continue
             lon, lat = geom[0], geom[1]
             coords[ip] = Coord(lat=float(lat), lon=float(lon))
-            self._asn_by_ip[ip] = p.get("asn_v4")
+            self._asn_by_ip[ip] = normalize_asn(p.get("asn_v4"))
             self._country_by_ip[ip] = p.get("country_code")
             anchor_id = p.get("id")
             if anchor_id is not None:

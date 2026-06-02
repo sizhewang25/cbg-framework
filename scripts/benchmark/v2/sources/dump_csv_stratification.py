@@ -47,6 +47,7 @@ import pandas as pd
 from scripts.processing.ripe_atlas.stratification import (
     AnchorInfo,
     DistGeoStratification,
+    normalize_asn,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ def _build_anchor_infos(df: pd.DataFrame) -> list[AnchorInfo]:
             lat=float(row["target_lat"]),
             lon=float(row["target_lon"]),
             country=str(country) if pd.notna(country) else None,
-            asn=int(asn) if pd.notna(asn) else None,
+            asn=normalize_asn(asn) if pd.notna(asn) else None,
         ))
     return out
 
