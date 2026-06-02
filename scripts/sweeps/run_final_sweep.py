@@ -2,12 +2,8 @@
 
 Pipeline per ASN:
     1. scripts/benchmark/v2/Snakefile     --configfile <stem>.yaml   (5 folds × 16 combos)
-    2. scripts/analysis/Snakefile         --configfile <stem>.yaml   (merge folds → CDFs)
-                                                                     [opt-in; analysis configs
-                                                                     for *_final stems are not
-                                                                     in the repo yet — pass
-                                                                     --with-analysis once they
-                                                                     exist]
+    2. scripts/analysis/Snakefile         --configfile <stem>.yaml   (merge folds → CDFs +
+                                                                      per_target_table.parquet)
 Then once across all ASN configs:
     3. scripts/visualization/benchmark/v2/mtl_world_map.smk          (world-map render)
 
@@ -22,12 +18,12 @@ need maps for the new variants.
 
 Usage::
 
-    python -m scripts.sweeps.run_final_sweep                        # full run (bench + viz)
+    python -m scripts.sweeps.run_final_sweep                        # full run (bench + analysis + viz)
     python -m scripts.sweeps.run_final_sweep --asn as7018 --asn as3209
     python -m scripts.sweeps.run_final_sweep -j 12
     python -m scripts.sweeps.run_final_sweep --dry-run
     python -m scripts.sweeps.run_final_sweep --skip-viz
-    python -m scripts.sweeps.run_final_sweep --with-analysis        # once analysis configs exist
+    python -m scripts.sweeps.run_final_sweep --no-analysis          # skip analysis stage
 """
 from __future__ import annotations
 
@@ -39,8 +35,8 @@ import typer
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Slug → config stem. Same stem is reused for the analysis config (if/when one
-# is added under scripts/analysis/config/).
+# Slug → config stem. Same stem is shared between the bench config and the
+# sibling analysis config under scripts/analysis/config/.
 CONFIGS = {
     "as7018":  "north_america_as7018_final",
     "as7922":  "north_america_as7922_final",
@@ -74,17 +70,16 @@ def main(
     jobs: int = typer.Option(12, "--jobs", "-j", help="Snakemake -j (parallel jobs per stage)."),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Pass -n to every snakemake call."),
     with_analysis: bool = typer.Option(
-        False,
-        "--with-analysis",
+        True,
+        "--with-analysis/--no-analysis",
         help=(
-            "Run the analysis-merge stage after bench. Disabled by default because "
-            "scripts/analysis/config/<stem>_final.yaml does not exist yet — opt in "
-            "once you've created the analysis siblings."
+            "Run the analysis-merge stage after bench (CDFs + per_target_table.parquet). "
+            "Enabled by default; pass --no-analysis to skip."
         ),
     ),
     skip_viz: bool = typer.Option(False, "--skip-viz", help="Skip the final world-map render."),
 ) -> None:
-    """Run bench → (optional analysis) → viz for the final 16-combo benchmark."""
+    """Run bench → analysis (CDFs + per_target_table) → viz for the final 16-combo benchmark."""
     unknown = [a for a in asn if a not in CONFIGS]
     if unknown:
         typer.echo(f"Unknown ASN(s): {unknown}. Available: {sorted(CONFIGS)}", err=True)

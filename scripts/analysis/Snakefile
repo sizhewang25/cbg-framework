@@ -126,6 +126,8 @@ def _all_targets():
         targets.extend(expand(str(MERGED_OUT / "{plot}.png"), plot=_PLOTS))
         targets.append(str(MERGED_OUT / "inspect_mtl_blockers.json"))
         targets.append(str(MERGED_OUT / "inspect_mtl_blockers.md"))
+        targets.append(str(MERGED_OUT / "per_target_table.parquet"))
+        targets.append(str(MERGED_OUT / "plot_per_target_sorted.png"))
         if SPLIT_CONT:
             targets.append(str(MERGED_OUT / f"plot_error_cdf_by_continent_{_CONT_SLUG}.png"))
             targets.append(str(MERGED_OUT / "plot_error_cdf_by_continent_rest.png"))
@@ -552,6 +554,36 @@ if MERGE_PAIRS and SPLIT_CONT:
             " --split-by-main-continent {params.cont}"
             " --filtered-anchors {params.anchors}"
             " --out {params.base_out}" + MERGE_ARG
+
+rule plot_per_target_sorted_merged:
+    input:
+        parquet = MERGED_OUT / "per_target_table.parquet",
+    output:
+        png = MERGED_OUT / "plot_per_target_sorted.png",
+    params:
+        run_id = RUN_ID,
+        setup  = SETUP,
+    shell:
+        CLI + ".plot_per_target_sorted"
+        " --parquet {input.parquet}"
+        " --out {output.png}"
+        " --title '{params.run_id} / {params.setup}'" + COMBOS_ARG
+
+rule per_target_table_merged:
+    input:
+        summary = RUN_DIR / "summary.parquet",
+    output:
+        parquet = MERGED_OUT / "per_target_table.parquet",
+    params:
+        run_dir    = str(RUN_DIR),
+        source     = SOURCE,
+        inputs_dir = str(MERGED_INPUTS_DIR),
+    shell:
+        CLI + ".per_target_table"
+        " --run-dir {params.run_dir}"
+        " --source {params.source}"
+        " --inputs-dir {params.inputs_dir}"
+        " --out {output.parquet}" + COMBOS_ARG
 
 rule mtl_blockers_merged:
     input:
