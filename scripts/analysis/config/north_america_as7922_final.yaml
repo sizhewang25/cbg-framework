@@ -35,10 +35,12 @@ combos:
   - million_scale_cbg
   - million_scale_cbg_geo
   - octant_cbg
+  - octant_cbg_nofil
   - octant_cbg_top
   - octant_cbg_top_geo
   - octant_cbg_hull
   - octant_cbg_hull_geo
+  - spotter_cbg_nofil
   - spotter_cbg
   - spotter_cbg_top
   - spotter_cbg_top_geo

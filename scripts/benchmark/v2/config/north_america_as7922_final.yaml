@@ -93,6 +93,22 @@ combos:
       highest_weight_only: true
 
   # ---- Octant family --------------------------------------------------------
+  - combo_id: octant_cbg_nofil
+    ltd: bounded_spline
+    mtl: planar_annulus
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
   - combo_id: octant_cbg
     ltd: bounded_spline
     mtl: planar_annulus_weighted
@@ -185,6 +201,23 @@ combos:
   # [mu±k·sigma] clipped to the 2/3c envelope. Same MTL+CTR as octant so the
   # head-to-head isolates the LTD: bounded-spline (per-VP band) vs Spotter
   # (pooled deg-3/deg-2 polynomials).
+  - combo_id: spotter_cbg_nofil
+    ltd: normal_dist
+    mtl: planar_annulus
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
+      min_per_bin: 5               # bins with fewer points are dropped before polyfit
+      deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
+      deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
+      bin_size_ms: 5.0              # RTT bin width (ms)
+      cutoff_min_points: 5         # right-edge cutoff: dense-bin support threshold
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
   - combo_id: spotter_cbg
     ltd: normal_dist
     mtl: planar_annulus_weighted
