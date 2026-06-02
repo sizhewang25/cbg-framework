@@ -300,7 +300,7 @@ def compute_feasible_region_unweighted(
 
 def compute_feasible_region_weighted(
     constraints: List[AnnularConstraint],
-    weight_threshold: float = 0.9,
+    weight_threshold: float = 1,
     n_pts: int = 64,
     highest_weight_only: bool = False,
 ) -> Optional[Any]:
