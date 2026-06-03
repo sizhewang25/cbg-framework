@@ -166,6 +166,40 @@ def load_closest_vp(cfg: Config, setup: Setup) -> pd.DataFrame:
     return closest
 
 
+def load_shortest_ping_error(cfg: Config, setup: Setup) -> pd.DataFrame:
+    """Per-target shortest-ping baseline error (km) for one setup.
+
+    For each (fold, target), predict the target location as the coordinates of
+    the VP with the smallest observed latency; error = haversine(true target,
+    that VP). Folds partition the targets, so this is one row per target.
+    Returns columns: target_id, fold, shortest_ping_km.
+    """
+    frames: list[pd.DataFrame] = []
+    for fold in cfg.folds:
+        p = eval_obs_path(cfg, setup, fold)
+        if not p.exists():
+            continue
+        df = pq.read_table(
+            p,
+            columns=["target_id", "target_lat", "target_lon",
+                     "vp_lat", "vp_lon", "latency_ms"],
+        ).to_pandas()
+        idx = df.groupby("target_id")["latency_ms"].idxmin()
+        nearest = df.loc[idx].copy()
+        nearest["shortest_ping_km"] = haversine_km(
+            nearest["target_lat"], nearest["target_lon"],
+            nearest["vp_lat"], nearest["vp_lon"],
+        )
+        nearest["fold"] = fold
+        frames.append(nearest[["target_id", "fold", "shortest_ping_km"]])
+    if not frames:
+        raise FileNotFoundError(
+            f"No eval_observations.parquet for setup={setup.slug!r} "
+            f"under {cfg.inputs_root / cfg.source / setup.run_stem}"
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
 def load_setup_long(cfg: Config, setup: Setup,
                     variants: Optional[Iterable[str]] = None) -> pd.DataFrame:
     """Tidy long frame for one setup: one row per (variant, target).

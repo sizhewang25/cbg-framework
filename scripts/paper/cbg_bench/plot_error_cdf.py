@@ -35,6 +35,7 @@ from scripts.paper.cbg_bench._io import (
     fallback_rate,
     load_config,
     load_setup_long,
+    load_shortest_ping_error,
 )
 from scripts.paper.cbg_bench import _variant_style as st
 
@@ -97,6 +98,32 @@ def _plot_setup_cdf(
             "n_success": n_success,
             "n_total": n_total,
             "fallback_rate": fb,
+        }
+
+    # Shortest-ping baseline (per target: error of the smallest-latency VP).
+    # Drawn as a single black dashed reference line, same for every variant.
+    sp_errors = (
+        load_shortest_ping_error(cfg, setup)["shortest_ping_km"]
+        .dropna()
+        .to_numpy(dtype=float)
+    )
+    if sp_errors.size > 0:
+        sp_sorted = np.sort(sp_errors)
+        sp_cdf_y = np.arange(1, sp_sorted.size + 1) / sp_sorted.size
+        ax.plot(
+            sp_sorted,
+            sp_cdf_y,
+            color="black",
+            linestyle="--",
+            linewidth=1.6,
+            alpha=0.9,
+            label=f"Shortest ping (p50 {np.median(sp_sorted):.0f} km)",
+            zorder=5,
+        )
+        json_variants["shortest_ping"] = {
+            "error_km_sorted": sp_sorted,
+            "cdf_y": sp_cdf_y,
+            "n_targets": int(sp_sorted.size),
         }
 
     # Vertical threshold reference lines.
