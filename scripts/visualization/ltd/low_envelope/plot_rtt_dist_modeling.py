@@ -86,7 +86,6 @@ def plot_rtt_distance(
         ax.set_ylim(0.0, d_max * 1.05)
     if max_rtt_ms is not None:
         ax.set_xlim(0.0, max_rtt_ms)
-    ax.set_box_aspect(1)
     ax.legend(loc="lower right", fontsize=11)
     return ax
 
@@ -120,7 +119,7 @@ def plot_low_envelope_vp(
     rtts = np.array([float(s.latency) for s in vp_samples], dtype=float)
 
     if ax is None:
-        _, ax = plt.subplots(figsize=(6, 6))
+        _, ax = plt.subplots(figsize=(9, 6))
 
     return plot_rtt_distance(
         ax, distances, rtts,
@@ -179,9 +178,9 @@ def main() -> None:
     print(f"Fitted {len(fitted_vps)}/{len(result.args['vps_attempted'])} VPs")
 
     for vp_id in result.args["vps_attempted"]:
-        fig, ax = plt.subplots(figsize=(6, 6))
+        fig, ax = plt.subplots(figsize=(9, 6))
         plot_low_envelope_vp(
-            model, samples, vp_id, ax=ax, max_rtt_ms=100, max_dist_km=3000,
+            model, samples, vp_id, ax=ax, max_rtt_ms=125, max_dist_km=8000,
         )
         out_path = output_dir / f"scatter_{str(vp_id).replace('.', '_')}.png"
         fig.tight_layout()
