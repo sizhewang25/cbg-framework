@@ -41,53 +41,53 @@ def plot_rtt_distance(
     *,
     title: Optional[str] = None,
     max_rtt_ms: Optional[float] = None,
+    max_dist_km: Optional[float] = None,
 ) -> Axes:
     """Draw scatter + 2/3·c baseline + low-envelope line on `ax`.
 
     `submodel` supplies the LP line (`rtt = slope·distance + intercept`).
-    `max_rtt_ms` clips the y-axis and trims the scatter accordingly.
+    `max_rtt_ms` clips the RTT (x) axis and `max_dist_km` the Distance (y)
+    axis; both trim the scatter accordingly.
     """
     distances = np.asarray(distances, dtype=float)
     rtts = np.asarray(rtts, dtype=float)
 
+    mask = np.ones(rtts.shape, dtype=bool)
     if max_rtt_ms is not None:
-        mask = rtts <= max_rtt_ms
-        plot_d, plot_r = distances[mask], rtts[mask]
-    else:
-        plot_d, plot_r = distances, rtts
+        mask &= rtts <= max_rtt_ms
+    if max_dist_km is not None:
+        mask &= distances <= max_dist_km
+    plot_d, plot_r = distances[mask], rtts[mask]
 
-    ax.scatter(
-        plot_r, plot_d, s=14, alpha=0.35, c="gray", edgecolors="none",
-        label=f"Measurements (n={len(plot_d)})",
-    )
+    ax.scatter(plot_r, plot_d, s=10, c="black", marker="+", linewidths=0.6)
 
     d_max = float(distances.max()) if distances.size else 1.0
-    d_grid = np.linspace(0.0, d_max, 100)
+    d_grid = np.linspace(0.0, max_dist_km if max_dist_km is not None else d_max, 100)
 
     ax.plot(
-        THEORETICAL_SLOPE * d_grid, d_grid, "k--", linewidth=1.5, alpha=0.6,
-        label=f"2/3·c baseline ({THEORETICAL_SLOPE:.4f} ms/km)",
+        THEORETICAL_SLOPE * d_grid, d_grid, color="black",
+        linestyle="--", linewidth=1.2, label="SOI Line",
     )
 
     if submodel is not None and submodel.fitted:
         line = submodel.slope * d_grid + submodel.intercept
         ax.plot(
-            line, d_grid, "r-", linewidth=2.0,
-            label=(
-                f"Low envelope: {submodel.slope:.4f}·d "
-                f"+ {submodel.intercept:.2f}"
-            ),
+            line, d_grid, color="black",
+            linestyle="-", linewidth=2.5, label="Lower Envelope Line",
         )
 
     ax.set_xlabel("RTT (ms)")
     ax.set_ylabel("Distance (km)")
     if title:
         ax.set_title(title)
-    ax.set_ylim(0.0, d_max * 1.05)
+    if max_dist_km is not None:
+        ax.set_ylim(0.0, max_dist_km)
+    else:
+        ax.set_ylim(0.0, d_max * 1.05)
     if max_rtt_ms is not None:
         ax.set_xlim(0.0, max_rtt_ms)
-    ax.grid(alpha=0.3)
-    ax.legend(loc="upper left", fontsize=9)
+    ax.set_box_aspect(1)
+    ax.legend(loc="lower right", fontsize=11)
     return ax
 
 
@@ -98,6 +98,7 @@ def plot_low_envelope_vp(
     ax: Optional[Axes] = None,
     *,
     max_rtt_ms: Optional[float] = None,
+    max_dist_km: Optional[float] = None,
     title: Optional[str] = None,
 ) -> Axes:
     """Plot scatter, baseline, and low-envelope line for one VP.
@@ -119,13 +120,14 @@ def plot_low_envelope_vp(
     rtts = np.array([float(s.latency) for s in vp_samples], dtype=float)
 
     if ax is None:
-        _, ax = plt.subplots(figsize=(9, 6))
+        _, ax = plt.subplots(figsize=(6, 6))
 
     return plot_rtt_distance(
         ax, distances, rtts,
         submodel=model._submodels.get(vp_id),
-        title=title or f"VP {vp_id}",
+        title=title,
         max_rtt_ms=max_rtt_ms,
+        max_dist_km=max_dist_km,
     )
 
 
@@ -177,10 +179,9 @@ def main() -> None:
     print(f"Fitted {len(fitted_vps)}/{len(result.args['vps_attempted'])} VPs")
 
     for vp_id in result.args["vps_attempted"]:
-        fig, ax = plt.subplots(figsize=(9, 6))
+        fig, ax = plt.subplots(figsize=(6, 6))
         plot_low_envelope_vp(
-            model, samples, vp_id, ax=ax, max_rtt_ms=200,
-            title=f"Low-envelope fit — anchor {vp_id}",
+            model, samples, vp_id, ax=ax, max_rtt_ms=100, max_dist_km=3000,
         )
         out_path = output_dir / f"scatter_{str(vp_id).replace('.', '_')}.png"
         fig.tight_layout()
