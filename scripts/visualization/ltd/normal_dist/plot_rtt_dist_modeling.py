@@ -77,7 +77,7 @@ def plot_rtt_distance(
         eval_grid = np.minimum(rtt_grid, cutoff)
         mu_line = np.maximum(0.0, np.polyval(model.p_mu, eval_grid))
         below = rtt_grid <= cutoff
-        ax.plot(rtt_grid[below], mu_line[below], color="black", linestyle="--",
+        ax.plot(rtt_grid[below], mu_line[below], color="black", linestyle="-.",
                 linewidth=1.2, label="μ(rtt)")
 
         # Band lines come straight from predict_distance_bounds so the
