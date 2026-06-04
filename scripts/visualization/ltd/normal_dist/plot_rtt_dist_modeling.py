@@ -158,7 +158,7 @@ def plot_normal_dist_vp(
     return plot_rtt_distance(
         ax, distances, rtts,
         model=model._model,
-        title=title or f"VP {vp_id}",
+        title=title,
     )
 
 
@@ -214,10 +214,7 @@ def main() -> None:
     vp_ids = sorted({s.vp_id for s in samples})
     for vp_id in vp_ids:
         fig, ax = plt.subplots(figsize=(9, 6))
-        plot_normal_dist_vp(
-            model, samples, vp_id, ax=ax,
-            title=f"Normal-dist fit — anchor {vp_id}",
-        )
+        plot_normal_dist_vp(model, samples, vp_id, ax=ax)
         out_path = output_dir / f"scatter_{str(vp_id).replace('.', '_')}.png"
         fig.tight_layout()
         fig.savefig(out_path, dpi=120, bbox_inches="tight")
