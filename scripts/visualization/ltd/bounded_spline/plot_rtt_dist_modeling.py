@@ -54,16 +54,15 @@ def plot_rtt_distance(
     rtts = np.asarray(rtts, dtype=float)
 
     ax.scatter(
-        rtts, distances, s=14, alpha=0.35, c="gray", edgecolors="none",
-        label=f"Measurements (n={len(distances)})",
+        rtts, distances, s=24, marker="+", c="black", linewidths=0.8,
+        alpha=0.5, label="_nolegend_",
     )
 
     rtt_max = float(rtts.max()) if rtts.size else 1.0
     rtt_axis = np.linspace(0.0, rtt_max, 100)
     ax.plot(
-        rtt_axis, rtt_axis / THEORETICAL_SLOPE, "--", color="gray",
-        linewidth=1.5, alpha=0.6,
-        label=f"2/3·c baseline ({THEORETICAL_SLOPE:.4f} ms/km)",
+        rtt_axis, rtt_axis / THEORETICAL_SLOPE, color="black",
+        linestyle="--", linewidth=1.2, label="SOI Line",
     )
 
     if submodel is not None and submodel.fitted:
@@ -90,16 +89,18 @@ def plot_rtt_distance(
                 [rtt_grid, [cutoff, cutoff + 1e-6]]
             ))
 
-        inner_hull = np.empty_like(rtt_grid)
-        outer_hull = np.empty_like(rtt_grid)
-        for i, r in enumerate(rtt_grid):
-            inner_hull[i], outer_hull[i] = submodel.predict_distance_bounds(
-                float(r), delta=None
-            )
-        ax.plot(rtt_grid, outer_hull, color="red", linewidth=1.8, alpha=0.9,
-                label="Outer hull (sentinel above cutoff)")
-        ax.plot(rtt_grid, inner_hull, color="blue", linewidth=1.8, alpha=0.9,
-                label="Inner hull (flat above cutoff)")
+        # Draw the *actual* convex hull from its stored monotone-chain
+        # vertices — the upper and lower chains span the full data range and
+        # wrap every point, including the sparse cluster above the cutoff.
+        # Reconstructing it from `predict_distance_bounds(delta=None)` would
+        # instead render the sentinel (outer) / flat (inner) extension above
+        # the cutoff, which is the model's prediction construction, not the
+        # geometric hull.
+        ax.plot(submodel.hull_upper_rtts, submodel.hull_upper_distances,
+                color="black", linestyle="-", linewidth=1.5,
+                label="Convex Hull")
+        ax.plot(submodel.hull_lower_rtts, submodel.hull_lower_distances,
+                color="black", linestyle="-", linewidth=1.5, label="_nolegend_")
 
         if has_spline:
             spline_hi = cutoff if cutoff > 0 else rtt_max
@@ -107,8 +108,8 @@ def plot_rtt_distance(
             centers = np.array(
                 [submodel.predict_distance(float(r)) for r in spline_grid]
             )
-            ax.plot(spline_grid, centers, color="darkorange", linestyle="--",
-                    linewidth=1.8, label="Spline center")
+            ax.plot(spline_grid, centers, color="black", linestyle="-.",
+                    linewidth=1.0, label="Spline Approximation")
 
             if delta is not None:
                 inner_band = np.empty_like(rtt_grid)
@@ -117,24 +118,41 @@ def plot_rtt_distance(
                     inner_band[i], outer_band[i] = submodel.predict_distance_bounds(
                         float(r), delta=delta
                     )
-                ax.plot(rtt_grid, outer_band, color="darkorange", linewidth=1.6,
-                        label=f"Outer prediction (δ={delta:.3f}, coverage≈0.9)")
-                ax.plot(rtt_grid, inner_band, color="darkorange", linewidth=1.6,
-                        label="Inner prediction")
+                # The Scaled Spline (dash-dot) is only the data-driven band
+                # *below* the cutoff. At/above the cutoff the band degenerates
+                # into the cutoff construction — the sentinel-connecting outer
+                # line and the flat inner line — which we draw dotted, matching
+                # the cutoff marker. Splitting at `cutoff` (strict <, >) also
+                # drops the single discontinuity point, so the vertical snap
+                # at the cutoff is no longer rendered.
+                if cutoff > 0:
+                    below = rtt_grid < cutoff
+                    above = rtt_grid > cutoff
+                else:
+                    below = np.ones_like(rtt_grid, dtype=bool)
+                    above = np.zeros_like(rtt_grid, dtype=bool)
+                ax.plot(rtt_grid[below], outer_band[below], color="black",
+                        linestyle="-.", linewidth=2.0, label="Scaled Spline")
+                ax.plot(rtt_grid[below], inner_band[below], color="black",
+                        linestyle="-.", linewidth=2.0, label="_nolegend_")
+                if above.any():
+                    ax.plot(rtt_grid[above], outer_band[above], color="black",
+                            linestyle=":", linewidth=1.0, label="_nolegend_")
+                    ax.plot(rtt_grid[above], inner_band[above], color="black",
+                            linestyle=":", linewidth=1.0, label="_nolegend_")
                 ax.fill_between(rtt_grid, inner_band, outer_band,
-                                color="darkorange", alpha=0.35)
+                                color="gray", alpha=0.3)
 
         if cutoff > 0:
-            ax.axvline(cutoff, color="purple", linestyle=":", linewidth=1.0,
-                       alpha=0.6, label=f"cutoff_rtt = {cutoff:.1f} ms")
+            ax.axvline(cutoff, color="black", linestyle=":", linewidth=1.0,
+                       label="Cutoff")
 
     ax.set_xlabel("RTT (ms)")
     ax.set_ylabel("Distance (km)")
     if title:
         ax.set_title(title)
-    ax.set_xlim(0.0, 200.0)
-    d_max = float(distances.max()) if distances.size else 1.0
-    ax.set_ylim(0.0, d_max * 1.1)
+    ax.set_xlim(0.0, 125.0)
+    ax.set_ylim(0.0, 8000.0)
     ax.grid(alpha=0.3)
     ax.legend(loc="upper left", fontsize=9)
     return ax
@@ -173,7 +191,7 @@ def plot_bounded_spline_vp(
         ax, distances, rtts,
         submodel=model._submodels.get(vp_id),
         delta=model._deltas.get(vp_id),
-        title=title or f"VP {vp_id}",
+        title=title,
     )
 
 
@@ -234,10 +252,7 @@ def main() -> None:
               f"δ={delta_str}, cutoff_rtt={cutoff:.2f} ms")
 
         fig, ax = plt.subplots(figsize=(9, 6))
-        plot_bounded_spline_vp(
-            model, samples, vp_id, ax=ax,
-            title=f"Bounded-spline fit — anchor {vp_id}",
-        )
+        plot_bounded_spline_vp(model, samples, vp_id, ax=ax)
         out_path = output_dir / f"scatter_{str(vp_id).replace('.', '_')}.png"
         fig.tight_layout()
         fig.savefig(out_path, dpi=120, bbox_inches="tight")
