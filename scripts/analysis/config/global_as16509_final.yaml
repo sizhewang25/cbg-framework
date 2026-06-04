@@ -73,9 +73,11 @@ merge_pairs:
   - vanilla_cbg_geo
   - million_scale_cbg
   - million_scale_cbg_geo
+  - octant_cbg_nofil
   - octant_cbg
   - octant_cbg_top_geo
   - octant_cbg_hull_geo
+  - spotter_cbg_nofil
   - spotter_cbg
   - spotter_cbg_c100_geo
   - spotter_cbg_c80_geo
