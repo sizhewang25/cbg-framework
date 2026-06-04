@@ -59,7 +59,7 @@ def plot_rtt_distance(
         mask &= distances <= max_dist_km
     plot_d, plot_r = distances[mask], rtts[mask]
 
-    ax.scatter(plot_r, plot_d, s=10, c="black", marker="+", linewidths=0.6)
+    ax.scatter(plot_r, plot_d, s=10, c="black", marker="+", linewidths=0.6, alpha=0.5)
 
     d_max = float(distances.max()) if distances.size else 1.0
     d_grid = np.linspace(0.0, max_dist_km if max_dist_km is not None else d_max, 100)
