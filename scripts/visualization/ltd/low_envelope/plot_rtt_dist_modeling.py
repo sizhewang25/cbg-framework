@@ -71,9 +71,17 @@ def plot_rtt_distance(
 
     if submodel is not None and submodel.fitted:
         line = submodel.slope * d_grid + submodel.intercept
+        # Shade the feasible region bounded by the lower envelope line: the
+        # area to the right of it (rtt >= envelope) up to the RTT cap, matching
+        # the bounded_hull gray band.
+        fill_xmax = (
+            max_rtt_ms if max_rtt_ms is not None
+            else float(rtts.max()) if rtts.size else d_max
+        )
+        ax.fill_betweenx(d_grid, line, fill_xmax, color="gray", alpha=0.3)
         ax.plot(
             line, d_grid, color="black",
-            linestyle="-", linewidth=2.5, label="Lower Envelope Line",
+            linestyle="-", linewidth=1.5, label="Lower Envelope Line",
         )
 
     ax.set_xlabel("RTT (ms)")
@@ -86,7 +94,7 @@ def plot_rtt_distance(
         ax.set_ylim(0.0, d_max * 1.05)
     if max_rtt_ms is not None:
         ax.set_xlim(0.0, max_rtt_ms)
-    ax.legend(loc="lower right", fontsize=11)
+    ax.legend(loc="upper left", fontsize=11)
     return ax
 
 
