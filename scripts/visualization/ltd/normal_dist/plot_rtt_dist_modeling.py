@@ -78,7 +78,7 @@ def plot_rtt_distance(
         mu_line = np.maximum(0.0, np.polyval(model.p_mu, eval_grid))
         below = rtt_grid <= cutoff
         ax.plot(rtt_grid[below], mu_line[below], color="black", linestyle="--",
-                linewidth=1.2, label="μ(rtt) center")
+                linewidth=1.2, label="μ(rtt)")
 
         # Band lines come straight from predict_distance_bounds so the
         # baseline clip + flat-extension are visualized exactly as the
@@ -100,7 +100,7 @@ def plot_rtt_distance(
             above = np.zeros_like(rtt_grid, dtype=bool)
         band_below = ~above
         ax.plot(rtt_grid[band_below], outer_line[band_below], color="black",
-                linestyle="-", linewidth=1.5, label="μ ± σ band")
+                linestyle="-", linewidth=1.5, label="μ(rtt) ± k·σ (k=1)")
         ax.plot(rtt_grid[band_below], inner_line[band_below], color="black",
                 linestyle="-", linewidth=1.5, label="_nolegend_")
         if above.any():
