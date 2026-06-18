@@ -9,7 +9,7 @@ post-hoc forensic analysis.
 
 | File                           | Role                                                                                                                                                                                                                             |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [cli.py](cli.py)               | Typer commands: `materialize-inputs`, `run-combo`, `summarize`                                                                                                                                                                   |
+| [cli.py](cli.py)               | Typer commands: `materialize-inputs`, `run-combo`, `summarize`, `build-airports`, `airport-eval`                                                                                                                                  |
 | [Snakefile](Snakefile)         | Parameterizes the (source × slice × combo) grid                                                                                                                                                                                  |
 | [sources/](sources/)           | DataSource adapters — [generic_csv.py](sources/generic_csv.py), [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py). See [sources/README.md](sources/README.md) for the contract + how to add your own. |
 | [inputs.py](inputs.py)         | Materializes a DataSource into three parquets                                                                                                                                                                                    |
@@ -17,6 +17,8 @@ post-hoc forensic analysis.
 | [checkpoint.py](checkpoint.py) | Picks LTD checkpoint snapshot (or `.stateless` marker)                                                                                                                                                                           |
 | [instrument.py](instrument.py) | Per-stage timing + tracemalloc peak collector                                                                                                                                                                                    |
 | [schema.py](schema.py)         | PyArrow schemas — single source of truth for all parquets                                                                                                                                                                        |
+| [airports.py](airports.py)     | OurAirports reference set + `AirportIndex` (haversine `BallTree` nearest-airport lookup)                                                                                                                                          |
+| [airport_eval.py](airport_eval.py) | Decoupled postprocessing — appends closest-airport columns to `targets.parquet`                                                                                                                                             |
 | [config/](config/)             | Snakemake configs (smoke, full, ...)                                                                                                                                                                                             |
 
 
@@ -55,6 +57,11 @@ poetry run python -m scripts.benchmark.v2.cli run-combo \
     --ltd speed_of_internet --mtl planar_circle --ctr geometric_centroid
 
 poetry run python -m scripts.benchmark.v2.cli summarize --run-id smoke-001
+
+# 3. (Optional) operator-facing closest-airport metric. Build the airport
+#    reference once, then annotate every combo's targets.parquet in place.
+poetry run python -m scripts.benchmark.v2.cli build-airports
+poetry run python -m scripts.benchmark.v2.cli airport-eval --run-id smoke-001
 ```
 
 ## Data flow
@@ -71,9 +78,19 @@ DataSource ──→ inputs/<source>/<slice>/{vp_configs,fit_samples,eval_observ
            ├── fit_checkpoint.pkl # pickled LTD (or `.stateless` marker)
            └── targets.parquet    # one row per target with full forensics
                                     │
-                                    ▼
-                              summarize  →  outputs/<run_id>/summary.parquet
+                  ┌─────────────────┴─────────────────┐
+                  ▼                                    ▼
+            summarize                          airport-eval (optional, in place)
+                  │                                    │
+                  ▼                                    ▼
+   outputs/<run_id>/summary.parquet     targets.parquet += 5 airport columns
+                                        outputs/<run_id>/airport_summary.parquet
 ```
+
+`airport-eval` is **decoupled from the runner** — it reads back the finished
+`targets.parquet` files and appends columns, so it can be re-run any time the
+airport set or match definition changes, and it backfills runs produced before
+the metric existed (no need to re-run CBG).
 
 ## Sources
 
@@ -138,6 +155,54 @@ Per the spec, every row of `targets.parquet` carries:
 Run-level: `fit_ms`, `fit_peak_bytes`, `run_peak_rss_bytes` live in `run.json`
 and roll into `summary.parquet`.
 
+The five `*_airport_*` columns are **not** written by the runner — they are
+appended later by `airport-eval` (see below).
+
+## Closest-airport eval
+
+`error_km` scores CBG at city-level precision. Operators often only care
+whether the estimate resolves to the right **airport** (IATA metro code) — a
+looser, deployment-relevant bar. `airport-eval` adds that view as a decoupled
+postprocessing pass over existing `targets.parquet` files.
+
+**Reference data.** [airports.py](airports.py) distils the public-domain
+[OurAirports](https://ourairports.com/data/) `airports.csv` down to the
+operator-facing set: `type ∈ {large_airport, medium_airport}` **and** a non-blank
+IATA code **and** a non-blank municipality (~4,441 airports worldwide). Per the
+`datasets/` convention nothing here is committed — regenerate the slim parquet
+(`datasets/static_datasets/ourairports_iata.parquet`) with:
+
+```bash
+poetry run python -m scripts.benchmark.v2.cli build-airports                 # downloads + builds
+poetry run python -m scripts.benchmark.v2.cli build-airports --src-csv FILE  # from a local CSV
+```
+
+**Lookup.** `AirportIndex` is a `BallTree(metric="haversine")` over the
+reference coordinates — exact great-circle nearest-neighbour, vectorized and
+NaN-safe, scaled by `EARTH_RADIUS_KM`.
+
+**Annotation.** `airport-eval` rewrites each `targets.parquet` in place
+(atomic, idempotent) with five columns:
+
+| column | meaning |
+| --- | --- |
+| `truth_airport_iata` | nearest airport to ground truth (always set) |
+| `truth_airport_km`   | distance truth → its nearest airport |
+| `pred_airport_iata`  | nearest airport to the prediction (NULL if no prediction) |
+| `pred_airport_km`    | distance prediction → its nearest airport |
+| `airport_match`      | `pred_airport_iata == truth_airport_iata` (NULL if no prediction) |
+
+It also writes `outputs/<run_id>/airport_summary.parquet` — per-combo
+`airport_match_rate` (the headline) plus the p5..p95/mean/std block for
+`pred_airport_km`, over SUCCESS/FALLBACK rows.
+
+```bash
+poetry run python -m scripts.benchmark.v2.cli airport-eval --run-id smoke-001
+poetry run python -m scripts.benchmark.v2.cli airport-eval --run-id smoke-001 --airports FILE
+```
+
+Design rationale: `notes/2026-06-18-closest-airport-eval-decisions.md`.
+
 ## Reproducibility
 
 Pass `--seed N` to `run-combo` (or set `seed: N` on a Snakemake combo entry)
@@ -173,7 +238,7 @@ poetry run python -m unittest discover -s scripts/benchmark/v2/tests -t .
 ```
 
 The `-t .` flag pins the top-level dir to the repo root so the `from scripts.…`
-imports inside the tests resolve. 22 + 24 = 46 tests pass on a fresh
+imports inside the tests resolve. 21 + 69 = 90 tests pass on a fresh
 `poetry install` against this commit.
 
 ## Synthetic data for a stand-alone smoke
