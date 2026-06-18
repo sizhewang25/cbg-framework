@@ -193,3 +193,6 @@ scripts/benchmark/v2/inputs/
 .DS_Store
 **/references/*
 /trees/
+
+# Track requirements.txt despite the *.txt rule above
+!requirements.txt
