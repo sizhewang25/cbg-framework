@@ -237,6 +237,18 @@ def _fold_input_dir(source: str, run_id: str, setup: str, fold: str) -> Path:
     return REPO_ROOT / "scripts" / "benchmark" / "v2" / "inputs" / source / run_id / setup / fold
 
 
+def _discover_folds(source: str, run_id: str, setup: str) -> list[str]:
+    """Sorted `fold_*` dir names under the run's inputs tree.
+
+    Merged-analysis configs (`merge_folds: true`) leave `slices` empty; the
+    viz still wants every fold, so derive them from the inputs layout.
+    """
+    base = REPO_ROOT / "scripts" / "benchmark" / "v2" / "inputs" / source / run_id / setup
+    if not base.is_dir():
+        return []
+    return sorted(p.name for p in base.iterdir() if p.is_dir() and p.name.startswith("fold_"))
+
+
 def _fold_output_dir(
     source: str, run_id: str, setup: str, fold: str, combo: str
 ) -> Path:
@@ -446,7 +458,14 @@ def build_payload(
     run_id = cfg["run_id"]
     source = cfg["source"]
     setup = cfg["setup"]
-    slices = cfg["slices"]
+    # Merged-analysis configs leave `slices` empty (merge_folds: true); fall
+    # back to discovering every fold from the inputs tree.
+    slices = cfg.get("slices") or _discover_folds(source, run_id, setup)
+    if not slices:
+        raise SystemExit(
+            f"No folds for run_id={run_id!r} source={source!r} setup={setup!r}: "
+            "set `slices` in the config or check the inputs directory."
+        )
 
     same_continent = _same_continent_for_run(run_id)
     ip_to_continent = _load_ip_to_continent() if same_continent else {}
