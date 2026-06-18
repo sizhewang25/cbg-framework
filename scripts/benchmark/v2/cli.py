@@ -269,9 +269,6 @@ def _summarize_combo(run_json: Path) -> dict:
 
 # ---- build-airports ----------------------------------------------------------
 
-_OURAIRPORTS_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
-
-
 @app.command("build-airports")
 def cmd_build_airports(
     src_csv: Optional[Path] = typer.Option(
@@ -286,18 +283,18 @@ def cmd_build_airports(
     Like the other datasets/ reference files, the artifact is regenerated rather
     than committed. Filters to large airports with an IATA code, a
     municipality, and scheduled commercial service (~1,158 worldwide)."""
-    import tempfile
-    import urllib.request
-
-    from scripts.benchmark.v2.airports import DEFAULT_AIRPORTS_PARQUET, build_slim_airports
+    from scripts.benchmark.v2.airports import (
+        DEFAULT_AIRPORTS_PARQUET,
+        OURAIRPORTS_URL,
+        build_slim_airports,
+        download_ourairports_csv,
+    )
 
     out_path = out or DEFAULT_AIRPORTS_PARQUET
 
     if src_csv is None:
-        tmp = Path(tempfile.mkdtemp()) / "airports.csv"
-        typer.echo(f"Downloading {_OURAIRPORTS_URL} ...")
-        urllib.request.urlretrieve(_OURAIRPORTS_URL, tmp)
-        src_csv = tmp
+        typer.echo(f"Downloading {OURAIRPORTS_URL} ...")
+        src_csv = download_ourairports_csv()
 
     slim = build_slim_airports(Path(src_csv), Path(out_path))
     typer.echo(f"Wrote {out_path} ({len(slim)} airports)")

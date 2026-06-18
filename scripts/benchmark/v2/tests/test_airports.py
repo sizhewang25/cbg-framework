@@ -68,6 +68,12 @@ class TestFilterAirports(unittest.TestCase):
         # yet the hub-level set excludes it.
         self.assertNotIn("AUS", set(filter_airports(self._raw())["iata_code"]))
 
+    def test_types_override_keeps_medium(self) -> None:
+        # The distribution viz widens `types` to include medium airports; the
+        # other gates (IATA/municipality/scheduled) still apply.
+        out = filter_airports(self._raw(), types=("large_airport", "medium_airport"))
+        self.assertEqual(sorted(out["iata_code"]), ["AUS", "JFK"])
+
     def test_unscheduled_airport_dropped(self) -> None:
         # A large airport with no scheduled service (GA/military field) is still
         # excluded by the scheduled-service gate.

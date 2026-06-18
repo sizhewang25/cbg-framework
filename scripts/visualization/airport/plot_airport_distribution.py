@@ -1,20 +1,23 @@
-"""Plot the world distribution of the airport reference set.
+"""Plot the world distribution of active scheduled-service airports.
 
 The closest-airport eval metric (scripts/benchmark/v2/airport_eval.py) snaps
-predictions and ground truth to the nearest airport in a slim OurAirports set
-(large hubs with an IATA code, a municipality, and scheduled commercial
-service — see notes/2026-06-18-closest-airport-eval-decisions.md). This script
-renders that set on a world map so the geographic coverage — and the density
-differences that drive the metric across regions — is visible.
+predictions and ground truth to the nearest *large* hub (the committed slim set
+is large-only — see notes/2026-06-18-closest-airport-eval-decisions.md). This
+script takes a wider view for context: it renders **both large and medium**
+scheduled-service airports on a world map, coloured by type, so you can see what
+the metric keeps (large) versus what it leaves out (medium), and the regional
+density differences that drive the metric.
 
-Airports are coloured by `type`; the hub-level set is large-only, but the
-medium style is retained so the script still works on a large+medium set.
-A longitude-band density panel accompanies the map.
+All airports shown pass the same gates as the eval set — non-blank IATA code,
+non-blank municipality, and `scheduled_service == 'yes'` — only the `type`
+filter is widened to {large, medium}. The set is derived from the raw
+OurAirports CSV (downloaded by default, or `--src-csv`), not the large-only slim
+parquet. A longitude-band density panel accompanies the map.
 
 CLI:
     python -m scripts.visualization.airport.plot_airport_distribution
     python -m scripts.visualization.airport.plot_airport_distribution \\
-        --airports path/to/ourairports_iata.parquet --out /tmp/airports.png
+        --src-csv path/to/airports.csv --out /tmp/airports.png
 """
 
 from __future__ import annotations
@@ -30,7 +33,11 @@ import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from scripts.benchmark.v2.airports import DEFAULT_AIRPORTS_PARQUET
+from scripts.benchmark.v2.airports import download_ourairports_csv, filter_airports
+
+# The distribution view contrasts large hubs (the eval set) against medium
+# airports (excluded), so it always works on the widened type set.
+_VIZ_TYPES = ("large_airport", "medium_airport")
 
 # Per type: (marker size, color, z-order) — large hubs sit on top so they stay
 # legible in dense regions like Western Europe and the US Northeast.
@@ -50,13 +57,11 @@ _CONTINENT_OF_LON = [
 ]
 
 
-def _load(airports_path: Path) -> pd.DataFrame:
-    df = pd.read_parquet(airports_path)
-    needed = {"latitude_deg", "longitude_deg", "type"}
-    missing = needed - set(df.columns)
-    if missing:
-        raise ValueError(f"airport parquet missing columns: {sorted(missing)}")
-    return df
+def _load(src_csv: Path) -> pd.DataFrame:
+    """Load the raw OurAirports CSV and filter to large+medium scheduled-service
+    airports (same IATA/municipality/scheduled gates as the eval set)."""
+    raw = pd.read_csv(src_csv, low_memory=False)
+    return filter_airports(raw, types=_VIZ_TYPES)
 
 
 def _lon_band(lon: float) -> str:
@@ -90,10 +95,10 @@ def plot_distribution(df: pd.DataFrame, out_path: Path) -> Path:
             label=f"{style['label']} ({len(sub):,})",
         )
 
-    kinds = " + ".join(sorted(t.replace("_airport", "") for t in df["type"].unique()))
+    kinds = " vs ".join(sorted(t.replace("_airport", "") for t in df["type"].unique()))
     ax.set_title(
-        f"Airport reference set — {len(df):,} scheduled-service airports "
-        f"(OurAirports, {kinds})",
+        f"Scheduled-service airports ({kinds}) — {len(df):,} total "
+        "(OurAirports; eval set = large only)",
         fontsize=13,
     )
     ax.legend(loc="lower left", framealpha=0.9, fontsize=10, markerscale=1.5)
@@ -120,8 +125,8 @@ def plot_distribution(df: pd.DataFrame, out_path: Path) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--airports", type=Path, default=DEFAULT_AIRPORTS_PARQUET,
-        help="Slim airport parquet (default: the committed-by-convention path).",
+        "--src-csv", type=Path, default=None,
+        help="Raw OurAirports airports.csv. If omitted, downloads the latest.",
     )
     parser.add_argument(
         "--out", type=Path,
@@ -130,15 +135,21 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.airports.exists():
-        raise SystemExit(
-            f"Airport parquet not found at {args.airports}. Build it with:\n"
-            "  python -m scripts.benchmark.v2.cli build-airports"
-        )
+    src_csv = args.src_csv
+    if src_csv is None:
+        print("Downloading OurAirports CSV ...")
+        src_csv = download_ourairports_csv()
+    elif not src_csv.exists():
+        raise SystemExit(f"CSV not found at {src_csv}")
 
-    df = _load(args.airports)
+    df = _load(src_csv)
+    by_type = df["type"].value_counts()
     out = plot_distribution(df, args.out)
-    print(f"Wrote {out} ({len(df):,} airports)")
+    print(
+        f"Wrote {out} ({len(df):,} airports: "
+        f"{by_type.get('large_airport', 0):,} large, "
+        f"{by_type.get('medium_airport', 0):,} medium)"
+    )
 
 
 if __name__ == "__main__":

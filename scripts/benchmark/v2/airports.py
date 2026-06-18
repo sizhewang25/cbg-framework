@@ -15,15 +15,20 @@ Design decisions live in notes/2026-06-18-closest-airport-eval-decisions.md.
 
 from __future__ import annotations
 
+import tempfile
+import urllib.request
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
 from sklearn.neighbors import BallTree
 
 from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM
+
+# Public-domain OurAirports CSV (continuously updated).
+OURAIRPORTS_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
 
 # OurAirports `type` values we keep. Large airports are the major hubs whose
 # IATA codes operators reference in PoP/router rDNS hostnames and where data
@@ -56,18 +61,31 @@ def _nonblank(series: pd.Series) -> pd.Series:
     return series.notna() & (series.astype("string").str.strip() != "")
 
 
-def filter_airports(raw: pd.DataFrame) -> pd.DataFrame:
+def download_ourairports_csv(dest: Optional[Path] = None) -> Path:
+    """Fetch the latest OurAirports airports.csv (to a temp file by default)."""
+    dest = dest or (Path(tempfile.mkdtemp()) / "airports.csv")
+    urllib.request.urlretrieve(OURAIRPORTS_URL, dest)
+    return dest
+
+
+def filter_airports(
+    raw: pd.DataFrame, types: Sequence[str] = AIRPORT_TYPES
+) -> pd.DataFrame:
     """Distil the raw OurAirports frame to the operator-facing airport set.
 
-    Keeps rows whose `type` is a large airport, that carry a non-blank IATA code
-    and municipality, *and* that have scheduled commercial service. The
-    scheduled-service gate is the in-dataset proxy for "codes operators actually
-    reference" (the IATA codes that appear in PoP/router rDNS hostnames) — it
-    drops GA/military fields like PAO (Palo Alto) and NUQ (Moffett) while keeping
-    real metro hubs. See the decision note for the resulting count (~1,158).
+    Keeps rows whose `type` is in `types` (default: large hubs only — the eval
+    reference set), that carry a non-blank IATA code and municipality, *and*
+    that have scheduled commercial service. The scheduled-service gate is the
+    in-dataset proxy for "codes operators actually reference" (the IATA codes
+    that appear in PoP/router rDNS hostnames) — it drops GA/military fields like
+    PAO (Palo Alto) and NUQ (Moffett) while keeping real metro hubs. See the
+    decision note for the resulting count (~1,158 for large-only).
+
+    `types` is widened (e.g. to include medium airports) by the distribution
+    visualization, which contrasts large vs. medium scheduled-service airports.
     """
     keep = (
-        raw["type"].isin(AIRPORT_TYPES)
+        raw["type"].isin(types)
         & _nonblank(raw["iata_code"])
         & _nonblank(raw["municipality"])
         & (raw["scheduled_service"] == "yes")
