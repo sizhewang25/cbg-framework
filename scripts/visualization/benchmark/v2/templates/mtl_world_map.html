@@ -34,6 +34,11 @@
     <option value="95">p95</option>
   </select></label>
   <label><input type="checkbox" id="successOnly"> SUCCESS only</label>
+  <label id="airportLabel" style="display:none">Airport <select id="airportFilter">
+    <option value="all" selected>all</option>
+    <option value="match">matched</option>
+    <option value="mismatch">mismatched</option>
+  </select></label>
   <label>Eval target <select id="target" class="wide"></select></label>
   <label id="keptOnlyLabel"><input type="checkbox" id="keptOnly"> only post-filter circles</label>
   <label id="maxRLabel">Hide circles ≥ <select id="maxR">

@@ -22,6 +22,10 @@
   }
   const pctSel = document.getElementById("pct");
   const successOnly = document.getElementById("successOnly");
+  const airportFilter = document.getElementById("airportFilter");
+  const airportLabel = document.getElementById("airportLabel");
+  const hasAirports = !!data.has_airports;
+  if (hasAirports) airportLabel.style.display = "";
   const targetSel = document.getElementById("target");
   const maxRSel = document.getElementById("maxR");
   const keptOnly = document.getElementById("keptOnly");
@@ -51,6 +55,16 @@
   const RING_INNER = "rgba(60,90,160,0.55)";
   const RING_INNER_DIM = "rgba(60,90,160,0.10)";
   const HL_RING = "rgba(20,40,140,0.95)";  // saturated blue, contrasts the dim
+
+  // ---- closest-airport layer ----
+  // U+2708 (plain airplane, no emoji variation selector) so `textfont.color`
+  // recolors the glyph — the emoji 🛬 ignores color. Truth airport reuses the
+  // gold star color, pred airport the crimson diamond color; the truth↔pred
+  // airport-gap line is slate-gray so it reads apart from the two connectors.
+  const PLANE = "✈";
+  const AP_TRUTH = "gold";
+  const AP_PRED = "crimson";
+  const AP_GAP_LINE = "rgba(90,90,110,0.9)";
 
   function polyKey(t) { return `${t.fold}__${t.target_id}`; }
   function polyUrl(t) { return `${POLY_URL_PREFIX}${polyKey(t)}.json`; }
@@ -151,6 +165,13 @@
       // "rest" excludes the run's continent AND drops Unknowns so the
       // partition same+rest is clean (matches plot_error_cdf semantics).
       if (cont === "rest" && (t.continent === sameContinent || t.continent === "Unknown")) return false;
+      if (hasAirports) {
+        // "match"/"mismatch" key off airport_match, which is true/false only
+        // when a prediction exists — so no-pred targets fall out of both.
+        const af = airportFilter.value;
+        if (af === "match" && !(t.airport && t.airport.match === true)) return false;
+        if (af === "mismatch" && !(t.airport && t.airport.match === false)) return false;
+      }
       return true;
     });
   }
@@ -215,6 +236,35 @@
     if (ctx.hlInnerIdx >= 0) Plotly.restyle(plotDiv, { lat: [[]], lon: [[]] }, [ctx.hlInnerIdx]);
     if (ctx.outerIdx >= 0) Plotly.restyle(plotDiv, { "line.color": RING_OUTER }, [ctx.outerIdx]);
     if (ctx.innerIdx >= 0) Plotly.restyle(plotDiv, { "line.color": RING_INNER }, [ctx.innerIdx]);
+  }
+
+  // ---- closest-airport trace builders ----
+  function kmLabel(prefix, km) {
+    return km != null ? `${prefix} = ${km.toFixed(1)} km` : prefix;
+  }
+  function airportMarkerTrace(ap, color) {
+    const kmStr = ap.km != null ? `${ap.km.toFixed(1)} km` : "—";
+    return {
+      type: "scattergeo", mode: "text",
+      lat: [ap.lat], lon: [ap.lon],
+      text: [`${PLANE} ${ap.iata}`],
+      textfont: { size: 16, color },
+      hovertext: [`${ap.name} (${ap.iata})<br>(${ap.lat}, ${ap.lon})<br>${ap.city}<br>dist = ${kmStr}`],
+      hoverinfo: "text",
+      name: `airport ${ap.iata}`,
+      showlegend: false,
+    };
+  }
+  function connectorTrace(from, ap, color, label) {
+    // Dashed line from a target point ([lat, lon]) to its airport; the hover
+    // distance lives on both endpoints so it shows anywhere along the segment.
+    return {
+      type: "scattergeo", mode: "lines",
+      lat: [from[0], ap.lat], lon: [from[1], ap.lon],
+      line: { width: 1.3, color, dash: "dash" },
+      text: [label, label], hoverinfo: "text",
+      showlegend: false,
+    };
   }
 
   // ---- main draw ----
@@ -445,6 +495,43 @@
       });
     }
 
+    // 7) closest-airport layer: airplane markers + dashed connectors.
+    //    matched → one gold airplane, gold connector from truth + crimson from
+    //    pred. mismatch/no-pred → gold truth airplane + crimson pred airplane,
+    //    each with its own connector, plus a slate-gray truth↔pred gap line.
+    if (t.airport) {
+      const ap = t.airport, truth = ap.truth, predAp = ap.pred;
+      if (ap.match === true && truth) {
+        traces.push(airportMarkerTrace(truth, AP_TRUTH));
+        traces.push(connectorTrace(t.true, truth, AP_TRUTH,
+          kmLabel("truth → airport", truth.km)));
+        if (t.pred && predAp) {
+          traces.push(connectorTrace(t.pred, truth, AP_PRED,
+            kmLabel("pred → airport", predAp.km)));
+        }
+      } else {
+        if (truth) {
+          traces.push(airportMarkerTrace(truth, AP_TRUTH));
+          traces.push(connectorTrace(t.true, truth, AP_TRUTH,
+            kmLabel("truth → airport", truth.km)));
+        }
+        if (t.pred && predAp) {
+          traces.push(airportMarkerTrace(predAp, AP_PRED));
+          traces.push(connectorTrace(t.pred, predAp, AP_PRED,
+            kmLabel("pred → airport", predAp.km)));
+        }
+        if (truth && predAp) {
+          traces.push({
+            type: "scattergeo", mode: "lines",
+            lat: [truth.lat, predAp.lat], lon: [truth.lon, predAp.lon],
+            line: { width: 1.3, color: AP_GAP_LINE, dash: "dash" },
+            text: Array(2).fill(kmLabel("airport gap", ap.gap_km)),
+            hoverinfo: "text", showlegend: false,
+          });
+        }
+      }
+    }
+
     const layout = {
       geo: {
         projection: { type: projSel.value },
@@ -484,13 +571,28 @@
       constraintsClause +=
         ` &nbsp;|&nbsp; annular bounds (visible): median inner=${miStr}, median outer=${moStr}`;
     }
+    let airportNote = "";
+    if (t.airport) {
+      const ap = t.airport;
+      const truthStr = ap.truth
+        ? `${ap.truth.iata} (${ap.truth.km != null ? ap.truth.km.toFixed(1) : "—"} km)`
+        : "—";
+      const predStr2 = ap.pred
+        ? `${ap.pred.iata} (${ap.pred.km != null ? ap.pred.km.toFixed(1) : "—"} km)`
+        : "(none)";
+      const mark = ap.match === true ? "✓ match"
+        : ap.match === false ? "✗ mismatch" : "—";
+      const gapStr = ap.gap_km != null ? `, gap=${ap.gap_km.toFixed(1)} km` : "";
+      airportNote =
+        `<br>airport: ${mark} · truth→${truthStr} · pred→${predStr2}${gapStr}`;
+    }
     metaDiv.innerHTML =
       `<b>${t.target_id}</b> (fold ${foldLabel(t.fold)}) — status=${t.status}, ` +
       `intersection=${t.intersection_kind}, ` +
       `n_ltd_success/n_obs=${t.n_ltd_success}/${t.n_obs}, ` +
       `${constraintsClause}<br>` +
       `true=(${t.true[0]}, ${t.true[1]})  ·  predicted=${predStr}  ·  error=${errStr}` +
-      pctNote + filterNote;
+      pctNote + filterNote + airportNote;
 
     Plotly.react(plotDiv, traces, layout, { responsive: true });
 
@@ -526,6 +628,7 @@
 
   pctSel.addEventListener("change", () => { applyPercentile(); draw(); });
   successOnly.addEventListener("change", () => { populateTargets(); draw(); });
+  airportFilter.addEventListener("change", () => { populateTargets(); draw(); });
   contSel.addEventListener("change", () => { populateTargets(); draw(); });
   targetSel.addEventListener("change", draw);
   maxRSel.addEventListener("change", draw);

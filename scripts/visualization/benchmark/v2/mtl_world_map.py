@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ from shapely.geometry import MultiPolygon, Polygon
 # Importing `scripts.framework.v2` populates LTD/MTL/CTR_REGISTRY via the
 # `@register_*` decorators on each subclass module.
 import scripts.framework.v2  # noqa: F401
+from scripts.benchmark.v2.airports import DEFAULT_AIRPORTS_PARQUET
 from scripts.framework.v2.ltd.base import LTDResult
 from scripts.framework.v2.registry import MTL_REGISTRY
 from scripts.framework.v2.types import Coord, Distance, Error, Latency, VpId
@@ -81,6 +83,61 @@ def _load_ip_to_continent() -> dict[str, str]:
         if ip:
             out[ip] = continent_of(r.get("country_code"))
     return out
+
+
+@lru_cache(maxsize=1)
+def _load_airport_coords() -> dict[str, dict[str, Any]]:
+    """{iata_code: {"lat", "lon", "name", "city"}} from the slim airport parquet.
+
+    The `airport-eval` postprocessor records only the IATA code + km in
+    `targets.parquet`; to *plot* an airport we need its coordinates, so we
+    resolve them here from the same slim reference set the metric was built
+    against (`datasets/static_datasets/ourairports_iata.parquet`). First
+    occurrence wins on any duplicate IATA. Returns `{}` when the file is
+    missing — the airport layer then simply doesn't render.
+    """
+    path = DEFAULT_AIRPORTS_PARQUET
+    if not Path(path).exists():
+        return {}
+    df = pd.read_parquet(path)
+    out: dict[str, dict[str, Any]] = {}
+    for row in df.itertuples(index=False):
+        iata = str(row.iata_code).strip()
+        if not iata or iata in out:
+            continue
+        out[iata] = {
+            "lat": round(float(row.latitude_deg), 4),
+            "lon": round(float(row.longitude_deg), 4),
+            "name": str(row.name),
+            "city": str(row.municipality),
+        }
+    return out
+
+
+def _airport_entry(
+    iata: Any, km: Any, coords: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Build a payload airport sub-dict from an IATA code + distance.
+
+    Returns None when the IATA is missing/null or unresolved in the slim
+    reference set (so the caller skips drawing that airplane).
+    """
+    if iata is None or (isinstance(iata, float) and math.isnan(iata)):
+        return None
+    code = str(iata).strip()
+    if not code:
+        return None
+    c = coords.get(code)
+    if c is None:
+        return None
+    return {
+        "iata": code,
+        "km": _safe_float(km),
+        "lat": c["lat"],
+        "lon": c["lon"],
+        "name": c["name"],
+        "city": c["city"],
+    }
 
 
 # ---- intersection polygons -------------------------------------------------
@@ -325,6 +382,13 @@ def _build_fold_payload(
     mtl_name = run_meta.get("mtl")
     mtl_kwargs = run_meta.get("mtl_kwargs") or {}
 
+    # Closest-airport columns are appended out-of-band by the `airport-eval`
+    # postprocessor; only emit the airport layer when they're present. Coords
+    # for plotting are resolved from the slim reference set (loaded once,
+    # cached).
+    has_airport_cols = "truth_airport_iata" in targets.columns
+    airport_coords = _load_airport_coords() if has_airport_cols else {}
+
     vps = {
         str(row.vp_id): [round(float(row.lat), 4), round(float(row.lon), 4)]
         for row in vp_configs.itertuples(index=False)
@@ -428,21 +492,41 @@ def _build_fold_payload(
                 )
                 has_polygon = True
 
-        target_rows.append(
-            {
-                "target_id": str(row.target_id),
-                "true": [round(float(row.target_lat), 4), round(float(row.target_lon), 4)],
-                "pred": pred,
-                "status": str(row.status),
-                "error_km": _safe_float(row.error_km),
-                "intersection_kind": str(row.mtl_intersection_kind),
-                "n_obs": int(row.n_obs),
-                "n_ltd_success": int(row.n_ltd_success),
-                "predictions": preds,
-                "shortest_ping": shortest_ping,
-                "has_polygon": has_polygon,
+        target_row: dict[str, Any] = {
+            "target_id": str(row.target_id),
+            "true": [round(float(row.target_lat), 4), round(float(row.target_lon), 4)],
+            "pred": pred,
+            "status": str(row.status),
+            "error_km": _safe_float(row.error_km),
+            "intersection_kind": str(row.mtl_intersection_kind),
+            "n_obs": int(row.n_obs),
+            "n_ltd_success": int(row.n_ltd_success),
+            "predictions": preds,
+            "shortest_ping": shortest_ping,
+            "has_polygon": has_polygon,
+        }
+
+        # Closest-airport layer: nearest airport to truth (always set) and to
+        # the prediction (when one exists), plus the truth↔pred airport gap.
+        # `match` is None when there's no prediction.
+        if has_airport_cols:
+            match_raw = row.airport_match
+            truth_ap = _airport_entry(
+                row.truth_airport_iata, row.truth_airport_km, airport_coords
+            )
+            pred_ap = _airport_entry(
+                row.pred_airport_iata, row.pred_airport_km, airport_coords
+            )
+            target_row["airport"] = {
+                "match": None if match_raw is None or (
+                    isinstance(match_raw, float) and math.isnan(match_raw)
+                ) else bool(match_raw),
+                "gap_km": _safe_float(row.pred_truth_airport_km),
+                "truth": truth_ap,
+                "pred": pred_ap,
             }
-        )
+
+        target_rows.append(target_row)
 
     return {"vps": vps, "targets": target_rows}
 
@@ -518,6 +602,7 @@ def build_payload(
         "earth_radius_km": EARTH_RADIUS_KM,
         "same_continent": same_continent,
         "mtl_kind": mtl_kind,
+        "has_airports": any("airport" in t for t in merged_targets),
         "polygon_url_prefix": polygon_url_prefix,
         "vps": merged_vps,
         "targets": merged_targets,
