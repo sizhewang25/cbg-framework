@@ -92,9 +92,11 @@ class AirportIndex:
         if airports.empty:
             raise ValueError("AirportIndex requires a non-empty airport set")
         self.iata = airports["iata_code"].astype(str).to_numpy()
-        lat = airports["latitude_deg"].to_numpy(dtype=float)
-        lon = airports["longitude_deg"].to_numpy(dtype=float)
-        self._tree = BallTree(np.radians(np.column_stack([lat, lon])), metric="haversine")
+        self.lat = airports["latitude_deg"].to_numpy(dtype=float)
+        self.lon = airports["longitude_deg"].to_numpy(dtype=float)
+        self._tree = BallTree(
+            np.radians(np.column_stack([self.lat, self.lon])), metric="haversine"
+        )
 
     @classmethod
     def from_parquet(cls, path: Path = DEFAULT_AIRPORTS_PARQUET) -> "AirportIndex":
@@ -106,30 +108,53 @@ class AirportIndex:
             )
         return cls(pd.read_parquet(path))
 
-    def query_many(
-        self, lats, lons
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Nearest airport per query point.
-
-        Returns `(iata, km)` arrays aligned to the input. Points with a missing
-        (NaN/None) latitude or longitude get `iata=None` and `km=NaN`; valid
-        points are unaffected by NaN siblings.
-        """
+    def _query(self, lats, lons) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Core k=1 query. Returns `(idx, km, valid)` where `idx` is the nearest
+        airport row index (−1 where invalid) and `valid` masks NaN-free points."""
         lats = np.asarray(lats, dtype=float)
         lons = np.asarray(lons, dtype=float)
         n = lats.shape[0]
-        iata_out = np.full(n, None, dtype=object)
+        idx_out = np.full(n, -1, dtype=int)
         km_out = np.full(n, np.nan, dtype=float)
 
         valid = ~(np.isnan(lats) | np.isnan(lons))
         if valid.any():
             pts = np.radians(np.column_stack([lats[valid], lons[valid]]))
             dist, idx = self._tree.query(pts, k=1)
-            dist = dist[:, 0]
-            idx = idx[:, 0]
-            iata_out[valid] = self.iata[idx]
-            km_out[valid] = dist * EARTH_RADIUS_KM
-        return iata_out, km_out
+            idx_out[valid] = idx[:, 0]
+            km_out[valid] = dist[:, 0] * EARTH_RADIUS_KM
+        return idx_out, km_out, valid
+
+    def query_many(self, lats, lons) -> tuple[np.ndarray, np.ndarray]:
+        """Nearest airport per query point.
+
+        Returns `(iata, km)` arrays aligned to the input. Points with a missing
+        (NaN/None) latitude or longitude get `iata=None` and `km=NaN`; valid
+        points are unaffected by NaN siblings.
+        """
+        idx, km, valid = self._query(lats, lons)
+        iata_out = np.full(idx.shape[0], None, dtype=object)
+        iata_out[valid] = self.iata[idx[valid]]
+        return iata_out, km
+
+    def query_full(
+        self, lats, lons
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Like `query_many` but also returns the matched airport's coordinates.
+
+        Returns `(iata, km, ap_lat, ap_lon)`. The coordinate arrays carry the
+        nearest *airport's* lat/lon (NaN where the query point was invalid),
+        which the postprocessor uses to measure the airport-to-airport gap.
+        """
+        idx, km, valid = self._query(lats, lons)
+        n = idx.shape[0]
+        iata_out = np.full(n, None, dtype=object)
+        ap_lat = np.full(n, np.nan, dtype=float)
+        ap_lon = np.full(n, np.nan, dtype=float)
+        iata_out[valid] = self.iata[idx[valid]]
+        ap_lat[valid] = self.lat[idx[valid]]
+        ap_lon[valid] = self.lon[idx[valid]]
+        return iata_out, km, ap_lat, ap_lon
 
 
 @lru_cache(maxsize=1)

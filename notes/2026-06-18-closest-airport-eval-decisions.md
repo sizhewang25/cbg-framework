@@ -93,12 +93,29 @@ existing `targets.parquet` files. Rationale:
 | `truth_airport_km`   | float64 | distance truth → its nearest airport |
 | `pred_airport_iata`  | string, null | nearest airport to prediction (null if no pred) |
 | `pred_airport_km`    | float64, null | distance pred → its nearest airport |
-| `airport_match`      | bool, null | `pred_airport_iata == truth_airport_iata` |
+| `pred_truth_airport_km` | float64, null | great-circle gap between the pred & truth airports (null if no pred) |
+| `airport_match`      | bool, null | exact: `pred_airport_iata == truth_airport_iata` |
 
 `truth_airport_km` characterizes the target set itself (how airport-dense each
 region is — an EU target sits closer to an airport than a rural one), useful
-context for interpreting `airport_match`. Re-running recomputes/overwrites the
+context for interpreting the match metrics. Re-running recomputes/overwrites the
 columns (idempotent), so changing the filter just means re-running the pass.
+
+### Decision 3b — threshold match, not just exact equality
+
+Exact nearest-IATA equality is too brittle: multi-airport metros (JFK/LGA/EWR,
+FTY/MGE in Atlanta) score as misses even when the prediction is in the right
+place. So we store the **continuous** `pred_truth_airport_km` (airport-to-airport
+gap) per target — *threshold-free* — and apply the cutoff only at summary time.
+The summary headline is `airport_match_rate_within_40km` (40 km = this repo's
+city-level `THRESHOLD_DISTANCES` bin and the literature's city-level accuracy);
+the exact `airport_match_rate` is kept as the strict reference. The threshold is
+configurable (`--threshold-km`); since it's applied at summary time, a different
+threshold needs no per-target recompute. Caveat: snapping both endpoints to
+nearby airports makes the gap ≈ `error_km` in dense-airport regions, so the
+40 km airport match tracks a 40 km `error_km` threshold there — the value is the
+operator framing (deliverable is an airport code) and that sparse regions
+genuinely differ.
 
 ---
 

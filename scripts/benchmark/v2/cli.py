@@ -312,6 +312,9 @@ def cmd_airport_eval(
     airports: Optional[Path] = typer.Option(
         None, help="Override path to the slim airport parquet (defaults to the committed one)."
     ),
+    threshold_km: float = typer.Option(
+        40.0, help="City-level threshold (km) for the forgiving airport_match_rate_within_<T>km."
+    ),
 ) -> None:
     """Append closest-airport columns to every combo's targets.parquet (in place).
 
@@ -337,7 +340,7 @@ def cmd_airport_eval(
         targets_path = run_json.parent / "targets.parquet"
         if not targets_path.exists():
             continue
-        summary = process_parquet(targets_path, index)
+        summary = process_parquet(targets_path, index, thresholds=(threshold_km,))
         rows.append(
             {
                 "run_id": meta["run_id"],

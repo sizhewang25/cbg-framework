@@ -109,6 +109,18 @@ class TestAirportIndexQuery(unittest.TestCase):
         self.assertEqual(iata[1], "LAX")
         self.assertAlmostEqual(km[1], 0.0, places=3)
 
+    def test_query_full_returns_matched_airport_coordinates(self) -> None:
+        idx = _index()
+        iata, km, ap_lat, ap_lon = idx.query_full([40.7580, np.nan], [-73.9855, np.nan])
+        # Matched airport is JFK; returned coords are JFK's, not the query's.
+        self.assertEqual(iata[0], "JFK")
+        self.assertAlmostEqual(ap_lat[0], _JFK[0], places=4)
+        self.assertAlmostEqual(ap_lon[0], _JFK[1], places=4)
+        # NaN query → null iata and NaN coords.
+        self.assertIsNone(iata[1])
+        self.assertTrue(math.isnan(ap_lat[1]))
+        self.assertTrue(math.isnan(ap_lon[1]))
+
 
 def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0

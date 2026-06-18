@@ -83,7 +83,7 @@ DataSource ──→ inputs/<source>/<slice>/{vp_configs,fit_samples,eval_observ
             summarize                          airport-eval (optional, in place)
                   │                                    │
                   ▼                                    ▼
-   outputs/<run_id>/summary.parquet     targets.parquet += 5 airport columns
+   outputs/<run_id>/summary.parquet     targets.parquet += 6 airport columns
                                         outputs/<run_id>/airport_summary.parquet
 ```
 
@@ -155,7 +155,7 @@ Per the spec, every row of `targets.parquet` carries:
 Run-level: `fit_ms`, `fit_peak_bytes`, `run_peak_rss_bytes` live in `run.json`
 and roll into `summary.parquet`.
 
-The five `*_airport_*` columns are **not** written by the runner — they are
+The six `*_airport_*` columns are **not** written by the runner — they are
 appended later by `airport-eval` (see below).
 
 ## Closest-airport eval
@@ -182,7 +182,7 @@ reference coordinates — exact great-circle nearest-neighbour, vectorized and
 NaN-safe, scaled by `EARTH_RADIUS_KM`.
 
 **Annotation.** `airport-eval` rewrites each `targets.parquet` in place
-(atomic, idempotent) with five columns:
+(atomic, idempotent) with six columns:
 
 | column | meaning |
 | --- | --- |
@@ -190,14 +190,24 @@ NaN-safe, scaled by `EARTH_RADIUS_KM`.
 | `truth_airport_km`   | distance truth → its nearest airport |
 | `pred_airport_iata`  | nearest airport to the prediction (NULL if no prediction) |
 | `pred_airport_km`    | distance prediction → its nearest airport |
-| `airport_match`      | `pred_airport_iata == truth_airport_iata` (NULL if no prediction) |
+| `pred_truth_airport_km` | great-circle gap between the pred & truth airports (NULL if no prediction) |
+| `airport_match`      | exact: `pred_airport_iata == truth_airport_iata` (NULL if no prediction) |
 
-It also writes `outputs/<run_id>/airport_summary.parquet` — per-combo
-`airport_match_rate` (the headline) plus the p5..p95/mean/std block for
-`pred_airport_km`, over SUCCESS/FALLBACK rows.
+**Match rates — exact vs. threshold.** Exact nearest-IATA equality is brittle:
+multi-airport metros (JFK/LGA/EWR) score as misses even when the prediction is
+in the right place. So the per-target file stores the *continuous*
+`pred_truth_airport_km`, and the **threshold** is applied at summary time —
+`outputs/<run_id>/airport_summary.parquet` carries, over SUCCESS/FALLBACK rows:
+
+- `airport_match_rate` — strict, exact-IATA equality (reference).
+- `airport_match_rate_within_40km` — forgiving; the pred/truth airports lie
+  within 40 km (city-level; configurable via `--threshold-km`). Always ≥ the
+  exact rate.
+- p5..p95/mean/std blocks for both `pred_airport_km` and `pred_truth_airport_km`.
 
 ```bash
 poetry run python -m scripts.benchmark.v2.cli airport-eval --run-id smoke-001
+poetry run python -m scripts.benchmark.v2.cli airport-eval --run-id smoke-001 --threshold-km 100
 poetry run python -m scripts.benchmark.v2.cli airport-eval --run-id smoke-001 --airports FILE
 ```
 
@@ -238,7 +248,7 @@ poetry run python -m unittest discover -s scripts/benchmark/v2/tests -t .
 ```
 
 The `-t .` flag pins the top-level dir to the repo root so the `from scripts.…`
-imports inside the tests resolve. 21 + 69 = 90 tests pass on a fresh
+imports inside the tests resolve. 21 + 73 = 94 tests pass on a fresh
 `poetry install` against this commit.
 
 ## Synthetic data for a stand-alone smoke
