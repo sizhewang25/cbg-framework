@@ -55,6 +55,10 @@ class Config:
     inputs_root: Path
     outputs_root: Path
     setups: list[Setup]
+    # Optional axis settings for the geometry studies (None ⇒ data-driven).
+    axis_lo_km: float = 1.0
+    axis_hi_km: Optional[float] = None
+    bin_width_km: float = 250.0
 
     @property
     def out_dir(self) -> Path:
@@ -87,6 +91,9 @@ def load_config(path: str | Path) -> Config:
         inputs_root=_root("inputs_root", "scripts/benchmark/v2/inputs"),
         outputs_root=_root("outputs_root", "scripts/benchmark/v2/outputs"),
         setups=[Setup(**s) for s in raw["setups"]],
+        axis_lo_km=float(raw.get("axis_lo_km", 1.0)),
+        axis_hi_km=(float(raw["axis_hi_km"]) if raw.get("axis_hi_km") is not None else None),
+        bin_width_km=float(raw.get("bin_width_km", 250.0)),
     )
 
 
@@ -217,6 +224,86 @@ def load_setup_long(cfg: Config, setup: Setup,
         df.insert(0, "combo_id", combo)
         out.append(df)
     return pd.concat(out, ignore_index=True)
+
+
+def binned_percentiles(
+    x,
+    y,
+    bin_width: float,
+    percentiles: Iterable[float] = (50, 90),
+    min_n: int = 5,
+    x_max: Optional[float] = None,
+) -> dict:
+    """Fixed-width bins over x; per-bin percentiles of y and counts.
+
+    Bins span ``(0, x_max]`` in steps of ``bin_width`` (``x_max`` defaults to the
+    data max). Bins with fewer than ``min_n`` points report NaN for every
+    percentile (but keep their true ``n``). Returns a dict with ``bin_centers``,
+    ``n``, and one key ``p{q}`` per requested percentile. All values are lists.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    x, y = x[mask], y[mask]
+    qs = list(percentiles)
+
+    if x.size == 0:
+        return {"bin_centers": [], "n": [], **{f"p{int(q)}": [] for q in qs}}
+
+    hi = float(x_max) if x_max is not None else float(x.max())
+    n_bins = max(1, int(np.ceil(hi / bin_width)))
+    edges = np.arange(n_bins + 1, dtype=float) * bin_width
+    centers = (edges[:-1] + edges[1:]) / 2.0
+    # rightmost edge inclusive; clip indices into range
+    idx = np.clip(np.searchsorted(edges, x, side="left") - 1, 0, n_bins - 1)
+
+    counts = [0] * n_bins
+    pvals: dict[float, list[float]] = {q: [float("nan")] * n_bins for q in qs}
+    for b in range(n_bins):
+        yb = y[idx == b]
+        counts[b] = int(yb.size)
+        if yb.size >= min_n:
+            for q in qs:
+                pvals[q][b] = float(np.percentile(yb, q))
+
+    return {
+        "bin_centers": centers.tolist(),
+        "n": counts,
+        **{f"p{int(q)}": pvals[q] for q in qs},
+    }
+
+
+def diagonal_split(x, y, tol: float = 0.02) -> dict:
+    """Split points by position relative to the ``error = closest-VP distance``
+    diagonal (``y = x``).
+
+    - ``on_diagonal``        : ``|error - dist| <= tol * dist`` (error ≈ distance)
+    - ``worse_than_nearest`` : ``error > dist`` (above the line — CBG no better
+      than the distance to the nearest VP)
+    - ``beats_nearest``      : ``error < dist`` (below the line — CBG localizes
+      tighter; "prediction wins")
+
+    Returns integer counts, percentages (of finite points with ``dist > 0``),
+    ``n``, and the tolerance used.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    m = np.isfinite(x) & np.isfinite(y) & (x > 0)
+    x, y = x[m], y[m]
+    n = int(x.size)
+    keys = ("on_diagonal", "worse_than_nearest", "beats_nearest")
+    if n == 0:
+        return {"n": 0, "tol": tol, **{k: 0 for k in keys},
+                **{f"{k}_pct": float("nan") for k in keys}}
+    rel = (y - x) / x  # >0 ⇒ error larger than distance (worse)
+    counts = {
+        "on_diagonal": int((np.abs(rel) <= tol).sum()),
+        "worse_than_nearest": int((rel > tol).sum()),
+        "beats_nearest": int((rel < -tol).sum()),
+    }
+    out = {"n": n, "tol": tol, **counts}
+    out.update({f"{k}_pct": round(100.0 * counts[k] / n, 2) for k in keys})
+    return out
 
 
 def fallback_rate(df_combo: pd.DataFrame) -> float:

@@ -41,5 +41,21 @@
 - [x] Confirm colors/labels identical across all four deliverables (all import `_variant_style`; success counts agree 0-mismatch across cdf/table/facet JSONs).
 
 ## To discuss (parked — not finalizable yet)
-- [ ] "Close but all on one side" vs "surrounded": VP azimuthal coverage / largest gap vs residual error at fixed closest-VP distance.
-- [ ] Tightest-constraint RTTs: target→VP RTTs (within τ ms) for the VPs that determine the final intersection boundary.
+- [ ] Tightest-constraint RTTs: target→VP RTTs (within τ ms) for the VPs that determine the final intersection boundary. (Global-act; needs MTL internals not in outputs.)
+- [ ] **MTL+CTR impact study (gates Study 2)** — discovered 2026-06-04: swapping only the geometry stack (same LTD, `_geo` = `planar_annulus_weighted`+`geometric_centroid` vs `spherical_circle`+`boundary_vertex_mean`) swings p50 by 20–55% and **flips by regime** (boundary_vertex_mean wins on far/one-sided US; geometric_centroid wins on near/surrounded Global; EU mixed). No single "best" CTR. Decision: **promote MTL+CTR to a factor** in the geometry studies rather than fixing one. Data already on disk (~18 combos: `_geo`/`_hull`/`_top`/`_c80`/`_c100`/weighted); may add 1–2 isolation combos (e.g. `spherical_circle`+`geometric_centroid`) to separate MTL from CTR (cheap post-processing, no re-measurement). Study 1 macro headline is CTR-robust; its `diagonal_split`/win-rate is CTR-dependent.
+- [ ] Study 2 (one-sided vs surrounded / azimuthal gap) — carry CTR as a factor (depends on the impact study above).
+
+## Study 1 — closest-VP distance impact (SOI baseline)  ✅ DONE
+### Data
+- [x] Reuse `load_setup_long` for {combo_id, target_id, closest_vp_km, error_km, status} — closest-VP already in `_io`, no new loader.
+- [x] Add a binned-summary helper: `_io.binned_percentiles` — fixed-width closest-VP-distance bins → p50/p90/n per bin (min-N=5 guard → NaN).
+### Figure — `plot_study1_distance.py` (config-driven typer CLI: `--config`, `--slug`)
+- [x] Axis decision (revised to **log–log**): both axes log on shared `[1, 20000]` km, identical ticks on x/y and across all panels, square box (45° `y=x`), threshold lines on both axes, no binned overlay.
+- [x] SOI hero panel (`study1_soi_<slug>.png`): error_km vs closest-VP distance, log–log, `y=x`, threshold gridlines both axes.
+- [x] Cross-method faceted panel (`study1_facet_<slug>.png`, Vanilla / SOI / Octant / Spotter): identical log limits/ticks across all panels; per-panel fallback count in title; scatter + `y=x` + threshold gridlines.
+- [x] Fixed color/label mapping from `_variant_style`; SOI hero is the dedicated baseline panel.
+### Data dump
+- [x] Sibling `study1_<slug>.json`: per-variant SUCCESS arrays (closest_vp_km, error_km) + n_success/n_total + `diagonal_split` (worse/on-diagonal/wins counts + pct, tol=2%) + axis settings. (`binned_percentiles` helper kept in `_io` for Study 2; `binned` block dropped from the JSON.)
+### Analysis / verify
+- [x] Cliff-vs-ramp: SOI binned p50 confirms **ramp + saturation** (as7018: 144→334→925→1380→1568 km through 0–1150 km, then high plateau ~5400→6800 km for the cross-Atlantic EU cluster at ~5800–6600 km). Not a cliff.
+- [x] Verified: log axes render with `y=x` at 45° (square box); thresholds on both axes; n_success per variant matches deliverable-3 JSON exactly (all 6 setups share `_io`); SOI fallback as7018=0/713, as16509=3/713 (matches the original screenshot — it was the Global setup).

@@ -63,11 +63,46 @@ collapse-prone):
 - **Visual:** CDF and paired-scatter figures render with the fixed color/label
   mapping (Vanilla=blue, SOI=orange, Octant=green, Spotter=red).
 
+## Study 1 — closest-VP distance impact (2026-06-03)
+
+`scripts/paper/cbg_bench/plot_study1_distance.py` — error_km vs closest-VP
+distance on **log–log, equal-scale axes** (`y=x` at a true 45°), threshold lines
+on both axes, SOI as the calibration-free / zero-fallback geometry baseline. Per
+setup: `study1_soi_<slug>.png` (hero) + `study1_facet_<slug>.png` (2×2) +
+`study1_<slug>.json` (SUCCESS arrays + binned p50/p90, computed not plotted).
+Shared axes `[1, 20000]` km computed once across all setups. New reusable helper
+`_io.binned_percentiles`.
+
+**Findings:**
+- **Ramp with saturation, not a cliff.** SOI binned p50 on as7018 (US):
+  144→334→925→1380→1568 km across 0–1150 km, a sparse middle, then a high plateau
+  (~5400→6800 km) for the cross-Atlantic EU cluster sitting at ~5800–6600 km from
+  the US VPs. Error saturates near the closest-VP distance once the target is far.
+- **SOI rides the `y=x` diagonal.** ~40% of SOI targets fall within 2% of
+  `error == closest-VP distance` (vanilla 9%, octant ~1% — SOI-specific). Its
+  loose `2/3·c` radii mean that for a large fraction of targets it cannot localize
+  any tighter than "near your closest VP." Another ~34% beat that (error <
+  closest-VP distance, below the diagonal). This is the geometry-baseline limit
+  the other variants' calibration is measured against.
+
+**Verification:** `n_success` per (setup × variant) matches the deliverable-3
+JSON exactly (shared `_io`); SOI fallback as7018 = 0/713, as16509 = 3/713 (the
+3/713 reconciles the original screenshot — it was the Global as16509 setup).
+
+**Caveat (2026-06-04):** the macro distance story (ramp + saturation; far targets
+unrecoverable) is robust to the geometry stack, but the `diagonal_split` /
+win-rate is **strongly MTL+CTR-dependent** — swapping only the stack (`_geo`)
+moves p50 20–55% and flips the win-rate (e.g. vanilla as7018 wins 67% → 3%), and
+the best stack flips by regime (boundary_vertex_mean far/one-sided, geometric_
+centroid near/surrounded). The diagonal split must therefore be read per-stack,
+and the MTL+CTR impact study (parked in todo) gates Study 2.
+
 ## Conclusions
 
-The four finalizable deliverables are done, verified, and reproducible from a
-single config (`scripts/paper/cbg_bench/config/four_variants.yaml`). Re-running
-any figure regenerates both the PNG and its JSON. The two raised analysis
-questions (azimuthal coverage "one side vs surrounded"; tightest-constraint RTTs
-for the VPs bounding the final intersection) remain parked for discussion — they
-need new per-target geometry features not yet surfaced in the benchmark outputs.
+The four finalizable deliverables plus Study 1 are done, verified, and
+reproducible from a single config
+(`scripts/paper/cbg_bench/config/four_variants.yaml`). Re-running any figure
+regenerates both the PNG and its JSON. Remaining parked questions: Study 2
+(azimuthal coverage "one side vs surrounded" — buildable from `eval_observations`
+coords, planned) and the Global-act tightest-constraint RTTs (needs MTL internals
+not yet surfaced in the benchmark outputs).

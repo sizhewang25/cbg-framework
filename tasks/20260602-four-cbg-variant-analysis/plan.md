@@ -132,3 +132,125 @@ All four deliverables are produced by config-driven typer CLI scripts under
    circles/annuli bound the chosen region, what are the target→VP RTTs within a
    τ-ms band (the "tightest few constraints")? Needs surfacing which LTD
    predictions actually touch the intersection boundary.
+
+---
+
+## Draft — geometry-study direction (2026-06-03, in discussion; no todos yet)
+
+This section captures where the discussion landed after the four deliverables
+were finalized. It is **not yet settled** — kept as a working draft, hence no new
+todos. The four deliverables above stand; this is the next chapter.
+
+### Reframing the research question
+
+- **Goal is to showcase CBG *limitations* — when each algorithm excels and when
+  it degrades — not to rank the 6 VP setups.** Setups are *treatments* that sweep
+  the geometry conditions a CBG algorithm faces, not subjects to crown a winner.
+- **The Europe-dominant target set is a feature, not a bias.** Its diversity is
+  what gives a wide spread of closest-VP distances and coverage geometries. So
+  **no stratification / reweighting / macro-averaging** — that would erase the
+  signal. "Global" is a *scenario requirement* (must geolocate a host anywhere),
+  not a target-weighting scheme; never relabel a per-setup CDF "global."
+
+### Calibration mechanics (verified by code dive, 2026-06-03)
+
+- LTD calibration is **per-setup and per-fold**, fit fresh from that setup's
+  `fit_samples.parquet` (VP↔fit-fold anchors); fit-anchors disjoint from
+  eval-anchors → **leakage-safe**. No cross-setup/cross-fold model reuse.
+- Per variant: `speed_of_internet` (SOI) is **parameter-free / no fit**;
+  `low_envelope` and `bounded_spline` are **per-VP** fits; `normal_dist` (Spotter)
+  is a **single global pooled** fit.
+- All 6 setups share the **same 721 anchors + same k-fold split**; only the VP
+  corpus changes ⇒ a clean controlled experiment (targets fixed, VP setup =
+  treatment). Cross-setup comparison is therefore **paired / repeated-measures**
+  (same targets), not independent groups — use per-target deltas.
+- Each VP's curve is fit on its RTTs to *globally-distributed* anchors ⇒ the
+  **Global setup is the in-distribution / matched condition**; **US/EU are
+  out-of-distribution**. A per-setup partition varies eval-geometry *and*
+  calibration representativeness together.
+
+### SOI as the geometry baseline
+
+Use **SOI (`million_scale_cbg`)** as the baseline for the geometry studies, for
+two reasons:
+1. **Calibration-free → pure geometry transfer.** Fixed `speed_ratio·c·rtt/2`
+   radius; the only thing shaping its error is VP geometry.
+2. **Zero fallback → uncensored.** The fitted/`_nofil` variants fall back exactly
+   on the hard-geometry targets, so studying geometry on them censors the hardest
+   cases (survivorship bias). SOI returns a result for all targets ⇒ the geometry
+   study runs over the full set.
+
+(Contrast: the shortest-ping line depends only on the *single* nearest VP, so it
+can't exercise the intersection — it's a naive *floor*, not a geometry probe.
+SOI is the pure-geometry CBG.)
+
+Carry SOI through every act as the control: degradation **shared** with SOI =
+pure geometry; **extra** degradation in the fitted variants = calibration
+mismatch. Recast the three acts as **degrees of VP–target match** — Global =
+matched reference, EU = partial, US = extreme mismatch.
+
+### Two geometry studies to build
+
+**Study 1 — closest-VP distance impact.** Main explanator = **scatter of error_km
+(y) vs closest-VP distance (x)**, with SOI as the baseline. Data already exists
+(deliverable-3 inputs). Locked design constraints:
+
+- **Both axes plain-scale (linear), not log.** Same numeric scale on both, with
+  **equal aspect** so a `y=x` reference line sits at 45° — the natural reference
+  ("did CBG localize tighter than the distance to its nearest VP?").
+- **Cross-method panels share identical x (and y) limits + tick steps** so the
+  four variants are directly comparable side by side.
+- Overlay **binned p50/p90 vs distance** per panel to quantify the shape and the
+  saturation point. (Eyeballed from the SOI scatter: a *ramp with saturation* —
+  steep through ~0–1500 km, plateauing in the ~5000 km band past ~2000 km — not a
+  cliff. To confirm with the binned curve.)
+- SOI emphasized as the baseline; the other three overlaid/faceted to show how
+  calibration deviates from the pure-geometry reference. Per-panel fallback count
+  in the title (as in the current SOI figure: `fallback=3/713`).
+- → answers the US-act question; "useful range" = distance at which SOI p50
+  crosses the accuracy threshold.
+
+*Caveat:* linear axes **compress the near-origin cluster** (~60% of targets:
+EU, small distance, small error) — exactly the regime Study 2 dissects. Study 1
+stays linear for the macro alignment; the near-origin zoom is Study 2's job.
+
+*Axis decision (locked 2026-06-03, revised to log–log):* ~~linear~~ — superseded.
+**Both axes log-scale** on a shared `[axis_lo, axis_hi]` (1 → 20000 km, the
+data-driven half-Earth ceiling), identical limits + ticks on **x and y** and
+**across all four method panels** (square box ⇒ `y=x` at a true 45°). Threshold
+lines (100/500/1000/2500/5000 km) drawn on **both** axes. Log uncompresses the
+near-origin EU cluster (the reason we moved off linear). No binned curve overlaid
+— pure scatter; binned p50/p90 live in the JSON only.
+
+**Study 2 — one-sided vs surrounded (azimuthal coverage).** Metric: **largest
+angular gap** — per target, compute great-circle *bearings* to every VP, sort,
+take the max wrap-around gap. Principled threshold:
+- **gap ≥ 180°** → target outside the angular hull of its VPs → intersection
+  unbounded in one direction → "one-sided."
+- **gap < 180°** → "surrounded" → boundable.
+
+**Must condition on closest-VP distance** (the two are colinear: far targets are
+also one-sided). Study 2 = "the residual after Study 1": at *fixed* (small)
+distance, does error rise with the angular gap? Figures: a 2D view
+(x = closest-VP dist, y = angular gap, color = SOI error) to expose the
+colinearity, plus a conditioned panel (within the near-distance bin: SOI error vs
+angular gap). Recommended: angular gap over **all** VPs, with a near-VP-subset
+version as a robustness check. → answers the EU-act question.
+
+### Computability / scope
+
+- Both metrics derive from **`eval_observations.parquet` coordinates alone**
+  (target + VP lat/lon) — no benchmark re-run. closest-VP distance already lives
+  in `_io.load_closest_vp`; the angular gap is the same data. New code: a
+  `load_angular_gap` in `_io.py` (mirrors `load_closest_vp`) + one figure script
+  `plot_geometry_studies.py` (SOI baseline + overlays, sibling JSON each).
+- **Deferred (still parked):** the Global-act **constraint-tightness** study
+  (τ-ms band / which VPs actually bound the final intersection) needs MTL
+  internals not surfaced in the outputs today.
+
+### Open / unsettled (why no todos yet)
+
+- Cliff-vs-ramp of the SOI distance curve not yet checked with data.
+- Angular metric definition (largest bearing gap, 180° cut, all-VPs vs near
+  subset) recommended but not locked.
+- Figure forms (2D joint + conditioned panel) tentative.

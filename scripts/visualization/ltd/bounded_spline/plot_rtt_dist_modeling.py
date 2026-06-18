@@ -44,11 +44,13 @@ def plot_rtt_distance(
     delta: Optional[float] = None,
     *,
     title: Optional[str] = None,
+    coverage: Optional[float] = None,
 ) -> Axes:
     """Draw scatter + 2/3·c baseline + hulls + spline + δ-band on `ax`.
 
     `submodel` supplies the hull arrays and spline knots; `delta` widens the
     spline-anchored band via `submodel.predict_distance_bounds(rtt, delta)`.
+    `coverage` is the band's target coverage, shown in the legend.
     """
     distances = np.asarray(distances, dtype=float)
     rtts = np.asarray(rtts, dtype=float)
@@ -131,8 +133,13 @@ def plot_rtt_distance(
                 else:
                     below = np.ones_like(rtt_grid, dtype=bool)
                     above = np.zeros_like(rtt_grid, dtype=bool)
+                scaled_label = (
+                    f"Scaled Spline (coverage={coverage:g})"
+                    if coverage is not None
+                    else "Scaled Spline"
+                )
                 ax.plot(rtt_grid[below], outer_band[below], color="black",
-                        linestyle="-.", linewidth=2.0, label="Scaled Spline")
+                        linestyle="-.", linewidth=2.0, label=scaled_label)
                 ax.plot(rtt_grid[below], inner_band[below], color="black",
                         linestyle="-.", linewidth=2.0, label="_nolegend_")
                 if above.any():
@@ -192,6 +199,7 @@ def plot_bounded_spline_vp(
         submodel=model._submodels.get(vp_id),
         delta=model._deltas.get(vp_id),
         title=title,
+        coverage=model.target_coverage,
     )
 
 
