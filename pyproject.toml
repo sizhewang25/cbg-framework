@@ -47,6 +47,7 @@ dependencies = [
     "ipykernel (>=6.24.0,<7.0.0)",
     "jupyter (>=1.0.0,<2.0.0)",
     "reverse-geocoder (>=1.5.1,<2.0.0)",
+    "scikit-learn (>=1.9.0,<2.0.0)",
 ]
 
 [tool.poetry]
