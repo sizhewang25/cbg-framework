@@ -39,6 +39,7 @@ SLIM_COLUMNS = (
     "latitude_deg",
     "longitude_deg",
     "type",
+    "scheduled_service",
 )
 
 # Default location of the committed slim parquet, relative to the repo root.
@@ -56,14 +57,18 @@ def _nonblank(series: pd.Series) -> pd.Series:
 def filter_airports(raw: pd.DataFrame) -> pd.DataFrame:
     """Distil the raw OurAirports frame to the operator-facing airport set.
 
-    Keeps rows whose `type` is large/medium *and* that carry a non-blank IATA
-    code *and* a non-blank municipality (city). See the decision note for the
-    rationale and the resulting count (~4,441 worldwide).
+    Keeps rows whose `type` is large/medium, that carry a non-blank IATA code
+    and municipality, *and* that have scheduled commercial service. The
+    scheduled-service gate is the in-dataset proxy for "codes operators actually
+    reference" (the IATA codes that appear in PoP/router rDNS hostnames) — it
+    drops GA/military fields like PAO (Palo Alto) and NUQ (Moffett) while keeping
+    real metro hubs. See the decision note for the resulting count (~3,224).
     """
     keep = (
         raw["type"].isin(AIRPORT_TYPES)
         & _nonblank(raw["iata_code"])
         & _nonblank(raw["municipality"])
+        & (raw["scheduled_service"] == "yes")
     )
     slim = raw.loc[keep, list(SLIM_COLUMNS)].copy()
     slim["iata_code"] = slim["iata_code"].astype("string").str.strip()

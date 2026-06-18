@@ -284,8 +284,8 @@ def cmd_build_airports(
     """(Re)build the slim airport reference parquet from OurAirports.
 
     Like the other datasets/ reference files, the artifact is regenerated rather
-    than committed. Filters to large/medium airports with an IATA code and a
-    municipality (~4,441 worldwide)."""
+    than committed. Filters to large/medium airports with an IATA code, a
+    municipality, and scheduled commercial service (~3,224 worldwide)."""
     import tempfile
     import urllib.request
 

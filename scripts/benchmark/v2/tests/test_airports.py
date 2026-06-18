@@ -48,19 +48,27 @@ class TestFilterAirports(unittest.TestCase):
                     "heliport",        # drop: wrong type
                     "large_airport",   # drop: no IATA
                     "medium_airport",  # drop: no municipality
+                    "medium_airport",  # drop: no scheduled service (e.g. PAO/NUQ)
                 ],
-                "iata_code": ["JFK", "AUS", "XXX", "HHH", None, "ZZZ"],
-                "municipality": ["New York", "Austin", "Nowhere", "Pad", "Bigcity", None],
-                "latitude_deg": [40.6, 30.2, 1.0, 2.0, 3.0, 4.0],
-                "longitude_deg": [-73.8, -97.7, 1.0, 2.0, 3.0, 4.0],
-                "name": ["a", "b", "c", "d", "e", "f"],
-                "iso_country": ["US", "US", "US", "US", "US", "US"],
+                "iata_code": ["JFK", "AUS", "XXX", "HHH", None, "ZZZ", "PAO"],
+                "municipality": ["New York", "Austin", "Nowhere", "Pad", "Bigcity", None, "Palo Alto"],
+                "scheduled_service": ["yes", "yes", "yes", "yes", "yes", "yes", "no"],
+                "latitude_deg": [40.6, 30.2, 1.0, 2.0, 3.0, 4.0, 37.46],
+                "longitude_deg": [-73.8, -97.7, 1.0, 2.0, 3.0, 4.0, -122.11],
+                "name": ["a", "b", "c", "d", "e", "f", "Palo Alto Airport"],
+                "iso_country": ["US", "US", "US", "US", "US", "US", "US"],
             }
         )
 
-    def test_keeps_only_large_medium_with_iata_and_municipality(self) -> None:
+    def test_keeps_only_large_medium_with_iata_municipality_and_scheduled(self) -> None:
         out = filter_airports(self._raw())
         self.assertEqual(sorted(out["iata_code"]), ["AUS", "JFK"])
+
+    def test_unscheduled_airport_dropped(self) -> None:
+        # PAO (Palo Alto) is medium + IATA + municipality but has no scheduled
+        # service — exactly the GA-field artifact the filter must exclude.
+        out = filter_airports(self._raw())
+        self.assertNotIn("PAO", set(out["iata_code"]))
 
     def test_blank_strings_treated_as_missing(self) -> None:
         raw = self._raw()

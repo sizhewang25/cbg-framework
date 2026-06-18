@@ -20,30 +20,40 @@ accuracy requirement and reframes the lat/lon as "which airport is nearest."
 ### Filter applied (the semantic crux of the metric)
 
 Keep `type ∈ {large_airport, medium_airport}` **and** non-null `iata_code`
-**and** non-null `municipality`.
+**and** non-null `municipality` **and** `scheduled_service == 'yes'`.
 
-| filter | count |
+| filter (with IATA + municipality) | count |
 |---|---|
 | all rows | 85,597 |
-| with IATA | 9,056 |
-| large+medium + IATA | 4,562 |
-| large+medium + IATA + non-null municipality | **4,441** ← chosen |
-| large+medium + IATA + scheduled_service=yes | 3,274 |
+| large+medium | 4,441 |
+| large only | 1,175 |
+| **large+medium + scheduled_service** | **3,224** ← chosen |
 
 **Why this filter:** the unfiltered set is 50% heliports / small / closed
 strips. An operator reasons in recognizable metro codes (JFK, LHR, FRA), so a
 nearby grass airstrip "winning" the nearest-airport test would make the metric
-meaningless. large+medium+IATA is the right granularity. We additionally
-require a non-null `municipality` (drops 121 city-less entries) — the metric is
-operator/city-facing, so an airport with no associated city is not a useful
-match target. `scheduled_service=yes` (3,274) remains a documented tightening
-option if reviewers want only active commercial fields.
+meaningless. large+medium with IATA + municipality is the right *granularity*,
+but it still admits GA/military fields — e.g. **PAO** (Palo Alto) and **NUQ**
+(Moffett Federal Airfield), two Bay Area peninsula fields a few km apart that
+out-compete real hubs like SJC/SFO/OAK on raw distance.
+
+The fix is the **`scheduled_service == 'yes'`** gate: it is the in-dataset proxy
+for "codes operators actually reference." Network operators encode airport/metro
+IATA codes in PoP/router **rDNS hostnames** (`sjc`, `sfo`, `lhr`, …) — and the
+codes that appear there are commercial passenger airports, not GA/military
+strips. Scheduled service drops PAO/NUQ while keeping every metro hub. `large
+only` (1,175) was rejected as too blunt — it loses legitimate regional
+commercial airports whose codes do appear in hostnames. A *true* "appears in
+hostnames" filter would need an external hostname-code dictionary
+(CAIDA Hoiho/DRoP-style); `scheduled_service` is the right proxy and ships in
+the dataset. The `scheduled_service` column is carried into the slim parquet for
+provenance.
 
 ### Slimmed artifact
 
 Slim set lives at `datasets/static_datasets/ourairports_iata.parquet` (columns:
 `iata_code, name, municipality, iso_country, latitude_deg, longitude_deg,
-type`). Per repo convention **nothing under `datasets/` is committed** (the big
+type, scheduled_service`). Per repo convention **nothing under `datasets/` is committed** (the big
 reference files are all on-disk-only, regenerated/downloaded) — so this artifact
 is **not** committed either. Regenerate it with:
 
@@ -137,8 +147,9 @@ genuinely differ.
 
 ## Open / adjustable
 
-- Airport filter (large+medium vs +scheduled_service) — chosen large+medium,
-  easy to retighten, then just re-run the postprocessor.
+- Airport filter — chosen large+medium + scheduled_service (3,224), after
+  PAO/NUQ revealed that large+medium alone admits GA/military fields. A
+  hostname-code dictionary (Hoiho/DRoP) is the stronger-but-heavier alternative.
 - Whether to also record `pred_truth_airport_gap_km` (distance between the two
   nearest airports) — deferred unless needed for analysis.
 - In-place append vs sidecar file — chose in-place (one file has everything for

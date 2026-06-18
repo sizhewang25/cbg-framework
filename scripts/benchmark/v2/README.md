@@ -167,9 +167,12 @@ postprocessing pass over existing `targets.parquet` files.
 
 **Reference data.** [airports.py](airports.py) distils the public-domain
 [OurAirports](https://ourairports.com/data/) `airports.csv` down to the
-operator-facing set: `type ∈ {large_airport, medium_airport}` **and** a non-blank
-IATA code **and** a non-blank municipality (~4,441 airports worldwide). Per the
-`datasets/` convention nothing here is committed — regenerate the slim parquet
+operator-facing set: `type ∈ {large_airport, medium_airport}`, a non-blank IATA
+code, a non-blank municipality, **and** scheduled commercial service
+(`scheduled_service == 'yes'`) — ~3,224 airports worldwide. The scheduled-service
+gate is the proxy for "codes operators reference" (IATA codes in PoP/router rDNS
+hostnames); it drops GA/military fields like PAO/NUQ while keeping metro hubs.
+Per the `datasets/` convention nothing here is committed — regenerate the slim parquet
 (`datasets/static_datasets/ourairports_iata.parquet`) with:
 
 ```bash
@@ -248,7 +251,7 @@ poetry run python -m unittest discover -s scripts/benchmark/v2/tests -t .
 ```
 
 The `-t .` flag pins the top-level dir to the repo root so the `from scripts.…`
-imports inside the tests resolve. 21 + 73 = 94 tests pass on a fresh
+imports inside the tests resolve. 21 + 74 = 95 tests pass on a fresh
 `poetry install` against this commit.
 
 ## Synthetic data for a stand-alone smoke
