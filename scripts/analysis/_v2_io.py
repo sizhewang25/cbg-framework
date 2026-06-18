@@ -15,11 +15,105 @@ from typing import Iterable, Optional
 
 import matplotlib.pyplot as plt
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 # outputs root written by the v2 runner: scripts/benchmark/v2/outputs/<run_id>/.
 # `_v2_io.py` lives at scripts/analysis/, so parents[1] == scripts/.
 DEFAULT_OUTPUTS_ROOT = Path(__file__).resolve().parents[1] / "benchmark" / "v2" / "outputs"
+
+# Where analysis scripts write their figures/tables.
+ANALYSIS_OUTPUTS_ROOT = Path(__file__).resolve().parent / "outputs"
+
+
+# ---- geo filter (shared across every analysis script) ------------------------
+#
+# `geo-eval` annotates each targets.parquet with `target_continent` /
+# `target_country` (see scripts/benchmark/v2/geo_eval.py). Setting a process-wide
+# geo filter here makes `load_targets` transparently restrict every loaded target
+# set to one geography, so *all* analysis scripts inherit geo slicing by simply
+# registering the two CLI args and calling `set_geo_filter_from_args` in their
+# main() — no change to their data-handling code. Output paths are routed under a
+# `geo/<level>/<value>/` segment so filtered artifacts never mix with global ones.
+
+_GEO_LEVEL_COLUMN = {"continent": "target_continent", "country": "target_country"}
+_ACTIVE_GEO: Optional[tuple[str, str]] = None  # (level, value)
+
+
+def add_geo_filter_args(parser) -> None:
+    """Register `--geo-level` / `--geo-value` on an argparse parser.
+
+    Call once per analysis-script `main()`, then `set_geo_filter_from_args(args)`.
+    """
+    g = parser.add_argument_group("geo filter (optional)")
+    g.add_argument(
+        "--geo-level", choices=tuple(_GEO_LEVEL_COLUMN), default=None,
+        help="Restrict every loaded target set to one geography. Requires the "
+             "geo-eval columns (run `cli geo-eval --run-id <id>` first). Pair "
+             "with --geo-value.",
+    )
+    g.add_argument(
+        "--geo-value", default=None,
+        help="Value for --geo-level: a continent name ('Europe', "
+             "'North America') or an ISO alpha-2 country code ('US', 'FR').",
+    )
+
+
+def set_geo_filter_from_args(args) -> Optional[tuple[str, str]]:
+    """Activate the process-wide geo filter from parsed args (idempotent).
+
+    Returns the active `(level, value)` or None. Raises if exactly one of
+    `--geo-level` / `--geo-value` is given.
+    """
+    level = getattr(args, "geo_level", None)
+    value = getattr(args, "geo_value", None)
+    if (level is None) != (value is None):
+        raise SystemExit("--geo-level and --geo-value must be passed together")
+    global _ACTIVE_GEO
+    _ACTIVE_GEO = (level, value) if level is not None else None
+    return _ACTIVE_GEO
+
+
+def active_geo_filter() -> Optional[tuple[str, str]]:
+    """Current `(level, value)` geo filter, or None."""
+    return _ACTIVE_GEO
+
+
+def geo_segment() -> Optional[Path]:
+    """`geo/<level>/<value>` path segment for the active filter, or None."""
+    if _ACTIVE_GEO is None:
+        return None
+    level, value = _ACTIVE_GEO
+    safe = str(value).replace(" ", "_").replace("/", "_")
+    return Path("geo") / level / safe
+
+
+def analysis_out_dir(run_dir: Path, *subdirs: str) -> Path:
+    """Default analysis output dir for a run, geo segment inserted after run_id.
+
+    `outputs/<run_id>/[geo/<level>/<value>/]<subdirs...>` — so a continent=Europe
+    filter routes a script's outputs under `outputs/<run_id>/geo/continent/Europe/`.
+    """
+    parts: list[str] = [run_dir.name]
+    seg = geo_segment()
+    if seg is not None:
+        parts.append(str(seg))
+    return ANALYSIS_OUTPUTS_ROOT.joinpath(*parts, *subdirs)
+
+
+def route_geo_path(path: Path) -> Path:
+    """Insert the active geo segment as a parent of `path`'s final component.
+
+    For explicit `--out` targets the geo filter can't be placed after a run_id
+    (there isn't one in the path), so the segment is inserted just above the
+    file/dir name: `.../foo.png` → `.../geo/<level>/<value>/foo.png`. No-op when
+    no filter is active.
+    """
+    seg = geo_segment()
+    if seg is None:
+        return Path(path)
+    p = Path(path)
+    return p.parent / seg / p.name
 
 
 def resolve_run_dir(
@@ -92,8 +186,24 @@ def group_combos_by_id(combo_dirs: list[Path]) -> dict[str, list[Path]]:
 
 
 def load_targets(combo_dir: Path) -> pa.Table:
-    """Read `<combo_dir>/targets.parquet` (TARGETS_SCHEMA)."""
-    return pq.read_table(combo_dir / "targets.parquet")
+    """Read `<combo_dir>/targets.parquet` (TARGETS_SCHEMA).
+
+    When a process-wide geo filter is active (see `set_geo_filter_from_args`),
+    rows are restricted to the matching `target_continent` / `target_country`
+    in place, so every caller transparently sees only the selected geography.
+    """
+    tbl = pq.read_table(combo_dir / "targets.parquet")
+    if _ACTIVE_GEO is not None:
+        level, value = _ACTIVE_GEO
+        col = _GEO_LEVEL_COLUMN[level]
+        if col not in tbl.schema.names:
+            raise KeyError(
+                f"{combo_dir / 'targets.parquet'} has no '{col}' column — run "
+                "`python -m scripts.benchmark.v2.cli geo-eval --run-id <id>` "
+                "first to annotate the geo columns."
+            )
+        tbl = tbl.filter(pc.equal(tbl.column(col), value))
+    return tbl
 
 
 def load_summary(run_dir: Path) -> pa.Table:

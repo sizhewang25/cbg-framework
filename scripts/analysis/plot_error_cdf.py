@@ -34,11 +34,15 @@ import pyarrow.parquet as pq
 from matplotlib.ticker import ScalarFormatter
 
 from scripts.analysis._v2_io import (
+    active_geo_filter,
+    add_geo_filter_args,
     discover_combos,
     group_combos_by_id,
     load_summary,
     load_targets,
     palette,
+    route_geo_path,
+    set_geo_filter_from_args,
 )
 from scripts.libs.cbg.rtt_model import haversine_distance
 from scripts.processing.ripe_atlas.continents import continent_of
@@ -428,7 +432,9 @@ def _load_nearest_ping_baseline_by_fold_target(inputs_dir: Path) -> dict[str, fl
     }
 
 
-def _load_nearest_ping_baseline(inputs_dir: Path) -> np.ndarray:
+def _load_nearest_ping_baseline(
+    inputs_dir: Path, allowed_target_ids: Optional[set[str]] = None
+) -> np.ndarray:
     """Read eval_observations.parquet and compute haversine error from each
     target to the location of its smallest-latency VP. One error per target.
 
@@ -437,9 +443,36 @@ def _load_nearest_ping_baseline(inputs_dir: Path) -> np.ndarray:
     per-fold input dirs and `**/eval_observations.parquet` is globbed and
     concatenated — the merged-folds counterpart of the merged-folds loader
     in `_load_from_run`.
+
+    `eval_observations.parquet` has no geo columns, so when a geo filter is
+    active the baseline can't filter itself. `allowed_target_ids` (the target
+    ids that survive the filter in `targets.parquet`) restricts the baseline to
+    the same subset so the overlaid line matches the CDF curves.
     """
     by_target = _load_nearest_ping_baseline_by_target(inputs_dir)
+    if allowed_target_ids is not None:
+        by_target = {k: v for k, v in by_target.items() if k in allowed_target_ids}
     return np.asarray(list(by_target.values()), dtype=float)
+
+
+def _geo_allowed_target_ids(
+    run_dir: Path,
+    source: Optional[str],
+    slice_: Optional[str],
+    combos: Optional[list[str]] = None,
+) -> Optional[set[str]]:
+    """Target ids surviving the active geo filter, or None when no filter is set.
+
+    `load_targets` already applies the filter, so this just unions the surviving
+    `target_id`s across the run's combo dirs — used to subset the shortest-ping
+    baseline to the selected geography.
+    """
+    if active_geo_filter() is None:
+        return None
+    ids: set[str] = set()
+    for d in discover_combos(run_dir, source, slice_, combos):
+        ids.update(load_targets(d).column("target_id").to_pylist())
+    return ids
 
 
 _CONTINENT_SLUG_TO_CANON: dict[str, str] = {
@@ -637,6 +670,7 @@ def plot_error_cdf_merge(
     success_only: bool = False,
     max_x_km: float = 10000.0,
     title: Optional[str] = None,
+    allowed_target_ids: Optional[set[str]] = None,
 ) -> plt.Figure:
     """Plot error CDFs for `combos_to_merge` overlaid on a single panel
     (no LTD grouping).
@@ -676,7 +710,7 @@ def plot_error_cdf_merge(
 
     baseline_errors = None
     if inputs_dir is not None:
-        baseline_errors = _load_nearest_ping_baseline(inputs_dir)
+        baseline_errors = _load_nearest_ping_baseline(inputs_dir, allowed_target_ids)
 
     base_title = title or (
         "Error CDF — SUCCESS only (merged combos)" if success_only
@@ -894,9 +928,27 @@ def main() -> None:
              "with the LTD-grouped plots. Combines with "
              "--split-by-main-continent.",
     )
+    add_geo_filter_args(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    set_geo_filter_from_args(args)
+
+    if active_geo_filter() is not None and args.split_by_main_continent is not None:
+        raise SystemExit(
+            "--geo-level/--geo-value and --split-by-main-continent both slice "
+            "by geography; use one or the other. The geo filter reads the "
+            "geo-eval columns on targets.parquet; --split-by-main-continent "
+            "uses the external filtered_anchors.json join."
+        )
+
+    # Route the output under geo/<level>/<value>/ when a filter is active, and
+    # subset the shortest-ping baseline to the surviving target ids.
+    args.out = route_geo_path(args.out)
+    allowed_ids = _geo_allowed_target_ids(
+        args.run_dir, args.source, args.slice_,
+        args.merge_combos or args.combos,
+    )
 
     if args.merge_combos:
         if args.split_by_main_continent is not None:
@@ -925,6 +977,7 @@ def main() -> None:
                 success_only=args.success_only,
                 max_x_km=args.max_x_km,
                 title=args.title,
+                allowed_target_ids=allowed_ids,
             )
             plt.close(fig)
         return
@@ -954,7 +1007,7 @@ def main() -> None:
 
     baseline_errors = None
     if args.inputs_dir is not None:
-        baseline_errors = _load_nearest_ping_baseline(args.inputs_dir)
+        baseline_errors = _load_nearest_ping_baseline(args.inputs_dir, allowed_ids)
         logger.info(
             "shortest_ping baseline: n=%d, p50=%.0f km",
             len(baseline_errors),

@@ -250,9 +250,28 @@ so eval metrics are readable per subset.
 poetry run python -m scripts.benchmark.v2.cli geo-eval --run-id smoke-001
 ```
 
-Downstream, [`scripts/analysis/plot_error_cdf_by_geo.py`](../../analysis/plot_error_cdf_by_geo.py)
-reads these columns and writes one overlaid-combo error CDF per geo bucket
-(`--level continent|country`, `--top-n`, `--min-targets`).
+**Slicing any analysis script.** Once a run is geo-eval'd, every analysis script
+under `scripts/analysis/` accepts a shared `--geo-level {continent,country}` +
+`--geo-value <V>` pair (wired through `_v2_io`: the filter is applied inside
+`load_targets`, so each script restricts its target set transparently). Output
+is routed under a `geo/<level>/<value>/` segment so filtered artifacts never mix
+with the global ones. Examples:
+
+```bash
+# Airport match-rate bars over European targets only
+python -m scripts.analysis.plot_airport_match_bars --run-dir outputs/<run_id> \
+    --geo-level continent --geo-value Europe
+#   → scripts/analysis/outputs/<run_id>/geo/continent/Europe/airport/...
+
+# Error CDF over US targets only
+python -m scripts.analysis.plot_error_cdf --run-dir outputs/<run_id> \
+    --geo-level country --geo-value US --out .../error_cdf.png
+#   → .../geo/country/US/error_cdf.png
+```
+
+This is the column-driven replacement for `plot_error_cdf.py`'s
+`--split-by-main-continent` (which joins the external `filtered_anchors.json`);
+the two are mutually exclusive on the scripts that still carry the legacy flag.
 
 ## Reproducibility
 

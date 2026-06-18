@@ -24,10 +24,13 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from scripts.analysis._v2_io import (
+    add_geo_filter_args,
     discover_combos,
     group_combos_by_id,
     load_summary,
     load_targets,
+    route_geo_path,
+    set_geo_filter_from_args,
 )
 from scripts.analysis.plot_error_cdf import _short_label
 
@@ -286,9 +289,12 @@ def main() -> None:
     )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--title", default=None)
+    add_geo_filter_args(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    set_geo_filter_from_args(args)
+    args.out = route_geo_path(args.out)
     summary, targets_by_combo = _load_from_run(
         args.run_dir, args.source, args.slice_, combos=args.combos,
     )

@@ -36,7 +36,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pyarrow.parquet as pq
 
-from scripts.analysis._v2_io import load_targets
+from scripts.analysis._v2_io import (
+    add_geo_filter_args,
+    load_targets,
+    route_geo_path,
+    set_geo_filter_from_args,
+)
 from scripts.benchmark.v2.checkpoint import load_ltd_checkpoint
 from scripts.framework.geometry import EARTH_RADIUS_KM, geo_to_cartesian
 from scripts.framework.v2.mtl.spherical_circle import SphericalCircleMTL
@@ -288,9 +293,12 @@ def main() -> None:
     parser.add_argument("--inputs-dir", type=Path, required=True,
                         help="benchmark inputs <source>/<run_id>/<setup>/ (parent of fold_*/eval_observations.parquet)")
     parser.add_argument("--out-dir", type=Path, required=True)
+    add_geo_filter_args(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    set_geo_filter_from_args(args)
+    args.out_dir = route_geo_path(args.out_dir)
 
     rows = _read_percentile_csv(args.percentile_csv, args.combo)
     if not rows:

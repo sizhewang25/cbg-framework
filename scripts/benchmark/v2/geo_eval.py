@@ -23,8 +23,10 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
-from scripts.benchmark.v2.schema import SUMMARY_STATS
+from scripts.benchmark.v2.schema import SUMMARY_STATS, TARGETS_SCHEMA
 from scripts.processing.ripe_atlas.continents import continent_of
 
 # Columns appended to each targets.parquet (not part of TARGETS_SCHEMA — the
@@ -121,21 +123,58 @@ def summarize_geo(df: pd.DataFrame) -> list[dict]:
     return rows
 
 
+def _canonicalize_schema(table: pa.Table) -> pa.Table:
+    """Cast columns shared with `TARGETS_SCHEMA` back to their canonical types.
+
+    Earlier in-place postprocessing passes round-trip through pandas, which
+    promotes nullable-int columns (e.g. `ctr_alloc_peak_bytes`) to float64 in
+    any fold that has nulls. Folds without nulls keep int64, so the per-fold
+    files drift apart and `pa.concat_tables` across folds fails. Conforming the
+    `TARGETS_SCHEMA` columns on write heals that drift (byte-count values are
+    whole numbers, so the float64→int64 cast is lossless). Appended columns
+    (airport_*, target_continent/country) aren't in the schema and pass through.
+    """
+    cols = []
+    for name in table.column_names:
+        col = table.column(name)
+        if name in TARGETS_SCHEMA.names:
+            want = TARGETS_SCHEMA.field(name).type
+            if col.type != want:
+                col = col.cast(want)
+        cols.append(col)
+    return pa.table(cols, names=table.column_names)
+
+
 def process_parquet(path: Path) -> list[dict]:
     """Annotate a single targets.parquet in place (atomic) and return its
-    per-bucket summary rows."""
+    per-bucket summary rows.
+
+    pyarrow-native (append + schema-conform) rather than a pandas round-trip, so
+    the existing columns keep their canonical `TARGETS_SCHEMA` types instead of
+    drifting. Idempotent — re-running overwrites the two geo columns.
+    """
     path = Path(path)
-    df = pd.read_parquet(path)
-    annotated = annotate_targets_geo(df)
+    table = pq.read_table(path)
+
+    lat = table.column("target_lat").to_numpy(zero_copy_only=False)
+    lon = table.column("target_lon").to_numpy(zero_copy_only=False)
+    cc = _reverse_geocode_cc(lat, lon)
+    continents = [continent_of(c) for c in cc]
+
+    keep = [n for n in table.column_names if n not in GEO_COLUMNS]
+    table = table.select(keep)
+    table = table.append_column("target_continent", pa.array(continents, pa.string()))
+    table = table.append_column("target_country", pa.array(cc, pa.string()))
+    table = _canonicalize_schema(table)
 
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".parquet")
     os.close(fd)
     try:
-        annotated.to_parquet(tmp, index=False)
+        pq.write_table(table, tmp)
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
 
-    return summarize_geo(annotated)
+    return summarize_geo(table.to_pandas())

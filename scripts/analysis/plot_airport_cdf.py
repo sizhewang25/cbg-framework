@@ -54,10 +54,14 @@ import numpy as np
 from matplotlib.ticker import ScalarFormatter
 
 from scripts.analysis._v2_io import (
+    add_geo_filter_args,
+    analysis_out_dir,
     discover_combos,
     group_combos_by_id,
     load_targets,
     resolve_run_dir,
+    route_geo_path,
+    set_geo_filter_from_args,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,13 +193,16 @@ def main() -> None:
                         help="Output dir (default: scripts/analysis/outputs/<run_id>/airport/cdf).")
     parser.add_argument("--threshold-km", type=float, default=40.0)
     parser.add_argument("--max-x-km", type=float, default=10000.0)
+    add_geo_filter_args(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    set_geo_filter_from_args(args)
 
     run_dir = resolve_run_dir(args.config, args.run_dir, args.outputs_root)
-    out_dir = args.out_dir or (
-        Path(__file__).resolve().parent / "outputs" / run_dir.name / "airport" / "cdf"
+    out_dir = (
+        route_geo_path(args.out_dir) if args.out_dir
+        else analysis_out_dir(run_dir, "airport", "cdf")
     )
 
     combo_dirs = discover_combos(run_dir, args.source, args.slice_)

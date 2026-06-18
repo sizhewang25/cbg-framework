@@ -42,10 +42,14 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from scripts.analysis._v2_io import (
+    add_geo_filter_args,
+    analysis_out_dir,
     discover_combos,
     group_combos_by_id,
     load_targets,
     resolve_run_dir,
+    route_geo_path,
+    set_geo_filter_from_args,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,13 +133,16 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, default=None,
                         help="Output dir (default: scripts/analysis/outputs/<run_id>/airport).")
     parser.add_argument("--threshold-km", type=float, default=40.0)
+    add_geo_filter_args(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    set_geo_filter_from_args(args)
 
     run_dir = resolve_run_dir(args.config, args.run_dir, args.outputs_root)
-    out_dir = args.out_dir or (
-        Path(__file__).resolve().parent / "outputs" / run_dir.name / "airport"
+    out_dir = (
+        route_geo_path(args.out_dir) if args.out_dir
+        else analysis_out_dir(run_dir, "airport")
     )
     rates = compute_rates(run_dir, args.threshold_km, args.source, args.slice_)
 

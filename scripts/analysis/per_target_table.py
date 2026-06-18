@@ -35,9 +35,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from scripts.analysis._v2_io import (
+    add_geo_filter_args,
     discover_combos,
     group_combos_by_id,
     load_targets,
+    route_geo_path,
+    set_geo_filter_from_args,
 )
 from scripts.libs.cbg.rtt_model import haversine_distance
 
@@ -203,9 +206,12 @@ def main() -> None:
         "--out", type=Path, required=True,
         help="Output parquet path.",
     )
+    add_geo_filter_args(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    set_geo_filter_from_args(args)
+    args.out = route_geo_path(args.out)
 
     df = build_per_target_table(
         run_dir=args.run_dir,

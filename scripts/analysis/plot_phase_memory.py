@@ -28,11 +28,14 @@ import numpy as np
 import pyarrow as pa
 
 from scripts.analysis._v2_io import (
+    add_geo_filter_args,
     discover_combos,
     group_combos_by_id,
     load_run_json,
     load_summary,
     load_targets,
+    route_geo_path,
+    set_geo_filter_from_args,
 )
 from scripts.analysis.plot_error_cdf import _short_label
 
@@ -334,9 +337,12 @@ def main() -> None:
     )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--title", default=None)
+    add_geo_filter_args(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    set_geo_filter_from_args(args)
+    args.out = route_geo_path(args.out)
     summary, run_jsons = _load_from_run(
         args.run_dir, args.source, args.slice_, combos=args.combos,
         channel=args.channel,

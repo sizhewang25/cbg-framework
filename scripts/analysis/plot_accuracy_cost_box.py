@@ -39,7 +39,15 @@ from matplotlib.patches import Rectangle
 from matplotlib.ticker import ScalarFormatter
 from matplotlib.transforms import offset_copy
 
-from scripts.analysis._v2_io import discover_combos, load_targets, palette
+from scripts.analysis._v2_io import (
+    active_geo_filter,
+    add_geo_filter_args,
+    discover_combos,
+    load_targets,
+    palette,
+    route_geo_path,
+    set_geo_filter_from_args,
+)
 from scripts.processing.ripe_atlas.continents import continent_of
 
 logger = logging.getLogger(__name__)
@@ -326,9 +334,17 @@ def main() -> None:
     p.add_argument("--title", default=None)
     p.add_argument("--no-log-x", action="store_true")
     p.add_argument("--no-log-y", action="store_true")
+    add_geo_filter_args(p)
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    set_geo_filter_from_args(args)
+    if active_geo_filter() is not None and args.split_by_main_continent is not None:
+        raise SystemExit(
+            "--geo-level/--geo-value and --split-by-main-continent both slice "
+            "by geography; use one or the other."
+        )
+    args.out = route_geo_path(args.out)
 
     cost_spec = _COST_SPECS[args.cost]
     data = _load_combo_xy(

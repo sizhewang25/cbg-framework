@@ -31,7 +31,14 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-from scripts.analysis._v2_io import discover_combos, load_targets
+from scripts.analysis._v2_io import (
+    active_geo_filter,
+    add_geo_filter_args,
+    discover_combos,
+    load_targets,
+    route_geo_path,
+    set_geo_filter_from_args,
+)
 from scripts.analysis.plot_error_cdf import (
     _load_ip_to_continent,
     _normalize_continent,
@@ -322,9 +329,18 @@ def main() -> None:
         "--combos", nargs="*", default=None,
         help="Restrict to these combo_ids (default: every combo found on disk).",
     )
+    add_geo_filter_args(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    set_geo_filter_from_args(args)
+    if active_geo_filter() is not None and args.split_by_main_continent is not None:
+        raise SystemExit(
+            "--geo-level/--geo-value and --split-by-main-continent both slice "
+            "by geography; use one or the other."
+        )
+    args.out_png = route_geo_path(args.out_png)
+    args.out_csv = route_geo_path(args.out_csv)
 
     cbg = _load_cbg_targets_success_only(
         args.run_dir, args.source, args.slice_, combos=args.combos,

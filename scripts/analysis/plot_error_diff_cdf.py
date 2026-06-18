@@ -15,7 +15,13 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 
-from scripts.analysis._v2_io import discover_combos, load_targets
+from scripts.analysis._v2_io import (
+    add_geo_filter_args,
+    discover_combos,
+    load_targets,
+    route_geo_path,
+    set_geo_filter_from_args,
+)
 from scripts.analysis.plot_error_cdf import (
     _load_nearest_ping_baseline_by_fold_target,
     _short_label,
@@ -183,9 +189,12 @@ def main() -> None:
     )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--title", default=None)
+    add_geo_filter_args(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    set_geo_filter_from_args(args)
+    args.out = route_geo_path(args.out)
     target_errors = _load_from_run(
         args.run_dir, args.source, args.slice_, combos=args.combos,
     )
