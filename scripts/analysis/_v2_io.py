@@ -17,6 +17,34 @@ import matplotlib.pyplot as plt
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+# outputs root written by the v2 runner: scripts/benchmark/v2/outputs/<run_id>/.
+# `_v2_io.py` lives at scripts/analysis/, so parents[1] == scripts/.
+DEFAULT_OUTPUTS_ROOT = Path(__file__).resolve().parents[1] / "benchmark" / "v2" / "outputs"
+
+
+def resolve_run_dir(
+    config: Optional[Path] = None,
+    run_dir: Optional[Path] = None,
+    outputs_root: Optional[Path] = None,
+) -> Path:
+    """Resolve the run directory (`outputs/<run_id>/`) from a benchmark config.
+
+    `run_dir` wins if given (explicit override). Otherwise the `run_id` field is
+    read from the config YAML and joined onto `outputs_root` (defaults to the
+    v2 runner's outputs tree). This lets the airport-analysis scripts take the
+    same config file that drove the benchmark as their single input.
+    """
+    if run_dir is not None:
+        return Path(run_dir)
+    if config is None:
+        raise ValueError("pass either --config or --run-dir")
+    import yaml
+
+    cfg = yaml.safe_load(Path(config).read_text())
+    run_id = cfg["run_id"]
+    root = Path(outputs_root) if outputs_root is not None else DEFAULT_OUTPUTS_ROOT
+    return root / run_id
+
 
 def discover_combos(
     run_dir: Path,
