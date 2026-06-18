@@ -41,10 +41,18 @@ option if reviewers want only active commercial fields.
 
 ### Slimmed artifact
 
-Store a slim copy at `datasets/static_datasets/ourairports_iata.parquet`
-(columns: `iata_code, name, municipality, iso_country, latitude_deg,
-longitude_deg, type`). Keeps the repo self-contained and the load fast; the
-raw 85k CSV is not committed.
+Slim set lives at `datasets/static_datasets/ourairports_iata.parquet` (columns:
+`iata_code, name, municipality, iso_country, latitude_deg, longitude_deg,
+type`). Per repo convention **nothing under `datasets/` is committed** (the big
+reference files are all on-disk-only, regenerated/downloaded) — so this artifact
+is **not** committed either. Regenerate it with:
+
+```
+python -m scripts.benchmark.v2.cli build-airports          # downloads + builds
+python -m scripts.benchmark.v2.cli build-airports --src-csv path/to/airports.csv
+```
+
+Neither the slim parquet nor the raw 85k CSV is tracked in git.
 
 ---
 

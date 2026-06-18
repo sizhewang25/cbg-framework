@@ -267,5 +267,96 @@ def _summarize_combo(run_json: Path) -> dict:
     return row
 
 
+# ---- build-airports ----------------------------------------------------------
+
+_OURAIRPORTS_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
+
+
+@app.command("build-airports")
+def cmd_build_airports(
+    src_csv: Optional[Path] = typer.Option(
+        None, help="Local OurAirports airports.csv. If omitted, downloads the latest."
+    ),
+    out: Optional[Path] = typer.Option(
+        None, help="Output slim parquet path (defaults to the committed-by-convention location)."
+    ),
+) -> None:
+    """(Re)build the slim airport reference parquet from OurAirports.
+
+    Like the other datasets/ reference files, the artifact is regenerated rather
+    than committed. Filters to large/medium airports with an IATA code and a
+    municipality (~4,441 worldwide)."""
+    import tempfile
+    import urllib.request
+
+    from scripts.benchmark.v2.airports import DEFAULT_AIRPORTS_PARQUET, build_slim_airports
+
+    out_path = out or DEFAULT_AIRPORTS_PARQUET
+
+    if src_csv is None:
+        tmp = Path(tempfile.mkdtemp()) / "airports.csv"
+        typer.echo(f"Downloading {_OURAIRPORTS_URL} ...")
+        urllib.request.urlretrieve(_OURAIRPORTS_URL, tmp)
+        src_csv = tmp
+
+    slim = build_slim_airports(Path(src_csv), Path(out_path))
+    typer.echo(f"Wrote {out_path} ({len(slim)} airports)")
+
+
+# ---- airport-eval (postprocessing) -------------------------------------------
+
+@app.command("airport-eval")
+def cmd_airport_eval(
+    run_id: str = typer.Option(..., help="Run id whose targets.parquet files to annotate."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root containing <run_id>/."),
+    airports: Optional[Path] = typer.Option(
+        None, help="Override path to the slim airport parquet (defaults to the committed one)."
+    ),
+) -> None:
+    """Append closest-airport columns to every combo's targets.parquet (in place).
+
+    Decoupled postprocessing: re-runnable any time and backfills existing runs
+    without re-running CBG. Also writes airport_summary.parquet (match rate +
+    pred_airport_km stats per combo).
+    """
+    from scripts.benchmark.v2.airport_eval import process_parquet, summarize_airport  # noqa: F401
+    from scripts.benchmark.v2.airports import load_airport_index
+
+    run_root = outputs_root / run_id
+    if not run_root.exists():
+        typer.echo(f"No such run dir: {run_root}", err=True)
+        raise typer.Exit(code=2)
+
+    index = load_airport_index(str(airports) if airports else None)
+
+    import pandas as pd
+
+    rows: list[dict] = []
+    for run_json in run_root.rglob("run.json"):
+        meta = json.loads(run_json.read_text())
+        targets_path = run_json.parent / "targets.parquet"
+        if not targets_path.exists():
+            continue
+        summary = process_parquet(targets_path, index)
+        rows.append(
+            {
+                "run_id": meta["run_id"],
+                "source": meta["source"],
+                "setup": meta.get("setup", "probes_to_anchors"),
+                "slice": meta["slice"],
+                "combo_id": meta["combo_id"],
+                **summary,
+            }
+        )
+
+    if not rows:
+        typer.echo(f"No targets.parquet found under {run_root}", err=True)
+        raise typer.Exit(code=1)
+
+    out_path = run_root / "airport_summary.parquet"
+    pd.DataFrame(rows).to_parquet(out_path, index=False)
+    typer.echo(f"Annotated {len(rows)} combos; wrote {out_path}")
+
+
 if __name__ == "__main__":
     app()

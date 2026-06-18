@@ -150,6 +150,58 @@ class TestCLI(unittest.TestCase):
         combos = set(table.column("ltd").to_pylist())
         self.assertEqual(combos, {"speed_of_internet", "low_envelope"})
 
+    def _write_tiny_airports(self) -> Path:
+        """A hermetic 3-airport reference parquet so the test doesn't depend on
+        the (uncommitted, regenerated) full OurAirports artifact."""
+        import pandas as pd
+        path = Path(self.tmp.name) / "airports.parquet"
+        pd.DataFrame({
+            "iata_code": ["ATL", "SEA", "LHR"],
+            "latitude_deg": [33.6407, 47.4502, 51.4700],
+            "longitude_deg": [-84.4277, -122.3088, -0.4543],
+            "municipality": ["Atlanta", "Seattle", "London"],
+        }).to_parquet(path, index=False)
+        return path
+
+    def test_airport_eval_annotates_targets_and_writes_summary(self) -> None:
+        from scripts.benchmark.v2.airport_eval import AIRPORT_COLUMNS
+
+        airports = self._write_tiny_airports()
+        self._materialize(run_id="ap-test")
+        r = self.runner.invoke(app, [
+            "run-combo",
+            "--source", "generic_csv", "--slice", "fold_0",
+            "--setup", "anchors_to_probes",
+            "--ltd", "speed_of_internet", "--mtl", "planar_circle", "--ctr", "geometric_centroid",
+            "--run-id", "ap-test",
+            "--inputs-root", str(self.inputs_root),
+            "--outputs-root", str(self.outputs_root),
+            "--source-kwargs", json.dumps({"csv_path": str(self.csv_path), "k": 4}),
+        ])
+        self.assertEqual(r.exit_code, 0, msg=r.output)
+
+        result = self.runner.invoke(app, [
+            "airport-eval",
+            "--run-id", "ap-test",
+            "--outputs-root", str(self.outputs_root),
+            "--airports", str(airports),
+        ])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+
+        combo_dir = (
+            self.outputs_root / "ap-test" / "generic_csv" / "anchors_to_probes" / "fold_0"
+            / "speed_of_internet__planar_circle__geometric_centroid"
+        )
+        cols = set(pq.read_table(combo_dir / "targets.parquet").column_names)
+        for col in AIRPORT_COLUMNS:
+            self.assertIn(col, cols)
+
+        summary_path = self.outputs_root / "ap-test" / "airport_summary.parquet"
+        self.assertTrue(summary_path.exists())
+        summ = pq.read_table(summary_path)
+        self.assertEqual(summ.num_rows, 1)
+        self.assertIn("airport_match_rate", summ.column_names)
+
 
 if __name__ == "__main__":
     unittest.main()
