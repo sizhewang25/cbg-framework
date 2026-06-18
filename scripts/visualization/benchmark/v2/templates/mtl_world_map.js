@@ -42,6 +42,16 @@
   const HOLE_LINE = "rgba(160,20,40,0.45)";
   const polyCache = new Map();
 
+  // ---- VP-ring colors (full vs. dimmed-on-hover) + highlight ring ----
+  // Base rings draw at the "full" alpha; hovering a VP dot restyles the base
+  // ring trace(s) to the "dim" alpha and paints the hovered VP's ring(s) into
+  // a dedicated bold highlight trace so a single constraint stands out.
+  const RING_OUTER = "rgba(60,90,160,0.35)";
+  const RING_OUTER_DIM = "rgba(60,90,160,0.06)";
+  const RING_INNER = "rgba(60,90,160,0.55)";
+  const RING_INNER_DIM = "rgba(60,90,160,0.10)";
+  const HL_RING = "rgba(20,40,140,0.95)";  // saturated blue, contrasts the dim
+
   function polyKey(t) { return `${t.fold}__${t.target_id}`; }
   function polyUrl(t) { return `${POLY_URL_PREFIX}${polyKey(t)}.json`; }
 
@@ -174,6 +184,39 @@
     targetSel.value = String(idx);
   }
 
+  // ---- VP-dot hover highlighting ----
+  // On hover over a VP marker: paint that VP's ring(s) into the bold highlight
+  // trace and dim the base rings so the hovered constraint stands out. On
+  // unhover: clear the highlight and restore full-alpha base rings. `ctx`
+  // carries this draw's trace indices (rebound after every Plotly.react).
+  function onVpHover(ev, ctx) {
+    const pt = ev.points && ev.points[0];
+    if (!pt || pt.curveNumber !== ctx.vpMarkerIdx) return;
+    const pred = pt.customdata;
+    if (!pred) return;
+    const coord = vps[pred[0]];
+    if (!coord) return;
+    const o = ringLatLon(coord[0], coord[1], pred[1], 96);
+    Plotly.restyle(plotDiv, { lat: [o.lats], lon: [o.lons] }, [ctx.hlOuterIdx]);
+    if (ctx.hlInnerIdx >= 0) {
+      if (isAnnulus && pred[2] > 0) {
+        const ir = ringLatLon(coord[0], coord[1], pred[2], 96);
+        Plotly.restyle(plotDiv, { lat: [ir.lats], lon: [ir.lons] }, [ctx.hlInnerIdx]);
+      } else {
+        Plotly.restyle(plotDiv, { lat: [[]], lon: [[]] }, [ctx.hlInnerIdx]);
+      }
+    }
+    if (ctx.outerIdx >= 0) Plotly.restyle(plotDiv, { "line.color": RING_OUTER_DIM }, [ctx.outerIdx]);
+    if (ctx.innerIdx >= 0) Plotly.restyle(plotDiv, { "line.color": RING_INNER_DIM }, [ctx.innerIdx]);
+  }
+
+  function onVpUnhover(ctx) {
+    Plotly.restyle(plotDiv, { lat: [[]], lon: [[]] }, [ctx.hlOuterIdx]);
+    if (ctx.hlInnerIdx >= 0) Plotly.restyle(plotDiv, { lat: [[]], lon: [[]] }, [ctx.hlInnerIdx]);
+    if (ctx.outerIdx >= 0) Plotly.restyle(plotDiv, { "line.color": RING_OUTER }, [ctx.outerIdx]);
+    if (ctx.innerIdx >= 0) Plotly.restyle(plotDiv, { "line.color": RING_INNER }, [ctx.innerIdx]);
+  }
+
   // ---- main draw ----
   function draw() {
     if (currentList.length === 0) {
@@ -186,12 +229,15 @@
     const maxR = +maxRSel.value;  // 0 = no cutoff
 
     const traces = [];
+    // Trace indices captured as traces are pushed, so the hover handler can
+    // restyle the right ones regardless of which optional traces are present.
+    let outerIdx = -1, innerIdx = -1, hlOuterIdx = -1, hlInnerIdx = -1, vpMarkerIdx = -1;
 
     // 1) per-VP great-circle rings (filtered by maxR, post-filter toggle, and
     // a hard cap covering the whole Earth — r >= π·R ≈ 20015 km — which has
     // no meaningful ring even with "show all" picked).
-    // Prediction tuple: [vp_id, outer_km, inner_km, isKept]. For disk combos
-    // inner_km == 0 and only the outer ring is drawn.
+    // Prediction tuple: [vp_id, outer_km, inner_km, isKept, rtt_ms]. For disk
+    // combos inner_km == 0 and only the outer ring is drawn.
     const fullEarthKm = Math.PI * EARTH;  // ≈ 20015 km
     const onlyKept = keptOnly.checked;
     const totalKept = t.predictions.reduce((n, p) => n + (p[3] ? 1 : 0), 0);
@@ -226,21 +272,23 @@
       }
     }
     if (outerLats.length) {
+      outerIdx = traces.length;
       traces.push({
         type: "scattergeo",
         mode: "lines",
         lat: outerLats, lon: outerLons,
-        line: { width: 0.8, color: "rgba(60,90,160,0.35)" },
+        line: { width: 0.8, color: RING_OUTER },
         name: isAnnulus ? `outer rings (${kept})` : `LTD circles (${kept})`,
         hoverinfo: "skip",
       });
     }
     if (innerLats.length) {
+      innerIdx = traces.length;
       traces.push({
         type: "scattergeo",
         mode: "lines",
         lat: innerLats, lon: innerLons,
-        line: { width: 0.7, color: "rgba(60,90,160,0.55)", dash: "dash" },
+        line: { width: 0.7, color: RING_INNER, dash: "dash" },
         name: `inner rings (${visibleInners.length})`,
         hoverinfo: "skip",
       });
@@ -292,26 +340,50 @@
       }
     }
 
-    // 2) per-VP markers (only those whose ring is shown).
-    const mkLat = [], mkLon = [], mkText = [];
+    // 1c) highlight ring traces — empty until a VP dot is hovered, then the
+    //     hover handler restyles them with that VP's ring(s) on top of the
+    //     dimmed base rings. Always present so their indices are stable.
+    hlOuterIdx = traces.length;
+    traces.push({
+      type: "scattergeo", mode: "lines", lat: [], lon: [],
+      line: { width: 2.2, color: HL_RING },
+      hoverinfo: "skip", showlegend: false,
+    });
+    if (isAnnulus) {
+      hlInnerIdx = traces.length;
+      traces.push({
+        type: "scattergeo", mode: "lines", lat: [], lon: [],
+        line: { width: 1.8, color: HL_RING, dash: "dash" },
+        hoverinfo: "skip", showlegend: false,
+      });
+    }
+
+    // 2) per-VP markers (only those whose ring is shown). `customdata` carries
+    //    the full prediction tuple so the hover handler can rebuild the ring.
+    const mkLat = [], mkLon = [], mkText = [], mkPred = [];
     for (const pred of t.predictions) {
       if (!included(pred)) continue;
       const coord = vps[pred[0]];
       if (!coord) continue;
       mkLat.push(coord[0]); mkLon.push(coord[1]);
-      const outer = pred[1], inner = pred[2];
-      let line = `VP ${pred[0]}<br>outer = ${outer.toFixed(1)} km`;
+      mkPred.push(pred);
+      const outer = pred[1], inner = pred[2], rtt = pred[4];
+      let line = `VP ${pred[0]}`;
+      line += rtt != null ? `<br>RTT = ${rtt.toFixed(2)} ms` : `<br>RTT = —`;
+      line += `<br>outer = ${outer.toFixed(1)} km`;
       if (isAnnulus) {
         line += inner > 0 ? `<br>inner = ${inner.toFixed(1)} km` : `<br>inner = 0`;
       }
       line += `<br>${pred[3] ? "kept" : "dropped by pre-filter"}`;
       mkText.push(line);
     }
+    vpMarkerIdx = traces.length;
     traces.push({
       type: "scattergeo",
       mode: "markers",
       lat: mkLat, lon: mkLon,
       text: mkText,
+      customdata: mkPred,
       hoverinfo: "text",
       marker: { size: 5, color: "rgba(40,60,120,0.75)" },
       name: `VPs (${kept})`,
@@ -421,6 +493,19 @@
       pctNote + filterNote;
 
     Plotly.react(plotDiv, traces, layout, { responsive: true });
+
+    // Re-bind hover highlighting for this draw's trace layout. Remove prior
+    // listeners first so they don't stack across Plotly.react calls — trace
+    // indices shift as optional traces (rings, feasible region) come and go.
+    if (plotDiv.removeAllListeners) {
+      plotDiv.removeAllListeners("plotly_hover");
+      plotDiv.removeAllListeners("plotly_unhover");
+    }
+    if (vpMarkerIdx >= 0) {
+      const hoverCtx = { outerIdx, innerIdx, hlOuterIdx, hlInnerIdx, vpMarkerIdx };
+      plotDiv.on("plotly_hover", (ev) => onVpHover(ev, hoverCtx));
+      plotDiv.on("plotly_unhover", () => onVpUnhover(hoverCtx));
+    }
 
     // Kick off the lazy fetch only when the cache hasn't seen this target yet.
     // Once the fetch resolves it populates the cache and re-calls draw(); on

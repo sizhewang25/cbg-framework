@@ -338,7 +338,9 @@ def _build_fold_payload(
     for row in targets.itertuples(index=False):
         # Collect (vp_id, lat, lon, outer_km, inner_km) per surviving
         # prediction. Annulus combos populate inner_km > 0; disk combos
-        # leave it at 0. The compact JSON form is [vp_id, outer, inner, isKept].
+        # leave it at 0. The compact JSON form is
+        # [vp_id, outer, inner, isKept, rtt_ms] — rtt_ms is the latency that
+        # produced this constraint, surfaced in the VP hover popup.
         raw: list[tuple[str, float, float, float, float]] = []
         for p in row.ltd_predictions:
             if not p.get("success"):
@@ -359,10 +361,19 @@ def _build_fold_payload(
         # `filter_redundant_outer_disks` on `enable_circle_filter=True`), so
         # we can apply it uniformly here regardless of mtl_kind.
         kept = _kept_after_filter([(v, la, lo, r) for v, la, lo, r, _ in raw])
-        preds = [
-            [vp_id, round(outer, 4), round(inner, 4), 1 if vp_id in kept else 0]
-            for vp_id, _lat, _lon, outer, inner in raw
-        ]
+        tid = str(row.target_id)
+        preds = []
+        for vp_id, _lat, _lon, outer, inner in raw:
+            rtt = latency_lookup.get((tid, vp_id))
+            preds.append(
+                [
+                    vp_id,
+                    round(outer, 4),
+                    round(inner, 4),
+                    1 if vp_id in kept else 0,
+                    round(rtt, 4) if rtt is not None else None,
+                ]
+            )
 
         pred_lat = _safe_float(row.pred_lat)
         pred_lon = _safe_float(row.pred_lon)
