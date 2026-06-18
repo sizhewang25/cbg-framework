@@ -14,6 +14,7 @@
 
 # external dataset downloads (reproducible from public endpoints)
 datasets/external_*/
+datasets/static_datasets/
 
 # snakemake sentinel touch files (DAG ordering for in-place rules)
 datasets/ripe_atlas/.flags/
