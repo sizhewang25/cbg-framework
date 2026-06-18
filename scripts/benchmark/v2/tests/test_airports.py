@@ -43,37 +43,39 @@ class TestFilterAirports(unittest.TestCase):
             {
                 "type": [
                     "large_airport",   # keep
-                    "medium_airport",  # keep
+                    "medium_airport",  # drop: hub-level set excludes medium
                     "small_airport",   # drop: wrong type
-                    "heliport",        # drop: wrong type
                     "large_airport",   # drop: no IATA
-                    "medium_airport",  # drop: no municipality
-                    "medium_airport",  # drop: no scheduled service (e.g. PAO/NUQ)
+                    "large_airport",   # drop: no municipality
+                    "large_airport",   # drop: no scheduled service
                 ],
-                "iata_code": ["JFK", "AUS", "XXX", "HHH", None, "ZZZ", "PAO"],
-                "municipality": ["New York", "Austin", "Nowhere", "Pad", "Bigcity", None, "Palo Alto"],
-                "scheduled_service": ["yes", "yes", "yes", "yes", "yes", "yes", "no"],
-                "latitude_deg": [40.6, 30.2, 1.0, 2.0, 3.0, 4.0, 37.46],
-                "longitude_deg": [-73.8, -97.7, 1.0, 2.0, 3.0, 4.0, -122.11],
-                "name": ["a", "b", "c", "d", "e", "f", "Palo Alto Airport"],
-                "iso_country": ["US", "US", "US", "US", "US", "US", "US"],
+                "iata_code": ["JFK", "AUS", "XXX", None, "ZZZ", "UNS"],
+                "municipality": ["New York", "Austin", "Nowhere", "Bigcity", None, "Sleepyton"],
+                "scheduled_service": ["yes", "yes", "yes", "yes", "yes", "no"],
+                "latitude_deg": [40.6, 30.2, 1.0, 3.0, 4.0, 5.0],
+                "longitude_deg": [-73.8, -97.7, 1.0, 3.0, 4.0, 5.0],
+                "name": ["a", "b", "c", "e", "f", "g"],
+                "iso_country": ["US", "US", "US", "US", "US", "US"],
             }
         )
 
-    def test_keeps_only_large_medium_with_iata_municipality_and_scheduled(self) -> None:
+    def test_keeps_only_large_with_iata_municipality_and_scheduled(self) -> None:
         out = filter_airports(self._raw())
-        self.assertEqual(sorted(out["iata_code"]), ["AUS", "JFK"])
+        self.assertEqual(sorted(out["iata_code"]), ["JFK"])
+
+    def test_medium_airport_dropped(self) -> None:
+        # AUS is a medium airport with IATA + municipality + scheduled service,
+        # yet the hub-level set excludes it.
+        self.assertNotIn("AUS", set(filter_airports(self._raw())["iata_code"]))
 
     def test_unscheduled_airport_dropped(self) -> None:
-        # PAO (Palo Alto) is medium + IATA + municipality but has no scheduled
-        # service — exactly the GA-field artifact the filter must exclude.
-        out = filter_airports(self._raw())
-        self.assertNotIn("PAO", set(out["iata_code"]))
+        # A large airport with no scheduled service (GA/military field) is still
+        # excluded by the scheduled-service gate.
+        self.assertNotIn("UNS", set(filter_airports(self._raw())["iata_code"]))
 
     def test_blank_strings_treated_as_missing(self) -> None:
         raw = self._raw()
         raw.loc[0, "iata_code"] = "   "  # JFK now blank → dropped
-        raw.loc[1, "municipality"] = ""   # AUS now blank → dropped
         out = filter_airports(raw)
         self.assertEqual(len(out), 0)
 

@@ -2,13 +2,14 @@
 
 The closest-airport eval metric (scripts/benchmark/v2/airport_eval.py) snaps
 predictions and ground truth to the nearest airport in a slim OurAirports set
-(large/medium airports with an IATA code, a municipality, and scheduled
-commercial service — see notes/2026-06-18-closest-airport-eval-decisions.md).
-This script renders that set on a world map so the geographic coverage — and
-the density differences that drive the metric across regions — is visible.
+(large hubs with an IATA code, a municipality, and scheduled commercial
+service — see notes/2026-06-18-closest-airport-eval-decisions.md). This script
+renders that set on a world map so the geographic coverage — and the density
+differences that drive the metric across regions — is visible.
 
-Large airports are drawn larger/on top; medium airports smaller/underneath.
-A density panel (airports per continent) accompanies the map.
+Airports are coloured by `type`; the hub-level set is large-only, but the
+medium style is retained so the script still works on a large+medium set.
+A longitude-band density panel accompanies the map.
 
 CLI:
     python -m scripts.visualization.airport.plot_airport_distribution
@@ -79,6 +80,8 @@ def plot_distribution(df: pd.DataFrame, out_path: Path) -> Path:
 
     for atype, style in _TYPE_STYLE.items():
         sub = df[df["type"] == atype]
+        if sub.empty:  # e.g. the hub-level (large-only) set has no medium rows
+            continue
         ax.scatter(
             sub["longitude_deg"], sub["latitude_deg"],
             transform=ccrs.PlateCarree(),
@@ -87,9 +90,10 @@ def plot_distribution(df: pd.DataFrame, out_path: Path) -> Path:
             label=f"{style['label']} ({len(sub):,})",
         )
 
+    kinds = " + ".join(sorted(t.replace("_airport", "") for t in df["type"].unique()))
     ax.set_title(
         f"Airport reference set — {len(df):,} scheduled-service airports "
-        "(OurAirports, large + medium)",
+        f"(OurAirports, {kinds})",
         fontsize=13,
     )
     ax.legend(loc="lower left", framealpha=0.9, fontsize=10, markerscale=1.5)

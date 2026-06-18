@@ -4,7 +4,7 @@ Operators care less about exact lat/lon error than about whether a geolocation
 estimate resolves to the right airport (IATA metro code). This module provides:
 
 - `filter_airports` — distil the raw OurAirports CSV to the operator-facing set
-  (large/medium airports that carry both an IATA code and a municipality).
+  (large hubs with scheduled service that carry an IATA code and a municipality).
 - `build_slim_airports` — write that slim set to a committed parquet.
 - `AirportIndex` — a haversine `BallTree` over the slim set, returning the
   nearest IATA code + great-circle distance (km) for query points, vectorized
@@ -25,10 +25,12 @@ from sklearn.neighbors import BallTree
 
 from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM
 
-# OurAirports `type` values we keep — the recognizable commercial fields. The
-# rest (small_airport, heliport, seaplane_base, closed, balloonport) are noise
-# for an operator reasoning in metro codes.
-AIRPORT_TYPES = ("large_airport", "medium_airport")
+# OurAirports `type` values we keep. Large airports are the major hubs whose
+# IATA codes operators reference in PoP/router rDNS hostnames and where data
+# centers colocate; ~82% of our targets already snap to one. Medium airports
+# are intentionally excluded (hub-level, not metro-faithful) — see the decision
+# note. Everything else (small/heliport/seaplane/closed) is noise.
+AIRPORT_TYPES = ("large_airport",)
 
 # Columns carried into the slim parquet.
 SLIM_COLUMNS = (
@@ -57,12 +59,12 @@ def _nonblank(series: pd.Series) -> pd.Series:
 def filter_airports(raw: pd.DataFrame) -> pd.DataFrame:
     """Distil the raw OurAirports frame to the operator-facing airport set.
 
-    Keeps rows whose `type` is large/medium, that carry a non-blank IATA code
+    Keeps rows whose `type` is a large airport, that carry a non-blank IATA code
     and municipality, *and* that have scheduled commercial service. The
     scheduled-service gate is the in-dataset proxy for "codes operators actually
     reference" (the IATA codes that appear in PoP/router rDNS hostnames) — it
     drops GA/military fields like PAO (Palo Alto) and NUQ (Moffett) while keeping
-    real metro hubs. See the decision note for the resulting count (~3,224).
+    real metro hubs. See the decision note for the resulting count (~1,158).
     """
     keep = (
         raw["type"].isin(AIRPORT_TYPES)

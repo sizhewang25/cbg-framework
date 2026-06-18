@@ -19,35 +19,39 @@ accuracy requirement and reframes the lat/lon as "which airport is nearest."
 
 ### Filter applied (the semantic crux of the metric)
 
-Keep `type ∈ {large_airport, medium_airport}` **and** non-null `iata_code`
-**and** non-null `municipality` **and** `scheduled_service == 'yes'`.
+Keep `type == 'large_airport'` **and** non-null `iata_code` **and** non-null
+`municipality` **and** `scheduled_service == 'yes'`.
 
 | filter (with IATA + municipality) | count |
 |---|---|
 | all rows | 85,597 |
 | large+medium | 4,441 |
-| large only | 1,175 |
-| **large+medium + scheduled_service** | **3,224** ← chosen |
+| large+medium + scheduled_service | 3,224 |
+| **large only + scheduled_service** | **1,158** ← chosen |
 
 **Why this filter:** the unfiltered set is 50% heliports / small / closed
 strips. An operator reasons in recognizable metro codes (JFK, LHR, FRA), so a
 nearby grass airstrip "winning" the nearest-airport test would make the metric
-meaningless. large+medium with IATA + municipality is the right *granularity*,
-but it still admits GA/military fields — e.g. **PAO** (Palo Alto) and **NUQ**
-(Moffett Federal Airfield), two Bay Area peninsula fields a few km apart that
-out-compete real hubs like SJC/SFO/OAK on raw distance.
+meaningless.
 
-The fix is the **`scheduled_service == 'yes'`** gate: it is the in-dataset proxy
-for "codes operators actually reference." Network operators encode airport/metro
-IATA codes in PoP/router **rDNS hostnames** (`sjc`, `sfo`, `lhr`, …) — and the
-codes that appear there are commercial passenger airports, not GA/military
-strips. Scheduled service drops PAO/NUQ while keeping every metro hub. `large
-only` (1,175) was rejected as too blunt — it loses legitimate regional
-commercial airports whose codes do appear in hostnames. A *true* "appears in
-hostnames" filter would need an external hostname-code dictionary
-(CAIDA Hoiho/DRoP-style); `scheduled_service` is the right proxy and ships in
-the dataset. The `scheduled_service` column is carried into the slim parquet for
-provenance.
+Two gates do the work. (1) **`scheduled_service == 'yes'`** is the in-dataset
+proxy for "codes operators actually reference" — network operators encode metro
+IATA codes in PoP/router **rDNS hostnames** (`sjc`, `sfo`, `lhr`, …), and those
+are commercial passenger fields, not GA/military strips. It drops artifacts like
+**PAO** (Palo Alto) and **NUQ** (Moffett), Bay Area fields that out-compete real
+hubs (SJC/SFO/OAK) on raw distance. (2) **`type == 'large_airport'`** (hub
+level): data centers and major PoPs colocate at large hubs, and an empirical
+check showed **~82% of our targets already snap to a large airport** (227 of the
+285 distinct ground-truth airports under large+medium were large). We chose the
+hub-level set over large+medium for alignment with the colocation/hostname
+framing.
+
+Tradeoff (recorded): ~18% of targets sit nearest a *medium* airport that is
+genuinely closer (median 10.5 km) — those mid-size metros now reassign to a
+farther large hub, coarsening `truth_airport_km` slightly. A *true* "appears in
+hostnames" filter would use an external hostname-code dictionary (CAIDA
+Hoiho/DRoP-style); `scheduled_service` + large-only is the practical proxy. The
+`scheduled_service` column is carried into the slim parquet for provenance.
 
 ### Slimmed artifact
 
@@ -147,9 +151,11 @@ genuinely differ.
 
 ## Open / adjustable
 
-- Airport filter — chosen large+medium + scheduled_service (3,224), after
-  PAO/NUQ revealed that large+medium alone admits GA/military fields. A
-  hostname-code dictionary (Hoiho/DRoP) is the stronger-but-heavier alternative.
+- Airport filter — chosen large-only + scheduled_service (1,158): hub-level,
+  aligned with data-center/rDNS-hostname colocation (~82% of targets already
+  snap to a large hub). Evolution: large+medium (4,441) → +scheduled_service
+  (3,224, dropped PAO/NUQ) → large-only (1,158). A hostname-code dictionary
+  (Hoiho/DRoP) is the stronger-but-heavier alternative.
 - Whether to also record `pred_truth_airport_gap_km` (distance between the two
   nearest airports) — deferred unless needed for analysis.
 - In-place append vs sidecar file — chose in-place (one file has everything for

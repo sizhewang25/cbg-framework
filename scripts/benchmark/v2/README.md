@@ -167,12 +167,13 @@ postprocessing pass over existing `targets.parquet` files.
 
 **Reference data.** [airports.py](airports.py) distils the public-domain
 [OurAirports](https://ourairports.com/data/) `airports.csv` down to the
-operator-facing set: `type ∈ {large_airport, medium_airport}`, a non-blank IATA
-code, a non-blank municipality, **and** scheduled commercial service
-(`scheduled_service == 'yes'`) — ~3,224 airports worldwide. The scheduled-service
-gate is the proxy for "codes operators reference" (IATA codes in PoP/router rDNS
-hostnames); it drops GA/military fields like PAO/NUQ while keeping metro hubs.
-Per the `datasets/` convention nothing here is committed — regenerate the slim parquet
+operator-facing set: `type == 'large_airport'`, a non-blank IATA code, a
+non-blank municipality, **and** scheduled commercial service
+(`scheduled_service == 'yes'`) — ~1,158 airports worldwide. Large hubs are where
+data centers colocate and whose IATA codes operators reference in PoP/router
+rDNS hostnames (~82% of our targets already snap to one); the scheduled-service
+gate further drops GA/military fields like PAO/NUQ. Per the `datasets/`
+convention nothing here is committed — regenerate the slim parquet
 (`datasets/static_datasets/ourairports_iata.parquet`) with:
 
 ```bash
