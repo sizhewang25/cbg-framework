@@ -9,7 +9,7 @@ post-hoc forensic analysis.
 
 | File                           | Role                                                                                                                                                                                                                             |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [cli.py](cli.py)               | Typer commands: `materialize-inputs`, `run-combo`, `summarize`, `build-airports`, `airport-eval`                                                                                                                                  |
+| [cli.py](cli.py)               | Typer commands: `materialize-inputs`, `run-combo`, `summarize`, `build-airports`, `airport-eval`, `geo-eval`                                                                                                                      |
 | [Snakefile](Snakefile)         | Parameterizes the (source × slice × combo) grid                                                                                                                                                                                  |
 | [sources/](sources/)           | DataSource adapters — [generic_csv.py](sources/generic_csv.py), [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py). See [sources/README.md](sources/README.md) for the contract + how to add your own. |
 | [inputs.py](inputs.py)         | Materializes a DataSource into three parquets                                                                                                                                                                                    |
@@ -19,6 +19,7 @@ post-hoc forensic analysis.
 | [schema.py](schema.py)         | PyArrow schemas — single source of truth for all parquets                                                                                                                                                                        |
 | [airports.py](airports.py)     | OurAirports reference set + `AirportIndex` (haversine `BallTree` nearest-airport lookup)                                                                                                                                          |
 | [airport_eval.py](airport_eval.py) | Decoupled postprocessing — appends closest-airport columns to `targets.parquet`                                                                                                                                             |
+| [geo_eval.py](geo_eval.py)     | Decoupled postprocessing — appends `target_continent` / `target_country` (reverse-geocoded from truth coords) so analysis can slice eval metrics by geography                                                                     |
 | [config/](config/)             | Snakemake configs (smoke, full, ...)                                                                                                                                                                                             |
 
 
@@ -216,6 +217,42 @@ poetry run python -m scripts.benchmark.v2.cli airport-eval --run-id smoke-001 --
 ```
 
 Design rationale: `notes/2026-06-18-closest-airport-eval-decisions.md`.
+
+## Geographic slicing (continent / country)
+
+`error_km` is a single global distribution; it hides that a continent-bounded
+per-ASN VP corpus recovers well at home and degrades abroad. `geo-eval` is a
+second decoupled postprocessing pass (same shape as `airport-eval`) that lets
+analysis slice the eval metrics by geography **without an external join**.
+
+It appends two columns to each `targets.parquet`, in place (atomic, idempotent):
+
+| column | meaning |
+| --- | --- |
+| `target_continent` | canonical continent name (`continents.continent_of`) |
+| `target_country`   | ISO 3166-1 alpha-2 code |
+
+Both are derived from the **ground-truth coordinates** (`target_lat`,
+`target_lon`) via an offline `reverse_geocoder` kdtree — *not* from a
+source-provided country field. Coordinate-derived codes resolve overseas
+territories to their physical location (Guadeloupe → `GP` → North America, not
+its administrative parent `FR` → Europe), which is exactly the mislabel the old
+`country_code`-based continent split had to bbox-guard against. Because the
+labels describe the target (always known), both columns are populated on every
+row regardless of prediction status.
+
+`geo-eval` also writes `geo_summary.parquet` — one row per
+`(combo × group_level × group_value)` (an overall `all` row plus `continent`
+and `country` breakdowns) carrying success counts and `error_km` percentiles,
+so eval metrics are readable per subset.
+
+```bash
+poetry run python -m scripts.benchmark.v2.cli geo-eval --run-id smoke-001
+```
+
+Downstream, [`scripts/analysis/plot_error_cdf_by_geo.py`](../../analysis/plot_error_cdf_by_geo.py)
+reads these columns and writes one overlaid-combo error CDF per geo bucket
+(`--level continent|country`, `--top-n`, `--min-targets`).
 
 ## Reproducibility
 

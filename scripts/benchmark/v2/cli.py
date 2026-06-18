@@ -358,5 +358,58 @@ def cmd_airport_eval(
     typer.echo(f"Annotated {len(rows)} combos; wrote {out_path}")
 
 
+# ---- geo-eval (postprocessing) -----------------------------------------------
+
+@app.command("geo-eval")
+def cmd_geo_eval(
+    run_id: str = typer.Option(..., help="Run id whose targets.parquet files to annotate."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root containing <run_id>/."),
+) -> None:
+    """Append target_continent + target_country to every targets.parquet (in place).
+
+    Decoupled postprocessing (like airport-eval): labels are reverse-geocoded
+    from the ground-truth target coordinates, so it is re-runnable any time and
+    backfills existing runs without re-running CBG. Also writes
+    geo_summary.parquet — one row per (combo × geo bucket) with success counts
+    and error_km percentiles, so eval metrics are readable per continent/country
+    subset.
+    """
+    from scripts.benchmark.v2.geo_eval import process_parquet
+
+    run_root = outputs_root / run_id
+    if not run_root.exists():
+        typer.echo(f"No such run dir: {run_root}", err=True)
+        raise typer.Exit(code=2)
+
+    import pandas as pd
+
+    rows: list[dict] = []
+    for run_json in run_root.rglob("run.json"):
+        meta = json.loads(run_json.read_text())
+        targets_path = run_json.parent / "targets.parquet"
+        if not targets_path.exists():
+            continue
+        for bucket in process_parquet(targets_path):
+            rows.append(
+                {
+                    "run_id": meta["run_id"],
+                    "source": meta["source"],
+                    "setup": meta.get("setup", "probes_to_anchors"),
+                    "slice": meta["slice"],
+                    "combo_id": meta["combo_id"],
+                    **bucket,
+                }
+            )
+
+    if not rows:
+        typer.echo(f"No targets.parquet found under {run_root}", err=True)
+        raise typer.Exit(code=1)
+
+    out_path = run_root / "geo_summary.parquet"
+    pd.DataFrame(rows).to_parquet(out_path, index=False)
+    n_combos = len({(r["combo_id"], r["slice"]) for r in rows})
+    typer.echo(f"Annotated {n_combos} combo dirs; wrote {out_path}")
+
+
 if __name__ == "__main__":
     app()
