@@ -51,6 +51,8 @@ class VpConfig:
     lon: float
     asn: int | None = None
     country: str | None = None
+    continent: str | None = None
+    region: str | None = None
     city: str | None = None
 
 
@@ -62,6 +64,8 @@ class TgConfig:
     lon: float
     asn: int | None = None
     country: str | None = None
+    continent: str | None = None
+    region: str | None = None
     city: str | None = None
 
 

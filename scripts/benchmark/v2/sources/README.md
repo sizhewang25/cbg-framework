@@ -22,7 +22,9 @@ implements the contract against a fixed canonical schema:
 | `vp_id`, `vp_lat`, `vp_lon` | str, float, float | yes |
 | `target_id`, `target_lat`, `target_lon` | str, float, float | yes |
 | `rtt_ms` | float (> 0) | yes |
-| `vp_asn`, `vp_country`, `target_asn`, `target_country` | int, str, … | no |
+| `vp_asn`, `target_asn` | int | no |
+| `vp_country`, `vp_continent`, `vp_region`, `vp_city` | str | no |
+| `target_country`, `target_continent`, `target_region`, `target_city` | str | no |
 
 Steps:
 
@@ -74,7 +76,8 @@ class MySource(DataSource):
 ### `iter_vp_configs`
 
 One [`VpConfig`](base.py) per *unique* VP your source exposes. Drives
-`vp_configs.parquet`. `asn` / `country` are optional (None when absent).
+`vp_configs.parquet`. `asn` / `country` / `continent` / `region` / `city`
+are optional (None when absent).
 `vp_id` must be stable — a probe ID, anchor IP, or a deterministic
 synthetic string. Two rows with the same `vp_id` later in
 `iter_fit_samples` / `iter_eval_targets` are assumed to refer to the same

@@ -7,7 +7,8 @@ Canonical schema (one row per `(vp, target, rtt)` observation):
     target_id, target_lat, target_lon str, float, float   — entity being geolocated
     rtt_ms                           float (>0)           — strictly positive RTT
   optional:
-    vp_asn, vp_country, target_asn, target_country
+    vp_asn, vp_country, vp_continent, vp_region, vp_city
+    target_asn, target_country, target_continent, target_region, target_city
 
 `vp_*` columns **always** supply the VP-role data; `target_*` columns **always**
 supply the target-role data. The `setup` flag is descriptive metadata only —
@@ -66,7 +67,20 @@ _REQUIRED = (
     "rtt_ms",
 )
 
-_OPTIONAL = ("vp_asn", "vp_country", "target_asn", "target_country")
+_OPTIONAL = (
+    "vp_asn", "vp_country", "vp_continent", "vp_region", "vp_city",
+    "target_asn", "target_country", "target_continent", "target_region", "target_city",
+)
+
+# Optional free-text columns. Read with an identity converter so pandas does
+# NOT apply its default NA-sentinel set to them — otherwise common literal
+# codes like the continent "NA" (North America) or country "NA" (Namibia)
+# would silently parse as NaN. Converters for columns absent from the CSV are
+# ignored by pandas, so passing the full tuple is safe.
+_OPTIONAL_STR = (
+    "vp_country", "vp_continent", "vp_region", "vp_city",
+    "target_country", "target_continent", "target_region", "target_city",
+)
 
 _FOLD_SLICE_RE = re.compile(r"^fold_(\d+)$")
 
@@ -137,15 +151,17 @@ class GenericCSVSource(DataSource):
 
     def iter_vp_configs(self) -> Iterator[VpConfig]:
         df = self._ensure_loaded()
-        asn_col = "vp_asn" if "vp_asn" in df.columns else None
-        country_col = "vp_country" if "vp_country" in df.columns else None
+        cols = df.columns
         for _, row in df.drop_duplicates("vp_id").iterrows():
             yield VpConfig(
                 vp_id=str(row["vp_id"]),
                 lat=float(row["vp_lat"]),
                 lon=float(row["vp_lon"]),
-                asn=normalize_asn(row.get(asn_col)) if asn_col else None,
-                country=_opt_str(row.get(country_col)) if country_col else None,
+                asn=normalize_asn(row.get("vp_asn")) if "vp_asn" in cols else None,
+                country=_opt_col(row, "vp_country", cols),
+                continent=_opt_col(row, "vp_continent", cols),
+                region=_opt_col(row, "vp_region", cols),
+                city=_opt_col(row, "vp_city", cols),
             )
 
     def iter_tg_configs(self) -> Iterator[TgConfig]:
@@ -154,16 +170,17 @@ class GenericCSVSource(DataSource):
         # iter_fit_samples. Matches the convention at
         # ripe_atlas_asn_corpora.py:137-158.
         df = self._ensure_loaded()
-        asn_col = "target_asn" if "target_asn" in df.columns else None
-        country_col = "target_country" if "target_country" in df.columns else None
+        cols = df.columns
         for _, row in df.drop_duplicates("target_id").iterrows():
             yield TgConfig(
                 tg_id=str(row["target_id"]),
                 lat=float(row["target_lat"]),
                 lon=float(row["target_lon"]),
-                asn=normalize_asn(row.get(asn_col)) if asn_col else None,
-                country=_opt_str(row.get(country_col)) if country_col else None,
-                city=None,
+                asn=normalize_asn(row.get("target_asn")) if "target_asn" in cols else None,
+                country=_opt_col(row, "target_country", cols),
+                continent=_opt_col(row, "target_continent", cols),
+                region=_opt_col(row, "target_region", cols),
+                city=_opt_col(row, "target_city", cols),
             )
 
     def iter_fit_samples(self) -> Iterator[FitSample]:
@@ -211,7 +228,10 @@ class GenericCSVSource(DataSource):
         return self._df
 
     def _load_csv(self) -> None:
-        df = pd.read_csv(self._csv_path)
+        df = pd.read_csv(
+            self._csv_path,
+            converters={c: _raw_str for c in _OPTIONAL_STR},
+        )
         missing = [c for c in _REQUIRED if c not in df.columns]
         if missing:
             raise ValueError(
@@ -287,5 +307,20 @@ class GenericCSVSource(DataSource):
         )
 
 
-def _opt_str(value: object) -> Optional[str]:
-    return str(value) if pd.notna(value) else None  # type: ignore[arg-type]
+def _raw_str(value: str) -> str:
+    """Identity converter — keeps a cell's literal text so pandas' default
+    NA-sentinel coercion never fires on it (see `_OPTIONAL_STR`)."""
+    return value
+
+
+def _opt_col(row: "pd.Series", col: str, cols: "pd.Index") -> Optional[str]:
+    """Stringify an optional column value, or None when the column is absent
+    from the CSV, the cell is NaN, or the cell is empty/whitespace (empty
+    cells arrive as "" under the `_raw_str` converter, not NaN)."""
+    if col not in cols:
+        return None
+    value = row.get(col)
+    if not pd.notna(value):
+        return None
+    text = str(value).strip()
+    return text or None

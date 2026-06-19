@@ -27,6 +27,8 @@ VP_CONFIGS_SCHEMA = pa.schema([
     pa.field("lon", pa.float64(), nullable=False),
     pa.field("asn", pa.int64(), nullable=True),
     pa.field("country", pa.string(), nullable=True),
+    pa.field("continent", pa.string(), nullable=True),
+    pa.field("region", pa.string(), nullable=True),
     pa.field("city", pa.string(), nullable=True),
 ])
 
@@ -36,6 +38,8 @@ TG_CONFIGS_SCHEMA = pa.schema([
     pa.field("lon", pa.float64(), nullable=False),
     pa.field("asn", pa.int64(), nullable=True),
     pa.field("country", pa.string(), nullable=True),
+    pa.field("continent", pa.string(), nullable=True),
+    pa.field("region", pa.string(), nullable=True),
     pa.field("city", pa.string(), nullable=True),
 ])
 
