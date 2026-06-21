@@ -13,31 +13,35 @@ string handling. Targets are deduped by `target_id`.
 
 Inputs:
     --csv       canonical-schema CSV (see scripts/benchmark/v2/sources/generic_csv.py)
+    --format    csv (default) or json — the targets-catalog serialization
     --stratify  also write a DistGeo K-fold stratification of the targets
     --k                 fold count                          (default 5)
     --seed              DistGeo RNG seed                     (default 42)
     --asn-bucket-top-n  DistGeo bucket cap                   (default 20)
 
 Output (default landing pad: `datasets/<csv stem>/`):
-    targets.json — one entry per unique target_id, with the canonical CSV's own
-                   field names (no RIPE-Atlas renaming):
+    targets.json / targets.csv — one entry per unique target_id, with the
+                   canonical CSV's own field names (no RIPE-Atlas renaming):
                      {target_id, target_lat, target_lon, target_asn,
                       target_country,
                       target_continent/target_region/target_city when present
                       in the CSV}
     stratification/stratification.json — only with `--stratify`; fold_assignments
                    + policy metadata in the shape `stratify.py` writes (the same
-                   file `legacy_dump_csv_stratification.py` produces).
+                   file `legacy_dump_csv_stratification.py` produces). Always
+                   JSON — it is a structured policy document, not a flat record
+                   list, so `--format` does not apply to it.
 
 Run::
 
     python -m scripts.benchmark.v2.sources.dump_csv_targets \\
-        --csv datasets/vultr_pings_us_canonical.csv --stratify
+        --csv datasets/vultr_pings_us_canonical.csv --format csv --stratify
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 from pathlib import Path
@@ -71,6 +75,28 @@ def _target_json(tg: TgConfig) -> dict:
     if tg.city is not None:
         out["target_city"] = tg.city
     return out
+
+
+def _write_records(records: list[dict], out_path: Path, fmt: str) -> None:
+    """Serialize a list of canonical-schema records as JSON or CSV.
+
+    The CSV header is the union of keys across records (preserving
+    first-seen order), so optional geo columns absent from the CSV simply
+    never appear; missing cells in any individual row are written empty.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if fmt == "json":
+        out_path.write_text(json.dumps(records, indent=2))
+        return
+    fieldnames: list[str] = []
+    for rec in records:
+        for key in rec:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with out_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(records)
 
 
 def _write_stratification(
@@ -112,6 +138,7 @@ def dump(
     csv_path: Path,
     out_path: Path,
     *,
+    fmt: str = "csv",
     stratify: bool = False,
     k: int = 5,
     seed: int = 42,
@@ -119,8 +146,7 @@ def dump(
 ) -> Path:
     source = GenericCSVSource(slice="all", csv_path=csv_path)
     tgs = list(source.iter_tg_configs())
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps([_target_json(tg) for tg in tgs], indent=2))
+    _write_records([_target_json(tg) for tg in tgs], out_path, fmt)
     logger.info("wrote %d targets to %s", len(tgs), out_path)
 
     if stratify:
@@ -137,7 +163,9 @@ def main() -> None:
     parser.add_argument("--csv", type=Path, required=True,
                         help="Canonical-schema CSV (vp_*, target_*, rtt_ms columns).")
     parser.add_argument("--out", type=Path, default=None,
-                        help="Output path. Defaults to datasets/<csv-stem>/targets.json.")
+                        help="Output path. Defaults to datasets/<csv-stem>/targets.<format>.")
+    parser.add_argument("--format", choices=("json", "csv"), default="csv",
+                        help="Targets-catalog serialization (default csv).")
     parser.add_argument("--stratify", action="store_true",
                         help="Also write stratification/stratification.json next to targets.json.")
     parser.add_argument("--k", type=int, default=5)
@@ -150,10 +178,11 @@ def main() -> None:
     out_path = args.out
     if out_path is None:
         repo_root = Path(__file__).resolve().parents[4]
-        out_path = repo_root / "datasets" / args.csv.stem / "targets.json"
+        out_path = repo_root / "datasets" / args.csv.stem / f"targets.{args.format}"
 
     dump(
         args.csv, out_path,
+        fmt=args.format,
         stratify=args.stratify,
         k=args.k, seed=args.seed, asn_bucket_top_n=args.asn_bucket_top_n,
     )
