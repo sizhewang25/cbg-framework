@@ -70,16 +70,16 @@ def plot_targets_vps(
     ax.add_feature(cfeature.BORDERS, linewidth=0.25, edgecolor="#cccccc")
 
     ax.scatter(
-        vps["vp_lon"], vps["vp_lat"],
-        transform=ccrs.PlateCarree(),
-        s=28, c="#1f77b4", marker="^", zorder=3, edgecolors="white", linewidths=0.3,
-        alpha=0.85, label=f"VPs ({len(vps):,})",
-    )
-    ax.scatter(
         targets["target_lon"], targets["target_lat"],
         transform=ccrs.PlateCarree(),
-        s=14, c="#ff7f0e", zorder=4, edgecolors="none", alpha=0.75,
+        s=14, c="#ff7f0e", zorder=3, edgecolors="none", alpha=0.5,
         label=f"targets ({len(targets):,})",
+    )
+    ax.scatter(
+        vps["vp_lon"], vps["vp_lat"],
+        transform=ccrs.PlateCarree(),
+        s=28, c="#1f77b4", marker="^", zorder=4, edgecolors="white", linewidths=0.3,
+        alpha=0.6, label=f"VPs ({len(vps):,})",
     )
 
     ax.set_title(f"{len(targets):,} targets vs {len(vps):,} VPs", fontsize=13)

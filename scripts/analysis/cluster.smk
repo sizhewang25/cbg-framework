@@ -14,6 +14,7 @@
 #         clusters/geo/<level>/<value>/...    (one per `cluster_geos` entry)
 #   [2] plot_cluster_match_bars  → <analysis>/<run_id>/[geo/<l>/<v>/]cluster/<run>_cluster_accuracy.png
 #   [3] plot_cluster_cdf         → <analysis>/<run_id>/[geo/<l>/<v>/]cluster/cdf/   (one PNG per combo)
+#   [4] plot_targets_vps         → <analysis>/<run_id>/cluster/<run>_targets_vps.png   (targets + VPs map)
 #
 # Config keys:
 #   run_id   (required)   source (required)   setup (default probes_to_anchors)
@@ -59,6 +60,7 @@ def _all_targets():
     t = [
         str(ANALYSIS_CLUSTER / f"{RUN_ID}_cluster_accuracy.png"),
         str(ANALYSIS_CLUSTER / "cdf"),
+        str(ANALYSIS_CLUSTER / f"{RUN_ID}_targets_vps.png"),
     ]
     for g in CLUSTER_GEOS:
         d = _geo_analysis_dir(g["level"], g["value"])
@@ -171,3 +173,21 @@ rule cluster_cdf_geo:
         " --run-dir {params.run_dir} --source {params.source}"
         " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
         " --geo-level {wildcards.level} --geo-value '{params.value}'"
+
+
+# ---- [4] targets + VPs map --------------------------------------------------
+# Reads the merged targets.csv / vps.csv that cluster_eval_global writes
+# alongside clusters.csv (side outputs at SETUP_DIR); we trigger off the
+# guaranteed clusters.csv and reference the two CSVs via params.
+rule plot_targets_vps:
+    input:
+        clusters = CLUSTERS_DIR / "clusters.csv",
+    output:
+        png = ANALYSIS_CLUSTER / f"{RUN_ID}_targets_vps.png",
+    params:
+        targets = str(SETUP_DIR / "targets.csv"),
+        vps = str(SETUP_DIR / "vps.csv"),
+    shell:
+        CLI + ".visualization.plot_targets_vps"
+        " --targets {params.targets} --vps {params.vps}"
+        " --out {output.png}"
