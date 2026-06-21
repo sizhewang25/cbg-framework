@@ -48,11 +48,13 @@ logger = logging.getLogger(__name__)
 
 
 def compute_rates(
-    run_dir: Path, radius_km: float, source=None, slice_=None
+    run_dir: Path, radius_km: float, source=None, slice_=None, clusters_dir=None
 ) -> tuple[pd.DataFrame, int, int]:
     """One row per combo_id: n, accuracy (snap match), within_r. Plus the shared
     answer-space size (n_centroids, n_targets)."""
-    index, n_centroids, n_targets = build_answer_space(run_dir, source, slice_, radius_km)
+    index, n_centroids, n_targets = build_answer_space(
+        run_dir, source, slice_, radius_km, clusters_dir=clusters_dir
+    )
     grouped = group_combos_by_id(discover_combos(run_dir, source, slice_))
 
     rows = []
@@ -114,6 +116,10 @@ def main() -> None:
                         help="Output dir (default: scripts/analysis/outputs/<run_id>/cluster).")
     parser.add_argument("--radius-km", type=float, default=50.0,
                         help="Cluster centroid-radius cap defining the answer space. Default 50.")
+    parser.add_argument("--clusters-dir", type=Path, default=None,
+                        help="Precomputed cluster-eval results dir (single source of truth). "
+                             "Geo subset auto-resolved when a geo filter is active. "
+                             "If omitted, the answer space is clustered in process.")
     add_geo_filter_args(parser)
     args = parser.parse_args()
 
@@ -127,7 +133,7 @@ def main() -> None:
     )
 
     rates, n_centroids, n_targets = compute_rates(
-        run_dir, args.radius_km, args.source, args.slice_
+        run_dir, args.radius_km, args.source, args.slice_, clusters_dir=args.clusters_dir
     )
     logger.info("answer space: %d targets → %d centroids (R=%.0f km)",
                 n_targets, n_centroids, args.radius_km)

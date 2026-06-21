@@ -41,6 +41,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -57,6 +58,7 @@ from scripts.analysis._v2_io import (
     add_geo_filter_args,
     analysis_out_dir,
     discover_combos,
+    geo_segment,
     group_combos_by_id,
     load_targets,
     resolve_run_dir,
@@ -111,13 +113,42 @@ class _CentroidIndex:
         return out
 
 
-def build_answer_space(
-    run_dir: Path, source, slice_, radius_km: float
-) -> tuple[_CentroidIndex, int, int]:
-    """Cluster the run's pooled unique ground truth into the centroid answer space.
+def _load_precomputed(clusters_dir: Path) -> tuple[_CentroidIndex, int, int]:
+    """Read a `cluster-eval` results dir into (index, n_centroids, n_targets).
 
-    Returns (index, n_centroids, n_targets). Geo filter (if active) flows through
-    `load_targets`, so the answer space matches the targets in scope."""
+    When a geo filter is active, the matching per-geo subset
+    (``<clusters_dir>/geo/<level>/<value>/``) is read instead of the global set."""
+    cdir = Path(clusters_dir)
+    seg = geo_segment()
+    if seg is not None:
+        cdir = cdir / seg
+    cpath = cdir / "clusters.csv"
+    if not cpath.exists():
+        raise FileNotFoundError(
+            f"{cpath} not found — run `python -m scripts.benchmark.v2.cli cluster-eval` "
+            "first (with matching --geo-level/--geo-value if a geo filter is active)."
+        )
+    clusters = pd.read_csv(cpath)
+    index = _CentroidIndex(
+        clusters["centroid_lat"].to_numpy(), clusters["centroid_lon"].to_numpy()
+    )
+    meta = cdir / "meta.json"
+    n_targets = (int(json.loads(meta.read_text())["n_targets"]) if meta.exists()
+                 else int(clusters["n_members"].sum()))
+    return index, len(clusters), n_targets
+
+
+def build_answer_space(
+    run_dir: Path, source, slice_, radius_km: float, clusters_dir: Path | None = None
+) -> tuple[_CentroidIndex, int, int]:
+    """The centroid answer space as (index, n_centroids, n_targets).
+
+    With `clusters_dir`, loads a precomputed `cluster-eval` result (single source
+    of truth, geo-subset aware). Otherwise clusters the run's pooled unique ground
+    truth in process — the geo filter (if active) flows through `load_targets`, so
+    the answer space matches the targets in scope."""
+    if clusters_dir is not None:
+        return _load_precomputed(clusters_dir)
     combo_dirs = discover_combos(run_dir, source, slice_)
     if not combo_dirs:
         raise FileNotFoundError(f"No combos found under {run_dir}")
@@ -254,6 +285,10 @@ def main() -> None:
                         help="Output dir (default: scripts/analysis/outputs/<run_id>/cluster/cdf).")
     parser.add_argument("--radius-km", type=float, default=50.0,
                         help="Cluster centroid-radius cap defining the answer space. Default 50.")
+    parser.add_argument("--clusters-dir", type=Path, default=None,
+                        help="Precomputed cluster-eval results dir (single source of truth). "
+                             "Geo subset auto-resolved when a geo filter is active. "
+                             "If omitted, the answer space is clustered in process.")
     parser.add_argument("--max-x-km", type=float, default=10000.0)
     add_geo_filter_args(parser)
     args = parser.parse_args()
@@ -268,7 +303,7 @@ def main() -> None:
     )
 
     index, n_centroids, n_targets = build_answer_space(
-        run_dir, args.source, args.slice_, args.radius_km
+        run_dir, args.source, args.slice_, args.radius_km, clusters_dir=args.clusters_dir
     )
     logger.info("answer space: %d targets → %d centroids (R=%.0f km)",
                 n_targets, n_centroids, args.radius_km)

@@ -411,5 +411,111 @@ def cmd_geo_eval(
     typer.echo(f"Annotated {n_combos} combo dirs; wrote {out_path}")
 
 
+# ---- cluster-eval (answer-space materialization) -----------------------------
+
+@app.command("cluster-eval")
+def cmd_cluster_eval(
+    run_id: str = typer.Option(..., help="Run id whose targets to cluster."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root containing <run_id>/."),
+    inputs_root: Path = typer.Option(DEFAULT_INPUTS_ROOT, help="Root containing materialized inputs (for the VP merge)."),
+    radius_km: float = typer.Option(50.0, help="Centroid-radius cap R for the cluster answer space."),
+    geo_level: Optional[str] = typer.Option(
+        None, help="continent|country — materialize a per-geo answer-space subset "
+                   "(clusters/geo/<level>/<value>/). Pair with --geo-value."),
+    geo_value: Optional[str] = typer.Option(None, help="Value for --geo-level (e.g. 'Europe', 'US')."),
+) -> None:
+    """Materialize the cluster answer space, once per (source, setup) of a run.
+
+    Decoupled like airport-eval/geo-eval: merges the unique targets (from each
+    fold's targets.parquet) and VPs (from each fold's inputs vp_configs.parquet)
+    across folds into ``targets.csv`` + ``vps.csv`` at the folds' parent dir
+    (``<run_id>/<source>/<setup>/``), reverse-geocodes the targets for geo labels,
+    then clusters the targets via `cluster_ground_truth` into ``clusters/``
+    (global) or ``clusters/geo/<level>/<value>/`` (a geo subset). The plot scripts
+    read this with --clusters-dir instead of re-clustering.
+    """
+    import pandas as pd
+
+    from scripts.benchmark.v2.geo_eval import _reverse_geocode_cc
+    from scripts.benchmark.v2.sources.cluster_ground_truth import (
+        _write_outputs,
+        cluster_ground_truth,
+    )
+    from scripts.processing.ripe_atlas.continents import continent_of
+
+    if (geo_level is None) != (geo_value is None):
+        typer.echo("--geo-level and --geo-value must be passed together", err=True)
+        raise typer.Exit(code=2)
+    geo_col = {"continent": "target_continent", "country": "target_country"}.get(geo_level)
+    if geo_level is not None and geo_col is None:
+        typer.echo(f"--geo-level must be 'continent' or 'country' (got {geo_level!r})", err=True)
+        raise typer.Exit(code=2)
+
+    run_root = outputs_root / run_id
+    if not run_root.exists():
+        typer.echo(f"No such run dir: {run_root}", err=True)
+        raise typer.Exit(code=2)
+
+    # Group every fold/combo targets.parquet by its (source, setup) parent dir
+    # (path = <run>/<source>/<setup>/<fold>/<combo>/targets.parquet).
+    setup_dirs: dict[Path, list[Path]] = {}
+    for tp in run_root.rglob("targets.parquet"):
+        setup_dirs.setdefault(tp.parents[2], []).append(tp)
+    if not setup_dirs:
+        typer.echo(f"No targets.parquet found under {run_root}", err=True)
+        raise typer.Exit(code=1)
+
+    for setup_dir, tpaths in sorted(setup_dirs.items()):
+        source, setup = setup_dir.parent.name, setup_dir.name
+
+        # Merge unique targets across folds (outputs are the evaluated targets).
+        tframes = [
+            pq.read_table(tp, columns=["target_id", "target_lat", "target_lon"]).to_pandas()
+            for tp in tpaths
+        ]
+        targets = (pd.concat(tframes, ignore_index=True)
+                   .drop_duplicates("target_id").reset_index(drop=True))
+        cc = _reverse_geocode_cc(targets["target_lat"].to_numpy(), targets["target_lon"].to_numpy())
+        targets["target_country"] = cc
+        targets["target_continent"] = [continent_of(c) for c in cc]
+
+        # Merge unique VPs across the matching inputs folds (best-effort).
+        in_dir = inputs_root / source / run_id / setup
+        vp_paths = sorted(in_dir.glob("**/vp_configs.parquet"))
+        if vp_paths:
+            vframes = [pq.read_table(vp).to_pandas() for vp in vp_paths]
+            vps = (pd.concat(vframes, ignore_index=True)
+                   .drop_duplicates("vp_id").reset_index(drop=True)
+                   .rename(columns={"lat": "vp_lat", "lon": "vp_lon",
+                                    "asn": "vp_asn", "country": "vp_country"}))
+            vps.to_csv(setup_dir / "vps.csv", index=False)
+        else:
+            typer.echo(f"  [{source}/{setup}] no inputs vp_configs under {in_dir}; skipping vps.csv", err=True)
+        targets.to_csv(setup_dir / "targets.csv", index=False)
+
+        # Cluster the (optionally geo-filtered) targets into the answer space.
+        if geo_col is not None:
+            sub = targets[targets[geo_col] == geo_value].reset_index(drop=True)
+            safe = str(geo_value).replace(" ", "_").replace("/", "_")
+            out_dir = setup_dir / "clusters" / "geo" / geo_level / safe
+        else:
+            sub = targets
+            out_dir = setup_dir / "clusters"
+        if len(sub) == 0:
+            typer.echo(f"  [{source}/{setup}] no targets for {geo_level}={geo_value}; skipping", err=True)
+            continue
+
+        res = cluster_ground_truth(
+            sub["target_lat"].to_numpy(), sub["target_lon"].to_numpy(), radius_km=radius_km
+        )
+        _write_outputs(sub, res, out_dir)
+        typer.echo(
+            f"  [{source}/{setup}] {len(sub)} targets → {res.n_clusters} centroids "
+            f"(R={radius_km:.0f} km) → {out_dir}"
+        )
+
+    typer.echo(f"cluster-eval done for {len(setup_dirs)} (source, setup) tree(s).")
+
+
 if __name__ == "__main__":
     app()
