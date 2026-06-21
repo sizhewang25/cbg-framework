@@ -17,12 +17,8 @@ with the error distance reported as a confidence.
 
 Clustering method — complete-linkage agglomerative, capped on centroid radius
 -----------------------------------------------------------------------------
-k-means is the wrong tool for a radius-bounded partition: its objective is
-within-cluster variance for a *fixed k*, with no notion of a radius, so a cap
-can only be bolted on by searching k (non-monotone, over-splits dense areas, and
-forces singletons by brute force). Instead we use **agglomerative clustering
-with complete linkage** over a precomputed **haversine** distance matrix —
-deterministic, no ``k``, and isolated points drop out as singletons naturally.
+we use **agglomerative clustering with complete linkage** over a precomputed **haversine** distance matrix —
+deterministic, and isolated points drop out as singletons naturally.
 
 The quantity that must be bounded is the one the scoring rule uses: each
 region's **centroid radius** (max member→centroid distance ≤ ``R``), so the
@@ -57,6 +53,9 @@ Outputs (default ``datasets/<targets-stem>/clusters/``):
                       diameter_km, is_singleton
     assignments.csv   one row per input coordinate: target_id, target_lat,
                       target_lon, cluster_id, dist_to_centroid_km
+    meta.json         run parameters (radius_km, n_targets, n_clusters,
+                      n_singletons) so consumers need only the results dir — the
+                      radius cap is not recoverable from the CSVs alone
 """
 
 from __future__ import annotations
@@ -255,7 +254,7 @@ def _load_targets(path: Path) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def _write_outputs(df: pd.DataFrame, res: ClusterResult, out_dir: Path) -> tuple[Path, Path]:
+def _write_outputs(df: pd.DataFrame, res: ClusterResult, out_dir: Path) -> tuple[Path, Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     clusters = pd.DataFrame({
@@ -274,11 +273,21 @@ def _write_outputs(df: pd.DataFrame, res: ClusterResult, out_dir: Path) -> tuple
         "cluster_id": res.labels,
         "dist_to_centroid_km": res.dist_km.round(3),
     })
+    # meta.json carries the run parameters so consumers (e.g. the visualization)
+    # need only the results dir — the radius cap is not recoverable from the CSVs.
+    meta = {
+        "radius_km": res.radius_target_km,
+        "n_targets": int(len(df)),
+        "n_clusters": int(res.n_clusters),
+        "n_singletons": int((res.member_counts == 1).sum()),
+    }
     clusters_path = out_dir / "clusters.csv"
     assignments_path = out_dir / "assignments.csv"
+    meta_path = out_dir / "meta.json"
     clusters.to_csv(clusters_path, index=False)
     assignments.to_csv(assignments_path, index=False)
-    return clusters_path, assignments_path
+    meta_path.write_text(json.dumps(meta, indent=2))
+    return clusters_path, assignments_path, meta_path
 
 
 def main() -> None:
@@ -305,7 +314,7 @@ def main() -> None:
     )
 
     out_dir = args.out_dir or (args.targets.parent / "clusters")
-    clusters_path, assignments_path = _write_outputs(df, res, out_dir)
+    clusters_path, assignments_path, meta_path = _write_outputs(df, res, out_dir)
 
     n = len(df)
     singletons = int((res.member_counts == 1).sum())
@@ -323,6 +332,7 @@ def main() -> None:
                 float(res.diameter_km.max()), float(np.percentile(res.diameter_km, 95)))
     logger.info("wrote %s", clusters_path)
     logger.info("wrote %s", assignments_path)
+    logger.info("wrote %s", meta_path)
 
 
 if __name__ == "__main__":

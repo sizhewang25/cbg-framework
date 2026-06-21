@@ -1,10 +1,14 @@
 """Map + stats for the ground-truth answer-space clustering.
 
-Visualizes the regions produced by
-`scripts.benchmark.v2.sources.cluster_ground_truth` (deterministic
-complete-linkage agglomerative clustering, diameter capped at ``2R``): every
-ground-truth coordinate is grouped into a coherent region, and each region's
-spherical centroid is one point of the CBG classification answer space.
+Visualizes the **results** of `scripts.benchmark.v2.sources.cluster_ground_truth`
+(deterministic complete-linkage agglomerative clustering, centroid radius capped
+at ``R``). Clustering and visualization are decoupled: this script reads the
+written results directory (``clusters.csv`` + ``assignments.csv`` + ``meta.json``)
+and never recomputes the clustering, so the figure always reflects exactly what
+was produced. Generate the inputs first::
+
+    python -m scripts.benchmark.v2.sources.cluster_ground_truth \\
+        --targets datasets/ripe_atlas/asn_corpora/targets.csv --radius-km 50
 
 Left panel — a PlateCarree map: member coordinates colored by region (singletons
 greyed), with an ``R``-radius geodesic circle drawn around each multi-member
@@ -13,20 +17,17 @@ distributions that characterize the answer space: region-size histogram (with
 the singleton share called out) and the per-region centroid-radius CDF (the
 scoring-relevant tightness, against the ``R`` line).
 
-Clustering is recomputed from coordinates here (importing
-`cluster_ground_truth`) so the figure always matches the requested radius — no
-dependency on a pre-written clusters.csv.
-
 CLI::
 
     python -m scripts.visualization.cluster.plot_ground_truth_clusters \\
-        --targets datasets/ripe_atlas/asn_corpora/targets.csv --radius-km 50
+        --clusters-dir datasets/ripe_atlas/asn_corpora/clusters
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 
 import matplotlib
@@ -36,18 +37,56 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import ScalarFormatter
 
-from scripts.benchmark.v2.sources.cluster_ground_truth import (
-    ClusterResult,
-    _load_targets,
-    cluster_ground_truth,
-)
+from scripts.benchmark.v2.sources.cluster_ground_truth import ClusterResult
 from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM
 
-_DEFAULT_RADIUS_KM = 50.0
+logger = logging.getLogger(__name__)
+
 _RADIUS_PCTILES = (50, 75, 90, 95, 99)
+
+
+def load_clustering(
+    clusters_dir: Path, radius_override: float | None = None
+) -> tuple[pd.DataFrame, ClusterResult]:
+    """Load a `cluster_ground_truth` results dir into (members, ClusterResult).
+
+    Reads ``clusters.csv`` (the answer space) and ``assignments.csv`` (per-coord
+    membership). The radius cap ``R`` comes from ``meta.json``; pass
+    `radius_override` to force it, or fall back to the max observed region radius
+    (with a warning) when neither is available."""
+    clusters = pd.read_csv(clusters_dir / "clusters.csv").sort_values(
+        "cluster_id").reset_index(drop=True)
+    members = pd.read_csv(clusters_dir / "assignments.csv")
+
+    meta_path = clusters_dir / "meta.json"
+    if radius_override is not None:
+        radius_km = float(radius_override)
+    elif meta_path.exists():
+        radius_km = float(json.loads(meta_path.read_text())["radius_km"])
+    else:
+        radius_km = float(clusters["radius_km"].max())
+        logger.warning("no meta.json and no --radius-km; using max region radius "
+                       "%.0f km for footprints/cap line", radius_km)
+
+    diameter = (clusters["diameter_km"].to_numpy(dtype=float)
+                if "diameter_km" in clusters.columns
+                else np.zeros(len(clusters)))
+    res = ClusterResult(
+        labels=members["cluster_id"].to_numpy(dtype=int),
+        centroid_lat=clusters["centroid_lat"].to_numpy(dtype=float),
+        centroid_lon=clusters["centroid_lon"].to_numpy(dtype=float),
+        member_counts=clusters["n_members"].to_numpy(dtype=int),
+        radius_km=clusters["radius_km"].to_numpy(dtype=float),
+        diameter_km=diameter,
+        dist_km=members["dist_to_centroid_km"].to_numpy(dtype=float),
+        radius_target_km=radius_km,
+        n_clusters=len(clusters),
+    )
+    return members, res
 
 
 def _geodesic_circle(lat: float, lon: float, radius_km: float, n: int = 60) -> tuple[np.ndarray, np.ndarray]:
@@ -153,12 +192,14 @@ def plot_clusters(df, res: ClusterResult, out_path: Path, *, extent=None) -> Pat
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "--targets", type=Path,
-        default=Path("datasets/ripe_atlas/asn_corpora/targets.csv"),
-        help="Ground-truth file (csv/json) with target_id/target_lat/target_lon.",
+        "--clusters-dir", type=Path,
+        default=Path("datasets/ripe_atlas/asn_corpora/clusters"),
+        help="cluster_ground_truth results dir (clusters.csv + assignments.csv "
+             "+ meta.json).",
     )
-    parser.add_argument("--radius-km", type=float, default=_DEFAULT_RADIUS_KM,
-                        help="Region radius R; complete-linkage caps diameter at 2R. Default 50.")
+    parser.add_argument("--radius-km", type=float, default=None,
+                        help="Override the region radius R for footprints/cap line "
+                             "(default: read from meta.json).")
     parser.add_argument(
         "--extent", type=float, nargs=4, default=None,
         metavar=("LON_MIN", "LON_MAX", "LAT_MIN", "LAT_MAX"),
@@ -171,18 +212,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.targets.exists():
-        raise SystemExit(f"targets file not found at {args.targets}")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    for name in ("clusters.csv", "assignments.csv"):
+        if not (args.clusters_dir / name).exists():
+            raise SystemExit(
+                f"{args.clusters_dir / name} not found — run "
+                "`python -m scripts.benchmark.v2.sources.cluster_ground_truth` first."
+            )
 
-    df = _load_targets(args.targets)
-    res = cluster_ground_truth(
-        df["target_lat"].to_numpy(), df["target_lon"].to_numpy(),
-        radius_km=args.radius_km,
-    )
+    df, res = load_clustering(args.clusters_dir, radius_override=args.radius_km)
     out = plot_clusters(df, res, args.out, extent=args.extent)
 
     n = len(df)
-    print(f"{n:,} coords → {res.n_clusters:,} regions (cap {args.radius_km:.0f} km)")
+    print(f"{n:,} coords → {res.n_clusters:,} regions (cap {res.radius_target_km:.0f} km)")
     print(f"  singletons {int((res.member_counts == 1).sum()):,} "
           f"({100 * (res.member_counts == 1).mean():.1f}% of regions)")
     print(f"  radius_km: max {res.radius_km.max():.1f}, "
