@@ -7,11 +7,11 @@ ground-truth coordinate is grouped into a coherent region, and each region's
 spherical centroid is one point of the CBG classification answer space.
 
 Left panel — a PlateCarree map: member coordinates colored by region (singletons
-greyed), centroids marked, and an ``R``-radius geodesic circle drawn around each
-multi-member centroid so the "coherent region" footprint is literal. Right
-column — the distributions that characterize the answer space: region-size
-histogram (with the singleton share called out) and the per-region centroid-radius
-CDF (the scoring-relevant tightness, against the ``R`` line).
+greyed), with an ``R``-radius geodesic circle drawn around each multi-member
+region so the "coherent region" footprint is literal. Right column — the
+distributions that characterize the answer space: region-size histogram (with
+the singleton share called out) and the per-region centroid-radius CDF (the
+scoring-relevant tightness, against the ``R`` line).
 
 Clustering is recomputed from coordinates here (importing
 `cluster_ground_truth`) so the figure always matches the requested radius — no
@@ -19,7 +19,7 @@ dependency on a pre-written clusters.csv.
 
 CLI::
 
-    python -m scripts.visualization.clusters.plot_ground_truth_clusters \\
+    python -m scripts.visualization.cluster.plot_ground_truth_clusters \\
         --targets datasets/ripe_atlas/asn_corpora/targets.csv --radius-km 50
 """
 
@@ -86,16 +86,13 @@ def _plot_map(ax, df, res: ClusterResult, *, extent) -> None:
                    c=res.labels[multi], cmap="tab20", marker="o",
                    transform=ccrs.PlateCarree(), zorder=3, label="clustered member")
 
-    # Centroids + R-radius footprints for multi-member regions.
+    # R-radius footprints for multi-member regions (no centroid markers).
     for c in range(res.n_clusters):
         if res.member_counts[c] <= 1:
             continue
         cx, cy = _geodesic_circle(res.centroid_lat[c], res.centroid_lon[c], res.radius_target_km)
         ax.plot(cx, cy, color="#444444", linewidth=0.4, alpha=0.5,
                 transform=ccrs.PlateCarree(), zorder=4)
-    ax.scatter(res.centroid_lon, res.centroid_lat, s=18, marker="x",
-               c="#000000", linewidths=0.8, transform=ccrs.PlateCarree(),
-               zorder=5, label="centroid")
     ax.legend(loc="lower left", fontsize=8, framealpha=0.9)
     ax.set_title(
         f"Answer space: {len(df):,} coords → {res.n_clusters:,} regions "
