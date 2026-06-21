@@ -1,0 +1,354 @@
+# Final per-ASN VP corpus benchmark: Vodafone DE (AS3209) probes → 721 shared anchors.
+#
+# Companion to europe_as3209.yaml (the original 4-family parent run) and
+# the *_octant_sweep / *_spotter_sweep configs (parameter sweeps). This config
+# fixes the per-family hyperparameters at the best-known settings from those
+# sweeps and adds a CTR ablation (`_geo` siblings = geometric_centroid CTR
+# instead of monte_carlo_medoid / boundary_vertex_mean) so each LTD family is
+# evaluated under two centroid recipes on the same MTL geometry.
+#
+# Output tree is isolated from the parent's via run_id, so this config does
+# not overwrite north_america_as7018/... outputs.
+#
+# Five LTD families × two CTRs each (where applicable):
+#   - vanilla_cbg          : low_envelope    + spherical_circle      + boundary_vertex_mean
+#   - vanilla_cbg_geo      : low_envelope    + planar_annulus_weighted (top) + geometric_centroid
+#   - million_scale_cbg    : speed_of_internet + spherical_circle    + boundary_vertex_mean
+#   - million_scale_cbg_geo: speed_of_internet + planar_annulus_weighted (top) + geometric_centroid
+#   - octant_cbg           : bounded_spline  + planar_annulus_weighted (weight_threshold=0.9, multi-face) + monte_carlo_medoid
+#   - octant_cbg_top{,_geo}: bounded_spline  + planar_annulus_weighted (highest_weight_only, single face)
+#   - octant_cbg_hull{,_geo}: bounded_spline (no spline / no δ-band) + planar_annulus_weighted (top)
+#   - spotter_cbg          : normal_dist     + planar_annulus_weighted (weight_threshold=0.9, multi-face) + monte_carlo_medoid
+#   - spotter_cbg_top{,_geo}: normal_dist (no coverage cal) + planar_annulus_weighted (top)
+#   - spotter_cbg_c100{,_geo}, c80{,_geo}: spotter with k·σ coverage calibration at 1.0 / 0.8
+#
+# `_geo` switches the MTL to planar_annulus_weighted with highest_weight_only=true
+# so geometric_centroid has a polygon to reduce (it cannot consume the
+# vertex-list output of spherical_circle).
+#
+# Requires (produced by `snakemake -s scripts/processing/ripe_atlas/process_probes_and_anchors.smk`):
+#   - datasets/ripe_atlas/asn_corpora/probes/europe/probes_of_as_3209.json
+#   - datasets/ripe_atlas/asn_corpora/anchors/kfolds/anchor_fold_<0..4>.json
+#
+# Run with:
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile scripts/benchmark/v2/config/europe_as3209_final.yaml -j 4
+
+# Target geo filter variant of europe_as3209_final.yaml: the shared anchor set (eval + fit
+# corpus + catalog) is restricted to Europe via source_kwargs.target_continent='Europe'.
+# Isolated from the parent run via run_id, so it does not overwrite europe_as3209_final/... outputs.
+run_id: europe_as3209_final_eu
+source: ripe_atlas_asn_corpora
+setup: probes_to_anchors
+slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+source_kwargs:
+  probe_data_dir: datasets/ripe_atlas/asn_corpora/probes/europe
+  probe_asn: 3209
+  anchor_data_dir: datasets/ripe_atlas/asn_corpora/anchors/kfolds
+  target_continent: Europe
+  max_rtt_ms: 10000          # RTT upper bound (ms) for compute_rtts_per_dst_src — matches the
+                            # anchor-corpus reachability bound from select_probes_and_anchors.
+
+enable_fallback: true
+seed: 42
+
+combos:
+  # ---- Vanilla CBG family ---------------------------------------------------------
+  - combo_id: vanilla_cbg
+    ltd: low_envelope
+    mtl: spherical_circle
+    ctr: boundary_vertex_mean
+    mtl_kwargs:
+      speed_ratio: 0.6667
+      enable_circle_filter: true
+
+  - combo_id: vanilla_cbg_geo
+    ltd: low_envelope
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    mtl_kwargs:
+      n_pts: 64
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+
+  # Million-scale variants
+  - combo_id: million_scale_cbg
+    ltd: speed_of_internet
+    mtl: spherical_circle
+    ctr: boundary_vertex_mean
+    ltd_kwargs:
+      speed_ratio: 0.6667
+    mtl_kwargs:
+      speed_ratio: 0.6667
+      enable_circle_filter: true
+
+  - combo_id: million_scale_cbg_geo
+    ltd: speed_of_internet
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid    
+    ltd_kwargs:
+      speed_ratio: 0.6667
+    mtl_kwargs:
+      n_pts: 64
+      weight_tau_ms: 50.0
+      enable_circle_filter: true
+      highest_weight_only: true
+
+  # ---- Octant family --------------------------------------------------------
+  - combo_id: octant_cbg_nofil
+    ltd: bounded_spline
+    mtl: planar_annulus
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      weight_threshold: 0.9
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_top
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_top_geo
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      target_coverage: 0.9
+      cutoff_min_points: 5
+      fit_spline: true
+      spline_n_knots: 4
+      bin_size_ms: 5.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+
+  # Octant hull-only: same per-VP convex-hull fit as octant but skip the spline
+  # + per-VP δ-band. predict_distance_bounds falls into its delta=None branch
+  # and returns the raw hull bounds. Isolates the spline+δ contribution to
+  # octant's accuracy. NOTE: target_coverage / spline_n_knots are inert when
+  # fit_spline=false (δ search is gated on a fitted spline), so they're omitted.
+  - combo_id: octant_cbg_hull
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      fit_spline: false             # raw convex-hull bounds; no spline / no δ band
+      cutoff_min_points: 5          # min samples per RTT bin for the cutoff scan
+      bin_size_ms: 5.0              # RTT bin width for the cutoff scan
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: octant_cbg_hull_geo
+    ltd: bounded_spline
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      fit_spline: false             # raw convex-hull bounds; no spline / no δ band
+      cutoff_min_points: 5          # min samples per RTT bin for the cutoff scan
+      bin_size_ms: 5.0              # RTT bin width for the cutoff scan
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+
+  # Spotter (Laki et al. 2011): pooled-normal RTT→distance model. One global
+  # (mu(d), sigma(d), k) fit across all VPs, then per-VP prediction is
+  # [mu±k·sigma] clipped to the 2/3c envelope. Same MTL+CTR as octant so the
+  # head-to-head isolates the LTD: bounded-spline (per-VP band) vs Spotter
+  # (pooled deg-3/deg-2 polynomials).
+  - combo_id: spotter_cbg_nofil
+    ltd: normal_dist
+    mtl: planar_annulus
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
+      min_per_bin: 5               # bins with fewer points are dropped before polyfit
+      deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
+      deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
+      bin_size_ms: 5.0              # RTT bin width (ms)
+      cutoff_min_points: 5         # right-edge cutoff: dense-bin support threshold
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
+      min_per_bin: 5               # bins with fewer points are dropped before polyfit
+      deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
+      deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
+      bin_size_ms: 5.0              # RTT bin width (ms)
+      cutoff_min_points: 5         # right-edge cutoff: dense-bin support threshold
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      weight_threshold: 0.9
+    ctr_kwargs:
+      n_samples: 1024               # power of 2 — Sobol sampler likes that
+
+  - combo_id: spotter_cbg_top
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_top_geo
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+
+  - combo_id: spotter_cbg_c100
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 1.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_c100_geo
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 1.0
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+
+  - combo_id: spotter_cbg_c80
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: monte_carlo_medoid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 0.8
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
+    ctr_kwargs:
+      n_samples: 1024
+
+  - combo_id: spotter_cbg_c80_geo
+    ltd: normal_dist
+    mtl: planar_annulus_weighted
+    ctr: geometric_centroid
+    ltd_kwargs:
+      n_bins: 40
+      min_per_bin: 5
+      deg_mu: 3
+      deg_sigma: 2
+      bin_size_ms: 5.0
+      cutoff_min_points: 5
+      target_coverage: 0.8
+    mtl_kwargs:
+      n_pts: 64
+      enable_circle_filter: true
+      weight_tau_ms: 50.0
+      highest_weight_only: true
