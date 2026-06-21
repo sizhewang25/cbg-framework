@@ -14,8 +14,9 @@ reference lines mark the **shortest-ping-VP baseline** — the same-centroid
 accuracy and within-R rate of using each target's closest-by-RTT VP as the
 estimate — so you can see which combos beat the trivial baseline.
 
-Rates pool SUCCESS+FALLBACK rows across folds per combo (disjoint K-fold test
-sets). Honors the shared `--geo-level/--geo-value` filter.
+Rates are over **SUCCESS rows only**, pooled across folds (a FALLBACK prediction
+is the nearest-VP fallback ≈ the shortest-ping baseline, so it would conflate CBG
+with it). Honors the shared `--geo-level/--geo-value` filter.
 
 CLI:
     python -m scripts.analysis.plot_cluster_match_bars \\
@@ -107,7 +108,7 @@ def plot_bars(
     ax.set_xlim(0, min(1.0, max(0.1, max(xs) * 1.25)))
     ax.set_yticks(list(y))
     ax.set_yticklabels(df["combo_id"], fontsize=8)
-    ax.set_xlabel("rate over SUCCESS+FALLBACK targets", fontsize=11)
+    ax.set_xlabel("rate over SUCCESS targets", fontsize=11)
     ax.set_title(title, fontsize=13, fontweight="bold")
     ax.grid(True, axis="x", alpha=0.3)
     ax.legend(loc="lower right", fontsize=8)

@@ -34,8 +34,11 @@ the headline classification accuracy (matched share), the within-R rate
 (error-to-centroid ≤ R, the point-estimate scoring rule), per-cohort
 percentiles, and the answer-space floor (truth→nearest-centroid distance).
 
-CDFs pool SUCCESS+FALLBACK rows across folds per combo (disjoint K-fold test
-sets). Honors the shared `--geo-level/--geo-value` filter.
+CBG cohorts are **SUCCESS rows only**, pooled across folds (disjoint K-fold test
+sets): a FALLBACK prediction is the nearest-VP fallback (≈ the shortest-ping VP),
+so including it would conflate CBG with the baseline. The baseline itself spans
+every target (it doesn't depend on CBG status). Honors the shared
+`--geo-level/--geo-value` filter.
 
 CLI:
     python -m scripts.analysis.plot_cluster_cdf \\
@@ -78,7 +81,10 @@ from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM, haversine_distance
 
 logger = logging.getLogger(__name__)
 
-_SCORED_STATUSES = ("SUCCESS", "FALLBACK")
+# SUCCESS only — a FALLBACK prediction IS the nearest-VP fallback (≈ the
+# shortest-ping VP), so counting it as a CBG result would conflate CBG with the
+# shortest-ping baseline this plot compares against.
+_CBG_STATUSES = ("SUCCESS",)
 _PCTILES = (50, 90, 95, 99)
 
 
@@ -173,14 +179,16 @@ def build_answer_space(
 
 
 def combo_frame(combo_dirs: list[Path], index: _CentroidIndex) -> pd.DataFrame:
-    """Per scored target: match flag, error-to-truth-centroid, truth→centroid floor.
+    """Per SUCCESS target: match flag, error-to-truth-centroid, truth→centroid floor.
 
-    Pools SUCCESS+FALLBACK rows across folds. `match` is nearest-centroid Voronoi
-    equality between prediction and truth; `error_to_centroid_km` is the gap from
-    the prediction to the truth's centroid (the correct answer point)."""
+    Pools SUCCESS rows only across folds (FALLBACK predictions are the nearest-VP
+    fallback ≈ the shortest-ping baseline, so they would conflate CBG with it).
+    `match` is nearest-centroid Voronoi equality between prediction and truth;
+    `error_to_centroid_km` is the gap from the prediction to the truth's centroid
+    (the correct answer point)."""
     frames = [load_targets(d).to_pandas() for d in combo_dirs]
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    sub = df[df["status"].isin(_SCORED_STATUSES)] if len(df) else df
+    sub = df[df["status"].isin(_CBG_STATUSES)] if len(df) else df
     if len(sub) == 0:
         return pd.DataFrame(columns=["match", "error_to_centroid_km", "truth_centroid_km", "error_km"])
 
