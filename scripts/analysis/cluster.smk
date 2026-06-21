@@ -122,10 +122,12 @@ rule cluster_bars_global:
     params:
         run_dir = str(RUN_DIR), source = SOURCE,
         clusters_dir = str(CLUSTERS_DIR), radius = RADIUS_KM,
+        inputs_root = str(V2_INPUTS_ROOT),
     shell:
         CLI + ".analysis.plot_cluster_match_bars"
         " --run-dir {params.run_dir} --source {params.source}"
         " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
+        " --inputs-root {params.inputs_root}"
 
 
 rule cluster_bars_geo:
@@ -136,11 +138,13 @@ rule cluster_bars_geo:
     params:
         run_dir = str(RUN_DIR), source = SOURCE,
         clusters_dir = str(CLUSTERS_DIR), radius = RADIUS_KM,
+        inputs_root = str(V2_INPUTS_ROOT),
         value = lambda w: w.value.replace("_", " "),
     shell:
         CLI + ".analysis.plot_cluster_match_bars"
         " --run-dir {params.run_dir} --source {params.source}"
         " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
+        " --inputs-root {params.inputs_root}"
         " --geo-level {wildcards.level} --geo-value '{params.value}'"
 
 
@@ -153,10 +157,12 @@ rule cluster_cdf_global:
     params:
         run_dir = str(RUN_DIR), source = SOURCE,
         clusters_dir = str(CLUSTERS_DIR), radius = RADIUS_KM,
+        inputs_root = str(V2_INPUTS_ROOT),
     shell:
         CLI + ".analysis.plot_cluster_cdf"
         " --run-dir {params.run_dir} --source {params.source}"
         " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
+        " --inputs-root {params.inputs_root}"
 
 
 rule cluster_cdf_geo:
@@ -167,11 +173,13 @@ rule cluster_cdf_geo:
     params:
         run_dir = str(RUN_DIR), source = SOURCE,
         clusters_dir = str(CLUSTERS_DIR), radius = RADIUS_KM,
+        inputs_root = str(V2_INPUTS_ROOT),
         value = lambda w: w.value.replace("_", " "),
     shell:
         CLI + ".analysis.plot_cluster_cdf"
         " --run-dir {params.run_dir} --source {params.source}"
         " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
+        " --inputs-root {params.inputs_root}"
         " --geo-level {wildcards.level} --geo-value '{params.value}'"
 
 

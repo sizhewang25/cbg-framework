@@ -23,6 +23,12 @@ the centroid the *truth* snaps to (i.e. distance to the correct answer point):
   mismatched  predictions that snap to a different centroid (wrong class) —
               strictly larger, the misclassification penalty.
 
+A combo-independent **shortest-ping baseline** is overlaid as a dotted gray line:
+the distance from each target's shortest-ping VP (min latency_ms in
+eval_observations) to the centroid the truth snaps to — i.e. "use the closest-by-
+RTT VP as the estimate". The inputs dir is auto-derived from the run layout (or
+passed via --inputs-dir).
+
 The legend carries each cohort's sample count and share, and a stats box reports
 the headline classification accuracy (matched share), the within-R rate
 (error-to-centroid ≤ R, the point-estimate scoring rule), per-cohort
@@ -51,10 +57,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 from matplotlib.ticker import ScalarFormatter
 from sklearn.neighbors import BallTree
 
 from scripts.analysis._v2_io import (
+    active_geo_filter,
     add_geo_filter_args,
     analysis_out_dir,
     discover_combos,
@@ -188,6 +196,93 @@ def combo_frame(combo_dirs: list[Path], index: _CentroidIndex) -> pd.DataFrame:
     })
 
 
+def _shortest_ping_rows(inputs_dir: Path) -> pd.DataFrame:
+    """Per target, the row of its shortest-ping VP, from eval_observations.
+
+    Reads ``<inputs_dir>/eval_observations.parquet`` directly, or globs
+    ``<inputs_dir>/*/eval_observations.parquet`` (merged-fold mode), then keeps
+    the min-`latency_ms` row per `target_id`. Columns: target_id, target_lat,
+    target_lon, vp_lat, vp_lon."""
+    direct = inputs_dir / "eval_observations.parquet"
+    paths = [direct] if direct.exists() else sorted(inputs_dir.glob("*/eval_observations.parquet"))
+    if not paths:
+        raise FileNotFoundError(f"no eval_observations.parquet at {inputs_dir} or {inputs_dir}/*/")
+    df = pd.concat([pq.read_table(p).to_pandas() for p in paths], ignore_index=True)
+    if df.empty:
+        return df
+    idx = df.groupby("target_id")["latency_ms"].idxmin()
+    cols = ["target_id", "target_lat", "target_lon", "vp_lat", "vp_lon"]
+    return df.loc[idx, cols].reset_index(drop=True)
+
+
+def shortest_ping_to_centroid(
+    inputs_dir: Path, index: _CentroidIndex, allowed_ids: set[str] | None = None
+) -> np.ndarray:
+    """Baseline: great-circle distance from each target's shortest-ping VP to the
+    centroid the truth snaps to — i.e. "use the closest-by-RTT VP as the estimate".
+
+    `allowed_ids` restricts the target set (e.g. to a geo subset). Returns an
+    array of distances (km), one per eligible target."""
+    rows = _shortest_ping_rows(inputs_dir)
+    if len(rows) == 0:
+        return np.array([], dtype=float)
+    if allowed_ids is not None:
+        rows = rows[rows["target_id"].isin(allowed_ids)]
+        if len(rows) == 0:
+            return np.array([], dtype=float)
+    t_idx, _ = index.query(rows["target_lat"], rows["target_lon"])
+    return index.distance_to(rows["vp_lat"], rows["vp_lon"], t_idx)
+
+
+def shortest_ping_baseline_rates(
+    inputs_dir: Path, index: _CentroidIndex, radius_km: float,
+    allowed_ids: set[str] | None = None,
+) -> tuple[float, float, int]:
+    """Scalar baseline for the bar chart: if the shortest-ping VP were the
+    estimate, its (classification accuracy, within-R rate, n). Accuracy =
+    fraction where the VP snaps to the truth's centroid; within-R = fraction
+    where VP→truth-centroid ≤ R."""
+    rows = _shortest_ping_rows(inputs_dir)
+    if allowed_ids is not None:
+        rows = rows[rows["target_id"].isin(allowed_ids)]
+    n = len(rows)
+    if n == 0:
+        return float("nan"), float("nan"), 0
+    v_idx, _ = index.query(rows["vp_lat"], rows["vp_lon"])
+    t_idx, _ = index.query(rows["target_lat"], rows["target_lon"])
+    acc = float(((v_idx == t_idx) & (v_idx >= 0)).mean())
+    dist = index.distance_to(rows["vp_lat"], rows["vp_lon"], t_idx)
+    finite = np.isfinite(dist)
+    within = float((dist[finite] <= radius_km).mean()) if finite.any() else float("nan")
+    return acc, within, n
+
+
+def resolve_inputs_dir(
+    run_dir: Path, combo_dirs: list[Path], inputs_root: Path, explicit: Path | None = None
+) -> Path | None:
+    """Inputs dir for the shortest-ping baseline: `explicit`, else auto-derived
+    from the run layout (`<inputs_root>/<source>/<run_id>/<setup>/`, the fold
+    parent). Returns None when nothing resolves."""
+    if explicit is not None:
+        return explicit
+    if not combo_dirs:
+        return None
+    first = combo_dirs[0]
+    cand = inputs_root / first.parents[2].name / run_dir.name / first.parents[1].name
+    return cand if cand.exists() else None
+
+
+def geo_allowed_ids(combo_dirs: list[Path]) -> set[str] | None:
+    """Union of (geo-filtered) target_ids across combos, or None when no geo
+    filter is active (so the baseline spans every target)."""
+    if active_geo_filter() is None:
+        return None
+    allowed: set[str] = set()
+    for d in combo_dirs:
+        allowed |= set(load_targets(d).to_pandas()["target_id"].tolist())
+    return allowed
+
+
 def _cdf(ax, arr: np.ndarray, **kw) -> None:
     s = np.sort(arr[np.isfinite(arr)])
     if len(s):
@@ -208,9 +303,13 @@ def plot_combo_cluster_cdf(
     combo_id: str,
     radius_km: float,
     n_centroids: int,
+    baseline_km: np.ndarray | None = None,
     max_x_km: float = 10000.0,
 ) -> plt.Figure:
-    """Overlay all / matched / mismatched error-to-centroid CDFs for one combo."""
+    """Overlay all / matched / mismatched error-to-centroid CDFs for one combo.
+
+    When `baseline_km` is given, the shortest-ping-VP→truth-centroid baseline is
+    drawn as a dotted gray reference (combo-independent)."""
     fig, ax = plt.subplots(figsize=(9, 6.5))
 
     n = len(df)
@@ -231,6 +330,14 @@ def plot_combo_cluster_cdf(
         _cdf(ax, err[~matched], color="#d62728", linewidth=2.0, zorder=3,
              label=f"mismatched (n={n_mm}, {1 - acc:.1%})")
 
+        n_base = 0
+        if baseline_km is not None:
+            base = baseline_km[np.isfinite(baseline_km)]
+            n_base = len(base)
+            if n_base:
+                _cdf(ax, base, color="#888888", linestyle=":", linewidth=1.8, zorder=2,
+                     label=f"shortest-ping VP → centroid (n={n_base})")
+
         ax.axvline(radius_km, color="green", linestyle=":", alpha=0.6)
         ax.text(radius_km, 0.02, f" R={radius_km:.0f} km", color="green",
                 fontsize=8, rotation=90, va="bottom", ha="left")
@@ -243,11 +350,14 @@ def plot_combo_cluster_cdf(
             f"answer space: {n_centroids} centroids\n"
             f"truth→centroid p50/p90  {floor[50]:.0f}/{floor[90]:.0f} km\n"
             f"\n"
-            f"{'err→centroid':<12} {'p50':>5} {'p90':>5} {'p95':>5}\n"
-            f"{'all':<12} {p_all[50]:5.0f} {p_all[90]:5.0f} {p_all[95]:5.0f}\n"
-            f"{'matched':<12} {p_m[50]:5.0f} {p_m[90]:5.0f} {p_m[95]:5.0f}\n"
-            f"{'mismatched':<12} {p_mm[50]:5.0f} {p_mm[90]:5.0f} {p_mm[95]:5.0f}"
+            f"{'err→centroid':<14} {'p50':>5} {'p90':>5} {'p95':>5}\n"
+            f"{'all':<14} {p_all[50]:5.0f} {p_all[90]:5.0f} {p_all[95]:5.0f}\n"
+            f"{'matched':<14} {p_m[50]:5.0f} {p_m[90]:5.0f} {p_m[95]:5.0f}\n"
+            f"{'mismatched':<14} {p_mm[50]:5.0f} {p_mm[90]:5.0f} {p_mm[95]:5.0f}"
         )
+        if baseline_km is not None and n_base:
+            p_b = _pcts(baseline_km)
+            box += f"\n{'shortest_ping':<14} {p_b[50]:5.0f} {p_b[90]:5.0f} {p_b[95]:5.0f}"
         ax.text(0.02, 0.98, box, transform=ax.transAxes, fontsize=7.5, va="top",
                 ha="left", family="monospace",
                 bbox=dict(boxstyle="round", facecolor="#eef7ee", alpha=0.95))
@@ -289,6 +399,13 @@ def main() -> None:
                         help="Precomputed cluster-eval results dir (single source of truth). "
                              "Geo subset auto-resolved when a geo filter is active. "
                              "If omitted, the answer space is clustered in process.")
+    parser.add_argument("--inputs-dir", type=Path, default=None,
+                        help="Materialized inputs dir (or its fold parent) for the "
+                             "shortest-ping VP baseline. Auto-derived from --inputs-root "
+                             "+ the run layout when omitted.")
+    parser.add_argument("--inputs-root", type=Path,
+                        default=Path("scripts/benchmark/v2/inputs"),
+                        help="Root of materialized inputs, used to auto-derive --inputs-dir.")
     parser.add_argument("--max-x-km", type=float, default=10000.0)
     add_geo_filter_args(parser)
     args = parser.parse_args()
@@ -311,13 +428,30 @@ def main() -> None:
     combo_dirs = discover_combos(run_dir, args.source, args.slice_)
     grouped = group_combos_by_id(combo_dirs)
 
+    # Shortest-ping VP → truth-centroid baseline (combo-independent, computed
+    # once). Inputs dir is explicit, or auto-derived from the run layout
+    # (<inputs_root>/<source>/<run_id>/<setup>/, the fold parent).
+    inputs_dir = resolve_inputs_dir(run_dir, combo_dirs, args.inputs_root, args.inputs_dir)
+    baseline_km = None
+    if inputs_dir is not None:
+        allowed_ids = geo_allowed_ids(combo_dirs)
+        try:
+            baseline_km = shortest_ping_to_centroid(inputs_dir, index, allowed_ids)
+            logger.info("baseline: shortest-ping VP → centroid over %d targets (inputs %s)",
+                        int(np.isfinite(baseline_km).sum()), inputs_dir)
+        except FileNotFoundError:
+            logger.warning("no eval_observations under %s; skipping shortest-ping baseline", inputs_dir)
+    else:
+        logger.warning("no inputs dir resolved; skipping shortest-ping baseline "
+                       "(pass --inputs-dir to enable)")
+
     logger.info("%-28s %8s %9s %9s", "combo", "n", "accuracy", "within_R")
     for combo_id, dirs in sorted(grouped.items()):
         df = combo_frame(dirs, index)
         fig = plot_combo_cluster_cdf(
             df, out_dir / f"{combo_id}_cluster_cdf.png",
             combo_id=combo_id, radius_km=args.radius_km,
-            n_centroids=n_centroids, max_x_km=args.max_x_km,
+            n_centroids=n_centroids, baseline_km=baseline_km, max_x_km=args.max_x_km,
         )
         plt.close(fig)
         if len(df):
