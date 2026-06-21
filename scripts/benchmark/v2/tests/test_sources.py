@@ -16,6 +16,10 @@ from pathlib import Path
 from scripts.benchmark.v2.sources import SOURCES
 from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
 from scripts.benchmark.v2.sources.ripe_atlas import RipeAtlasSource
+from scripts.benchmark.v2.sources.ripe_atlas_asn_corpora import (
+    RipeAtlasASNCorporaSource,
+)
+from scripts.processing.ripe_atlas.continents import continent_of
 
 
 def _write_stratification(
@@ -787,6 +791,123 @@ class TestRipeAtlasSourceStratification(unittest.TestCase):
                 )
             self.assertTrue(any("anchors_to_probes" in m for m in captured.output))
             self.assertEqual(src.slice_id(), "all")
+
+
+class TestRipeAtlasASNCorporaGeoFilter(unittest.TestCase):
+    """target_continent / target_country restrict the WHOLE anchor set
+    (eval + fit + tg_configs catalog), parallel to how probe_asn scopes VPs."""
+
+    # 6 anchors across 4 countries / 3 continents, round-robined into 2 folds.
+    _ANCHORS = [
+        # (ip, country_code, lon, lat)
+        ("10.0.0.1", "US", -100.0, 40.0),   # North America
+        ("10.0.0.2", "CA", -106.0, 52.0),   # North America
+        ("10.0.0.3", "FR", 2.0, 48.0),      # Europe
+        ("10.0.0.4", "DE", 13.0, 52.0),     # Europe
+        ("10.0.0.5", "BR", -47.0, -15.0),   # South America
+        ("10.0.0.6", "US", -122.0, 37.0),   # North America
+    ]
+    _PROBES = [
+        ("192.168.0.1", -101.0, 40.5),
+        ("192.168.0.2", 3.0, 48.5),
+    ]
+
+    def _build(self, *, slice: str = "fold_0", k: int = 2, **geo_kwargs):
+        """Write k anchor_fold files + a probes_of_as_7018.json into a temp dir
+        and return a source with an injected rtt_query (no ClickHouse)."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        probe_dir = root / "probes"
+        anchor_dir = root / "anchors"
+        probe_dir.mkdir()
+        anchor_dir.mkdir()
+
+        # K folds: round-robin the anchors by index so every fold is non-empty.
+        folds: list[list[dict]] = [[] for _ in range(k)]
+        for i, (ip, cc, lon, lat) in enumerate(self._ANCHORS):
+            folds[i % k].append({
+                "address_v4": ip, "asn_v4": 12345, "country_code": cc,
+                "continent": continent_of(cc),
+                "geometry": {"coordinates": [lon, lat]}, "is_anchor": True,
+            })
+        for i, entries in enumerate(folds):
+            (anchor_dir / f"anchor_fold_{i}.json").write_text(_json.dumps(entries))
+
+        (probe_dir / "probes_of_as_7018.json").write_text(_json.dumps([
+            {"address_v4": ip, "asn_v4": 7018, "country_code": "US",
+             "geometry": {"coordinates": [lon, lat]}}
+            for ip, lon, lat in self._PROBES
+        ]))
+
+        # Every anchor is pinged by both probes.
+        anchor_ips = [a[0] for a in self._ANCHORS]
+        probe_ips = [p[0] for p in self._PROBES]
+
+        def rtt_query(*_a, **_kw):
+            return {a_ip: {p_ip: [10.0 + j] for j, p_ip in enumerate(probe_ips)}
+                    for a_ip in anchor_ips}
+
+        return RipeAtlasASNCorporaSource(
+            slice=slice,
+            probe_data_dir=probe_dir,
+            probe_asn=7018,
+            anchor_data_dir=anchor_dir,
+            rtt_query=rtt_query,
+            **geo_kwargs,
+        )
+
+    def _all_anchor_ids(self, src) -> set[str]:
+        """eval ∪ fit ∪ catalog anchor ids (should all agree under a filter)."""
+        eval_ids = {t.target_id for t in src.iter_eval_targets()}
+        catalog_ids = {t.tg_id for t in src.iter_tg_configs()}
+        # fit-sample targets are anchors (FitSample.probe_coord); back them out
+        # via the catalog coords rather than ids (ids aren't on the sample).
+        return eval_ids | catalog_ids
+
+    def test_country_filter_keeps_only_that_country(self) -> None:
+        src = self._build(target_country="US")
+        ids = self._all_anchor_ids(src)
+        self.assertEqual(ids, {"10.0.0.1", "10.0.0.6"})  # the two US anchors
+
+    def test_country_filter_is_case_insensitive(self) -> None:
+        src = self._build(target_country="us")
+        self.assertEqual(self._all_anchor_ids(src), {"10.0.0.1", "10.0.0.6"})
+
+    def test_continent_filter_keeps_only_that_continent(self) -> None:
+        src = self._build(target_continent="Europe")
+        self.assertEqual(self._all_anchor_ids(src), {"10.0.0.3", "10.0.0.4"})
+
+    def test_continent_filter_is_case_insensitive(self) -> None:
+        src = self._build(target_continent="europe")
+        self.assertEqual(self._all_anchor_ids(src), {"10.0.0.3", "10.0.0.4"})
+
+    def test_filter_applies_to_fit_corpus_too(self) -> None:
+        """Across all folds, fit-sample target coords must lie in-region — the
+        calibration corpus is filtered, not just the eval set."""
+        eu_coords = {(48.0, 2.0), (52.0, 13.0)}  # (lat, lon) of FR, DE anchors
+        seen: set[tuple[float, float]] = set()
+        for fold in range(2):
+            src = self._build(slice=f"fold_{fold}", target_continent="Europe")
+            for fs in src.iter_fit_samples():
+                coord = (fs.probe_coord.lat, fs.probe_coord.lon)
+                self.assertIn(coord, eu_coords, "fit sample target is out-of-region")
+                seen.add(coord)
+        # Both EU anchors should serve as a fit target in some fold.
+        self.assertEqual(seen, eu_coords)
+
+    def test_both_params_set_raises_at_construction(self) -> None:
+        with self.assertRaises(ValueError):
+            self._build(target_continent="Europe", target_country="US")
+
+    def test_no_match_raises_on_load(self) -> None:
+        src = self._build(target_country="ZZ")  # no anchor is in ZZ
+        with self.assertRaises(ValueError):
+            list(src.iter_eval_targets())  # forces _load_anchors
+
+    def test_no_filter_retains_all_anchors(self) -> None:
+        src = self._build()
+        self.assertEqual(self._all_anchor_ids(src), {a[0] for a in self._ANCHORS})
 
 
 if __name__ == "__main__":

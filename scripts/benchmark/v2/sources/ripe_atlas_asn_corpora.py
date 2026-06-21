@@ -21,6 +21,16 @@ For one configured (probe_data_dir, probe_asn, anchor_data_dir):
 Only `setup=probes_to_anchors` is supported. Per-ASN corpora are VP fleets
 by construction; transposing them would be meaningless.
 
+The anchor set can optionally be restricted to a single continent or a single
+country via `target_continent` / `target_country` (mutually exclusive). The
+filter applies to the **whole** anchor set — eval targets, the fit/calibration
+corpus, and the tg_configs catalog all shrink to the region (parallel to how
+`probe_asn` selects the entire VP corpus), so calibration becomes
+in-distribution to the chosen region. Continent names match `continent_of`
+spelling ("Europe", "North America", …); country codes are ISO alpha-2.
+Filtered runs must use a distinct `run_id` so they do not overwrite the
+unfiltered output tree.
+
 Slice grammar: `fold_N` where N indexes a file `anchor_fold_<N>.json` in
 `anchor_data_dir`. K is auto-discovered from the file count.
 """
@@ -38,6 +48,7 @@ import default
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, VpConfig
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
+from scripts.processing.ripe_atlas.continents import continent_of
 from scripts.processing.ripe_atlas.stratification import normalize_asn
 
 logger = logging.getLogger(__name__)
@@ -62,6 +73,8 @@ class RipeAtlasASNCorporaSource(DataSource):
         probe_data_dir: str | Path,
         probe_asn: int | str,
         anchor_data_dir: str | Path,
+        target_continent: Optional[str] = None,
+        target_country: Optional[str] = None,
         ping_table: Optional[str] = None,
         max_rtt_ms: int = _DEFAULT_RTT_THRESHOLD_MS,
         filter_clause: str = _DEFAULT_FILTER,
@@ -90,6 +103,16 @@ class RipeAtlasASNCorporaSource(DataSource):
         if self._probe_asn is None:
             raise ValueError(f"probe_asn must be a numeric ASN, got {probe_asn!r}")
         self._anchor_data_dir = Path(anchor_data_dir)
+
+        # Optional whole-anchor-set geo filter (eval + fit + catalog). Mutually
+        # exclusive: a single continent OR a single country, never both.
+        if target_continent and target_country:
+            raise ValueError(
+                "target_continent and target_country are mutually exclusive; "
+                "set at most one."
+            )
+        self._target_continent = target_continent.strip() if target_continent else None
+        self._target_country = target_country.strip().upper() if target_country else None
 
         self._ping_table = (
             ping_table if ping_table is not None
@@ -213,6 +236,24 @@ class RipeAtlasASNCorporaSource(DataSource):
 
     # ---- internals -----------------------------------------------------------
 
+    def _keep_anchor(self, country_code: Optional[str]) -> bool:
+        """Whole-anchor-set geo predicate. True when no filter is active, or when
+        the anchor's country matches the configured country, or its continent
+        (via `continent_of`) matches the configured continent (case-insensitive)."""
+        if self._target_country is not None:
+            return (country_code or "").upper() == self._target_country
+        if self._target_continent is not None:
+            return continent_of(country_code).casefold() == self._target_continent.casefold()
+        return True
+
+    def _geo_filter_desc(self) -> Optional[str]:
+        """Human-readable active-filter label for logs/errors, or None."""
+        if self._target_country is not None:
+            return f"country={self._target_country}"
+        if self._target_continent is not None:
+            return f"continent={self._target_continent}"
+        return None
+
     def _ensure_loaded(self) -> None:
         if self._probe_coords is None:
             self._load_probes()
@@ -276,19 +317,28 @@ class RipeAtlasASNCorporaSource(DataSource):
                 geom = (a.get("geometry") or {}).get("coordinates")
                 if not ip or not geom or len(geom) < 2:
                     continue
+                if not self._keep_anchor(a.get("country_code")):
+                    continue
                 lon, lat = geom[0], geom[1]
                 coords[ip] = Coord(lat=float(lat), lon=float(lon))
                 self._anchor_asn_by_ip[ip] = normalize_asn(a.get("asn_v4"))
                 self._anchor_country_by_ip[ip] = a.get("country_code")
                 target_set.add(ip)
+        geo_desc = self._geo_filter_desc()
+        if geo_desc is not None and not coords:
+            raise ValueError(
+                f"no anchors match target geo filter {geo_desc} in "
+                f"{self._anchor_data_dir} — check the continent/country spelling."
+            )
         self._anchor_coords = coords
         self._eval_anchors = eval_anchors
         self._fit_anchors = fit_anchors
         logger.info(
             "loaded %d anchors over K=%d folds: eval=fold_%d (%d anchors), "
-            "fit=union of %d other folds (%d anchors)",
+            "fit=union of %d other folds (%d anchors)%s",
             len(coords), k, self._fold_index,
             len(eval_anchors), k - 1, len(fit_anchors),
+            f" [geo filter: {geo_desc}]" if geo_desc else "",
         )
 
     def _load_rtts(self) -> None:
