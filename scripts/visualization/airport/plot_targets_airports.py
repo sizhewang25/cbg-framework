@@ -7,7 +7,8 @@ layers that metric operates on, so you can eyeball coverage: **large airports**
 as the faint background reference grid and the **targets** on top, coloured by
 whether a large hub sits within the eval's 40 km "same airport" radius. A side
 panel plots the CDF of the target→nearest-hub distance — the answer-space
-quantization floor the metric works against.
+quantization floor the metric works against — annotated with its major
+percentiles (also printed to stdout).
 
 Targets are read from a `dump_csv_targets` output (`targets.csv` or
 `targets.json`) — i.e. the canonical `target_id, target_lat, target_lon, ...`
@@ -52,6 +53,10 @@ from scripts.benchmark.v2.airports import (
 # match in airport_eval.py.
 _MATCH_KM = 40.0
 
+# Major percentiles of the target→nearest-hub distance, reported in the side
+# panel and on stdout.
+_PCTILES = (1, 5, 10, 25, 50, 75, 90, 95, 99)
+
 
 def _load_airports(src_csv: Path | None) -> pd.DataFrame:
     """Large-only airport set: the committed slim parquet, or a fresh
@@ -88,10 +93,13 @@ def plot_targets_airports(
     out_path: Path,
     *,
     extent: tuple[float, float, float, float] | None = None,
-) -> Path:
+) -> tuple[Path, dict[int, float]]:
     """Render large airports (faint reference grid) + targets (coloured by
     within-40km-of-a-hub) on a PlateCarree map, with a CDF of the
-    target→nearest-hub distance alongside."""
+    target→nearest-hub distance alongside.
+
+    Returns `(out_path, percentiles)` where `percentiles` maps each percentile
+    in `_PCTILES` to the target→nearest-hub distance (km)."""
     # Tag each target with its nearest large hub distance so we can split the
     # scatter into resolvable (≤40 km) vs. far-from-any-hub.
     index = AirportIndex(airports)
@@ -148,17 +156,18 @@ def plot_targets_airports(
     # target sits from the best hub it could ever snap to.
     axb = fig.add_subplot(gs[0, 1])
     finite = km[np.isfinite(km)]
+    percentiles: dict[int, float] = {}
     if len(finite):
         s = np.sort(finite)
         cdf = np.arange(1, len(s) + 1) / len(s)
         axb.plot(s, cdf, color="#1f77b4", linewidth=2.0)
-        p50, p90 = np.percentile(s, [50, 90])
+        percentiles = {p: float(v) for p, v in zip(_PCTILES, np.percentile(s, _PCTILES))}
         axb.axvline(_MATCH_KM, color="green", linestyle=":", alpha=0.6)
         axb.text(_MATCH_KM, 0.02, f" {_MATCH_KM:.0f} km", color="green",
                  fontsize=8, rotation=90, va="bottom", ha="left")
-        axb.text(0.04, 0.97, f"p50 {p50:,.0f} km\np90 {p90:,.0f} km",
-                 transform=axb.transAxes, fontsize=8, va="top", ha="left",
-                 family="monospace",
+        stat_txt = "\n".join(f"p{p:<2d} {percentiles[p]:>6,.0f} km" for p in _PCTILES)
+        axb.text(0.96, 0.04, stat_txt, transform=axb.transAxes,
+                 fontsize=8, va="bottom", ha="right", family="monospace",
                  bbox=dict(boxstyle="round", facecolor="white", alpha=0.9))
     axb.set_xscale("log")
     x_fmt = ScalarFormatter()
@@ -175,7 +184,7 @@ def plot_targets_airports(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=140, bbox_inches="tight")
     plt.close(fig)
-    return out_path
+    return out_path, percentiles
 
 
 def main() -> None:
@@ -208,8 +217,12 @@ def main() -> None:
     targets = _load_targets(args.targets)
     airports = _load_airports(args.src_csv)
     extent = tuple(args.extent) if args.extent is not None else None
-    out = plot_targets_airports(targets, airports, args.out, extent=extent)
+    out, percentiles = plot_targets_airports(targets, airports, args.out, extent=extent)
     print(f"Wrote {out} ({len(targets):,} targets, {len(airports):,} large airports)")
+    if percentiles:
+        print("target → nearest-hub distance percentiles (km):")
+        for p in _PCTILES:
+            print(f"  p{p:<2d} {percentiles[p]:>8,.1f}")
 
 
 if __name__ == "__main__":
