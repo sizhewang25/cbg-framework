@@ -94,8 +94,17 @@ single-feature AUC, per-tier box plots, and depth-3 decision-tree thresholds. Fu
    AUC **0.64–0.68** globally (isolated truth-centroid ⇒ a coarse estimate still snaps right); weak
    in the small in-country answer spaces.
 3. **Angular surround is a regime-gated secondary lever.** `part_circ_var` (surrounded) reaches AUC
-   **0.53–0.63** for "geolocatable?" in the matched-regional runs, invisible globally (degenerate
-   single-VP Tier-1). Confirms "surrounded helps" but always behind proximity.
+   **0.53–0.82** for "geolocatable?" in the matched-regional runs (DE highest), invisible globally
+   (degenerate single-VP Tier-1). Confirms "surrounded helps" but always behind proximity.
+
+**Inward/outward natural experiment (EU fleets → all-EU, `participating_vp_findings.md` §4.6).**
+Single-region fleets (AS3209 DE-central, AS3215 FR-western) geolocating all 415 EU anchors give a
+*dramatic* raw split — octant Tier-1 **31–32% inward** (target inside the VP hull, `avail_max_gap_deg
+< 180°`) vs **2–5% outward** — but inward targets are also ~70× closer, so the split is largely a
+proximity proxy. **Distance-controlled** (matched closest-VP band 20–80 km), the gap shrinks to
+**14% vs 8%** (DE) / 12% vs 0% (FR): a real but **secondary ~1.5–2× angular residual**. Confirms
+lever 3 is genuine yet subordinate to proximity — there is essentially no Tier-1 beyond ~50 km
+regardless of surround.
 
 Matched-regional fleets roughly **double** the precise-Tier-1 share and **halve** Tier-3 vs global.
 Spotter collapses everywhere (Tier-1 ≈ 0–3%).
@@ -129,7 +138,85 @@ number.
 
 ---
 
-## 6. §7 "when-to-use-what" — assertions to quantify
+## 6. Operator-facing confidence model — what's knowable at inference (2026-06-22 discussion)
+
+Follow-up to §3. The three-lever model in `participating_vp_findings.md` characterizes tiers
+using **truth-anchored** features (distance/bearing computed from the target's real lat/lon). An
+operator geolocating an *unknown* target does not have the truth, so the open question is: **from
+the RTT measurements alone (plus standard priors), can the operator predict the confidence tier —
+in particular flag "no CBG variant will get this right"?** Reframed: a per-target confidence model
+yielding the three-tier label from inference-observable features.
+
+### 6.1 The observability split
+Partition the §3 features by what's actually available at inference:
+- **Observable pre-prediction (RTT only):** `avail_min_rtt_ms` (shortest ping), `n_obs`. This is
+  almost the entire raw-measurement signal. Good news: `avail_min_rtt_ms` is the **#1 Q1 driver**
+  (pooled mean |AUC−0.5| = 0.26), so **min-RTT alone is a deployable Tier-1 gate** (RTT ≲ 5–7 ms
+  ⇒ high confidence). This is the operator's answer to "which metric flags a confident prediction."
+- **Observable post-prediction (anchor features on the *predicted* location):** once CBG emits a
+  point, recompute `part_min_dist_km`, `n_part`, `part_circ_var`, RTT inflation, and the predicted
+  centroid's `nearest_other_centroid_km` — the answer-space / cluster map is a **known fixed input**,
+  not truth-dependent, so isolation of the *predicted* centroid is computable.
+- **Not observable (truth-anchored):** the report's distance/bearing-to-truth features — including
+  the **inward/outward** label of §4.6 (`avail_max_gap_deg` is computed from the target's true
+  location). Its inference-time **proxy** is the angular spread of VPs around the *predicted* point
+  (or whether the predicted point / constraint region sits inside the VP convex hull) — computable
+  without truth and worth adding to the post-prediction feature set, though §4.6 warns its
+  independent (distance-controlled) signal is modest.
+
+### 6.2 The residual blind spot
+Per `participating_vp_findings.md` §3.2, the Tier-2-vs-Tier-3 split is driven **only** by
+answer-space isolation; VP distance/RTT carry *zero* signal there (both tiers are far-from-VP and
+look identical in the measurements). So from RTT alone the operator can confidently flag Tier-1 and
+confidently flag "no near VP", but **cannot** separate recoverable-far (Tier-2) from hopeless-far
+(Tier-3) — that's a property of the candidate-site layout, not the measurement.
+
+### 6.3 Does the operator's standard prior rescue this? (one-ASN-at-a-time + known sites + landmass)
+Operators typically target **one ASN at a time, know the full candidate location set, and can apply
+geographic feasibility** (e.g. US targets must fall on US landmass; ocean/out-of-country predictions
+are obviously failures). This splits the blind spot into three pieces — and the report has **already
+half-tested** this via the matched-regional runs:
+
+| residual Tier-3 case | detectable at inference? |
+| --- | --- |
+| FALLBACK / ERROR | yes (already) |
+| SUCCESS, prediction off-landmass / out-of-region | **yes — NEW, via a geographic-feasibility filter (untested)** |
+| SUCCESS, prediction on a plausible *in-region but wrong* candidate | **no — irreducible** (needs truth) |
+
+Two **opposite-signed** mechanisms:
+1. **Geographic-feasibility filter — genuinely new, not in any run.** A SUCCESS prediction landing
+   off-landmass or out-of-country is a guaranteed failure detectable without truth; our pipeline
+   currently counts these as valid SUCCESS. Softer version: if CBG's constraint-intersection region
+   doesn't overlap any in-region candidate (or the landmass) → flag low-confidence. **Yield is
+   measurable:** of today's ~75% global Tier-3, what fraction of the SUCCESS-but-wrong-centroid ones
+   are geographically implausible? That number = the value of the prior.
+2. **Isolation lever gets *weaker*, not stronger, when constrained.** The "one ASN + known small
+   candidate set" scenario *is* the matched-regional regime. `participating_vp_findings.md` §4.4
+   found isolation degrades from global AUC 0.64–0.68 to **~0.3–0.5** in the small in-country answer
+   space (US 32 centroids / FR 12) — isolation is a *large*-answer-space phenomenon. So shrinking the
+   answer space does **not** rescue far-target Tier-2/3 confidence; per §4.1 the regional benefit
+   showed up instead as **more near-VPs** (Tier-1 doubles, Tier-3 halves) — i.e. the proximity lever
+   again, which was already observable.
+
+**Honest revised caveat:** the landmass/region prior catches the geographically-implausible failures
+for free, but the residual — a confident-looking snap onto the wrong *in-region* candidate — stays
+invisible, and shrinking the answer space makes the only lever that addressed it (isolation) noisier.
+
+### 6.4 Model feasibility
+A cross-validated 3-tier confidence classifier is feasible from the existing labeled rows
+(713 × combos global + regional), restricted to the §6.1 observable / prediction-anchored features
+plus a hard geographic-feasibility pre-gate. Expected shape: strong, calibrated **Tier-1 detection**
+(min-RTT + pred-anchored proximity); **Tier-2/3 separation only as good as isolation** (global
+~0.65, weak regionally). Current §3 decision trees are **in-sample** (train acc only) — the model
+must use held-out folds. Scope decision: per-variant confidence vs. an ensemble "will *any* variant
+reach Tier-1/2" model (closer to the "none will be correct" framing).
+
+**Cross-refs:** classification-over-known-answer-space framing `[[project_answer_space_clustering]]`;
+operator airport metric `[[project_airport_eval_metric]]`.
+
+---
+
+## 7. §7 "when-to-use-what" — assertions to quantify
 
 Two existing §7 bullets can be upgraded from assertion to quantified once the above lands:
 - "Loses to shortest-ping when VPs are globally dispersed" → backed by 23.4% baseline vs.
@@ -143,3 +230,8 @@ Two existing §7 bullets can be upgraded from assertion to quantified once the a
 - [ ] Tolerance-dividend numbers per variant once CSVs land (§4).
 - [ ] Small-n regional fix — pooling ASNs vs. bootstrap CIs (deferred decision).
 - [ ] Lock distance-bin edges for the §6.1 mechanism figure (§1).
+- [ ] **Measure geographic-feasibility-filter yield** — fraction of Tier-3 (SUCCESS-but-wrong) that
+      is off-landmass / out-of-region, i.e. detectable without truth (§6.3). Decides headline vs.
+      footnote *before* building the model.
+- [ ] Build cross-validated 3-tier confidence model on observable / prediction-anchored features +
+      feasibility pre-gate (§6.4); decide per-variant vs. ensemble scope.
