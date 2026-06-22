@@ -58,14 +58,33 @@ Per-target tier labels:
 - **Tier 3 — low-confidence:** snaps to the wrong centroid (or falls back / fails).
 
 **Question to answer:** which target features predict Tier-1 membership?
-Candidate features:
-- min VP–TG distance (closest VP),
-- VP angular spread around the target (surrounded vs. all-VPs-on-one-side),
-- intersection cardinality / number of valid constraints,
-- answer-space local density (truth inside a tight cluster of centroids ⇒ harder).
+
+**Feasibility resolved (2026-06-22): chose the instrument-and-rerun path.** The MTL stage now
+persists `participating_vp_ids` — the constraints surviving the redundant-disk filter that
+actually decide the region — and the runner joins them back to each VP's RTT and echoed distance
+band into a nested `mtl_participants` column of `targets.parquet` (+ `n_mtl_participants`). So the
+"participating VPs that decide the intersection" set is now exact, not the LTD-success proxy.
+The 6 characterization configs (global ×2, EU ×2, US ×2) were re-run on this instrumentation.
+
+Implemented per-target features (`scripts/analysis/partvp/extract_features.py`):
+- **Available geometry (combo-independent):** `avail_min_vp_km` (closest VP over all observed
+  VPs), `avail_min_rtt_ms` (shortest-ping signal), `n_obs`.
+- **Participating-VP (combo-specific, the deciding set):** `n_part`; `part_{min,mean,med}_dist_km`;
+  `part_{min,mean,med}_rtt_ms`; **`part_max_gap_deg`** (max angular gap between consecutive
+  participants as seen from the target — large ⇒ one-sided) and **`part_circ_var`** (circular
+  variance of bearings — high ⇒ surrounded); **`part_{mean,min}_infl`** (RTT inflation =
+  measured / (slope·dist), decoupling congestion from raw distance).
+- **Answer-space (target-level):** `truth_centroid_km` (the floor) and
+  **`nearest_other_centroid_km`** (truth-centroid isolation — small ⇒ crowded ⇒ easy to
+  misclassify; the Tier-1-vs-Tier-2 lever from §3 above).
+
+Analysis (`scripts/analysis/partvp/analyze_tiers.py`) answers two questions per run × family:
+Q1 "geolocatable?" (Tier-3 vs Tier-1∪2) and Q2 "precise?" (Tier-1 vs Tier-2 among matched), via
+single-feature AUC, per-tier box plots, and depth-3 decision-tree thresholds. Full write-up in
+`participating_vp_findings.md`.
 
 **Target deliverable sentence:** *"Precisely-geolocated targets are the ones close to ≥1 VP
-**and** angularly surrounded by VPs."*
+**and** angularly surrounded by VPs."* — to be confirmed/refined against the AUC + tree results.
 
 ---
 
