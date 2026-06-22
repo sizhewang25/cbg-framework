@@ -14,7 +14,7 @@ from typing import Optional, Union
 from shapely.geometry.base import BaseGeometry
 
 from scripts.framework.v2.ltd.base import LTDResult
-from scripts.framework.v2.types import Coord, Error
+from scripts.framework.v2.types import Coord, Error, VpId
 
 # Output region representation. Planar methods (e.g. Shapely-based) return
 # a Polygon / MultiPolygon. Spherical methods return a list of (lat, lon)
@@ -27,12 +27,21 @@ class MTLResult:
     """Outcome of multilateration over a set of distance constraints.
 
     `method` is auto-stamped by MTLMethod.multilaterate with the concrete
-    class name."""
+    class name.
+
+    `participating_vp_ids`, when set, lists the VPs whose constraints survived
+    the method's redundant-disk filter and were actually fed to the
+    intersection / feasible-region computation — i.e. the VPs that *decide* the
+    region. None means the method did not record participation (older callers);
+    an empty tuple means no constraint participated. Recorded on both success
+    and failure so the deciding set is recoverable even when the region is
+    empty."""
 
     success: bool
     error: Optional[Error] = None
     intersection: Intersection = None
     method: Optional[str] = None
+    participating_vp_ids: Optional[tuple[VpId, ...]] = None
 
 
 class MTLMethod(ABC):

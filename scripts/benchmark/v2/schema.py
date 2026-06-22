@@ -79,6 +79,26 @@ _LTD_PREDICTION_FIELD = pa.field(
     nullable=False,
 )
 
+# Per-VP MTL-participation forensics nested into each target row. A participant
+# is a VP whose constraint survived the MTL's redundant-disk filter and was fed
+# to the intersection / feasible-region computation — the VPs that *decide* the
+# region. `rtt_ms` is the measured RTT echoed from the LTD result; `echoed_*_km`
+# are that VP's predicted distance band (the constraint radii). `vp_lat/lon`
+# are carried so distance / angular-spread features can be derived without
+# re-joining eval_observations.
+_MTL_PARTICIPANT_FIELD = pa.field(
+    "mtl_participants",
+    pa.list_(pa.struct([
+        pa.field("vp_id", pa.string(), nullable=False),
+        pa.field("rtt_ms", pa.float64(), nullable=True),
+        pa.field("echoed_upper_km", pa.float64(), nullable=True),
+        pa.field("echoed_lower_km", pa.float64(), nullable=True),
+        pa.field("vp_lat", pa.float64(), nullable=True),
+        pa.field("vp_lon", pa.float64(), nullable=True),
+    ])),
+    nullable=False,
+)
+
 TARGETS_SCHEMA = pa.schema([
     # Identification + ground truth
     pa.field("target_id", pa.string(), nullable=False),
@@ -115,6 +135,8 @@ TARGETS_SCHEMA = pa.schema([
     pa.field("mtl_success", pa.bool_(), nullable=True),
     pa.field("mtl_error", pa.string(), nullable=True),
     pa.field("mtl_intersection_kind", pa.string(), nullable=True),  # polygon|multipolygon|vertex_list|none
+    pa.field("n_mtl_participants", pa.int32(), nullable=False),      # VPs deciding the region (post-filter)
+    _MTL_PARTICIPANT_FIELD,
     pa.field("ctr_success", pa.bool_(), nullable=True),
     pa.field("ctr_error", pa.string(), nullable=True),
 

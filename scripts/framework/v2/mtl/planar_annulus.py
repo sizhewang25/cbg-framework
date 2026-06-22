@@ -13,6 +13,8 @@ we pass placeholders.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from scripts.framework.geometry import filter_redundant_outer_disks
 from scripts.framework.v2.ltd.base import LTDResult
 from scripts.framework.v2.mtl.base import AnnulusMTLMethod, MTLResult
@@ -53,10 +55,16 @@ class PlanarAnnulusMTL(AnnulusMTLMethod):
             keep = filter_redundant_outer_disks(centers, radii)
             results = [results[k] for k in keep]
 
+        # VPs that survived the filter and decide the region (recording only).
+        participating = tuple(r.vp_id for r in results)
+
         constraints = [
             annular_constraint_from_ltd(r, rtt_ms=0.0, weight=1.0)
             for r in results
         ]
 
         region = compute_feasible_region_unweighted(constraints, n_pts=self.n_pts)
-        return wrap_region_as_mtl_result(region)
+        return replace(
+            wrap_region_as_mtl_result(region),
+            participating_vp_ids=participating,
+        )

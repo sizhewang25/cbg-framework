@@ -202,6 +202,27 @@ def _build_target_row(
     mtl_result: Optional[MTLResult] = geo_result.mtl_result
     ctr_result = geo_result.ctr_result
 
+    # Per-VP MTL-participation forensics. Join the VPs that survived the MTL
+    # filter (and decide the region) back to their LTD result for RTT (echoed
+    # `latency`) and the predicted distance band (the constraint radii). VP
+    # coords are carried so distance / angular-spread features can be derived
+    # downstream without re-joining eval_observations.
+    ltd_by_vp = {
+        str(r.vp_id): r for r in geo_result.ltd_results if r.vp_id is not None
+    }
+    mtl_participants: list[dict] = []
+    if mtl_result is not None and mtl_result.participating_vp_ids:
+        for vp in mtl_result.participating_vp_ids:
+            r = ltd_by_vp.get(str(vp))
+            mtl_participants.append({
+                "vp_id": str(vp),
+                "rtt_ms": (float(r.latency) if r and r.latency is not None else None),
+                "echoed_upper_km": (r.tg_distance.upper_km if r and r.tg_distance else None),
+                "echoed_lower_km": (r.tg_distance.lower_km if r and r.tg_distance else None),
+                "vp_lat": (r.vp_coord.lat if r and r.vp_coord else None),
+                "vp_lon": (r.vp_coord.lon if r and r.vp_coord else None),
+            })
+
     return {
         "target_id": target.target_id,
         "target_lat": target.true_coord.lat,
@@ -226,6 +247,8 @@ def _build_target_row(
         "mtl_success": mtl_result.success if mtl_result else None,
         "mtl_error": (mtl_result.error.name if mtl_result and mtl_result.error else None),
         "mtl_intersection_kind": _intersection_kind(mtl_result),
+        "n_mtl_participants": len(mtl_participants),
+        "mtl_participants": mtl_participants,
         "ctr_success": ctr_result.success if ctr_result else None,
         "ctr_error": (ctr_result.error.name if ctr_result and ctr_result.error else None),
         "seed": seed,

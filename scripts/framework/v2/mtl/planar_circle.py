@@ -70,6 +70,9 @@ class PlanarCircleMTL(CircleMTLMethod):
             keep = filter_redundant_outer_disks(centers, radii)
             results = [results[k] for k in keep]
 
+        # VPs that survived the filter and decide the region (recording only).
+        participating = tuple(r.vp_id for r in results)
+
         polys = []
         for r in results:
             p = _circle_to_planar_polygon(
@@ -82,7 +85,8 @@ class PlanarCircleMTL(CircleMTLMethod):
                 polys.append(p)
 
         if not polys:
-            return MTLResult(success=False, error=Error.EMPTY_REGION)
+            return MTLResult(success=False, error=Error.EMPTY_REGION,
+                             participating_vp_ids=participating)
 
         # Chained pairwise intersection
         # Output is a Shapely geometry
@@ -93,8 +97,11 @@ class PlanarCircleMTL(CircleMTLMethod):
         region = reduce(lambda a, b: a.intersection(b), polys)
 
         if region.is_empty:
-            return MTLResult(success=False, error=Error.EMPTY_REGION)
+            return MTLResult(success=False, error=Error.EMPTY_REGION,
+                             participating_vp_ids=participating)
         if region.geom_type not in ("Polygon", "MultiPolygon"):
-            return MTLResult(success=False, error=Error.DEGENERATE_REGION)
-    
-        return MTLResult(success=True, intersection=region)
+            return MTLResult(success=False, error=Error.DEGENERATE_REGION,
+                             participating_vp_ids=participating)
+
+        return MTLResult(success=True, intersection=region,
+                         participating_vp_ids=participating)

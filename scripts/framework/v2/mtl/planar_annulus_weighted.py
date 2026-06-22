@@ -23,6 +23,7 @@ Wraps scripts/libs/octant/octant_geolocation.compute_feasible_region_weighted.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from scripts.framework.geometry import filter_redundant_outer_disks
 from scripts.framework.v2.ltd.base import LTDResult
@@ -72,11 +73,17 @@ class PlanarAnnulusWeightedMTL(AnnulusMTLMethod):
             keep = filter_redundant_outer_disks(centers, radii)
             results = [results[k] for k in keep]
 
+        # VPs that survived the filter and decide the region (recording only).
+        participating = tuple(r.vp_id for r in results)
+
         constraints = []
         for r in results:
             rtt_ms = getattr(r, "latency", None)
             if rtt_ms is None:
-                return MTLResult(success=False, error=Error.INSUFFICIENT_DATA)
+                return MTLResult(
+                    success=False, error=Error.INSUFFICIENT_DATA,
+                    participating_vp_ids=participating,
+                )
             constraints.append(
                 annular_constraint_from_ltd(
                     r,
@@ -91,4 +98,7 @@ class PlanarAnnulusWeightedMTL(AnnulusMTLMethod):
             n_pts=self.n_pts,
             highest_weight_only=self.highest_weight_only,
         )
-        return wrap_region_as_mtl_result(region)
+        return replace(
+            wrap_region_as_mtl_result(region),
+            participating_vp_ids=participating,
+        )
