@@ -311,8 +311,77 @@ Tier-3 — but the gating quantity never changes: **is there a VP close to the t
 
 ---
 
-## 7. Caveats & next steps
+## 7. Observable confidence from region–answer-space overlap
 
+§1–§5 characterize tiers with **truth-anchored** features. An operator geolocating an *unknown*
+target has none of those. The question this section answers: **is there an inference-observable
+signal — computable from the RTT measurements and the (known) answer space alone — that predicts the
+confidence tier?** The §5 isolation lever cannot be it (it needs the truth's centroid). The lever
+that *can* be is the geometry CBG already produces: **how the MTL feasible region sits relative to the
+answer-space cells.**
+
+### 7.1 Method (`scripts/analysis/partvp/region_confidence.py`)
+The MTL region is reconstructed offline from the persisted `mtl_participants` annuli
+(`compute_feasible_region_unweighted`; circle methods are the `lower=0` special case). Two
+observables per prediction: `n_hit` = number of distinct answer-space cluster disks (uniform
+**R = 50 km**) the region overlaps (sampled-interior points + haversine), and `d_hub` = point-estimate
+→ nearest centroid. Confidence levels, priority order, **all observable**:
+- **L1** highest: `n_hit == 1` (region in exactly one cell), regardless of `d_hub`.
+- **L2** high: `n_hit > 1` and `d_hub < R`.
+- **L3** mid: `n_hit > 1` and `d_hub ≥ R`.
+- **L0** low/fail: `n_hit == 0` (empty / touches no cell) or FALLBACK/ERROR.
+
+These are *predictions of* the tiers; we validate them against the true tier labels of §1.2. Results:
+`analysis/region_confidence.csv`; per-target rows: `data/region_confidence_all.parquet`.
+
+### 7.2 Calibration — L1 is the high-confidence flag; nothing else is reliably high
+`P(prediction snaps to the correct centroid | level)`, n-weighted (global / matched-regional):
+
+| combo | L1 | L2 | L3 | L0 | L1 coverage (share of all correct) |
+| ----- | -: | -: | -: | -: | :--------------------------------: |
+| vanilla_cbg       | **0.85 / 0.91** | 0.20 / 0.21 | 0.09 / 0.31 | 0.26 / 0.10 | 0.41 / 0.56 |
+| million_scale_cbg | **0.70 / 0.83** | 0.28 / 0.63 | 0.08 / 0.28 | 0.00 / 0.00 | 0.28 / 0.06 |
+| octant_cbg        | **0.71 / 0.66** | 0.22 / 0.15 | 0.08 / 0.14 | 0.29 / 0.51 | 0.33 / 0.28 |
+| spotter_cbg       | 0.16 / 0.20     | 0.07 / –    | 0.05 / 0.00 | 0.07 / 0.16 | 0.08 / 0.03 |
+
+1. **L1 (region lands in exactly one cell) is the operator's "trust this" signal** — precision
+   **0.66–0.91** for the three real CBG variants, capturing **~30–56%** of all correct answers
+   (vanilla). Fully observable; no truth, no model. This is the inference-time replacement for the
+   §5 isolation lever, sitting at the top of the confidence ranking.
+2. **A multi-cell region is *not* rescued by a near point estimate.** L2 (`n_hit>1`, `d_hub<R`) is
+   low globally (**0.20–0.28**): when the feasible region straddles several cells, the point snaps to
+   the wrong hub ~80% of the time even though it sits inside *a* hub. L2 is moderate only for
+   `million_scale` regionally (0.63), whose larger regions rarely reach L1. **The clean operating
+   point is L1, not L1∪L2.**
+3. **L3 (region present, point far from any hub) ≈ low** everywhere (0.08–0.31, mostly Tier-3).
+4. **L0 ("no intersection") is *not* uniformly failure — it depends on the variant's fallback.**
+   Spotter L0 is pure collapse (~0.07–0.16); octant's centroid fallback still lands right **0.29
+   (global) / 0.51 (regional)** of the time (the recoverable "no-intersection-yet-correct" case is
+   real for octant). vanilla sits between.
+
+### 7.3 Reading
+Region-overlap is the observable confidence lever that §5's truth-anchored analysis implied was
+missing — but only at the **top**: L1 is reliably high, L2 is not, and L0's value is variant-specific.
+The far-target ambiguity remains genuinely hard from observables (L2/L3 ≈ 0.1–0.3), consistent with
+§3.2: when no VP is near, whether a coarse estimate lands right is an answer-space property the
+*measurement* cannot see — and a multi-cell region is exactly the observable signature of that
+ambiguity. Spotter's near-total L0 (its bands never isolate one cell) is the geometric form of its
+collapse (`[[finding_spherical_circle_brittle]]`).
+
+This cleanly feeds the **operator takeaway** (§6): beyond "deploy a near VP," the operator gets a
+real, model-free confidence gate — *trust a prediction iff its feasible region falls inside a single
+answer cell* — and a calibrated expectation for everything else.
+
+---
+
+## 8. Caveats & next steps
+
+- **Region-overlap confidence** (§7): the region is reconstructed in octant's planar frame, so its
+  *shape* carries a small planar error (the cluster test itself is haversine). Level assignment is
+  **94% stable** between 300 and 1200 interior samples; since `n_hit` only grows with sampling,
+  reported L1 precision is a mild **lower bound** (denser sampling moves borderline L1→L3). "Correct"
+  is scored by the point-estimate's nearest centroid for all levels (consistent with §1.2); an L1
+  variant that scores against the single overlapped cell would be marginally cleaner.
 - **Inflation metric is unreliable at tiny distances** (ratio explodes as dist→0), so its apparent
   AUC near Tier-1 is an artifact of co-located VPs; do not over-read it. A floored/absolute-residual
   version would be cleaner.

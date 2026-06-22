@@ -171,48 +171,69 @@ look identical in the measurements). So from RTT alone the operator can confiden
 confidently flag "no near VP", but **cannot** separate recoverable-far (Tier-2) from hopeless-far
 (Tier-3) — that's a property of the candidate-site layout, not the measurement.
 
-### 6.3 Does the operator's standard prior rescue this? (one-ASN-at-a-time + known sites + landmass)
-Operators typically target **one ASN at a time, know the full candidate location set, and can apply
-geographic feasibility** (e.g. US targets must fall on US landmass; ocean/out-of-country predictions
-are obviously failures). This splits the blind spot into three pieces — and the report has **already
-half-tested** this via the matched-regional runs:
+### 6.3 The observable lever that *does* work: MTL-region vs. answer-space overlap (measured 2026-06-22)
+The landmass-filter idea (earlier draft) was **dropped** — the answer space already encodes the
+spatial constraint, so rather than bolt on an external plausibility gate we ask a question that
+reuses CBG's *own* geometry and is fully observable at inference: **how many answer-space cluster
+cells does the MTL feasible region land in?** A region inside exactly one cell is unambiguous; one
+straddling many cells, or touching none, is not — no ground truth needed. This replaces the
+truth-anchored isolation lever (§6.2) with an observable one.
 
-| residual Tier-3 case | detectable at inference? |
-| --- | --- |
-| FALLBACK / ERROR | yes (already) |
-| SUCCESS, prediction off-landmass / out-of-region | **yes — NEW, via a geographic-feasibility filter (untested)** |
-| SUCCESS, prediction on a plausible *in-region but wrong* candidate | **no — irreducible** (needs truth) |
+**Method** (`scripts/analysis/partvp/region_confidence.py`, results
+`analysis/region_confidence.csv`). The MTL region is reconstructed offline from the persisted
+`mtl_participants` annuli via `compute_feasible_region_unweighted`; `n_hit` = distinct cluster disks
+(uniform **R=50 km**) the region overlaps (sampled-point + haversine test); `d_hub` = point-estimate
+→ nearest centroid. Confidence levels (priority order, all observable):
+- **L1** highest: `n_hit == 1` (region in exactly one cell, regardless of `d_hub`).
+- **L2** high: `n_hit > 1` and `d_hub < R`.
+- **L3** mid: `n_hit > 1` and `d_hub ≥ R`.
+- **L0** low/fail: `n_hit == 0` (empty / no overlap) or FALLBACK/ERROR. (Truth splits this only in
+  validation: "snaps right anyway" vs fail — the user's cases 4/5; observably one bucket.)
 
-Two **opposite-signed** mechanisms:
-1. **Geographic-feasibility filter — genuinely new, not in any run.** A SUCCESS prediction landing
-   off-landmass or out-of-country is a guaranteed failure detectable without truth; our pipeline
-   currently counts these as valid SUCCESS. Softer version: if CBG's constraint-intersection region
-   doesn't overlap any in-region candidate (or the landmass) → flag low-confidence. **Yield is
-   measurable:** of today's ~75% global Tier-3, what fraction of the SUCCESS-but-wrong-centroid ones
-   are geographically implausible? That number = the value of the prior.
-2. **Isolation lever gets *weaker*, not stronger, when constrained.** The "one ASN + known small
-   candidate set" scenario *is* the matched-regional regime. `participating_vp_findings.md` §4.4
-   found isolation degrades from global AUC 0.64–0.68 to **~0.3–0.5** in the small in-country answer
-   space (US 32 centroids / FR 12) — isolation is a *large*-answer-space phenomenon. So shrinking the
-   answer space does **not** rescue far-target Tier-2/3 confidence; per §4.1 the regional benefit
-   showed up instead as **more near-VPs** (Tier-1 doubles, Tier-3 halves) — i.e. the proximity lever
-   again, which was already observable.
+**Result — L1 is a real, deployable high-confidence flag; the rest are not reliably high.**
+P(correct centroid | level), weighted by n (global / matched-regional):
 
-**Honest revised caveat:** the landmass/region prior catches the geographically-implausible failures
-for free, but the residual — a confident-looking snap onto the wrong *in-region* candidate — stays
-invisible, and shrinking the answer space makes the only lever that addressed it (isolation) noisier.
+| combo | L1 | L2 | L3 | L0 | L1 coverage (share of all correct) |
+| --- | --- | --- | --- | --- | --- |
+| vanilla_cbg | **0.85 / 0.91** | 0.20 / 0.21 | 0.09 / 0.31 | 0.26 / 0.10 | 0.41 / 0.56 |
+| million_scale_cbg | **0.70 / 0.83** | 0.28 / 0.63 | 0.08 / 0.28 | 0.00 / 0.00 | 0.28 / 0.06 |
+| octant_cbg | **0.71 / 0.66** | 0.22 / 0.15 | 0.08 / 0.14 | 0.29 / 0.51 | 0.33 / 0.28 |
+| spotter_cbg | 0.16 / 0.20 | 0.07 / – | 0.05 / 0.00 | 0.07 / 0.16 | 0.08 / 0.03 |
+
+Takeaways, in order of importance:
+1. **L1 (single-cell region) is the operator's "trust this" signal** — precision **0.66–0.91** for the
+   three real CBG variants, capturing **~30–56%** of all correct answers (vanilla). Fully observable.
+   Spotter is the structural exception (0.16–0.20): its wide bands never isolate a single cell.
+2. **The user's case-2 (L2) intuition only half-holds.** Multi-cell region + point-in-hub is **not**
+   high-confidence globally (~0.20–0.28): region ambiguity dominates, and the point snaps to the wrong
+   hub ~80% of the time. It is moderate only for `million_scale` regionally (0.63), whose larger
+   regions rarely reach L1. So the clean operating point is **L1, not L1∪L2**.
+3. **L3 (region present but point far from any hub) ≈ low** everywhere (0.08–0.31, mostly Tier-3) —
+   confirms "far point ⇒ unreliable."
+4. **L0 ("no intersection") is *not* uniformly failure — it depends on the variant's fallback.**
+   Spotter L0 is pure collapse (~0.07–0.16); octant's centroid fallback still snaps right **0.29
+   (global) / 0.51 (regional)** of the time — the user's "case 4" (no intersection yet correct) is
+   real and common for octant. vanilla sits between.
+
+**Synthesis.** Region-overlap *is* the inference-observable confidence lever §6.2 said was missing —
+but only at the top: **L1 is reliably high; L2 is not; L0's value is variant-dependent.** The
+far-target ambiguity §6.2 flagged remains genuinely hard (L2/L3 ≈ 0.1–0.3). Stability: level
+assignment is 94% stable between n=300 and n=1200 samples; since `n_hit` only grows with sampling,
+reported L1 precision is a mild **lower bound**.
 
 ### 6.4 Model feasibility
 A cross-validated 3-tier confidence classifier is feasible from the existing labeled rows
-(713 × combos global + regional), restricted to the §6.1 observable / prediction-anchored features
-plus a hard geographic-feasibility pre-gate. Expected shape: strong, calibrated **Tier-1 detection**
-(min-RTT + pred-anchored proximity); **Tier-2/3 separation only as good as isolation** (global
-~0.65, weak regionally). Current §3 decision trees are **in-sample** (train acc only) — the model
-must use held-out folds. Scope decision: per-variant confidence vs. an ensemble "will *any* variant
-reach Tier-1/2" model (closer to the "none will be correct" framing).
+(713 × combos global + regional), now with a **proven observable feature**: the §6.3 region-overlap
+level (`n_hit`, `d_hub`), alongside `avail_min_rtt_ms` and the §6.1 prediction-anchored geometry.
+Expected shape: strong, calibrated **L1/Tier-1 detection** (region-overlap + min-RTT); far-target
+Tier-2/3 separation remains the hard part (L2/L3 precision ~0.1–0.3). Current §3 decision trees are
+**in-sample** — a real model must use held-out folds. Scope decision: per-variant vs. an ensemble
+"will *any* variant be correct?" model (closer to the "none will be correct" framing). **Deferred**
+for now; §6.3 produces and validates the core feature it would consume.
 
 **Cross-refs:** classification-over-known-answer-space framing `[[project_answer_space_clustering]]`;
-operator airport metric `[[project_airport_eval_metric]]`.
+operator airport metric `[[project_airport_eval_metric]]`; empty-region collapse
+`[[finding_spherical_circle_brittle]]`.
 
 ---
 
@@ -230,8 +251,8 @@ Two existing §7 bullets can be upgraded from assertion to quantified once the a
 - [ ] Tolerance-dividend numbers per variant once CSVs land (§4).
 - [ ] Small-n regional fix — pooling ASNs vs. bootstrap CIs (deferred decision).
 - [ ] Lock distance-bin edges for the §6.1 mechanism figure (§1).
-- [ ] **Measure geographic-feasibility-filter yield** — fraction of Tier-3 (SUCCESS-but-wrong) that
-      is off-landmass / out-of-region, i.e. detectable without truth (§6.3). Decides headline vs.
-      footnote *before* building the model.
-- [ ] Build cross-validated 3-tier confidence model on observable / prediction-anchored features +
-      feasibility pre-gate (§6.4); decide per-variant vs. ensemble scope.
+- [x] ~~Measure geographic-feasibility-filter yield~~ — **dropped** (landmass idea superseded by the
+      region-overlap lever, §6.3). Done 2026-06-22: L1 = region-in-one-cell is the observable
+      high-confidence flag (precision 0.66–0.91 ex-spotter); L2 not reliably high; L0 variant-dependent.
+- [ ] Build cross-validated 3-tier confidence model on observable features incl. the §6.3
+      region-overlap level (`n_hit`, `d_hub`) + min-RTT (§6.4); decide per-variant vs. ensemble scope.
