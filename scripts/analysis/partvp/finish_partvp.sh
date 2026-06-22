@@ -15,7 +15,7 @@ RUNS=(
 )
 
 echo "=== waiting for ALL RERUNS DONE $(date -Is) ===" >>"$LOG"
-for i in $(seq 1 540); do          # up to 90 min
+for i in $(seq 1 2160); do         # up to 6 h
   grep -q "ALL RERUNS DONE" "$RERUN_LOG" 2>/dev/null && { echo "reruns done $(date -Is)" >>"$LOG"; break; }
   sleep 10
 done

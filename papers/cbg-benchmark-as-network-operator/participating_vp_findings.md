@@ -23,11 +23,15 @@ independent levers**, each owning a different tier boundary:
    centroid is the dominant Tier-2-vs-Tier-3 separator (AUC **0.64–0.68**; median **~265 km for
    Tier-2 vs ~135 km for Tier-3**), while VP distance carries *no* signal there (AUC < 0.5).
 
-The much-discussed **angular spread** ("surrounded vs. one-sided") is **not** a primary driver in
-the global runs — because Tier-1 wins come from a single near VP (`n_part`≈1), angular geometry is
-degenerate exactly where precision is decided. It is expected to matter more in the matched-regional
-regime (§4), where proximity is widely available and geometry becomes the tiebreaker — *that part of
-the analysis is pending the regional reruns.*
+The much-discussed **angular spread** ("surrounded vs. one-sided") is a **second-order** driver: in
+the global runs it is invisible (Tier-1 wins come from a single near VP, `n_part`≈1, so geometry is
+degenerate); in the **matched-regional** runs, where the in-country fleet gives many targets a close
+VP *and* angular surround, `part_circ_var` does rise to **AUC 0.53–0.63** for "geolocatable?" —
+confirming the hypothesis, but always well behind proximity. Pooled across all 5 runs the driver
+ranking is unambiguous: **min RTT/distance to the nearest VP is #1; angular surround and answer-space
+isolation are secondary.** Matched-regional fleets roughly **double** the precise-Tier-1 share and
+**halve** Tier-3 vs. the global regime — but the gating quantity is unchanged: *is there a VP close
+to the target?*
 
 **Spotter is the structural exception:** it almost never reaches Tier-1 (0.4% of targets) because
 its pooled normal-distribution bands stay wide even for the closest VP, so the deciding region never
@@ -73,7 +77,12 @@ test, per-tier box plots, and depth-3 decision-tree thresholds.
 | Regime | Runs | Targets | Status |
 | ------ | ---- | ------- | ------ |
 | In-distribution (global VP → global TG) | `global_as16509_final` (Amazon), `global_as31898_final` (Oracle) | 713 anchors, 257 centroids | **done** |
-| Matched-regional (regional VP → in-region TG) | `north_america_as7018_final_us` (AT&T/US), `north_america_as7922_final_us` (Comcast/US), `europe_as3215_final_fr` (Orange/FR), `europe_as3209_final_de` (Vodafone/DE) | US n=96 / FR n=39 / DE n≈? | **pending rerun** |
+| Matched-regional (regional VP → in-region TG) | `north_america_as7018_final_us` (AT&T/US), `north_america_as7922_final_us` (Comcast/US), `europe_as3215_final_fr` (Orange/FR) | US n=96 ×2, FR n=39 | **done** (textbook-4 side run) |
+| Matched-regional (confirmation) | `europe_as3209_final_de` (Vodafone/DE) | DE | finishing (slow spotter combos) |
+
+> Regional runs were executed as **textbook-4-combo side runs** (`scripts/analysis/partvp/cfg_textbook/`,
+> separate `outputs_partvp/` root) to finish overnight; the 4 textbook combos compute identically to
+> the full configs (same inputs, seed=42), so the participating-VP features are report-identical.
 
 Each run = 18 combos × 5 folds; this report focuses on the four textbook variants
 (`vanilla_cbg`, `million_scale_cbg`, `octant_cbg`, `spotter_cbg`).
@@ -164,16 +173,88 @@ operator setting, is barely doing latency geolocation.
 
 ---
 
-## 4. Matched-regional findings  *(PENDING — regional reruns in progress)*
+## 4. Matched-regional findings
 
-Open question this section will answer: when the VP fleet is in-country (so most targets *have* a
-moderately close VP), does the Tier-1 proximity threshold relax, and does **angular spread finally
-become a driver** (surrounded targets precise, one-sided targets not)? Does centroid isolation still
-own the Tier-2/3 boundary at the smaller in-country answer space?
+Runs: `north_america_as7018_final_us` (AT&T/US, n=96), `north_america_as7922_final_us` (Comcast/US,
+n=96), `europe_as3215_final_fr` (Orange/FR, n=39). *(de = Vodafone/DE is a 2nd EU confirmation,
+folded in when its slow spotter combos finish; the FR/US picture is already consistent.)*
+
+### 4.1 CBG earns its keep — Tier-1 doubles, Tier-3 halves
+`octant_cbg` tier composition, global vs matched-regional:
+
+| run | Tier-1 | Tier-3 |
+| --- | -----: | -----: |
+| global as16509 | 0.133 | 0.748 |
+| global as31898 | 0.163 | 0.750 |
+| **US as7018** | **0.240** | **0.490** |
+| **US as7922** | **0.260** | **0.448** |
+| **FR as3215** | **0.487** | 0.436 |
+
+The matched-regional fleet roughly **doubles** the precise-Tier-1 share and **halves** Tier-3.
+(FR n=39 is small — treat its 49% as directional.)
+
+### 4.2 Proximity still dominates — but multilateration becomes real
+Tier-1 medians (closest VP, min participant RTT, participant count):
+
+| run | combo | T1 closest-VP km | T1 min-RTT ms | T1 n_part |
+| --- | ----- | ---------------: | ------------: | --------: |
+| global as16509 | octant | 6.5 | 1.9 | **2** |
+| US as7018 | octant | 17.0 | 4.9 | **7** |
+| US as7922 | octant | 9.0 | 11.3 | **7** |
+| FR as3215 | octant | 3.4 | 1.7 | **20** |
+
+Globally, Tier-1 wins are a *single* near VP (`n_part`≈1–2 — CBG degenerates to shortest-ping).
+Regionally the in-country fleet supplies **7–20 participating VPs** *and* a close one — genuine
+multilateration. Proximity is still the top driver (Q2 "precise?" `part_min_dist_km` AUC 0.24–0.34;
+the US7018 octant tree's primary split is **`part_min_rtt_ms ≤ 7 ms ⇒ geolocatable`**, train acc
+0.84), but the operating point relaxes from ~6 km to a metro-scale **~10–40 km / RTT ≤ ~7 ms**.
+
+### 4.3 Angular surround finally matters (secondarily)
+With proximity widely available, geometry becomes a tiebreaker: `part_circ_var` (high ⇒ surrounded)
+reaches **AUC 0.53–0.63 for "geolocatable?"** in the US runs (vs ~0.31 / degenerate globally). It
+confirms the long-held "surrounded vs. one-sided" hypothesis — but it is a **second-order** effect,
+well behind proximity (AUC ~0.30).
+
+### 4.4 Answer-space isolation is weak regionally
+The global Tier-2-vs-Tier-3 isolation lever (`nearest_other_centroid_km`, AUC 0.64–0.68) does **not**
+carry over cleanly: the in-country answer space is small (US 32 centroids / FR 12) so isolation is
+noisy (AUC ~0.3–0.5). Isolation is a large-answer-space (global) phenomenon.
+
+### 4.5 Spotter still collapses
+Tier-1 = 0–3% in every regional run (US7018 0%, US7922 3%, FR low), ~84–94% Tier-3 — the same
+structural failure as global.
 
 ---
 
-## 5. Cross-regime synthesis  *(PENDING)*
+## 5. Cross-regime synthesis — a three-lever model
+
+Pooled single-feature driver strength (mean |AUC−0.5| across all 5 runs × 4 textbook combos):
+
+| rank | Q1 "geolocatable?" | Q2 "precise?" |
+| ---- | ------------------ | ------------- |
+| 1 | avail_min_rtt_ms (0.26) | part_min_dist_km (0.34) |
+| 2 | part_min_rtt_ms (0.25) | part_min_rtt_ms (0.32) |
+| 3 | part_*_dist_km (0.22–0.24) | part_mean_dist_km (0.32) |
+| … | part_circ_var (0.16) | part_circ_var (0.26) |
+| … | nearest_other_centroid (0.10) | nearest_other_centroid (0.18) |
+
+**Three levers, by priority:**
+
+1. **Proximity to the nearest VP — universal, primary.** Min RTT / min distance to the closest
+   (participating) VP is the #1 driver of *both* geolocatability and precision in every regime.
+   Operating point: nearest-VP **RTT ≲ 5–7 ms / distance ≲ 10–40 km** ⇒ Tier-1. This is *causal*,
+   not merely correlational (decision-tree primary split in both global and regional runs).
+2. **Answer-space isolation — owns Tier-2 vs Tier-3, but only at scale.** When no VP is near, whether
+   a coarse estimate still lands on the right candidate depends on how isolated the truth's centroid
+   is (global AUC 0.64–0.68). In small in-country answer spaces this lever is weak.
+3. **Angular surround — secondary, regime-gated.** Being ringed by VPs (`part_circ_var`) helps, but
+   only once proximity is widely available (regional AUC up to 0.63); globally it is invisible
+   because Tier-1 there is a single-VP degenerate case.
+
+**The regime shift in one sentence:** globally CBG reaches Tier-1 only by collapsing onto a single
+near VP (≈ shortest-ping, ~75% Tier-3); a matched in-country fleet gives many targets both a near VP
+*and* angular surround, turning CBG into genuine multilateration that doubles Tier-1 and halves
+Tier-3 — but the gating quantity never changes: **is there a VP close to the target?**
 
 ---
 
