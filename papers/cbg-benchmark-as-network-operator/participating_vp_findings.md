@@ -26,8 +26,8 @@ independent levers**, each owning a different tier boundary:
 The much-discussed **angular spread** ("surrounded vs. one-sided") is a **second-order** driver: in
 the global runs it is invisible (Tier-1 wins come from a single near VP, `n_part`≈1, so geometry is
 degenerate); in the **matched-regional** runs, where the in-country fleet gives many targets a close
-VP *and* angular surround, `part_circ_var` does rise to **AUC 0.53–0.63** for "geolocatable?" —
-confirming the hypothesis, but always well behind proximity. Pooled across all 5 runs the driver
+VP *and* angular surround, `part_circ_var` does rise to **AUC 0.53–0.82** for "geolocatable?" —
+confirming the hypothesis, but always well behind proximity. Pooled across all 6 runs the driver
 ranking is unambiguous: **min RTT/distance to the nearest VP is #1; angular surround and answer-space
 isolation are secondary.** Matched-regional fleets roughly **double** the precise-Tier-1 share and
 **halve** Tier-3 vs. the global regime — but the gating quantity is unchanged: *is there a VP close
@@ -78,7 +78,7 @@ test, per-tier box plots, and depth-3 decision-tree thresholds.
 | ------ | ---- | ------- | ------ |
 | In-distribution (global VP → global TG) | `global_as16509_final` (Amazon), `global_as31898_final` (Oracle) | 713 anchors, 257 centroids | **done** |
 | Matched-regional (regional VP → in-region TG) | `north_america_as7018_final_us` (AT&T/US), `north_america_as7922_final_us` (Comcast/US), `europe_as3215_final_fr` (Orange/FR) | US n=96 ×2, FR n=39 | **done** (textbook-4 side run) |
-| Matched-regional (confirmation) | `europe_as3209_final_de` (Vodafone/DE) | DE | finishing (slow spotter combos) |
+| Matched-regional (confirmation) | `europe_as3209_final_de` (Vodafone/DE) | DE n=96 | **done** — confirms; `part_circ_var` AUC **0.82** (strongest angular signal) |
 
 > Regional runs were executed as **textbook-4-combo side runs** (`scripts/analysis/partvp/cfg_textbook/`,
 > separate `outputs_partvp/` root) to finish overnight; the 4 textbook combos compute identically to
@@ -160,8 +160,8 @@ centroid) or crowded (Tier-3, ~135 km).
 Tier-1 wins come from a *single* near VP — `n_part` median is 1–2 and `part_max_gap_deg` is ~360°
 (degenerate). Angular spread can only matter when several VPs of comparable distance jointly shape
 the region, which is rare when VPs are globally dispersed. So in this regime proximity dominates and
-geometry is a non-factor. (The matched-regional regime is the place to test the angular hypothesis;
-§4, pending.)
+geometry is a non-factor. (The matched-regional regime is where the angular hypothesis is confirmed
+— see §4.3.)
 
 ### 3.4 Spotter's structural collapse
 Spotter's "Tier-1" targets (n≈3) still have closest VP ~420 km and min participant RTT **~19 ms** —
@@ -176,8 +176,8 @@ operator setting, is barely doing latency geolocation.
 ## 4. Matched-regional findings
 
 Runs: `north_america_as7018_final_us` (AT&T/US, n=96), `north_america_as7922_final_us` (Comcast/US,
-n=96), `europe_as3215_final_fr` (Orange/FR, n=39). *(de = Vodafone/DE is a 2nd EU confirmation,
-folded in when its slow spotter combos finish; the FR/US picture is already consistent.)*
+n=96), `europe_as3215_final_fr` (Orange/FR, n=39), `europe_as3209_final_de` (Vodafone/DE, n=96).
+All four consistent.
 
 ### 4.1 CBG earns its keep — Tier-1 doubles, Tier-3 halves
 `octant_cbg` tier composition, global vs matched-regional:
@@ -211,7 +211,8 @@ the US7018 octant tree's primary split is **`part_min_rtt_ms ≤ 7 ms ⇒ geoloc
 
 ### 4.3 Angular surround finally matters (secondarily)
 With proximity widely available, geometry becomes a tiebreaker: `part_circ_var` (high ⇒ surrounded)
-reaches **AUC 0.53–0.63 for "geolocatable?"** in the US runs (vs ~0.31 / degenerate globally). It
+reaches **AUC 0.53–0.82 for "geolocatable?"** in the regional runs (US 0.53–0.63, DE 0.82; vs ~0.31
+/ degenerate globally). It
 confirms the long-held "surrounded vs. one-sided" hypothesis — but it is a **second-order** effect,
 well behind proximity (AUC ~0.30).
 
@@ -228,7 +229,7 @@ structural failure as global.
 
 ## 5. Cross-regime synthesis — a three-lever model
 
-Pooled single-feature driver strength (mean |AUC−0.5| across all 5 runs × 4 textbook combos):
+Pooled single-feature driver strength (mean |AUC−0.5| across all 6 runs × 4 textbook combos):
 
 | rank | Q1 "geolocatable?" | Q2 "precise?" |
 | ---- | ------------------ | ------------- |
@@ -281,9 +282,10 @@ Tier-3 — but the gating quantity never changes: **is there a VP close to the t
 - **Inflation metric is unreliable at tiny distances** (ratio explodes as dist→0), so its apparent
   AUC near Tier-1 is an artifact of co-located VPs; do not over-read it. A floored/absolute-residual
   version would be cleaner.
-- Tier-1-vs-Tier-2 vs the proximity threshold is stable across the two global ASNs; regional
-  confirmation pending.
-- Regional target sets are small (US 96 / FR 39) — regional tier *counts* are noisy; treat regional
-  AUCs as directional.
+- The proximity → Tier-1 relationship is stable across all six runs (2 global, US ×2, FR, DE).
+- Regional target sets are small (US/DE n=96, FR n=39) — regional tier *counts* are noisy; treat
+  regional AUCs as directional.
+- Regional runs cover the **4 textbook combos** only (textbook-4 side reruns); the non-textbook
+  combos in the regional configs were not regenerated with the new column.
 - Decision-tree thresholds are in-sample (train accuracy ~0.73 Q1 / ~0.87 Q2); they are descriptive
   operating points, not validated classifiers.
