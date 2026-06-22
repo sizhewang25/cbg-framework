@@ -43,6 +43,14 @@ since failures have no real CBG prediction. The shortest-ping baseline spans
 every target (it doesn't depend on CBG status), so it is directly comparable.
 Honors the shared `--geo-level/--geo-value` filter.
 
+Alongside each combo's PNG it writes a sibling machine-readable CSV
+(``<combo_id>_cluster_cdf.csv`` in the same output dir) with one row per CDF line
+drawn (cohorts ``scored``/``matched``/``mismatched``/``shortest_ping``) carrying
+``combo_id, cohort, n, p5, p25, p50, p75, p95, frac_within_radius, radius_km`` —
+so other tools can read the percentiles and the within-R crossing without
+OCR-ing the figure. ``frac_within_radius`` is the CDF y-value where the curve
+crosses x = ``radius_km``.
+
 CLI:
     python -m scripts.analysis.plot_cluster_cdf \\
         --run-dir scripts/benchmark/v2/outputs/ripe-smoke-01 --radius-km 50
@@ -91,6 +99,8 @@ logger = logging.getLogger(__name__)
 # total-target denominator (see `combo_frame`).
 _CBG_STATUSES = ("SUCCESS",)
 _PCTILES = (50, 90, 95, 99)
+# Percentiles reported in the sibling per-combo CSV (one row per CDF line).
+_CDF_CSV_PCTILES = (5, 25, 50, 75, 95)
 
 
 class _CentroidIndex:
@@ -327,6 +337,27 @@ def _pcts(arr: np.ndarray) -> dict[int, float]:
     return {p: float(v) for p, v in zip(_PCTILES, np.percentile(s, _PCTILES))}
 
 
+def _cohort_stats(arr: np.ndarray, radius_km: float) -> dict:
+    """Summary of one CDF line for the sibling CSV: sample count, the
+    `_CDF_CSV_PCTILES` percentiles, and `frac_within_radius` (the CDF y-value
+    where the curve crosses x=radius_km, i.e. the share ≤ radius_km). All over
+    the finite values of `arr`; percentiles and frac are NaN when empty."""
+    s = np.asarray(arr, dtype=float)
+    s = s[np.isfinite(s)]
+    n = int(len(s))
+    if n == 0:
+        stats = {f"p{p}": float("nan") for p in _CDF_CSV_PCTILES}
+        stats["frac_within_radius"] = float("nan")
+    else:
+        stats = {
+            f"p{p}": float(v)
+            for p, v in zip(_CDF_CSV_PCTILES, np.percentile(s, _CDF_CSV_PCTILES))
+        }
+        stats["frac_within_radius"] = float((s <= radius_km).mean())
+    stats["n"] = n
+    return stats
+
+
 def plot_combo_cluster_cdf(
     df: pd.DataFrame,
     out_path: Path,
@@ -485,12 +516,44 @@ def main() -> None:
     logger.info("%-28s %8s %9s %9s", "combo", "n", "accuracy", "within_R")
     for combo_id, dirs in sorted(grouped.items()):
         df = combo_frame(dirs, index)
+        png_path = out_dir / f"{combo_id}_cluster_cdf.png"
         fig = plot_combo_cluster_cdf(
-            df, out_dir / f"{combo_id}_cluster_cdf.png",
+            df, png_path,
             combo_id=combo_id, radius_km=args.radius_km,
             n_centroids=n_centroids, baseline_km=baseline_km, max_x_km=args.max_x_km,
         )
         plt.close(fig)
+
+        # Sibling machine-readable CSV: one row per CDF line drawn in the figure.
+        err = (df["error_to_centroid_km"].to_numpy(dtype=float)
+               if len(df) else np.array([], dtype=float))
+        matched = (df["match"].to_numpy(dtype=bool)
+                   if len(df) else np.array([], dtype=bool))
+        finite = np.isfinite(err)
+        cohorts: list[tuple[str, np.ndarray]] = [
+            ("scored", err[finite]),
+            ("matched", err[finite & matched]),
+            ("mismatched", err[finite & ~matched]),
+        ]
+        if baseline_km is not None and np.isfinite(baseline_km).any():
+            cohorts.append(("shortest_ping", baseline_km[np.isfinite(baseline_km)]))
+        csv_rows = []
+        for cohort, arr in cohorts:
+            stats = _cohort_stats(arr, args.radius_km)
+            csv_rows.append({
+                "combo_id": combo_id, "cohort": cohort, "n": stats["n"],
+                "p5": stats["p5"], "p25": stats["p25"], "p50": stats["p50"],
+                "p75": stats["p75"], "p95": stats["p95"],
+                "frac_within_radius": stats["frac_within_radius"],
+                "radius_km": args.radius_km,
+            })
+        csv_path = png_path.with_suffix(".csv")
+        pd.DataFrame(csv_rows, columns=[
+            "combo_id", "cohort", "n", "p5", "p25", "p50", "p75", "p95",
+            "frac_within_radius", "radius_km",
+        ]).to_csv(csv_path, index=False)
+        logger.info("Saved: %s", csv_path)
+
         if len(df):
             acc = float(df["match"].mean())
             within = float((df["error_to_centroid_km"] <= args.radius_km).mean())

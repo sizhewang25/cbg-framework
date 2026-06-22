@@ -23,6 +23,12 @@ The per-bar "(n=…, k failed)" tag surfaces that coverage, and the shortest-pin
 baseline (which spans every target) stays directly comparable. Honors the shared
 `--geo-level/--geo-value` filter.
 
+Alongside the PNG it writes a sibling machine-readable CSV
+(``<run_id>_cluster_accuracy.csv`` in the same output dir) with one row per combo
+(``combo_id, n, n_scored, n_failed, accuracy, within_r``, sorted best-first) plus
+a final ``shortest_ping_baseline`` row — so other tools can read the numbers
+without OCR-ing the figure. Accuracy/within_r stay as floats in [0, 1].
+
 CLI:
     python -m scripts.analysis.plot_cluster_match_bars \\
         --run-dir scripts/benchmark/v2/outputs/global_as16509_final --radius-km 50
@@ -198,14 +204,30 @@ def main() -> None:
         logger.warning("no inputs dir resolved; skipping shortest-ping baseline "
                        "(pass --inputs-dir to enable)")
 
+    png_path = out_dir / f"{run_dir.name}_cluster_accuracy.png"
     fig = plot_bars(
-        rates, out_dir / f"{run_dir.name}_cluster_accuracy.png",
+        rates, png_path,
         title=f"Cluster classification accuracy — {run_dir.name} "
               f"({n_centroids} centroids, R={args.radius_km:.0f} km)",
         radius_km=args.radius_km,
         baseline_acc=base_acc, baseline_within=base_within, n_base=n_base,
     )
     plt.close(fig)
+
+    # Sibling machine-readable CSV: the data behind the bars (one row per combo,
+    # best-first, matching the bar order) plus the shortest-ping baseline row.
+    csv = rates.sort_values("accuracy", ascending=False).copy()
+    csv["n_failed"] = csv["n"] - csv["n_scored"]
+    csv = csv[["combo_id", "n", "n_scored", "n_failed", "accuracy", "within_r"]]
+    baseline_row = pd.DataFrame([{
+        "combo_id": "shortest_ping_baseline",
+        "n": n_base, "n_scored": n_base, "n_failed": 0,
+        "accuracy": base_acc, "within_r": base_within,
+    }])
+    csv = pd.concat([csv, baseline_row], ignore_index=True)
+    csv_path = png_path.with_suffix(".csv")
+    csv.to_csv(csv_path, index=False)
+    logger.info("Saved: %s", csv_path)
     logger.info("Ranked %d combos to %s", len(rates), out_dir)
 
 
