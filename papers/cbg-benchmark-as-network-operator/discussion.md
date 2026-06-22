@@ -83,8 +83,26 @@ Q1 "geolocatable?" (Tier-3 vs Tier-1∪2) and Q2 "precise?" (Tier-1 vs Tier-2 am
 single-feature AUC, per-tier box plots, and depth-3 decision-tree thresholds. Full write-up in
 `participating_vp_findings.md`.
 
-**Target deliverable sentence:** *"Precisely-geolocated targets are the ones close to ≥1 VP
-**and** angularly surrounded by VPs."* — to be confirmed/refined against the AUC + tree results.
+**Result (confirmed — see `participating_vp_findings.md`).** A **three-lever model**, by priority:
+1. **Proximity to the nearest VP is the universal primary driver** of *both* geolocatability and
+   precision (Tier-1), in every regime. Operating point: nearest-VP **RTT ≲ 5–7 ms / distance ≲
+   10–40 km** ⇒ Tier-1 (decision-tree primary split in global *and* regional runs; pooled
+   single-feature AUC ranks min-RTT/min-dist #1 for both questions). Globally CBG reaches Tier-1
+   only by collapsing onto a single near VP (`n_part`≈1 ≈ shortest-ping); regionally the in-country
+   fleet gives 7–20 participating VPs *and* a close one (genuine multilateration).
+2. **Answer-space isolation owns Tier-2 vs Tier-3 — but only at scale.** `nearest_other_centroid_km`
+   AUC **0.64–0.68** globally (isolated truth-centroid ⇒ a coarse estimate still snaps right); weak
+   in the small in-country answer spaces.
+3. **Angular surround is a regime-gated secondary lever.** `part_circ_var` (surrounded) reaches AUC
+   **0.53–0.63** for "geolocatable?" in the matched-regional runs, invisible globally (degenerate
+   single-VP Tier-1). Confirms "surrounded helps" but always behind proximity.
+
+Matched-regional fleets roughly **double** the precise-Tier-1 share and **halve** Tier-3 vs global.
+Spotter collapses everywhere (Tier-1 ≈ 0–3%).
+
+**Refined deliverable sentence:** *"A target is geolocated precisely iff a VP is close to it (RTT ≲
+5–7 ms); among far targets, it still lands on the right answer iff its candidate site is isolated;
+being angularly surrounded helps only as a second-order tiebreaker."*
 
 ---
 

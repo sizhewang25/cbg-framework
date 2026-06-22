@@ -240,6 +240,29 @@ stand-in for the proprietary single-ASN operator setting (§1.4).
 - **Multi-candidate intersection cases** — physics-validated but ambiguous (§5.3 tradeoff): how often, and how does the variant choice resolve it?
 - Quantitative correlation metrics: VP–TG distance vs. outer radius vs. intersection area.
 
+### 6.5b What characterizes a precisely-geolocated target? (three-lever model)
+
+Per-target characterization over the three confidence tiers (Tier-1 within R of the truth's
+centroid; Tier-2 right centroid but >R; Tier-3 wrong/fallback), driven by the new participating-VP
+instrumentation (the VPs that survive the MTL filter and decide the region, with their RTT and
+echoed distance). Full study: `participating_vp_findings.md`. Headline:
+
+- **Lever 1 — proximity to the nearest VP (universal, primary).** Min RTT / min distance to the
+  closest VP is the #1 driver of *both* geolocatability and precision in every regime (pooled
+  single-feature AUC #1; decision-tree primary split in global *and* regional runs). Operating
+  point: nearest-VP **RTT ≲ 5–7 ms / distance ≲ 10–40 km ⇒ Tier-1**. Globally CBG reaches Tier-1
+  only by collapsing onto a single near VP (≈ shortest-ping); regionally it becomes genuine
+  multilateration (7–20 participating VPs).
+- **Lever 2 — answer-space isolation (Tier-2 vs Tier-3, at scale).** When no VP is near, a coarse
+  estimate still snaps to the right candidate iff the truth's centroid is isolated
+  (`nearest_other_centroid_km`, global AUC 0.64–0.68); weak in small in-country answer spaces.
+- **Lever 3 — angular surround (regime-gated, secondary).** Being ringed by VPs helps only once
+  proximity is widely available (regional `part_circ_var` AUC up to 0.63); invisible globally.
+
+Matched-regional fleets **double** the precise-Tier-1 share and **halve** Tier-3 vs global; Spotter
+collapses everywhere (Tier-1 ≈ 0–3%). This separates a **measurement-geometry** lever (proximity)
+from an **answer-space-geometry** lever (isolation) — a framing prior CBG work lacks.
+
 ---
 
 ## 7. Practical Insights — When to Use What
