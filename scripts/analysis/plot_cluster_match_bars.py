@@ -3,8 +3,9 @@
 The cluster counterpart of `plot_airport_match_bars.py`. Builds the centroid
 answer space once from the run's pooled ground truth (see
 `plot_cluster_cdf.build_answer_space`), then ranks every combo by its
-**classification accuracy** — the share of scored predictions that snap to the
-same cluster centroid as the truth (nearest-centroid Voronoi).
+**classification accuracy** — the share of **all** targets whose prediction
+snaps to the same cluster centroid as the truth (nearest-centroid Voronoi);
+targets that fall back / fail count as inaccurate.
 
 One figure, horizontal bars sorted descending (best on top). Each bar carries a
 marker for the **within-R rate** (prediction within R km of the truth's
@@ -14,9 +15,13 @@ reference lines mark the **shortest-ping-VP baseline** — the same-centroid
 accuracy and within-R rate of using each target's closest-by-RTT VP as the
 estimate — so you can see which combos beat the trivial baseline.
 
-Rates are over **SUCCESS rows only**, pooled across folds (a FALLBACK prediction
-is the nearest-VP fallback ≈ the shortest-ping baseline, so it would conflate CBG
-with it). Honors the shared `--geo-level/--geo-value` filter.
+Rates are over the **total** target set, pooled across folds: a CBG estimate is
+read only for SUCCESS rows, but non-SUCCESS rows (FALLBACK ≈ the nearest-VP /
+shortest-ping fallback, or hard failures) count as **inaccurate** — so a method
+that fails on hard targets is penalised, not flattered by a smaller denominator.
+The per-bar "(n=…, k failed)" tag surfaces that coverage, and the shortest-ping
+baseline (which spans every target) stays directly comparable. Honors the shared
+`--geo-level/--geo-value` filter.
 
 CLI:
     python -m scripts.analysis.plot_cluster_match_bars \\
@@ -58,7 +63,13 @@ logger = logging.getLogger(__name__)
 
 
 def compute_rates(run_dir: Path, radius_km: float, index, source=None, slice_=None) -> pd.DataFrame:
-    """One row per combo_id: n, accuracy (snap match), within_r, against `index`."""
+    """One row per combo_id: n (total targets), n_scored (SUCCESS), accuracy
+    (snap match), within_r — all against `index`.
+
+    Accuracy and within_r are over the **total** target set: non-SUCCESS rows
+    (FALLBACK / hard failures) carry match=False and NaN error in `combo_frame`,
+    so they count as inaccurate. A method that fails on hard targets is penalised,
+    not flattered by a smaller denominator."""
     grouped = group_combos_by_id(discover_combos(run_dir, source, slice_))
     rows = []
     for combo_id, dirs in grouped.items():
@@ -67,6 +78,7 @@ def compute_rates(run_dir: Path, radius_km: float, index, source=None, slice_=No
         rows.append({
             "combo_id": combo_id,
             "n": n,
+            "n_scored": int(df["success"].sum()) if n else 0,
             "accuracy": float(df["match"].mean()) if n else float("nan"),
             "within_r": float((df["error_to_centroid_km"] <= radius_km).mean()) if n else float("nan"),
         })
@@ -96,9 +108,11 @@ def plot_bars(
             ax.axvline(baseline_within, color="#aaaaaa", linestyle=":", linewidth=1.8, zorder=1,
                        label=f"shortest-ping VP: within R ({baseline_within:.1%})")
 
-    for yi, (val, n) in enumerate(zip(df["accuracy"], df["n"])):
+    for yi, (val, n, n_sc) in enumerate(zip(df["accuracy"], df["n"], df["n_scored"])):
         if pd.notna(val):
-            ax.text(val + 0.005, yi, f"{val:.1%}  (n={n})", va="center", fontsize=8)
+            tag = f"{val:.1%}  (n={n}"
+            tag += f", {n - n_sc} failed)" if n - n_sc else ")"
+            ax.text(val + 0.005, yi, tag, va="center", fontsize=8)
 
     xs = [float(df["accuracy"].max()) if len(df) else 0.0]
     if pd.notna(baseline_acc):
@@ -108,7 +122,7 @@ def plot_bars(
     ax.set_xlim(0, min(1.0, max(0.1, max(xs) * 1.25)))
     ax.set_yticks(list(y))
     ax.set_yticklabels(df["combo_id"], fontsize=8)
-    ax.set_xlabel("rate over SUCCESS targets", fontsize=11)
+    ax.set_xlabel("rate over all targets (FALLBACK / failures = inaccurate)", fontsize=11)
     ax.set_title(title, fontsize=13, fontweight="bold")
     ax.grid(True, axis="x", alpha=0.3)
     ax.legend(loc="lower right", fontsize=8)

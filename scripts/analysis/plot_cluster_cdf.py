@@ -13,11 +13,11 @@ target coordinates pooled across every combo/fold (deduped by target_id) are
 clustered at `--radius-km` (default 50). All combos share that single centroid
 set, so their classification accuracies are directly comparable.
 
-For each combo it writes one figure overlaying three CDFs of the **error
-distance to the cluster centroid** — the great-circle gap from the prediction to
-the centroid the *truth* snaps to (i.e. distance to the correct answer point):
+For each combo it writes one figure overlaying CDFs of the **error distance to
+the cluster centroid** — the great-circle gap from the prediction to the
+centroid the *truth* snaps to (i.e. distance to the correct answer point):
 
-  all         every scored prediction.
+  scored      every SUCCESS prediction (the curves cover scored rows only).
   matched     predictions that snap to the truth's centroid (correct class) —
               here this equals the prediction's own snap distance.
   mismatched  predictions that snap to a different centroid (wrong class) —
@@ -30,15 +30,18 @@ RTT VP as the estimate". The inputs dir is auto-derived from the run layout (or
 passed via --inputs-dir).
 
 The legend carries each cohort's sample count and share, and a stats box reports
-the headline classification accuracy (matched share), the within-R rate
-(error-to-centroid ≤ R, the point-estimate scoring rule), per-cohort
+the headline classification accuracy, the within-R rate (error-to-centroid ≤ R,
+the point-estimate scoring rule), coverage (scored vs failures), per-cohort
 percentiles, and the answer-space floor (truth→nearest-centroid distance).
 
-CBG cohorts are **SUCCESS rows only**, pooled across folds (disjoint K-fold test
-sets): a FALLBACK prediction is the nearest-VP fallback (≈ the shortest-ping VP),
-so including it would conflate CBG with the baseline. The baseline itself spans
-every target (it doesn't depend on CBG status). Honors the shared
-`--geo-level/--geo-value` filter.
+Accuracy and within-R are taken over the **total** target set: a CBG estimate is
+only read for SUCCESS rows, and non-SUCCESS rows (FALLBACK ≈ the nearest-VP /
+shortest-ping fallback, or hard failures) count as **inaccurate** rather than
+being dropped — so a method that fails on hard targets is penalised, not
+flattered. The error-distance CDF curves still cover scored (SUCCESS) rows only,
+since failures have no real CBG prediction. The shortest-ping baseline spans
+every target (it doesn't depend on CBG status), so it is directly comparable.
+Honors the shared `--geo-level/--geo-value` filter.
 
 CLI:
     python -m scripts.analysis.plot_cluster_cdf \\
@@ -81,9 +84,11 @@ from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM, haversine_distance
 
 logger = logging.getLogger(__name__)
 
-# SUCCESS only — a FALLBACK prediction IS the nearest-VP fallback (≈ the
-# shortest-ping VP), so counting it as a CBG result would conflate CBG with the
-# shortest-ping baseline this plot compares against.
+# A CBG prediction is only read for SUCCESS rows — a FALLBACK prediction IS the
+# nearest-VP fallback (≈ the shortest-ping VP), so treating it as a CBG estimate
+# would conflate CBG with the shortest-ping baseline this plot compares against.
+# Non-SUCCESS rows are NOT dropped, though: they count as inaccurate in the
+# total-target denominator (see `combo_frame`).
 _CBG_STATUSES = ("SUCCESS",)
 _PCTILES = (50, 90, 95, 99)
 
@@ -179,28 +184,46 @@ def build_answer_space(
 
 
 def combo_frame(combo_dirs: list[Path], index: _CentroidIndex) -> pd.DataFrame:
-    """Per SUCCESS target: match flag, error-to-truth-centroid, truth→centroid floor.
+    """One row per EVAL target: success flag, match, error-to-centroid, floor.
 
-    Pools SUCCESS rows only across folds (FALLBACK predictions are the nearest-VP
-    fallback ≈ the shortest-ping baseline, so they would conflate CBG with it).
+    Pools **all** target rows across folds (disjoint K-fold test sets). A CBG
+    prediction is only read for SUCCESS rows; non-SUCCESS rows (FALLBACK ≈ the
+    nearest-VP/shortest-ping fallback, or hard failures) carry `match=False` and
+    `error_to_centroid_km=NaN`. This makes the denominator the **total** target
+    set — so `df["match"].mean()` is accuracy over all targets (failures count as
+    inaccurate) and `(error_to_centroid_km <= R).mean()` is within-R over all
+    targets, while NaN keeps non-SUCCESS rows out of the error-distance CDF.
     `match` is nearest-centroid Voronoi equality between prediction and truth;
     `error_to_centroid_km` is the gap from the prediction to the truth's centroid
-    (the correct answer point)."""
+    (the correct answer point); `truth_centroid_km` (the floor) is defined for
+    every target."""
     frames = [load_targets(d).to_pandas() for d in combo_dirs]
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    sub = df[df["status"].isin(_CBG_STATUSES)] if len(df) else df
-    if len(sub) == 0:
-        return pd.DataFrame(columns=["match", "error_to_centroid_km", "truth_centroid_km", "error_km"])
+    if len(df) == 0:
+        return pd.DataFrame(columns=[
+            "success", "match", "error_to_centroid_km", "truth_centroid_km", "error_km"])
 
-    t_idx, t_km = index.query(sub["target_lat"], sub["target_lon"])
-    p_idx, _p_km = index.query(sub["pred_lat"], sub["pred_lon"])
-    err_to_centroid = index.distance_to(sub["pred_lat"], sub["pred_lon"], t_idx)
+    n = len(df)
+    success = df["status"].isin(_CBG_STATUSES).to_numpy()
+    # Floor (truth → its own nearest centroid) is a property of the target, so
+    # it is computed for every row regardless of CBG status.
+    t_idx, t_km = index.query(df["target_lat"], df["target_lon"])
+
+    match = np.zeros(n, dtype=bool)
+    err_to_centroid = np.full(n, np.nan, dtype=float)
+    if success.any():
+        sub = df[success]
+        p_idx, _p_km = index.query(sub["pred_lat"], sub["pred_lon"])
+        ts = t_idx[success]
+        match[success] = (ts == p_idx) & (p_idx >= 0)
+        err_to_centroid[success] = index.distance_to(sub["pred_lat"], sub["pred_lon"], ts)
 
     return pd.DataFrame({
-        "match": (t_idx == p_idx) & (p_idx >= 0),
+        "success": success,
+        "match": match,
         "error_to_centroid_km": err_to_centroid,
         "truth_centroid_km": t_km,
-        "error_km": sub["error_km"].to_numpy(dtype=float),
+        "error_km": df["error_km"].to_numpy(dtype=float),
     })
 
 
@@ -320,23 +343,28 @@ def plot_combo_cluster_cdf(
     drawn as a dotted gray reference (combo-independent)."""
     fig, ax = plt.subplots(figsize=(9, 6.5))
 
-    n = len(df)
-    if n == 0:
-        ax.text(0.5, 0.5, "no scored targets", transform=ax.transAxes,
+    n_total = len(df)
+    if n_total == 0:
+        ax.text(0.5, 0.5, "no targets", transform=ax.transAxes,
                 ha="center", va="center")
     else:
         err = df["error_to_centroid_km"].to_numpy(dtype=float)
         matched = df["match"].to_numpy(dtype=bool)
-        n_m, n_mm = int(matched.sum()), int((~matched).sum())
-        acc = n_m / n
-        within_r = float((err <= radius_km).mean())
+        finite = np.isfinite(err)            # SUCCESS rows with a scored prediction
+        n_scored = int(finite.sum())
+        n_fail = n_total - n_scored          # FALLBACK / hard failures (no CBG estimate)
+        n_m = int(matched.sum())             # matched ⊆ scored
+        n_mm = n_scored - n_m
+        # Denominator is the TOTAL target set: failures count as inaccurate.
+        acc = n_m / n_total
+        within_r = int((err[finite] <= radius_km).sum()) / n_total
 
         _cdf(ax, err, color="#222222", linewidth=2.4, zorder=5,
-             label=f"all (n={n})")
+             label=f"scored (n={n_scored})")
         _cdf(ax, err[matched], color="#2ca02c", linewidth=2.0, zorder=4,
-             label=f"matched (n={n_m}, {acc:.1%})")
-        _cdf(ax, err[~matched], color="#d62728", linewidth=2.0, zorder=3,
-             label=f"mismatched (n={n_mm}, {1 - acc:.1%})")
+             label=f"matched (n={n_m}, {acc:.1%} of {n_total})")
+        _cdf(ax, err[finite & ~matched], color="#d62728", linewidth=2.0, zorder=3,
+             label=f"mismatched (n={n_mm}, {n_mm / n_total:.1%} of {n_total})")
 
         n_base = 0
         if baseline_km is not None:
@@ -350,11 +378,12 @@ def plot_combo_cluster_cdf(
         ax.text(radius_km, 0.02, f" R={radius_km:.0f} km", color="green",
                 fontsize=8, rotation=90, va="bottom", ha="left")
 
-        p_all, p_m, p_mm = _pcts(err), _pcts(err[matched]), _pcts(err[~matched])
+        p_all, p_m, p_mm = _pcts(err), _pcts(err[matched]), _pcts(err[finite & ~matched])
         floor = _pcts(df["truth_centroid_km"].to_numpy(dtype=float))
         box = (
-            f"classification accuracy   {acc:6.1%}\n"
+            f"classification accuracy   {acc:6.1%}   (of {n_total} targets)\n"
             f"within R ({radius_km:.0f} km)        {within_r:6.1%}\n"
+            f"scored {n_scored} / {n_total}  (failures: {n_fail})\n"
             f"answer space: {n_centroids} centroids\n"
             f"truth→centroid p50/p90  {floor[50]:.0f}/{floor[90]:.0f} km\n"
             f"\n"
