@@ -58,7 +58,7 @@ We decompose existing CBG variants into a unified, composable 3-phase framework;
 
 1. First CBG phase-level interpretation backed by statistics and case studies, evaluated across **two different datasets** — a proprietary single-ASN operator dataset and a public mixed-ASN RIPE dataset with matched VP topology.
 2. Unified, composable CBG framework spanning Vanilla / Million-scale / Octant / Spotter, deployed under a **two-track operator taxonomy** (Anchored / Unanchored) that separates physics-grounded validation from statistical estimation.
-3. Dual evaluation — error-distance *and* bounded-candidate classification — exposing scenarios where CBG is "off on lat/long but right on the answer that matters."
+3. Dual evaluation — error-distance *and* bounded-candidate classification — exposing scenarios where CBG is "off on lat/long but right on the answer that matters." We quantify this as the **tolerance dividend** (classification accuracy − within-R rate): in the matched-regional operator regime it reaches **25–31 points — i.e. 53–71% of all correct answers are won only by the answer-space tolerance**, invisible to a coordinate-error metric.
 4. **Per-ASN calibration regime:** empirical evidence that pooled-ASN training degrades accuracy because calibration captures per-ASN propagation topology; we recommend per-ASN training as the methodological default.
 5. New CBG combinations that outperform the originals in specific operator scenarios.
 6. Open-source framework so downstream work can be explicit about *which* CBG it uses.
@@ -174,6 +174,7 @@ The primitive is calibration-free, runs entirely on operator-owned VPs, and boot
 ### 5.4 Metrics
 
 - **Accuracy:** p5 / p25 / p50 / p75 / p95 error percentiles · classification accuracy at each precision tier · diff from shortest-ping baseline.
+- **Dual scoring rules + tolerance dividend.** Two ways to score the same prediction: the *coordinate* rule **within-R** (predicted point ≤ R km of truth) and the *classification* rule **same-centroid accuracy** (prediction snaps to the truth's cell in the bounded answer space). Their gap is the **tolerance dividend** = `same_centroid_acc − within_r` — the share of targets that land on the *right* candidate site despite being >R off (the Tier-2 band; see §6.5b). It measures how much the finite answer space forgives bounded coordinate error. *Note: the dividend is a property of (variant × answer-space granularity) — it grows with cluster radius R, fixed at 50 km here.*
 - **Practicality:** Runtime · Memory.
 - **Diagnostic:** Intersection Success Rate · **Intersection Cardinality Distribution** · Failure Analysis · Outlier VP Resistance · Intersection Agreement · Latency-to-distance Agreement.
 
@@ -214,6 +215,15 @@ stand-in for the proprietary single-ASN operator setting (§1.4).
 
 > *Note: per-ASN regional target sets are currently small (US n=96, FR n=39); the regional
 > family **ranking** is not yet stable and is treated as deferred (see `discussion.md`).*
+
+**The metric choice reorders the variants (tolerance dividend, §5.4).** On the global run, ranking
+by the *coordinate* rule (within-R) gives Million-scale (21.2%) > Vanilla (18.0%) > **Octant
+(14.5%, last)**; ranking by the *classification* rule (same-centroid) **flips** it to **Octant
+(25.3%, first)** > Vanilla (24.3%) > Million-scale (23.0%). Octant is worst on coordinate error but
+best on the answer that matters — it relies most on the tolerance dividend (+10.8 pp globally,
++27–29 pp regionally), while Million-scale relies on it least (+1.8 pp globally: its predictions
+either nail the cell or miss it entirely). So *which variant wins is metric-dependent*, and the
+dividend is itself a per-variant geometric fingerprint.
 
 ### 6.2 RQ2 — Phase ablation
 

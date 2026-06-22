@@ -2,7 +2,7 @@
 
 Scratch/working doc for analyses not yet locked into `paper-flow.md`. Everything here is
 candidate material: mechanism story, failure modes, the confidence-tier characterization, the
-tolerance-dividend numbers (pending data extraction), and metrics still under consideration.
+the tolerance-dividend numbers (computed; promoted to paper-flow), and metrics still under consideration.
 
 Holds everything **from the "Mechanism (the bridge)" point onward** in our 2026-06 discussion;
 `paper-flow.md` §6.1 holds the two clean-regime rankings up to that point.
@@ -115,18 +115,36 @@ being angularly surrounded helps only as a second-order tiebreaker."*
 
 ---
 
-## 4. The tolerance dividend (pending CSV extraction)
+## 4. The tolerance dividend (DONE — promoted to paper-flow §1.5/§5.4/§6.1)
 
-Definition: the gap between **same-centroid accuracy** (classification, the blue bars) and the
-**within-R rate** (point-estimate scoring, the red diamonds). It quantifies how much the bounded
-answer space forgives bounded coordinate error — the §1.2 thesis / contribution #3, made into a
-number.
+Definition: the gap between **same-centroid accuracy** (classification) and the **within-R rate**
+(point-estimate scoring) — the share of targets that land on the right answer-space cell despite
+being >R off (the Tier-2 band). Measures how much the bounded answer space forgives bounded
+coordinate error — the §1.2 thesis / contribution #3, made into a number.
+Computed by `scripts/analysis/partvp/tolerance_dividend.py` → `analysis/tolerance_dividend.csv`.
 
-- **Status:** numbers being extracted to CSV (agent in progress). Once available, report the
-  per-variant gap across the clean runs and decide whether it is headline-worthy (5-point vs.
-  20-point story) before committing §1.2 / contribution #3 framing.
-- **`paper-flow.md` §5.4** should then name "classification accuracy (same-centroid)" and
-  "within-R rate" as the two scoring rules and define their gap as the *tolerance dividend*.
+**It is a headline-sized, 25–31-point story in the operator regime — not a footnote.** Per-variant
+dividend (absolute pp / relative = share of *correct* answers that are tolerance wins):
+
+| regime | vanilla | million-scale | octant | spotter |
+| --- | --- | --- | --- | --- |
+| Global (as16509) | +6.3 pp / 26% | +1.8 pp / 8% | **+10.8 pp / 43%** | +6.6 pp / 94%* |
+| Matched US (as7018) | **+31.3 pp / 68%** | +19.8 pp / 45% | +27.1 pp / 53% | +6.3 pp / 100%* |
+| Matched US (as7922) | +25.0 pp / 71% | +24.0 pp / 61% | +29.2 pp / 53% | +12.5 pp / 80%* |
+
+(*spotter relative is ~1 on a collapsed base — not meaningful.)
+
+Two findings worth carrying:
+1. **Biggest exactly where the paper lives.** In the matched-regional operator regime, **53–71% of
+   all correct answers are >R-off-but-right-cell** — invisible to a coordinate metric. Strongest
+   justification for the dual-evaluation contribution.
+2. **The metric reorders the variants.** Global within-R: million > vanilla > **octant (last)**;
+   same-centroid: **octant (first)** > vanilla > million. Octant relies most on the dividend,
+   million-scale least (nails-or-misses-the-cell). The dividend is a per-variant fingerprint.
+
+**Caveat (carry wherever headlined):** the dividend is a property of (variant × answer-space
+granularity) — it grows with the cluster radius R (fixed at 50 km here), so it is not a property of
+the variant alone.
 
 ---
 
@@ -248,7 +266,7 @@ Two existing §7 bullets can be upgraded from assertion to quantified once the a
 
 ## Open items carried from the discussion
 
-- [ ] Tolerance-dividend numbers per variant once CSVs land (§4).
+- [x] Tolerance-dividend numbers per variant — DONE (§4), promoted to paper-flow §1.5/§5.4/§6.1.
 - [ ] Small-n regional fix — pooling ASNs vs. bootstrap CIs (deferred decision).
 - [ ] Lock distance-bin edges for the §6.1 mechanism figure (§1).
 - [x] ~~Measure geographic-feasibility-filter yield~~ — **dropped** (landmass idea superseded by the
