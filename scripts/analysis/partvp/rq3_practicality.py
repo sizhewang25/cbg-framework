@@ -71,6 +71,10 @@ def collect(run_dir: Path, features: Path) -> pd.DataFrame:
             "total_ms_p50": round(float(total.median()), 2),
             "total_ms_p95": round(float(total.quantile(0.95)), 2),
             "throughput_per_s": round(1000.0 / float(total.median()), 1),
+            # Single-core wall-clock to geolocate 1M targets (inference only; fit
+            # is one-time and negligible at this scale). Embarrassingly parallel,
+            # so divide by #cores in deployment.
+            "hours_per_1M_1core": round(1e6 * float(total.median()) / 1000.0 / 3600.0, 2),
             "mtl_alloc_p95_kb": round(float(df["mtl_alloc_peak_bytes"].quantile(0.95)) / 1024, 1),
             "ctr_alloc_p95_kb": round(float(df["ctr_alloc_peak_bytes"].quantile(0.95)) / 1024, 1),
             "fit_ms_mean": round(float(np.mean([r["fit_ms"] for r in runs])), 1),

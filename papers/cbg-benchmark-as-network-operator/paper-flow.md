@@ -240,9 +240,48 @@ dividend is itself a per-variant geometric fingerprint.
 
 ### 6.4 RQ3 — Practicality at production scale
 
-- Runtime per pipeline phase.
-- Memory footprint.
-- Trade-off plots: accuracy vs. runtime; accuracy vs. memory.
+Per-stage timing + peak memory are recorded per target (`targets.parquet`); fit cost + process
+RSS per run (`run.json`); analysis in `scripts/analysis/partvp/rq3_practicality.py`. *Numbers are
+single-thread Python/Shapely on one host — the **relative** phase/variant comparison is the robust
+claim, not absolute ms.* Consistent across both global ASNs.
+
+**Finding 1 — cost lives in the centroid (CTR) phase, and `monte_carlo_medoid` is the culprit.**
+Per-target CTR latency: `monte_carlo_medoid` **190–390 ms** vs `geometric_centroid` **~0.25 ms** vs
+`boundary_vertex_mean` **~0.04 ms** (~1000×). It is also the memory hog: **~24 MB** peak alloc
+(Sobol point cloud + O(N²) medoid) vs ~40 KB for the others, and ~24 MB extra process RSS. LTD is
+cheap (0.5–5 ms); MTL is moderate (4–78 ms; weighted planar-annulus > spherical-circle;
+`highest_weight_only` < multi-face).
+
+**Finding 2 — every `monte_carlo` variant is Pareto-dominated by its `geometric_centroid` (`_geo`)
+sibling.** `monte_carlo_medoid` is slow *by construction* — it adds Sobol sampling + an O(N²) medoid
+on top of the region, whereas `geometric_centroid` is a closed-form area-weighted polygon centroid,
+so geo is **always** faster and (RQ1/RQ2) equal-or-more accurate. The medoid's only genuine edge —
+robustness on non-convex / multi-polygon regions where an area-centroid can fall in a gap — is
+engineered away by pairing `_geo` with `highest_weight_only=true` (single face). Accuracy vs.
+throughput (global AS16509):
+
+| variant | CTR | accuracy | throughput | 1 M IPs (1 core) |
+| ------- | --- | -------: | ---------: | ---------------: |
+| octant_cbg_hull_geo | geometric | **30.0%** | 65 /s | **4.3 h** |
+| vanilla_cbg_geo | geometric | 28.6% | 148 /s | 1.9 h |
+| million_scale_cbg | bvmean | 23.0% | 211 /s | **1.3 h** (≈0 fit) |
+| octant_cbg (default) | monte_carlo | 25.2% | 3.2 /s | **88 h ≈ 3.7 d** |
+| spotter_cbg | monte_carlo | 7.0% | 1.7 /s | 162 h ≈ 6.7 d |
+
+**Finding 3 — fit (one-time calibration) cost.** Million-scale is **calibration-free (~0 ms)**;
+Vanilla/Octant ~1.1–1.3 s, Spotter ~0.8 s per VP corpus — negligible per-target at scale, but it
+sets the Anchored-track retraining cadence.
+
+**Production scale (1 M IPs, inference only, embarrassingly parallel → divide by #cores).** The CTR
+choice is decisive: `geometric_centroid` turns octant from a **3.7-day** single-core job (default
+`monte_carlo`, 25% acc) into a **4.3-hour** job (`octant_hull_geo`) at **higher** accuracy (30%);
+on 16 cores that is ~16 min. Million-scale geolocates 1 M in **~1.3 h** single-core / ~5 min on 16
+cores with zero calibration.
+
+**Recommendation:** deploy `geometric_centroid` (single-face MTL); never `monte_carlo_medoid`. Pick
+along the frontier by budget — `million_scale_cbg` for max throughput / zero-calibration,
+`vanilla_cbg_geo` for balance, `octant_cbg_hull_geo` for max accuracy at still-modest cost. Figures:
+`analysis_rq3/pareto_*.png`, `phases_*.png`.
 
 ### 6.5 Failure analysis & root cause
 
