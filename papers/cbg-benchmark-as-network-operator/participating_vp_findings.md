@@ -221,6 +221,40 @@ The global Tier-2-vs-Tier-3 isolation lever (`nearest_other_centroid_km`, AUC 0.
 carry over cleanly: the in-country answer space is small (US 32 centroids / FR 12) so isolation is
 noisy (AUC ~0.3–0.5). Isolation is a large-answer-space (global) phenomenon.
 
+### 4.6 Natural experiment — inward vs outward (EU fleets → all-EU targets)
+
+To isolate the angular lever, two single-region EU fleets — **AS3209 (Vodafone, DE-central)** and
+**AS3215 (Orange, FR-western)** — geolocate **all 415 Europe anchors** (`target_continent=Europe`).
+Each target is labelled by the *whole-fleet* angular coverage as seen from it (combo-independent):
+**outward** = `avail_max_gap_deg ≥ 180°` (target outside the VP convex hull, one-sided) vs
+**inward** = `< 180°` (surrounded).
+
+**Raw split is dramatic** (octant Tier-1):
+
+| fleet | inward T1 | outward T1 | inward med closest-VP | outward med closest-VP |
+| ----- | --------: | ---------: | --------------------: | ---------------------: |
+| AS3209/DE | **32%** (n=102) | **2.2%** (n=313) | 4.7 km | 326 km |
+| AS3215/FR | **31%** (n=55) | **4.7%** (n=360) | 4.8 km | 351 km |
+
+But inward targets are also ~70× closer — the split is *confounded with proximity* (an
+inside-the-hull target of a clustered fleet is necessarily near it). The figure
+(`analysis_eu/strat_*.png`) shows Tier-1 lives almost entirely in the **≤50 km inward corner**
+(34% inward vs 5% outward at ≤50 km) and is ≈0% beyond 50 km for *both* classes.
+
+**Distance-controlled (matched band, closest-VP 20–80 km, balanced medians):**
+
+| fleet | inward T1 | outward T1 |
+| ----- | --------: | ---------: |
+| AS3209/DE | 14% (n=14) | 8% (n=36) |
+| AS3215/FR | 12% (n=8) | 0% (n=7) |
+
+So the dramatic raw inward/outward gap is **mostly proximity**, with a **smaller genuine angular
+residual** (~1.5–2× at matched distance, small n). This *refines* lever 3: angular surround does
+carry independent signal, but the binding constraint is still proximity — there is essentially no
+Tier-1 success beyond ~50 km regardless of surround. (Caveat for operator use: inward/outward is
+*truth-anchored* — it needs the target's location — so it characterizes outcomes rather than being
+an inference-time predictor; see discussion.md §6.)
+
 ### 4.5 Spotter still collapses
 Tier-1 = 0–3% in every regional run (US7018 0%, US7922 3%, FR low), ~84–94% Tier-3 — the same
 structural failure as global.

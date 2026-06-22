@@ -116,7 +116,11 @@ def _nearest_other_centroid_km(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
 
 
 def _avail_geometry(inputs_dir: Path) -> pd.DataFrame:
-    """Per target_id: avail_min_vp_km, avail_min_rtt_ms, n_obs — over ALL observed VPs."""
+    """Per target_id, over ALL observed VPs (combo-independent fleet geometry):
+    avail_min_vp_km, avail_min_rtt_ms, n_obs, and the angular coverage of the
+    *whole fleet* as seen from the target — `avail_max_gap_deg` (≥180° ⟺ the
+    target lies outside the VP convex hull, i.e. the fleet is one-sided /
+    "outward") and `avail_circ_var` (high ⟺ surrounded / "inward")."""
     direct = inputs_dir / "eval_observations.parquet"
     paths = [direct] if direct.exists() else sorted(inputs_dir.glob("*/eval_observations.parquet"))
     if not paths:
@@ -125,11 +129,19 @@ def _avail_geometry(inputs_dir: Path) -> pd.DataFrame:
     df = df.drop_duplicates(["target_id", "vp_id"])
     df["vp_km"] = _haversine_vec(df["target_lat"], df["target_lon"], df["vp_lat"], df["vp_lon"])
     g = df.groupby("target_id")
-    return pd.DataFrame({
+    base = pd.DataFrame({
         "avail_min_vp_km": g["vp_km"].min(),
         "avail_min_rtt_ms": g["latency_ms"].min(),
         "n_obs": g.size(),
-    }).reset_index()
+    })
+    ang = {}
+    for tid, sub in g:
+        b = _bearings_deg(sub["target_lat"].iloc[0], sub["target_lon"].iloc[0],
+                          sub["vp_lat"].to_numpy(), sub["vp_lon"].to_numpy())
+        mg, cv = _angular_features(b)
+        ang[tid] = (mg, cv)
+    angdf = pd.DataFrame.from_dict(ang, orient="index", columns=["avail_max_gap_deg", "avail_circ_var"])
+    return base.join(angdf).reset_index()
 
 
 def _participant_features(row) -> dict:
@@ -215,6 +227,8 @@ def extract_run(run_dir: Path, inputs_dir: Path, clusters_dir: Path | None,
                 "nearest_other_centroid_km": float(near_other[t_idx[i]]) if t_idx[i] >= 0 else np.nan,
                 "avail_min_vp_km": float(av["avail_min_vp_km"]) if av is not None else np.nan,
                 "avail_min_rtt_ms": float(av["avail_min_rtt_ms"]) if av is not None else np.nan,
+                "avail_max_gap_deg": float(av["avail_max_gap_deg"]) if av is not None else np.nan,
+                "avail_circ_var": float(av["avail_circ_var"]) if av is not None else np.nan,
                 "n_obs": int(av["n_obs"]) if av is not None else 0,
                 **feat,
             })
