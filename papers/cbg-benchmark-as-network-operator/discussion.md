@@ -11,8 +11,21 @@ Holds everything **from the "Mechanism (the bridge)" point onward** in our 2026-
 
 ## 1. Mechanism — the bridge between the two regimes
 
-The two regimes in §6.1 (in-distribution global; matched-regional) are connected by a single
-explanatory axis: **min(VP–TG) distance** (closest-VP distance).
+The two regimes in §6.1 (in-distribution global; matched-regional) are connected by a small
+fleet-geometry primitive set. The old single axis, **min(VP-TG) distance**, was directionally
+right but too coarse because it ignored the local density of the answer space. The revised bridge is:
+
+- **Raw VP proximity:** `fleet_abs_km = d(V*, C)`, where `C` is the truth centroid and `V*` is the
+  closest available VP to that centroid.
+- **Target-distinguishable VP margin:** `target_distinguishable_vp_margin_km = d(C, N)/2 -
+  fleet_abs_km`, where `N` is the nearest competing centroid. If the margin is positive, at least
+  one VP is inside the loose `d(C,N)/2` bound and is therefore guaranteed, by triangle inequality,
+  to favor the truth centroid over its nearest answer-space competitor.
+
+This combo separates two questions that were previously blurred:
+1. *How far is the fleet from the target?* (`fleet_abs_km`)
+2. *Is that close enough for this target's local answer-space geometry?*
+   (`target_distinguishable_vp_margin_km`)
 
 - The in-distribution global run (n=713) already spans the full distance range — some targets
   sit near a VP, many are far. Re-read **sliced by min(VP–TG) distance**, it reproduces the
@@ -23,19 +36,42 @@ explanatory axis: **min(VP–TG) distance** (closest-VP distance).
 So the global run is read **two ways**: (a) as a ranking at full scale (→ §6.1 Regime 1), and
 (b) distance-sliced to expose the mechanism (this doc).
 
-**Planned figure:** classification accuracy + confidence-tier breakdown vs. binned closest-VP
-distance, per textbook variant. This single curve also delivers:
+**Result from the focused failure reassessment** (`scripts/analysis/partvp/assess_vp_proximity_failures.py`,
+`analysis_fleet/VP_PROXIMITY_FAILURE_ASSESSMENT.md`): across the 4 textbook variants and 5 VP-target
+setups (5,540 rows), missing a target-distinguishing VP (`margin <= 0`) covers **84.4% of all
+failures**; among rows missing such a VP, **92.6% fail**. But it is not a complete model: when a
+target-distinguishing VP exists, the residual failure rate is still **49.3%**.
+
+The primitive is most explanatory for the variants that actually behave like CBG estimators:
+- **Million-scale:** missing target-distinguishing VP covers **91.8%** of failures; residual failure
+  with such a VP present falls to **24.9%**. The cleanest setup is **global-global / million-scale**:
+  **97.8%** of failures covered, residual failure only **7.3%**.
+- **Vanilla and Octant:** broadly consistent with the same story, but with more residual failures.
+- **Spotter:** structural exception. Missing VP still covers many failures because the sparse-fleet
+  setups are hard, but even when a target-distinguishing VP exists Spotter fails **91.9%** of the
+  time. Its failure mode is therefore not primarily fleet proximity.
+
+**Planned figure:** classification accuracy + confidence-tier breakdown vs. binned `fleet_abs_km`,
+with an overlay/split for `target_distinguishable_vp_margin_km > 0`, per textbook variant. This
+single curve also delivers:
 - *Spotter's effective range* — where it dies relative to distance.
 - *Octant's long-range limit* — where bounded-spline extrapolation breaks down.
+- *The answer-space-normalized VP-proximity gate* — where raw distance is not enough because a
+  target in a dense answer-space neighborhood needs a closer VP than an isolated target.
 
-**TODO:** lock the distance-bin edges for this figure.
+**TODO:** lock the `fleet_abs_km` bin edges and margin split for this figure.
 
 ---
 
 ## 2. Failure analysis & named failure modes
 
-Both modes are surfaced by the answer-space metric (FALLBACK / failures count as inaccurate).
+These modes are surfaced by the answer-space metric (FALLBACK / failures count as inaccurate).
 
+- **Missing target-distinguishing VP.** The main cross-variant fleet-geometry failure primitive:
+  no available VP lies within `d(C,N)/2` of the truth centroid. This explains most failures for
+  million-scale and much of vanilla/octant in sparse setups; it is the paper's clean answer to
+  "CBG fails when the operator fleet cannot distinguish the target from its nearest plausible
+  answer-space neighbor."
 - **Spotter collapse.** The k·σ bands produce constraints that frequently empty the inside-all
   intersection → fallback → counted inaccurate; worst when targets are far (7% on the global
   run). Cross-ref `[[finding_spherical_circle_brittle]]`.
@@ -152,7 +188,9 @@ the variant alone.
 
 *(Scratch — user is weighing additional metrics here. Add candidates below.)*
 
-- [ ] (placeholder)
+- [x] **Fleet-geometry primitive combo locked for failure explanation:** `fleet_abs_km` +
+      `target_distinguishable_vp_margin_km`. Keep fixed-km thresholds descriptive only; use the
+      target-specific margin as the primary VP-proximity rule.
 
 ---
 
@@ -260,7 +298,8 @@ operator airport metric `[[project_airport_eval_metric]]`; empty-region collapse
 Two existing §7 bullets can be upgraded from assertion to quantified once the above lands:
 - "Loses to shortest-ping when VPs are globally dispersed" → backed by 23.4% baseline vs.
   23–25% CBG (global run).
-- "Loses when the target is far from every VP" → backed by the distance-sliced curve (§1 here).
+- "Loses when the operator fleet cannot distinguish the target from its nearest answer-space
+  neighbor" → backed by the `fleet_abs_km` + target-distinguishable-margin assessment (§1 here).
 
 ---
 
@@ -268,7 +307,8 @@ Two existing §7 bullets can be upgraded from assertion to quantified once the a
 
 - [x] Tolerance-dividend numbers per variant — DONE (§4), promoted to paper-flow §1.5/§5.4/§6.1.
 - [ ] Small-n regional fix — pooling ASNs vs. bootstrap CIs (deferred decision).
-- [ ] Lock distance-bin edges for the §6.1 mechanism figure (§1).
+- [ ] Lock `fleet_abs_km` bin edges and the target-distinguishable-margin split for the §6.1
+      mechanism figure (§1).
 - [x] ~~Measure geographic-feasibility-filter yield~~ — **dropped** (landmass idea superseded by the
       region-overlap lever, §6.3). Done 2026-06-22: L1 = region-in-one-cell is the observable
       high-confidence flag (precision 0.66–0.91 ex-spotter); L2 not reliably high; L0 variant-dependent.
