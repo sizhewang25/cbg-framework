@@ -16,6 +16,8 @@
   const mechSel = document.getElementById("mech");
   const pctSel = document.getElementById("pct");
   const targetSel = document.getElementById("target");
+  const targetSearch = document.getElementById("targetSearch");
+  const targetCount = document.getElementById("targetCount");
   const maxRSel = document.getElementById("maxR");
   const keptOnly = document.getElementById("keptOnly");
   const projSel = document.getElementById("proj");
@@ -79,6 +81,36 @@
     const tail = t.match ? "MATCH" : `${outcomeTag(t)}/${mechTag(t)}`;
     return `${t.target_id} (fold ${foldLabel(t.fold)}) — d→cell=${eStr} — ${tail}`;
   }
+  function compactSearch(s) {
+    return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+  function isSubsequence(needle, haystack) {
+    let j = 0;
+    for (let i = 0; i < haystack.length && j < needle.length; i++) {
+      if (haystack[i] === needle[j]) j++;
+    }
+    return j === needle.length;
+  }
+  function searchScore(t, rawQuery) {
+    const q = String(rawQuery || "").trim().toLowerCase();
+    if (!q) return 0;
+    const id = String(t.target_id || "").toLowerCase();
+    const label = targetLabel(t).toLowerCase();
+    const fold = String(t.fold || "").toLowerCase();
+    const cq = compactSearch(q);
+    const cid = compactSearch(id);
+    const clabel = compactSearch(label);
+    if (id === q) return 1000;
+    if (id.startsWith(q)) return 900 - id.length;
+    if (id.includes(q)) return 800 - id.indexOf(q);
+    if (cq && cid === cq) return 700;
+    if (cq && cid.startsWith(cq)) return 650 - cid.length;
+    if (cq && cid.includes(cq)) return 600 - cid.indexOf(cq);
+    if (fold.includes(q) || label.includes(q)) return 500;
+    if (cq && clabel.includes(cq)) return 400;
+    if (cq.length >= 3 && isSubsequence(cq, clabel)) return 300 - cq.length;
+    return -1;
+  }
   function percentileIndex(p, n) {
     if (n === 0) return 0;
     const raw = (p / 100) * (n - 1);
@@ -122,14 +154,19 @@
   let currentList = data.targets;
   function activeList() {
     const oc = outcomeSel.value, mc = mechSel.value;
-    return data.targets.filter((t) => {
+    const q = targetSearch ? targetSearch.value : "";
+    const rows = data.targets.map((t, i) => ({ t, i, score: searchScore(t, q) })).filter((r) => {
+      const t = r.t;
       if (oc === "fail" && t.match) return false;
       if (oc === "WRONG" && !(t.outcome === "WRONG" && !t.match)) return false;
       if (oc === "GIVE_UP" && t.outcome !== "GIVE_UP") return false;
       if (oc === "MATCH" && !t.match) return false;
       if (mc !== "all" && t.mechanism !== mc) return false;
+      if (q.trim() && r.score < 0) return false;
       return true;
     });
+    if (q.trim()) rows.sort((a, b) => (b.score - a.score) || (a.i - b.i));
+    return rows.map((r) => r.t);
   }
   function populateTargets() {
     const prev = currentList[+targetSel.value];
@@ -148,6 +185,7 @@
       if (pIdx >= 0) idx = pIdx;
     }
     targetSel.value = String(idx);
+    if (targetCount) targetCount.textContent = `${currentList.length}/${data.targets.length}`;
   }
   function applyPercentile() {
     if (pctSel.value === "") return;
@@ -440,6 +478,13 @@
   pctSel.addEventListener("change", () => { applyPercentile(); draw(); });
   outcomeSel.addEventListener("change", () => { populateTargets(); draw(); });
   mechSel.addEventListener("change", () => { populateTargets(); draw(); });
+  if (targetSearch) {
+    targetSearch.addEventListener("input", () => {
+      pctSel.value = "";
+      populateTargets();
+      draw();
+    });
+  }
   targetSel.addEventListener("change", draw);
   maxRSel.addEventListener("change", draw);
   keptOnly.addEventListener("change", draw);
