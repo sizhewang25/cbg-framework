@@ -249,8 +249,8 @@ extrapolation. No textbook variant fixes that geometry.
 
 After establishing the span-mismatch failure, we switch back to classification. All rows use
 `R = 50 km` answer-space clustering. The percentages are setup-local because the answer space
-differs by row: global uses 713 targets / 257 clusters, US uses 96 targets / 32 clusters, and Europe
-uses 415 targets / 120 clusters.
+differs by row: global uses 713 targets / 257 clusters, US uses 96 targets / 32 clusters, and the
+Europe operator rows are country-matched (`DE→DE`, `FR→FR`) rather than Europe-wide.
 
 | Setup | Targets / clusters | Shortest ping | Vanilla | Million-scale | Octant | Spotter | Main read |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -258,12 +258,14 @@ uses 415 targets / 120 clusters.
 | Global AS31898 | 713 / 257 | 20.6% | **25.0%** | 22.4% | **25.0%** | 7.0% | Vanilla/Octant lead; Million-scale is modest. |
 | US AS7018 | 96 / 32 | 39.6% | 45.8% | 43.8% | **51.0%** | 6.3% | Regional colocation lets CBG beat baseline. |
 | US AS7922 | 96 / 32 | 54.2% | 35.4% | 39.6% | **55.2%** | 15.6% | Baseline is already strong; only Octant clears it. |
-| Europe AS3209 | 415 / 120 | 10.8% | 5.5% | 10.4% | **12.0%** | 2.4% | Octant gives a small setup-local lift. |
-| Europe AS3215 | 415 / 120 | 5.8% | 4.6% | 6.5% | **12.0%** | 1.4% | Octant is the only clear winner. |
+| DE AS3209 | 96 / 21 | 50.0% | 18.8% | **46.9%** | 39.6% | pending | Dedicated `DE→DE` run; Spotter artifact needs clean rerun. |
+| FR AS3215 | 39 / 12 | 59.0% | 20.5% | 53.8% | **56.4%** | 35.9% | Dedicated `FR→FR` run; baseline is already strong. |
 
-**Read:** CBG's rank is not global. Octant is the most consistent textbook variant in this bounded
-answer-space view, but the margin over shortest ping depends strongly on VP-target geometry. Spotter
-is a structural outlier across these setups.
+**Read:** CBG's rank is not global. Octant is the most consistent textbook variant in the global/US
+bounded-answer-space view, while the country-matched Europe rows show how strong a nearest-VP
+baseline can become when the target set is very local. Spotter is a structural outlier across the
+completed setups; the dedicated `DE→DE` Spotter row is left pending until its interrupted artifacts
+are rerun cleanly.
 
 **The metric choice reorders the variants (tolerance dividend, §5.4).** On Global AS16509, ranking
 by the coordinate rule (within-R) gives Million-scale (21.2%) > Vanilla (18.0%) > Octant (14.5%);
