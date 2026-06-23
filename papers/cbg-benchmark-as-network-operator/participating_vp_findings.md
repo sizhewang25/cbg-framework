@@ -238,7 +238,7 @@ Each target is labelled by the *whole-fleet* angular coverage as seen from it (c
 
 But inward targets are also ~70× closer — the split is *confounded with proximity* (an
 inside-the-hull target of a clustered fleet is necessarily near it). The figure
-(`analysis_eu/strat_*.png`) shows Tier-1 lives almost entirely in the **≤50 km inward corner**
+(`outputs/analysis_eu/strat_*.png`) shows Tier-1 lives almost entirely in the **≤50 km inward corner**
 (34% inward vs 5% outward at ≤50 km) and is ≈0% beyond 50 km for *both* classes.
 
 **Distance-controlled (matched band, closest-VP 20–80 km, balanced medians):**

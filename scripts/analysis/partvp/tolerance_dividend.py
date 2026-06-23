@@ -16,9 +16,9 @@ tolerance_dividend.csv.
 
 CLI:
     python -m scripts.analysis.partvp.tolerance_dividend \\
-        --features "scripts/analysis/partvp/data/*.parquet" \\
-                   "scripts/analysis/partvp/data_eu/*.parquet" \\
-        --out scripts/analysis/partvp/analysis/tolerance_dividend.csv
+        --features "scripts/analysis/partvp/outputs/data/*.parquet" \\
+                   "scripts/analysis/partvp/outputs/data_eu/*.parquet" \\
+        --out scripts/analysis/partvp/outputs/analysis/tolerance_dividend.csv
 """
 from __future__ import annotations
 

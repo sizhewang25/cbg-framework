@@ -196,3 +196,4 @@ scripts/benchmark/v2/inputs/
 
 # Track requirements.txt despite the *.txt rule above
 !requirements.txt
+**/*/outputs_partvp/

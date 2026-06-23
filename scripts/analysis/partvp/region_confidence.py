@@ -26,8 +26,8 @@ only the region shape carries planar error.
 CLI:
     python -m scripts.analysis.partvp.region_confidence \\
         --run-dir scripts/benchmark/v2/outputs/global_as16509_final \\
-        --out-csv scripts/analysis/partvp/analysis/region_confidence.csv \\
-        --out-parquet scripts/analysis/partvp/data/region_confidence_global_as16509_final.parquet
+        --out-csv scripts/analysis/partvp/outputs/analysis/region_confidence.csv \\
+        --out-parquet scripts/analysis/partvp/outputs/data/region_confidence_global_as16509_final.parquet
 """
 
 from __future__ import annotations

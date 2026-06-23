@@ -281,7 +281,7 @@ cores with zero calibration.
 **Recommendation:** deploy `geometric_centroid` (single-face MTL); never `monte_carlo_medoid`. Pick
 along the frontier by budget — `million_scale_cbg` for max throughput / zero-calibration,
 `vanilla_cbg_geo` for balance, `octant_cbg_hull_geo` for max accuracy at still-modest cost. Figures:
-`analysis_rq3/pareto_*.png`, `phases_*.png`.
+`outputs/analysis_rq3/pareto_*.png`, `phases_*.png`.
 
 ### 6.5 Failure analysis & root cause
 
