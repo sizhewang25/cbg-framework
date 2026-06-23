@@ -2,16 +2,17 @@
 
 Scratch/working doc for analyses not yet locked into `paper-flow.md`. Everything here is
 candidate material: mechanism story, failure modes, the confidence-tier characterization, the
-the tolerance-dividend numbers (computed; promoted to paper-flow), and metrics still under consideration.
+tolerance-dividend numbers (computed; promoted to paper-flow), and metrics still under consideration.
 
 Holds everything **from the "Mechanism (the bridge)" point onward** in our 2026-06 discussion;
-`paper-flow.md` §6.1 holds the two clean-regime rankings up to that point.
+`paper-flow.md` §6.1 now holds the VP/target span-mismatch stress test, and §6.2 holds the
+setup-local classification rankings.
 
 ---
 
 ## 1. Mechanism — the bridge between the two regimes
 
-The two regimes in §6.1 (in-distribution global; matched-regional) are connected by a small
+The in-distribution global and matched-regional regimes in `paper-flow.md` are connected by a small
 fleet-geometry primitive set. The old single axis, **min(VP-TG) distance**, was directionally
 right but too coarse because it ignored the local density of the answer space. The revised bridge is:
 
@@ -29,12 +30,15 @@ This combo separates two questions that were previously blurred:
 
 - The in-distribution global run (n=713) already spans the full distance range — some targets
   sit near a VP, many are far. Re-read **sliced by min(VP–TG) distance**, it reproduces the
-  whole colocation story (accuracy decays with distance) **without** needing a separate
-  mismatched (regional-VP → global-TG) regime, which we dropped for being too noisy to rank.
+  whole colocation story (accuracy decays with distance). The separate mismatched
+  regional-VP → global-TG runs are therefore not used to rank variants, but they are useful as a
+  coordinate-error stress test: they show that none of the textbook variants works well when the VP
+  fleet span is narrower than the target span.
 - The matched-regional regime is then the "what good colocation buys you" endpoint.
 
-So the global run is read **two ways**: (a) as a ranking at full scale (→ §6.1 Regime 1), and
-(b) distance-sliced to expose the mechanism (this doc).
+So the global run is read **two ways**: (a) as a ranking at full scale (→ `paper-flow.md` §6.2),
+and (b) distance-sliced to expose the mechanism (this doc). The regional→global runs are read only
+as the span-mismatch failure case now placed in `paper-flow.md` §6.1.
 
 **Result from the focused failure reassessment** (`scripts/analysis/partvp/assess_vp_proximity_failures.py`,
 `analysis_fleet/VP_PROXIMITY_FAILURE_ASSESSMENT.md`): across the 4 textbook variants and 5 VP-target

@@ -147,198 +147,192 @@ The contribution that makes everything else measurable.
 
 ---
 
-## 5. Dataset & Experimental Setup
+## 5. Dataset Prior & Experimental Setup
 
-### 5.1 Datasets
+The paper's evaluation starts with a data-composition prior, before any CBG result: not every
+RTT corpus is equally suitable for operator-scoped, per-ASN CBG.
 
-We benchmark on two different datasets, matched on **VP topology** (VP count, geographic spread, pairwise distance distribution) at best effort so that cross-dataset comparisons isolate the effect of data composition rather than VP placement.
+### 5.1 Dataset characteristics — public RIPE vs. proprietary operator data
 
-- **Public RIPE-based dataset:** VPs = RIPE Probes (within a single ASN); TGs = RIPE Anchors (across ASNs, excluding the probe ASN). **6 VP setups** for operator realism: 1 US · 1 Europe · 1 Global, each paired with an additional validation set.
-- **Proprietary operator dataset:** VPs = the network operator's user planes / mobile cores (UPs); TGs restricted to a **single target ASN** (e.g., a hypergiant the operator peers with); RTT is passively collected at the UPs.
+We use two datasets for different roles.
 
-### 5.2 Protocol
+- **Public RIPE-based dataset:** VPs are RIPE Atlas probes grouped into operator-like ASN fleets;
+  targets are RIPE Atlas anchors. This is public and reproducible, but noisy for the operator
+  question because target anchors are sparse once we condition on both region and ASN. In the US,
+  for example, no target ASN contributes more than 7 anchors, so RIPE cannot cleanly emulate a
+  single target ASN with many regional sites.
+- **Proprietary operator dataset:** VPs are one operator's user-plane / mobile-core sites, and
+  targets are 200+ IPs from the same target ASN across 20+ US clusters. This is the cleaner
+  operator regime: RTTs from one operator ASN to one target ASN tend to share the same peering,
+  backbone, and interconnection topology, which is exactly the structure CBG's latency-to-distance
+  calibration needs.
 
-- K-fold split per VP: (K-1)/K folds → train (RTT–distance pairs of non-target-fold Anchors); 1/K fold → test (target-fold Anchors).
-- Output: predicted location vs. ground truth + intersection geometry artifacts.
+This distinction is a prior for interpreting results. RIPE is the public stress test and
+reproducibility substrate; the proprietary dataset is the deployment-shaped target regime. Where
+the two disagree, the first explanation to check is data composition, not only algorithm choice.
+
+### 5.2 Data processing and setup construction
+
+The benchmark turns both datasets into the same bounded-answer-space task.
+
+1. **Target clustering.** Ground-truth target coordinates are clustered into answer cells with
+   radius `R = 50 km`. Each cell has a centroid. A CBG prediction is scored by snapping it to the
+   nearest centroid and checking whether it matches the truth's centroid.
+2. **VP grouping.** VPs are grouped by ASN, then by geographic deployment scope. The public RIPE
+   setups currently cover global, US, and Europe views; the proprietary setup is a US single-target-ASN
+   operator view.
+3. **Geometry visualization.** Each setup gets a map showing VP locations, target centroids/cells,
+   and VP-target geometry. These maps establish whether the setup is global, colocated regional, or
+   sparse before the accuracy table is interpreted.
+4. **K-fold evaluation.** For RIPE, anchors are split by fold: `(K-1)/K` folds provide labeled
+   RTT-distance pairs for CBG calibration, and the held-out fold provides targets. The VP fleet is
+   shared across folds; target leakage is avoided on the anchor side.
 
 ### 5.3 Validation primitive — Speed-of-internet intersection
 
-For any claimed target location (from Geofeed / rDNS / operator record), the **physics-validation rule** is:
+For any claimed target location (from Geofeed / rDNS / operator record), the **physics-validation
+rule** is:
 
-1. For each VP `v`, compute the speed-of-internet circle: `C_v = { x : dist(v, x) ≤ c · 2/3 · RTT(v, T) }`.
-2. The claim is **physics-consistent** iff it lies inside at least `k` of `N` VPs' SoI circles. Default `k = N` (unanimous); relax to majority to tolerate congested outlier VPs.
-3. **Tradeoff — physics-consistent ≠ uniquely identified.** Multiple bounded-answer-space candidates can fall inside the intersection; the Geofeed/rDNS claim is consistent with all of them. We report the empirical distribution of intersection cardinality across the bounded answer space — tighter intersections give more discriminative validation.
+1. For each VP `v`, compute the speed-of-internet circle:
+   `C_v = { x : dist(v, x) ≤ c · 2/3 · RTT(v, T) }`.
+2. The claim is **physics-consistent** iff it lies inside at least `k` of `N` VPs' SoI circles.
+   Default `k = N` (unanimous); relax to majority to tolerate congested outlier VPs.
+3. **Tradeoff — physics-consistent ≠ uniquely identified.** Multiple bounded-answer-space candidates
+   can fall inside the intersection; the Geofeed/rDNS claim is consistent with all of them.
 
-The primitive is calibration-free, runs entirely on operator-owned VPs, and bootstraps the Anchored-track training pipeline.
+The primitive is calibration-free, runs entirely on operator-owned VPs, and bootstraps the
+Anchored-track training pipeline.
 
 ### 5.4 Metrics
 
-- **Accuracy:** p5 / p25 / p50 / p75 / p95 error percentiles · classification accuracy at each precision tier · diff from shortest-ping baseline.
-- **Dual scoring rules + tolerance dividend.** Two ways to score the same prediction: the *coordinate* rule **within-R** (predicted point ≤ R km of truth) and the *classification* rule **same-centroid accuracy** (prediction snaps to the truth's cell in the bounded answer space). Their gap is the **tolerance dividend** = `same_centroid_acc − within_r` — the share of targets that land on the *right* candidate site despite being >R off (the Tier-2 band; see §6.5b). It measures how much the finite answer space forgives bounded coordinate error. *Note: the dividend is a property of (variant × answer-space granularity) — it grows with cluster radius R, fixed at 50 km here.*
-- **Practicality:** Runtime · Memory.
-- **Diagnostic:** Intersection Success Rate · **Intersection Cardinality Distribution** · Failure Analysis · Outlier VP Resistance · Intersection Agreement · Latency-to-distance Agreement.
+- **Classification accuracy:** same-centroid accuracy over the bounded answer space, always reported
+  against a shortest-ping VP baseline.
+- **Coordinate error:** p5 / p25 / p50 / p75 / p95 error-to-truth-centroid percentiles, separately
+  for correct and incorrect matches where useful.
+- **Dual scoring rules + tolerance dividend.** The coordinate rule is **within-R** (prediction within
+  `R` km of the truth centroid); the classification rule is **same-centroid accuracy**. Their gap,
+  `same_centroid_acc − within_r`, measures how often the finite answer space accepts a bounded
+  coordinate error because the prediction still lands in the right answer cell.
+- **Failure/success stats:** failed intersections, fallbacks/give-ups, wrong-cell matches, and the
+  number/geometry of participating VPs that survive multilateration.
+- **Fleet-geometry diagnostics:** raw VP proximity (`fleet_abs_km`) and the
+  target-distinguishable VP margin (`d(C,N)/2 − fleet_abs_km`).
+- **Practicality:** runtime and memory by phase.
 
 ---
 
 ## 6. Results
 
-Each RQ is evaluated across **both datasets** (proprietary single-ASN, public mixed-ASN) with VP topology matched at best effort. Cross-dataset agreement points to an effect driven by CBG variant choice; cross-dataset divergence points to an effect driven by data composition.
+The first results section is deliberately narrow: four textbook CBG variants, a coordinate-error
+stress test for VP/target span mismatch, setup-local classification accuracy where the answer spaces
+are comparable within setup, and the two fleet-geometry primitives that explain where CBG fails.
+Phase ablations and production-cost results come after this core accuracy story.
 
-### 6.1 RQ1 — Variant performance under operator-realistic VPs
+### 6.1 VP span must match target span
 
-We read RQ1 through the bounded-answer-space (classification) lens of §1.2 / §5.4, over the
-**four textbook variants** (§2.3). Two clean VP→target regimes anchor the comparison.
+Before classification, we use coordinate error to compare the same global RIPE target set
+(713 targets pooled across the held-out folds) under three VP spans: global VPs, US-only VPs, and
+Europe-only VPs. This is not a variant-ranking table; it is the sanity check that CBG cannot solve
+long-distance target prediction when the VP fleet is regional.
 
-**Regime 1 — in-distribution (global VP → global TG).** On the global VP corpus (AS16509,
-n=713 targets, 257 centroids at R=50 km), classification accuracy over the four textbook
-variants ranks:
+| VP span → target span | Fleets | Best textbook p50 error | Best textbook p75 error | Textbook p50 range | Main read |
+| --- | --- | ---: | ---: | ---: | --- |
+| Global → global | AS16509, AS31898 | 322–417 km | 918–1082 km | 322–965 km | Global VPs give the only viable global-target regime. |
+| US → global | AS7018, AS7922 | 2760–2820 km | 4085–4154 km | 2760–6882 km | A US fleet cannot geolocate global targets well. |
+| Europe → global | AS3209, AS3215 | 1214–1232 km | 5684–5835 km | 1214–2158 km | Europe looks less bad at p50 because many targets are in/near Europe; p75 exposes the global spillover failure. |
 
-| Variant | Same-centroid accuracy |
-| ------------- | ---------------------- |
-| Octant | 25.2% |
-| Vanilla | 24.6% |
-| Million-scale | 23.1% |
-| Spotter | 7.0% |
+**Read:** the VP deployment has to cover the span of the target population. A regional VP fleet can
+be useful for regional targets, but using it on global targets turns CBG into long-distance
+extrapolation. No textbook variant fixes that geometry.
 
-against a **shortest-ping-VP baseline of 23.4%** (same-centroid). AS31898 corroborates the
-ordering.
+### 6.2 Four textbook CBG variants on setup-local answer spaces
 
-> **Key finding.** Under globally dispersed VPs, only Octant and Vanilla clear the trivial
-> shortest-ping baseline — and only by ~1–2 points; Million-scale essentially ties it and
-> Spotter falls far below. *CBG barely earns its keep when VPs are dispersed.*
+After establishing the span-mismatch failure, we switch back to classification. All rows use
+`R = 50 km` answer-space clustering. The percentages are setup-local because the answer space
+differs by row: global uses 713 targets / 257 clusters, US uses 96 targets / 32 clusters, and Europe
+uses 415 targets / 120 clusters.
 
-**Regime 2 — matched-regional (regional VP → in-region TG).** With a regional single-ASN VP
-fleet geolocating in-region targets (e.g. AS7018→US, AS3215→FR), the same four variants jump
-to ~40–60% and beat the (higher, ~40%) regional shortest-ping baseline by 12–15 points.
-*CBG earns its keep when VPs and targets are colocated.* This regional regime is the public-data
-stand-in for the proprietary single-ASN operator setting (§1.4).
+| Setup | Targets / clusters | Shortest ping | Vanilla | Million-scale | Octant | Spotter | Main read |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Global AS16509 | 713 / 257 | 23.4% | 24.3% | 23.0% | **25.2%** | 7.0% | Octant/Vanilla only barely beat baseline; Spotter collapses. |
+| Global AS31898 | 713 / 257 | 20.6% | **25.0%** | 22.4% | **25.0%** | 7.0% | Vanilla/Octant lead; Million-scale is modest. |
+| US AS7018 | 96 / 32 | 39.6% | 45.8% | 43.8% | **51.0%** | 6.3% | Regional colocation lets CBG beat baseline. |
+| US AS7922 | 96 / 32 | 54.2% | 35.4% | 39.6% | **55.2%** | 15.6% | Baseline is already strong; only Octant clears it. |
+| Europe AS3209 | 415 / 120 | 10.8% | 5.5% | 10.4% | **12.0%** | 2.4% | Octant gives a small setup-local lift. |
+| Europe AS3215 | 415 / 120 | 5.8% | 4.6% | 6.5% | **12.0%** | 1.4% | Octant is the only clear winner. |
 
-> *Note: per-ASN regional target sets are currently small (US n=96, FR n=39); the regional
-> family **ranking** is not yet stable and is treated as deferred (see `discussion.md`).*
+**Read:** CBG's rank is not global. Octant is the most consistent textbook variant in this bounded
+answer-space view, but the margin over shortest ping depends strongly on VP-target geometry. Spotter
+is a structural outlier across these setups.
 
-**The metric choice reorders the variants (tolerance dividend, §5.4).** On the global run, ranking
-by the *coordinate* rule (within-R) gives Million-scale (21.2%) > Vanilla (18.0%) > **Octant
-(14.5%, last)**; ranking by the *classification* rule (same-centroid) **flips** it to **Octant
-(25.3%, first)** > Vanilla (24.3%) > Million-scale (23.0%). Octant is worst on coordinate error but
-best on the answer that matters — it relies most on the tolerance dividend (+10.8 pp globally,
-+27–29 pp regionally), while Million-scale relies on it least (+1.8 pp globally: its predictions
-either nail the cell or miss it entirely). So *which variant wins is metric-dependent*, and the
-dividend is itself a per-variant geometric fingerprint.
+**The metric choice reorders the variants (tolerance dividend, §5.4).** On Global AS16509, ranking
+by the coordinate rule (within-R) gives Million-scale (21.2%) > Vanilla (18.0%) > Octant (14.5%);
+ranking by same-centroid accuracy flips the top to Octant (25.2%) > Vanilla (24.3%) > Million-scale
+(23.0%). Octant is worse as a point estimator but better at choosing the right bounded answer cell.
 
-### 6.2 RQ2 — Phase ablation
+### 6.3 Success and failure profiles
 
-- **Disk-based CBG:** Best LTD + Centroid combination over spherical-circle constraints.
-- **Annulus-based CBG:** Best LTD + Centroid combination over planar-annulus constraints.
-- Per-phase contribution to accuracy.
+For each setup × variant, the evaluation reports:
 
-### 6.3 Training-granularity ablation — per-ASN vs. pooled
+- same-centroid accuracy, within-R rate, and accuracy delta from shortest ping;
+- error-to-centroid CDFs for all rows, matched rows, and mismatched rows;
+- `SUCCESS`, `FALLBACK` / give-up, and wrong-cell counts;
+- participating VP count and geometry for the constraints that actually survive multilateration.
 
-- **Per-ASN training:** fit each VP's latency-to-distance model using only the target ASN's RTT–distance pairs.
-- **Pooled training:** fit a single per-VP model across all ASNs.
-- **Hypothesis:** per-ASN training outperforms pooled because calibration captures ASN-specific propagation topology (peering geometry, congestion patterns, last-mile characteristics).
-- **Outcome:** report accuracy gap per CBG variant; recommend per-ASN training as the methodological default. Quantify the minimum #anchors-per-ASN required to make per-ASN training viable.
+This is the bridge from rank tables to mechanism: a variant that wins by many wrong-but-near
+coordinates is different from a variant that wins by isolating the correct answer cell, and a variant
+that fails by empty intersection is different from one that confidently selects the wrong cell.
 
-### 6.4 RQ3 — Practicality at production scale
+### 6.4 Feature correlation — VP proximity and target-distinguishable margin
 
-Per-stage timing + peak memory are recorded per target (`targets.parquet`); fit cost + process
-RSS per run (`run.json`); analysis in `scripts/analysis/partvp/rq3_practicality.py`. *Numbers are
-single-thread Python/Shapely on one host — the **relative** phase/variant comparison is the robust
-claim, not absolute ms.* Consistent across both global ASNs.
+We keep two complementary fleet-geometry primitives:
 
-**Finding 1 — cost lives in the centroid (CTR) phase, and `monte_carlo_medoid` is the culprit.**
-Per-target CTR latency: `monte_carlo_medoid` **190–390 ms** vs `geometric_centroid` **~0.25 ms** vs
-`boundary_vertex_mean` **~0.04 ms** (~1000×). It is also the memory hog: **~24 MB** peak alloc
-(Sobol point cloud + O(N²) medoid) vs ~40 KB for the others, and ~24 MB extra process RSS. LTD is
-cheap (0.5–5 ms); MTL is moderate (4–78 ms; weighted planar-annulus > spherical-circle;
-`highest_weight_only` < multi-face).
+- **Raw VP proximity:** `fleet_abs_km = d(V*, C)`, where `C` is the truth centroid and `V*` is the
+  closest available VP to that centroid.
+- **Target-distinguishable VP margin:** `target_distinguishable_vp_margin_km = d(C,N)/2 -
+  fleet_abs_km`, where `N` is the nearest competing centroid. Positive margin means at least one VP
+  is inside the loose half-gap bound and is guaranteed, by triangle inequality, to favor the truth
+  centroid over the nearest competing answer cell.
 
-**Finding 2 — every `monte_carlo` variant is Pareto-dominated by its `geometric_centroid` (`_geo`)
-sibling.** `monte_carlo_medoid` is slow *by construction* — it adds Sobol sampling + an O(N²) medoid
-on top of the region, whereas `geometric_centroid` is a closed-form area-weighted polygon centroid,
-so geo is **always** faster and (RQ1/RQ2) equal-or-more accurate. The medoid's only genuine edge —
-robustness on non-convex / multi-polygon regions where an area-centroid can fall in a gap — is
-engineered away by pairing `_geo` with `highest_weight_only=true` (single face). Accuracy vs.
-throughput (global AS16509):
+The pair separates two questions: *how far is the fleet from the target?* and *is that close enough
+for this target's local answer-space density?* We do not learn a universal km threshold across
+setups; fixed km cuts are descriptive only.
 
-| variant | CTR | accuracy | throughput | 1 M IPs (1 core) |
-| ------- | --- | -------: | ---------: | ---------------: |
-| octant_cbg_hull_geo | geometric | **30.0%** | 65 /s | **4.3 h** |
-| vanilla_cbg_geo | geometric | 28.6% | 148 /s | 1.9 h |
-| million_scale_cbg | bvmean | 23.0% | 211 /s | **1.3 h** (≈0 fit) |
-| octant_cbg (default) | monte_carlo | 25.2% | 3.2 /s | **88 h ≈ 3.7 d** |
-| spotter_cbg | monte_carlo | 7.0% | 1.7 /s | 162 h ≈ 6.7 d |
+| Setup | Median `fleet_abs_km` | Median target-distinguishable distance | Median margin | Missing target-distinguishing VP |
+| --- | ---: | ---: | ---: | ---: |
+| Global | 348.2 km | 71.0 km | -313.3 km | 77.0% |
+| US | 35.1 km | 130.9 km | 62.0 km | 43.8% |
+| Europe | 259.2 km | 45.3 km | -214.6 km | 88.2% |
 
-**Finding 3 — fit (one-time calibration) cost.** Million-scale is **calibration-free (~0 ms)**;
-Vanilla/Octant ~1.1–1.3 s, Spotter ~0.8 s per VP corpus — negligible per-target at scale, but it
-sets the Anchored-track retraining cadence.
+Across all four textbook variants and five VP-target setups (5,540 rows), `margin <= 0` covers
+**84.4%** of all failures; among rows missing such a VP, **92.6%** fail. It is strongest for
+Million-scale: missing a target-distinguishing VP covers **91.8%** of its failures, and the residual
+failure rate when such a VP exists is **24.9%**. Spotter remains the exception: even when a
+target-distinguishing VP exists, it still fails **91.9%** of the time.
 
-**Production scale (1 M IPs, inference only, embarrassingly parallel → divide by #cores).** The CTR
-choice is decisive: `geometric_centroid` turns octant from a **3.7-day** single-core job (default
-`monte_carlo`, 25% acc) into a **4.3-hour** job (`octant_hull_geo`) at **higher** accuracy (30%);
-on 16 cores that is ~16 min. Million-scale geolocates 1 M in **~1.3 h** single-core / ~5 min on 16
-cores with zero calibration.
+### 6.5 Phase ablation and production cost
 
-**Recommendation:** deploy `geometric_centroid` (single-face MTL); never `monte_carlo_medoid`. Pick
-along the frontier by budget — `million_scale_cbg` for max throughput / zero-calibration,
-`vanilla_cbg_geo` for balance, `octant_cbg_hull_geo` for max accuracy at still-modest cost. Figures:
-`outputs/analysis_rq3/pareto_*.png`, `phases_*.png`.
+This section follows the core accuracy/mechanism story and compares non-textbook phase combinations.
+The factual result already measured for practicality is that cost lives in the centroid phase:
+`monte_carlo_medoid` takes **190–390 ms** per target versus `geometric_centroid` at **~0.25 ms** and
+`boundary_vertex_mean` at **~0.04 ms**. In the global AS16509 run, `octant_cbg_hull_geo` reaches
+**30.0%** accuracy at **65 targets/s**, while default `octant_cbg` reaches **25.2%** at **3.2
+targets/s**.
 
-### 6.5 Failure analysis & root cause
-
-- Empty intersection cases · uninformative low-envelope blow-ups · single bad probe contamination.
-- **Multi-candidate intersection cases** — physics-validated but ambiguous (§5.3 tradeoff): how often, and how does the variant choice resolve it?
-- Quantitative correlation metrics: VP–TG distance vs. outer radius vs. intersection area.
-
-### 6.5b What characterizes a precisely-geolocated target? (three-lever model)
-
-Per-target characterization over the three confidence tiers (Tier-1 within R of the truth's
-centroid; Tier-2 right centroid but >R; Tier-3 wrong/fallback), driven by the new participating-VP
-instrumentation (the VPs that survive the MTL filter and decide the region, with their RTT and
-echoed distance). Full study: `participating_vp_findings.md`. Headline:
-
-- **Lever 1 — proximity to the nearest VP (universal, primary).** Min RTT / min distance to the
-  closest VP is the #1 driver of *both* geolocatability and precision in every regime (pooled
-  single-feature AUC #1; decision-tree primary split in global *and* regional runs). Operating
-  point: nearest-VP **RTT ≲ 5–7 ms / distance ≲ 10–40 km ⇒ Tier-1**. Globally CBG reaches Tier-1
-  only by collapsing onto a single near VP (≈ shortest-ping); regionally it becomes genuine
-  multilateration (7–20 participating VPs).
-- **Lever 2 — answer-space isolation (Tier-2 vs Tier-3, at scale).** When no VP is near, a coarse
-  estimate still snaps to the right candidate iff the truth's centroid is isolated
-  (`nearest_other_centroid_km`, global AUC 0.64–0.68); weak in small in-country answer spaces.
-- **Lever 3 — angular surround (regime-gated, secondary).** Being ringed by VPs helps only once
-  proximity is widely available (regional `part_circ_var` AUC up to 0.63); invisible globally.
-
-Matched-regional fleets **double** the precise-Tier-1 share and **halve** Tier-3 vs global; Spotter
-collapses everywhere (Tier-1 ≈ 0–3%). This separates a **measurement-geometry** lever (proximity)
-from an **answer-space-geometry** lever (isolation) — a framing prior CBG work lacks.
+The paper should introduce this only after the four foundational variants are understood, because
+the early story is about when standard CBG earns its keep, not yet about optimizing the framework.
 
 ---
 
-## 7. Practical Insights — When to Use What
+## 7. Discussion Material Deferred From Main Flow
 
-The "actionable" section that distinguishes this paper from prior CBG comparisons.
-
-- **CBG is not a silver bullet.**
-- **Wins:** when VPs and targets are densely colocated.
-- **Loses to shortest-ping** when VPs are globally dispersed (RIPE IPMAP's choice of single-radius reflects this).
-- **Loses** when the target is "far away" from every VP.
-- Anycast targets → distinct failure mode, worth a sub-section.
-- Recommendations per operator scenario (US-only ops, EU-only ops, global ops).
+The confidence-tier characterization, inference-time confidence model, anycast handling, ladder-CBG
+precision labels, relocation detection, and richer noise models remain in `discussion.md` until the
+core dataset/evaluation/proximity story is stable.
 
 ---
 
-## 8. Limitations & Open Questions
-
-- Quantifying the *effective minimum-VP distance range* more rigorously.
-- Error-distance inference directly from intersection geometry (status, area, shape).
-- **Ladder CBG:** yield a precision tier (city/state/country/continent) alongside the point estimate.
-- Anycast geolocation as a first-class problem.
-- IP relocation detection (VPN / ISP maintenance / history diff).
-- Octant/Spotter denoising under richer noise models.
-
----
-
-## 9. Conclusion
+## 8. Conclusion
 
 Restate: composable framework + operator-realistic benchmark + actionable when-to-use-what guidance + open-source release. Position the framework as the substrate future CBG work should plug into so accuracy claims become directly comparable.
 
