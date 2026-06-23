@@ -186,6 +186,26 @@
       name, hoverinfo: "skip",
     };
   }
+  function pointDistanceKm(a, b) {
+    const lat1 = a[0] * Math.PI / 180, lon1 = a[1] * Math.PI / 180;
+    const lat2 = b[0] * Math.PI / 180, lon2 = b[1] * Math.PI / 180;
+    const dlat = lat2 - lat1, dlon = lon2 - lon1;
+    const h = Math.sin(dlat / 2) ** 2 +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dlon / 2) ** 2;
+    return EARTH * 2 * Math.asin(Math.sqrt(Math.max(0, Math.min(1, h))));
+  }
+  function kmText(prefix, km) {
+    return km != null ? `${prefix}<br>distance = ${km.toFixed(1)} km` : prefix;
+  }
+  function connectorTrace(from, to, color, label, name) {
+    return {
+      type: "scattergeo", mode: "lines",
+      lat: [from[0], to[0]], lon: [from[1], to[1]],
+      line: { width: 1.6, color, dash: "dash" },
+      text: [label, label], hoverinfo: "text",
+      name, showlegend: false,
+    };
+  }
 
   // ---- main draw ----
   function draw() {
@@ -333,24 +353,35 @@
         hoverinfo: "text" });
     }
 
-    // 4) truth centroid marker (the correct answer cell centre).
+    // 4) prediction connectors. Draw before markers so endpoints stay visible.
+    if (t.pred) {
+      const predTruthKm = t.error_km != null ? t.error_km : pointDistanceKm(t.pred, t.true);
+      traces.push(connectorTrace(t.pred, t.true, TRUTH_CELL_LINE,
+        kmText("prediction -> true target", predTruthKm), "prediction -> true target"));
+      if (t.pred_centroid) {
+        const predSnapKm = pointDistanceKm(t.pred, t.pred_centroid);
+        traces.push(connectorTrace(t.pred, t.pred_centroid, PRED_CELL_LINE,
+          kmText("prediction -> snapped centroid", predSnapKm),
+          "prediction -> snapped centroid"));
+      }
+    }
+
+    // 5) truth centroid marker (the correct answer cell centre).
     if (t.truth_centroid) traces.push({ type: "scattergeo", mode: "markers",
       lat: [t.truth_centroid[0]], lon: [t.truth_centroid[1]],
       marker: { size: 9, color: "gold", symbol: "circle", line: { color: "rgba(140,110,0,1)", width: 1 } },
       name: "truth centroid", text: ["truth centroid"], hoverinfo: "text" });
 
-    // 5) true target.
+    // 6) true target.
     traces.push({ type: "scattergeo", mode: "markers", lat: [t.true[0]], lon: [t.true[1]],
       marker: { size: 16, color: "gold", symbol: "star", line: { color: "black", width: 1 } },
       name: "true target", text: [`true: ${t.target_id}<br>(${t.true[0]}, ${t.true[1]})`], hoverinfo: "text" });
 
-    // 6) predicted target + connector to truth.
+    // 7) predicted target.
     if (t.pred) {
       traces.push({ type: "scattergeo", mode: "markers", lat: [t.pred[0]], lon: [t.pred[1]],
         marker: { size: 12, color: "crimson", symbol: "diamond", line: { color: "white", width: 1.5 } },
         name: "predicted target", text: [`predicted<br>(${t.pred[0]}, ${t.pred[1]})`], hoverinfo: "text" });
-      traces.push({ type: "scattergeo", mode: "lines", lat: [t.pred[0], t.true[0]], lon: [t.pred[1], t.true[1]],
-        line: { width: 1.5, color: "crimson", dash: "dot" }, showlegend: false, hoverinfo: "skip" });
     }
 
     const layout = {
