@@ -110,25 +110,15 @@ def _geodesic_circle(lat: float, lon: float, radius_km: float, n: int = 60) -> t
 def _plot_voronoi_underlay(ax, voronoi: LandmassVoronoi) -> None:
     """Draw the answer-space Voronoi partition as a background layer (zorder 1).
 
-    Multi-member cells are tinted by ``cluster_id`` (tab20) to echo the member
-    dots above; singleton cells are greyed. Fills are translucent so the
-    clustered points and footprints stay legible on top.
+    Partition boundaries only — no fill — so the clustered points and
+    footprints stay legible. Red dashed lines match the "nearest-hub cells"
+    convention used in the interactive viewer.
     """
-    cmap = plt.get_cmap("tab20")
-    cells = voronoi.cells
-    singletons = cells[cells["is_singleton"]]
-    if not singletons.empty:
-        ax.add_geometries(
-            list(singletons.geometry), crs=ccrs.PlateCarree(),
-            facecolor="#d9d9d9", edgecolor="#9a9a9a", linewidth=0.3,
-            alpha=0.30, zorder=1,
-        )
-    for _, row in cells[~cells["is_singleton"]].iterrows():
-        ax.add_geometries(
-            [row.geometry], crs=ccrs.PlateCarree(),
-            facecolor=cmap(int(row["cluster_id"]) % 20),
-            edgecolor="#555555", linewidth=0.4, alpha=0.30, zorder=1,
-        )
+    ax.add_geometries(
+        list(voronoi.cells.geometry), crs=ccrs.PlateCarree(),
+        facecolor="none", edgecolor="red", linewidth=0.5,
+        linestyle="--", zorder=1,
+    )
 
 
 def _plot_map(ax, df, res: ClusterResult, *, extent, voronoi: LandmassVoronoi | None = None) -> None:
@@ -272,7 +262,7 @@ def main() -> None:
         clusters = pd.read_csv(args.clusters_dir / "clusters.csv")
         voronoi = build_landmass_voronoi(clusters, args.landmass)
         if extent is None:
-            extent = voronoi.focus_extent()
+            extent = voronoi.focus_extent(pct=0)
 
     out = plot_clusters(df, res, args.out, extent=extent, voronoi=voronoi)
 
