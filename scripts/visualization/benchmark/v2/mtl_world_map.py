@@ -307,12 +307,11 @@ def _discover_folds(source: str, run_id: str, setup: str) -> list[str]:
 
 
 def _fold_output_dir(
-    source: str, run_id: str, setup: str, fold: str, combo: str
+    source: str, run_id: str, setup: str, fold: str, combo: str,
+    outputs_root: Path | None = None,
 ) -> Path:
-    return (
-        REPO_ROOT / "scripts" / "benchmark" / "v2" / "outputs" / run_id / source
-        / setup / fold / combo
-    )
+    base = outputs_root or (REPO_ROOT / "scripts" / "benchmark" / "v2" / "outputs")
+    return base / run_id / source / setup / fold / combo
 
 
 def _kept_after_filter(
@@ -367,9 +366,10 @@ def _build_fold_payload(
     fold: str,
     combo: str,
     static_dir: Path | None = None,
+    outputs_root: Path | None = None,
 ) -> dict[str, Any]:
     in_dir = _fold_input_dir(source, run_id, setup, fold)
-    out_dir = _fold_output_dir(source, run_id, setup, fold, combo)
+    out_dir = _fold_output_dir(source, run_id, setup, fold, combo, outputs_root)
 
     vp_configs = pd.read_parquet(in_dir / "vp_configs.parquet")
     targets = pd.read_parquet(out_dir / "targets.parquet")
@@ -535,6 +535,7 @@ def build_payload(
     config_path: Path,
     combo_id: str,
     static_dir: Path | None = None,
+    outputs_root: Path | None = None,
 ) -> dict[str, Any]:
     with open(config_path) as fh:
         cfg = yaml.safe_load(fh)
@@ -562,7 +563,8 @@ def build_payload(
     for fold in slices:
         print(f"  fold {fold}: loading…", flush=True)
         fold_pl = _build_fold_payload(
-            source, run_id, setup, fold, combo_id, static_dir=static_dir
+            source, run_id, setup, fold, combo_id, static_dir=static_dir,
+            outputs_root=outputs_root,
         )
         # VPs are identical across folds for an ASN corpus (k-fold splits
         # anchors, not probes); first-seen wins on any conflict.

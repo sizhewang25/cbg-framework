@@ -43,6 +43,10 @@ from matplotlib.ticker import ScalarFormatter
 
 from scripts.benchmark.v2.sources.cluster_ground_truth import ClusterResult
 from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM
+from scripts.visualization.cluster.voronoi import (
+    LandmassVoronoi,
+    build_landmass_voronoi,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +107,31 @@ def _geodesic_circle(lat: float, lon: float, radius_km: float, n: int = 60) -> t
     return np.degrees(lon2), np.degrees(lat2)
 
 
-def _plot_map(ax, df, res: ClusterResult, *, extent) -> None:
+def _plot_voronoi_underlay(ax, voronoi: LandmassVoronoi) -> None:
+    """Draw the answer-space Voronoi partition as a background layer (zorder 1).
+
+    Multi-member cells are tinted by ``cluster_id`` (tab20) to echo the member
+    dots above; singleton cells are greyed. Fills are translucent so the
+    clustered points and footprints stay legible on top.
+    """
+    cmap = plt.get_cmap("tab20")
+    cells = voronoi.cells
+    singletons = cells[cells["is_singleton"]]
+    if not singletons.empty:
+        ax.add_geometries(
+            list(singletons.geometry), crs=ccrs.PlateCarree(),
+            facecolor="#d9d9d9", edgecolor="#9a9a9a", linewidth=0.3,
+            alpha=0.30, zorder=1,
+        )
+    for _, row in cells[~cells["is_singleton"]].iterrows():
+        ax.add_geometries(
+            [row.geometry], crs=ccrs.PlateCarree(),
+            facecolor=cmap(int(row["cluster_id"]) % 20),
+            edgecolor="#555555", linewidth=0.4, alpha=0.30, zorder=1,
+        )
+
+
+def _plot_map(ax, df, res: ClusterResult, *, extent, voronoi: LandmassVoronoi | None = None) -> None:
     if extent is not None:
         ax.set_extent(extent, crs=ccrs.PlateCarree())
     else:
@@ -112,6 +140,9 @@ def _plot_map(ax, df, res: ClusterResult, *, extent) -> None:
     ax.add_feature(cfeature.LAND, facecolor="#f6f4ef")
     ax.add_feature(cfeature.COASTLINE, linewidth=0.4, edgecolor="#999999")
     ax.add_feature(cfeature.BORDERS, linewidth=0.25, edgecolor="#cccccc")
+
+    if voronoi is not None:
+        _plot_voronoi_underlay(ax, voronoi)
 
     lat = df["target_lat"].to_numpy()
     lon = df["target_lon"].to_numpy()
@@ -133,11 +164,13 @@ def _plot_map(ax, df, res: ClusterResult, *, extent) -> None:
         ax.plot(cx, cy, color="#444444", linewidth=0.4, alpha=0.5,
                 transform=ccrs.PlateCarree(), zorder=4)
     ax.legend(loc="lower left", fontsize=8, framealpha=0.9)
-    ax.set_title(
+    title = (
         f"Answer space: {len(df):,} coords → {res.n_clusters:,} regions "
-        f"(≤{res.radius_target_km:.0f} km)",
-        fontsize=12,
+        f"(≤{res.radius_target_km:.0f} km)"
     )
+    if voronoi is not None:
+        title += f"\nnearest-centroid partition over {voronoi.label} ({len(voronoi.cells):,} cells)"
+    ax.set_title(title, fontsize=12)
 
 
 def _plot_size_hist(ax, res: ClusterResult, n_coords: int) -> None:
@@ -175,11 +208,14 @@ def _plot_radius_cdf(ax, res: ClusterResult) -> None:
             bbox=dict(boxstyle="round", facecolor="white", alpha=0.9))
 
 
-def plot_clusters(df, res: ClusterResult, out_path: Path, *, extent=None) -> Path:
+def plot_clusters(
+    df, res: ClusterResult, out_path: Path, *, extent=None,
+    voronoi: LandmassVoronoi | None = None,
+) -> Path:
     fig = plt.figure(figsize=(17, 7.5))
     gs = GridSpec(2, 2, width_ratios=[2.4, 1.0], figure=fig, wspace=0.18, hspace=0.32)
     ax_map = fig.add_subplot(gs[:, 0], projection=ccrs.PlateCarree())
-    _plot_map(ax_map, df, res, extent=extent)
+    _plot_map(ax_map, df, res, extent=extent, voronoi=voronoi)
     _plot_size_hist(fig.add_subplot(gs[0, 1]), res, len(df))
     _plot_radius_cdf(fig.add_subplot(gs[1, 1]), res)
 
@@ -203,7 +239,15 @@ def main() -> None:
     parser.add_argument(
         "--extent", type=float, nargs=4, default=None,
         metavar=("LON_MIN", "LON_MAX", "LAT_MIN", "LAT_MAX"),
-        help="Optional map extent; default is global.",
+        help="Optional map extent; default is global, or the landmass bounds "
+             "when --landmass is given.",
+    )
+    parser.add_argument(
+        "--landmass", type=str, default=None,
+        help="Draw the nearest-centroid answer-space partition (Voronoi of the "
+             "cluster centroids) clipped to this landmass as a background layer. "
+             "Accepts a continent ('Europe', 'North America') or a country "
+             "code/name ('US', 'USA', 'France').",
     )
     parser.add_argument(
         "--out", type=Path,
@@ -221,10 +265,21 @@ def main() -> None:
             )
 
     df, res = load_clustering(args.clusters_dir, radius_override=args.radius_km)
-    out = plot_clusters(df, res, args.out, extent=args.extent)
+
+    voronoi = None
+    extent = args.extent
+    if args.landmass:
+        clusters = pd.read_csv(args.clusters_dir / "clusters.csv")
+        voronoi = build_landmass_voronoi(clusters, args.landmass)
+        if extent is None:
+            extent = voronoi.focus_extent()
+
+    out = plot_clusters(df, res, args.out, extent=extent, voronoi=voronoi)
 
     n = len(df)
     print(f"{n:,} coords → {res.n_clusters:,} regions (cap {res.radius_target_km:.0f} km)")
+    if voronoi is not None:
+        print(f"  partition: {len(voronoi.cells):,} Voronoi cells over {voronoi.label}")
     print(f"  singletons {int((res.member_counts == 1).sum()):,} "
           f"({100 * (res.member_counts == 1).mean():.1f}% of regions)")
     print(f"  radius_km: max {res.radius_km.max():.1f}, "

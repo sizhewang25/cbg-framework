@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cluster world map — __TITLE__</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         margin: 16px; color: #222; }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 12px 0; }
+  .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+              margin-bottom: 12px; }
+  .controls label { font-size: 13px; }
+  .controls select { font-size: 13px; padding: 4px 6px; }
+  .controls select.wide { min-width: 420px; }
+  .meta { font-size: 12px; color: #555; margin: 4px 0 12px 0; line-height: 1.5; }
+  #plot { width: 100%; height: 720px; }
+  .badge { font-weight: 600; padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>Cluster world map — __TITLE__</h1>
+<div class="controls">
+  <label>Outcome <select id="outcome">
+    <option value="all" selected>all</option>
+    <option value="fail">failures only</option>
+    <option value="WRONG">wrong (committed)</option>
+    <option value="GIVE_UP">give-up (fallback)</option>
+    <option value="MATCH">match</option>
+  </select></label>
+  <label>Mechanism <select id="mech">
+    <option value="all" selected>all</option>
+    <option value="NO_PROXIMITY">no proximity</option>
+    <option value="ERRONEOUS_CONTAINMENT">containment</option>
+    <option value="RTT_INFLATION">RTT inflation</option>
+    <option value="OTHER">other</option>
+  </select></label>
+  <label>Percentile <select id="pct">
+    <option value="" selected>(none)</option>
+    <option value="5">p5</option>
+    <option value="25">p25</option>
+    <option value="50">p50</option>
+    <option value="75">p75</option>
+    <option value="95">p95</option>
+  </select></label>
+  <label>Eval target <select id="target" class="wide"></select></label>
+  <label id="keptOnlyLabel"><input type="checkbox" id="keptOnly"> only post-filter circles</label>
+  <label id="maxRLabel">Hide circles ≥ <select id="maxR">
+    <option value="10000" selected>10 000 km (¼ Earth circumf.)</option>
+    <option value="20000">20 000 km (½ Earth circumf.)</option>
+    <option value="5000">5 000 km</option>
+    <option value="2000">2 000 km</option>
+    <option value="0">(show all — large radii wrap to antipode)</option>
+  </select></label>
+  <label>Projection <select id="proj">
+    <option value="natural earth">natural earth</option>
+    <option value="orthographic">orthographic</option>
+    <option value="equirectangular">equirectangular</option>
+    <option value="robinson">robinson</option>
+  </select></label>
+  <label><input type="checkbox" id="showRegion"> feasible region</label>
+  <label><input type="checkbox" id="showCells" checked> answer cells</label>
+  <label><input type="checkbox" id="showVoronoi"> nearest-hub cells</label>
+  <span id="ringHint" style="display:none; font-size:12px; color:#555;">outer ring solid · inner ring dashed</span>
+</div>
+<div id="meta" class="meta"></div>
+<div id="plot"></div>
+<script id="data" type="application/json">__PAYLOAD__</script>
+<script>
+__SCRIPT__
+</script>
+</body>
+</html>
