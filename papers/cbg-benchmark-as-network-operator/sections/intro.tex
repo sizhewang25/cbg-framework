@@ -1,0 +1,139 @@
+\section{Introduction}
+\label{sec:intro}
+
+\subsection{Motivation}
+
+IP geolocation underpins a broad set of network operator decisions: ISPs steer traffic toward
+nearby peers, CDNs select edge servers, regulators enforce jurisdictional content rules, and
+capacity planners forecast regional demand. At Internet scale, locating millions of IP addresses
+on a recurring basis is unavoidable. Commercial geolocation databases are black-box, expensive,
+and raise privacy concerns. Operators need a measurement-light, in-house alternative they can
+actually trust.
+
+The dominant measurement-based technique is Constraint-Based Geolocation (CBG)~\cite{gueye2006constraint,katz2006towards}: collect round-trip
+times (RTTs) from a set of \emph{vantage points} (VPs) whose locations are known, convert each
+RTT to a distance bound, and intersect the resulting geometric constraints to estimate the
+target's position. CBG is entirely passive-capable, requires no cooperation from the target
+organization, and scales to millions of addresses. However, since Katz-Bassett et al.~\cite{katz2006towards}
+and Laki et al.~\cite{laki2011spotter}, the literature has produced several
+incompatible algorithmic variants---Vanilla, Million-scale~\cite{poese2011ip}, Octant~\cite{wong2007octant},
+Spotter~\cite{laki2011spotter}---without a controlled, operator-grounded comparison of when
+and why each one works.
+
+\subsection{The Operator Setting Is Not the General Problem}
+\label{sec:intro-operator}
+
+The operator setting differs from general-purpose IP geolocation in three structural ways that
+prior work conflates:
+
+\textbf{Free vantage points.} Operators already collect passive RTTs at core infrastructure
+across many physical sites---a no-cost fleet of probes whose locations are ground truth.
+
+\textbf{Bounded answer space.} For hypergiants, CDNs, and peering partners, operators already
+know the set of possible locations, because that is where they built the interconnection. An
+Akamai IP observed at a mobile operator's core does not live at an arbitrary latitude/longitude;
+it lives at one of $N$ known data-center sites.
+
+\textbf{Evaluation as classification, not regression.} Because the answer space is finite,
+success is no longer absolute coordinate error---it is \emph{classification accuracy} over the
+known candidate set. A CBG prediction is correct if and only if the emitted coordinate snaps to
+the right site when projected onto the candidate set. This is easier than continuous regression
+(finite, tolerant of bounded error) and more useful (matches the operator's actual decision).
+
+We operationalize this by clustering ground-truth target coordinates into answer cells of radius
+$R = 50$\,km via complete-linkage agglomerative clustering. A prediction is correct iff it snaps
+to the truth's centroid. This yields 257 globally distinct cells over 713 RIPE Atlas anchors,
+32 cells for US-targeted evaluation, and 21 for Germany-targeted evaluation.
+
+\subsection{Why Existing Methods Are Not Enough}
+\label{sec:intro-challenges}
+
+A natural reaction: \emph{``If operators know their peers' possible sites, why not use Geofeed
+or rDNS as the canonical signal?''} In practice those signals leave a large, structurally biased
+residual:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Geofeed ingestion is fragmented.} No single ingestion endpoint exists. Building a
+    pipeline that \emph{finds} feeds across WHOIS remarks and self-hosted URLs is itself substantial
+    engineering.
+  \item \textbf{Staleness.} Operators do not republish on every relocation or capacity expansion,
+    so even reachable data can be wrong.
+  \item \textbf{Manipulation.} Both signals are self-reported and can be purposefully misreported
+    for competitive advantage; they cannot be trusted without external validation.
+  \item \textbf{Coverage gaps.} For entire ASNs---including ones whose traffic operators care
+    about---\emph{no} rDNS or Geofeed signal is available at all.
+\end{itemize}
+
+The coverage gap is decisive: when canonical signals are missing, the operator still needs a
+location estimate. Latency measurement is the only remaining lever that runs entirely on the
+operator's own infrastructure and requires no cooperation from the target.
+
+Within that lever we separate two distinct uses. The \textbf{physics-validation primitive} uses
+the speed-of-Internet bound ($\approx \tfrac{2}{3}c$) to validate claimed locations: a claim is
+\emph{physics-consistent} iff it lies inside the speed-of-Internet circle of every VP. This is
+calibration-free and bootstraps labeling from Geofeed/rDNS records. The \textbf{calibrated CBG
+estimators} (Vanilla, Octant, Spotter) fit per-VP latency-to-distance models from labeled
+RTT-distance pairs and emit point estimates for IPs without canonical records.
+
+This separation yields two operator workflows. In the \textbf{Anchored track}, any rDNS or
+Geofeed coverage exists for the ASN: speed-of-Internet validates the claims; the validated subset
+becomes training labels; calibrated CBG variants train per-ASN on those labels; the operator gets
+verification for covered IPs and prediction for the uncovered residual. In the
+\textbf{Unanchored track}, zero canonical coverage is available: only the speed-of-Internet
+(Million-scale) prediction is possible, evaluated against the bounded answer space.
+
+\subsection{Thesis and Scope}
+\label{sec:intro-thesis}
+
+We present the first cross-variant CBG benchmark from the network-operator perspective, run on
+two datasets:
+
+\begin{itemize}[leftmargin=*]
+  \item A \textbf{public RIPE-based dataset} with RTTs from three ASN-defined fleets---Amazon
+    AWS~(AS16509, 30\,VPs globally), AT\&T~(AS7018, 125\,US VPs), Vodafone~DE~(AS3209,
+    164\,EU VPs)---against 713 RIPE Atlas anchors. This dataset is reproducible and serves as
+    the public stress test.
+  \item A \textbf{proprietary operator dataset} with one operator's user-plane/mobile-core RTTs
+    toward a single target ASN across 20+ US clusters. This is the clean operator regime: RTTs
+    from one operator ASN to one target ASN share the same peering, backbone, and interconnection
+    topology that CBG's calibration assumes.
+\end{itemize}
+
+We decompose each CBG variant into a three-phase pipeline (Latency-to-Distance $\to$
+Multilateration $\to$ Centroid), evaluate all phases under both continuous and discrete criteria,
+identify when and why each variant succeeds or fails, characterize production costs, and release
+an open-source implementation.
+
+\subsection{Contributions}
+\label{sec:intro-contributions}
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Operator-grounded benchmark.} First controlled cross-variant CBG evaluation
+    under operator-realistic VP setups (ASN-scoped fleets, matched VP topology between datasets)
+    and an operator-relevant evaluation metric (bounded-candidate classification at $R = 50$\,km).
+
+  \item \textbf{Unified composable framework.} A three-phase abstraction spanning
+    Vanilla/Million-scale/Octant/Spotter, implemented with interchangeable phase components
+    and deployed under a two-track taxonomy (Anchored / Unanchored).
+
+  \item \textbf{Tolerance dividend.} We quantify the gap between coordinate-error and
+    classification accuracy as the \emph{tolerance dividend}: in the proximity-sufficient
+    operator regime, 53--68\% of all correct answers are won only by answer-space tolerance,
+    invisible to any coordinate-error metric.
+
+  \item \textbf{Failure taxonomy.} A two-layer geometric taxonomy---EMPTY\_REGION,
+    EXCLUSIVE\_REGION, INCLUSIVE misclassification---partitions every wrong prediction by
+    \emph{where} in the three-phase pipeline the error originates. In proximity-sufficient setups
+    at $R = 50$\,km, EXCLUSIVE = 0: the bounded answer space absorbs containment failures,
+    leaving centroid estimation (Phase 3) as the sole remaining failure mode for
+    non-empty-intersection variants.
+
+  \item \textbf{Per-ASN calibration evidence.} Empirical evidence that pooled-ASN training
+    degrades accuracy; per-ASN calibration is the correct methodological default for operator
+    deployments.
+
+  \item \textbf{Production-cost characterization.} The centroid phase dominates cost by two
+    orders of magnitude: Monte Carlo medoid takes 190--390\,ms per target; geometric centroid
+    takes $\approx 0.25$\,ms. Replacing Monte Carlo with geometric centroid in Octant yields
+    $\approx 20\times$ throughput with equal or better accuracy.
+\end{enumerate}

@@ -1,0 +1,45 @@
+\section{Improved CBG Variants}
+\label{sec:improved}
+
+% PAPER-FLOW §7
+% Given §6's failure taxonomy, we ask: do targeted repairs to each variant's failure mode
+% produce a better variant? Evaluation: classification accuracy across all setups.
+% No new metrics introduced. Closes with head-to-head of best new combo vs. original four.
+%
+% §7.1 Weighted vs. unweighted intersection:
+%   vanilla_cbg → vanilla_cbg_geo (planar_annulus_weighted + geometric_centroid)
+%   million_scale_cbg → million_scale_cbg_geo (same)
+%   octant_cbg → octant_cbg_top (highest_weight_only)
+%   spotter_cbg → spotter_cbg_top (same)
+%   Question: does weighting repair EXCLUSIVE and INCLUSIVE misclassification, and for which
+%   variants / regimes?
+%
+% §7.2 Geometric vs. Monte Carlo centroid:
+%   octant_cbg → octant_cbg_top_geo (Monte Carlo → geometric)
+%   spotter_cbg → spotter_cbg_top_geo
+%   Directly targets INCLUSIVE resolution failures (Phase 3). Production cost payoff: §6.5.
+%
+% §7.3 Tight vs. loose constraint (Octant hull variants):
+%   octant_cbg_geo (tight, standard) vs. octant_cbg_hull_geo (hull-relaxed, loose)
+%   Loosening reduces EMPTY and EXCLUSIVE at cost of resolution coarseness.
+%   Question: does loosening recover EMPTY failures without introducing new INCLUSIVE errors?
+%
+% §7.4 Head-to-head:
+%   Best new combo across all setups vs. the four textbook baselines.
+%   [Results TBD — data exists in outputs/global_as16509_final + final country runs.]
+
+\subsection{Weighted Intersection}
+\label{sec:improved-weighted}
+% TODO
+
+\subsection{Geometric vs. Monte Carlo Centroid}
+\label{sec:improved-centroid}
+% TODO
+
+\subsection{Tight vs. Loose Constraint}
+\label{sec:improved-constraint}
+% TODO
+
+\subsection{Head-to-Head Comparison}
+\label{sec:improved-head2head}
+% TODO

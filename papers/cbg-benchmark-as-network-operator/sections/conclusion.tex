@@ -1,0 +1,25 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+% PAPER-FLOW (implied)
+% Summary: VP proximity dominates at global scale; operators should deploy VPs co-located with
+% target ASN infrastructure (proximity-sufficient regime) where CBG classification accuracy
+% reaches 40–51% over a bounded-candidate answer space.
+%
+% Key takeaways:
+%   1. Proximity is the binding constraint. When the nearest VP is >1,000 km from the truth
+%      centroid, no CBG variant outperforms a random baseline meaningfully.
+%   2. At operator scale (VP fleet co-located with target ASN), the bounded answer space does
+%      substantial work: 53–68% of all correct answers are wins from answer-space tolerance
+%      alone (tolerance dividend), invisible to coordinate-error metrics.
+%   3. Failure mode at operator scale is exclusively INCLUSIVE misclassification (R=50 km
+%      absorbs containment). The centroid phase is the remaining bottleneck.
+%   4. Geometric centroid at ~0.25 ms vs. Monte Carlo at 190–390 ms: 20× throughput,
+%      equal or better accuracy. Deploy geometric centroid at production scale.
+%   5. Per-ASN calibration is mandatory; pooled-ASN training degrades accuracy by corrupting
+%      the LTD model with mixed propagation topologies.
+%
+% Future work: extend to IPv6 targets, evaluate on additional operator fleets, characterize
+% the physics-validation primitive's intersection-cardinality distribution in production.
+%
+% [TODO: write 2–3 paragraphs synthesizing findings and implications]

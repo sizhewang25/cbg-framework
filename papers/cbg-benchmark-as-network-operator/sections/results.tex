@@ -1,0 +1,114 @@
+\section{Results}
+\label{sec:results}
+
+% PAPER-FLOW §6
+% Four-stage structure: proximity-limited → proximity-sufficient → failure analysis → cost.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\subsection{Proximity-Limited Regime}
+\label{sec:results-proximity-limited}
+
+% PAPER-FLOW §6.1
+% Fixed target set: 713 global RIPE anchors, 257 centroids at R=50 km.
+% Vary only the VP fleet across three ASNs in two degrees:
+%
+%   Fairly limited — AS16509 (30 global VPs):
+%     Median fleet_abs_km = 348 km; 77% of targets missing target-distinguishing VP.
+%     Shortest-ping baseline = 23.4%. Variant accuracy: Vanilla 24.3%, MS 23.0%,
+%     Octant 25.2%, Spotter 7.0%.
+%     VP proximity explains 84.4–91.8% of non-Spotter failures; fleet_abs_km AUC = 0.84–0.96.
+%     Spotter is a structural exception: 7% despite proximity (LTD collapse, not fleet geometry).
+%
+%   Extremely limited — country-scale fleets vs. global targets:
+%     AS7018 (125 US VPs → 713 global): median 6,268 km, 92.4% missing, baseline 5.3%.
+%       Accuracy: Vanilla 3.9%, MS 6.6%, Octant 5.5%, Spotter 3.0%.
+%     AS3209 (164 EU VPs → 713 global): median 972 km, 85.4% missing, baseline 6.3%.
+%       Accuracy: Vanilla 2.7%, MS 6.0%, Octant 2.0%, Spotter 2.5%.
+%     Near-random (random baseline ≈ 0.4%); no CBG variant recovers.
+%
+% Key finding: VP proximity is the binding constraint. Variant-level differences are noise.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\subsection{Proximity-Sufficient Regime}
+\label{sec:results-proximity-sufficient}
+
+% PAPER-FLOW §6.2
+% Same AS7018 + AS3209 fleets, now evaluated against HOME target populations.
+% Natural experiment: same fleet, different target set → isolates proximity regime.
+%
+%   AS7018 → US (96 targets / 32 centroids):
+%     Median fleet_abs_km = 35.1 km; median margin = +62.0 km; 43.8% missing. n VPs = 125.
+%     Shortest-ping baseline = 39.6%.
+%     Variant accuracy: Vanilla 45.8%, MS 43.8%, Octant 51.0%, Spotter 6.3%.
+%     Tolerance dividend: Vanilla +31.3 pp / 68%; MS +19.8 pp / 45%;
+%                         Octant +27.1 pp / 53%; Spotter +6.3 pp / ~100%.
+%
+%   AS3209 → DE (96 targets / 21 centroids):
+%     Median fleet_abs_km = 4.6 km; median margin = +38.6 km; 2.1% missing. n VPs = 164.
+%     Shortest-ping baseline = 50.0%.
+%     Variant accuracy: Vanilla 18.8%, MS 46.9%, Octant 39.6%, Spotter 17.7%.
+%
+% Per-variant behavior:
+%   Vanilla: EMPTY dominates (38% in DE) — low-envelope under-prediction empties region.
+%   Million-scale: all INCLUSIVE misclassification — SoI r_v >= 0 always; resolution-limited.
+%   Octant: INCLUSIVE misclassification (RTT-inflation → wrong centroid; EXCLUSIVE=0 at R=50km).
+%   Spotter: INCLUSIVE misclassification (k·σ bands too wide; region overlaps truth but spans
+%            many clusters — not EMPTY as initially assumed).
+
+% ─────────────────────────────────────────────────────────────────────────────
+\subsection{Success and Failure Analysis}
+\label{sec:results-failure}
+
+% PAPER-FLOW §6.3
+% Focuses on proximity-sufficient setups; attribution figures cover both regimes side by side.
+%
+% Two-layer failure taxonomy:
+%   Layer A (geometric): EMPTY_REGION (R=∅), EXCLUSIVE_REGION (R≠∅, R∩D_truth=∅),
+%                        INCLUSIVE (R≠∅, R∩D_truth≠∅).
+%   Layer B (phase attribution): Phase 1 band residuals r_v, Phase 2 participant geometry,
+%                                Phase 3 centroid rule.
+%
+% Key finding — EXCLUSIVE=0 in proximity-sufficient setups (verified by Shapely polygon-disk
+% intersection on correct planar_circle + geometric_centroid data):
+%   The R=50 km bounded metric absorbs geometric containment failures. All wrong predictions are
+%   INCLUSIVE misclassifications. This shifts residual failure entirely to Phase 3 (centroid).
+%   [PENDING: confirm EXCLUSIVE=0 on official outputs/ data; see exclusive_verification.md]
+%
+% Per-variant partition (na-us / eu-de, from outputs_partvp with planar_circle after rerun):
+%   vanilla_cbg:      EMPTY 16%/38%, EXCL 0%, INCL-success 46%/19%, INCL-misclass 39%/44%
+%   million_scale_cbg: EMPTY 0%/0%,  EXCL 0%, INCL-success 44%/47%, INCL-misclass 56%/53%
+%   octant_cbg:        EMPTY 0%/0%,  EXCL 0%, INCL-success 51%/40%, INCL-misclass 49%/60%
+%   spotter_cbg:       EMPTY 0%/0%,  EXCL 0%, INCL-success 6%/18%,  INCL-misclass 94%/82%
+%
+% Per-feature attribution of INCLUSIVE failures:
+%   1. Proximity (primary): part_min_rtt_ms AUC~0.32; close VP → Tier-1 lock-in.
+%   2. Answer-space isolation: nearest_other_centroid_km AUC 0.64–0.68 globally.
+%   3. Angular surround: part_circ_var AUC up to 0.82 in DE (regime-gated).
+%
+% AUC note: the "AUC 0.82" cited for Octant RTT-inflation is the RTT-inflation → failure
+%   attribution AUC (from WHEN_CBG_FAILS.md), distinct from the fleet_abs_km AUC (0.84–0.96).
+%
+% Observable confidence flag: L1 (MTL region overlaps exactly one answer cell) achieves
+%   precision 0.66–0.91 (ex-Spotter), capturing 30–56% of correct answers as high-confidence.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\subsection{Proprietary Single-ASN Dataset}
+\label{sec:results-proprietary}
+
+% PAPER-FLOW §6.4
+% Cleanest operator regime: one operator ASN → one target ASN, 200+ IPs, 20+ US clusters.
+% VP topology matched to public dataset.
+% [RESULTS TO BE FILLED — expected: accuracy jumps substantially vs. RIPE;
+%  residual ~20% failure fully interpretable by §6.3 taxonomy with no no-proximity confound.]
+
+% ─────────────────────────────────────────────────────────────────────────────
+\subsection{Production Cost}
+\label{sec:results-cost}
+
+% PAPER-FLOW §6.5  (VERIFIED against rq3_runtime_global_as16509_final.csv)
+% Cost lives in the centroid phase:
+%   Monte Carlo medoid (octant_cbg): 190–390 ms/target, 3.2 targets/s, 25.2% accuracy.
+%   Geometric centroid (octant_cbg_hull_geo): ~0.25 ms/target, 65 targets/s, 30.0% accuracy.
+%   ≈20× throughput gain from geometric centroid, with equal or better accuracy.
+% LTD and MTL phases are negligible by comparison.
+% Centroid choice is the only production-cost lever.

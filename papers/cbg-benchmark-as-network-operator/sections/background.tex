@@ -1,0 +1,30 @@
+\section{Background and Related Work}
+\label{sec:background}
+
+% PAPER-FLOW §2.1–§2.3
+% Covers: (a) IP geolocation toolkit comparison (DNS, Geofeed, traceroute, latency/CBG),
+% emphasizing that latency-based methods double as validation for the other three;
+% (b) CBG at a glance — three-phase pipeline (LTD → MTL → CTR), inputs/outputs;
+% (c) the four foundational variants in a table: Vanilla (low-envelope + planar-circle +
+% geometric-centroid), Million-scale (speed-of-internet + planar-circle + geometric-centroid),
+% Octant (bounded-spline + planar-annulus-weighted + Monte-Carlo), Spotter (normal-dist +
+% planar-annulus-weighted + Monte-Carlo); implementation note that Vanilla/Million-scale
+% use PlanarCircleMTL + geometric_centroid (not spherical-circle + BVM as in the originals).
+%
+% Key citations: Katz-Bassett 2006 (CBG), Laki 2011 (Spotter), Poese 2011 (Million-scale),
+% Wong 2007 (Octant), Huffaker 2011 (Verfploeter), Geofeed RFCs.
+
+\subsection{The IP Geolocation Toolkit for Operators}
+\label{sec:background-toolkit}
+% TODO: table comparing DNS-based, Geofeed, traceroute, and latency/CBG on pros/cons
+% under operator constraints (scale, privacy, cost, freshness).
+
+\subsection{Constraint-Based Geolocation}
+\label{sec:background-cbg}
+% TODO: three-phase pipeline; notation; speed-of-light model; RTT → distance conversion.
+
+\subsection{The Four Foundational Variants}
+\label{sec:background-variants}
+% TODO: variant table (Vanilla, Million-scale, Octant, Spotter) with LTD / MTL / CTR columns.
+% Implementation note: this benchmark uses planar_circle + geometric_centroid for
+% Vanilla and Million-scale (not the original spherical-circle + BVM).

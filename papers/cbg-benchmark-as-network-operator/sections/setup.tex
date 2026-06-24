@@ -1,0 +1,50 @@
+\section{Dataset and Experimental Setup}
+\label{sec:setup}
+
+% PAPER-FLOW §5
+% Covers: (a) two datasets with different roles; (b) the bounded-answer-space task construction;
+% (c) the physics-validation primitive (SoI intersection); (d) evaluation metrics.
+%
+% §5.1 Dataset characteristics:
+%   - Public RIPE-based dataset: 713 anchors, three ASN fleets (AS16509/30 global VPs,
+%     AS7018/125 US VPs, AS3209/164 EU VPs), 5-fold cross-validation.
+%     Limitation: sparse per-ASN anchor counts (no single target ASN > 7 anchors in US).
+%   - Proprietary operator dataset: user-plane/mobile-core RTTs, one target ASN,
+%     200+ IPs across 20+ US clusters, VP topology matched to public dataset.
+%
+% §5.2 Data processing and setup construction:
+%   - Target clustering: complete-linkage agglomerative, R=50 km, 257 global / 32 US / 21 DE cells.
+%   - VP grouping by ASN + geographic scope.
+%   - Geometry maps per setup (VP locations, centroid cells, fleet geometry diagnostics).
+%   - K-fold: (K-1)/K anchor folds → LTD calibration; held-out fold → eval targets.
+%
+% §5.3 Validation primitive — Speed-of-internet intersection (calibration-free):
+%   SoI circle: C_v = { x : dist(v,x) ≤ (2/3)c · RTT/2 }.
+%   Physics-consistent iff claim ∈ ⋂_v C_v (unanimous; relax to majority for congested VPs).
+%   Tradeoff: SoI-consistent ≠ uniquely identified (multiple candidate sites may be inside).
+%   Bootstraps Anchored-track training from Geofeed/rDNS records.
+%
+% §5.4 Metrics:
+%   - Classification accuracy (same-centroid, primary)
+%   - within-R rate (coordinate proxy)
+%   - Tolerance dividend = same_centroid_acc − within_r
+%   - fleet_abs_km = d(V*, C): closest VP to truth centroid
+%   - target_distinguishable_vp_margin = d(C,N)/2 − fleet_abs_km (triangle-inequality threshold)
+%   - Shortest-ping baseline (RTT-based VP-location snap)
+%   - Practicality: runtime and memory by phase
+
+\subsection{Datasets}
+\label{sec:setup-datasets}
+% TODO
+
+\subsection{Setup Construction and Answer Space}
+\label{sec:setup-construction}
+% TODO
+
+\subsection{Physics-Validation Primitive}
+\label{sec:setup-soi}
+% TODO
+
+\subsection{Evaluation Metrics}
+\label{sec:setup-metrics}
+% TODO
