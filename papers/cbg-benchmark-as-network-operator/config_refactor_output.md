@@ -102,7 +102,7 @@ Both re-runs were executed via `run_textbook_config.py` with the `cfg_textbook/`
 
 **`north_america_as7018_final_us`**: Completed successfully. All 5 folds × 4 combos re-run.
 
-**`europe_as3209_final_de`**: Two invocations were launched (one at 00:46, a second at 00:57 UTC). The EU VP corpus is significantly larger than NA-US, so the runs take longer (~35+ min each). Both processes were still running at time of document creation. Fold_0 for all 4 combos had already been written with the corrected config.
+**`europe_as3209_final_de`**: Two invocations were launched (one at 00:46, one at 00:57 UTC). The EU VP corpus is significantly larger than NA-US — each fold took ~15 min vs ~2 min for NA-US. Both processes ran in parallel across folds; all 5 folds × 4 combos completed successfully.
 
 ## 4. Verification: `run.json` shows `planar_circle` for `vanilla_cbg`?
 
@@ -118,25 +118,16 @@ fold_4: mtl=planar_circle  ctr=geometric_centroid
 
 Same result for `million_scale_cbg`: all 5 folds show `mtl=planar_circle`.
 
-### `europe_as3209_final_de` — **Partial (fold_0 confirmed; folds 1-4 in progress)**
+### `europe_as3209_final_de` — **Y (all 5 folds confirmed)**
 
-At time of writing, fold_0 was confirmed correct:
 ```
 fold_0: mtl=planar_circle  ctr=geometric_centroid
+fold_1: mtl=planar_circle  ctr=geometric_centroid
+fold_2: mtl=planar_circle  ctr=geometric_centroid
+fold_3: mtl=planar_circle  ctr=geometric_centroid
+fold_4: mtl=planar_circle  ctr=geometric_centroid
 ```
 
-Folds 1-4 still showed `spherical_circle` (stale) because the re-run processes were still executing.
-The two `run_textbook_config.py` processes (PIDs 2643531 and 2664458) were active and writing
-updated `fit_checkpoint.pkl` files for folds 2, 3, 4. The `run.json` is written last after all
-targets are processed per fold, so stale values will persist until each fold completes.
+Same result for `million_scale_cbg`: all 5 folds show `mtl=planar_circle`.
 
-Re-run the verification after both processes exit:
-```bash
-python3 -c "
-import json, pathlib
-runs = list(pathlib.Path('scripts/benchmark/v2/outputs_partvp/europe_as3209_final_de').glob('*/*/*/vanilla_cbg/run.json'))
-for r in sorted(runs):
-    d = json.loads(r.read_text())
-    print(r.parts[-3], d.get('mtl'), d.get('ctr'))
-"
-```
+The stale `spherical_circle + boundary_vertex_mean` config has been fully replaced in both run directories.
