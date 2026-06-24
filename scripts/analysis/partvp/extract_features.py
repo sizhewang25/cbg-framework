@@ -42,7 +42,7 @@ Features (see README in this dir):
 CLI:
     python -m scripts.analysis.partvp.extract_features \\
         --run-dir scripts/benchmark/v2/outputs/global_as16509_final \\
-        --out scripts/analysis/partvp/outputs/data/global_as16509_final.parquet
+        --out scripts/analysis/outputs/partvp/data/global_as16509_final.parquet
 """
 
 from __future__ import annotations

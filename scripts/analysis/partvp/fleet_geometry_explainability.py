@@ -24,7 +24,8 @@ Outputs under ``--out-dir``:
   fleet_geometry_rule_quality.csv     simple threshold-rule quality
   fleet_geometry_combined_bins.csv    fail rate in fixed-km/margin combinations
   fleet_geometry_model_auc.csv        in-sample logistic AUC for metric sets
-  fleet_geometry_bins.png             visual summary of combined bins
+  fleet_geometry_bins.png             2-bin margin figure (primary; threshold-free)
+  fleet_geometry_combined_bins.png    4-bin abs_km+margin figure (reference only)
   FLEET_GEOMETRY_ONLY.md              short report
 """
 from __future__ import annotations
@@ -51,8 +52,8 @@ from scripts.analysis.partvp.extract_features import _nearest_other_centroid_km
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ATTRIBUTION = Path("scripts/analysis/partvp/outputs/analysis_fail/per_target_failures.parquet")
-DEFAULT_OUT_DIR = Path("scripts/analysis/partvp/outputs/analysis_fleet")
+DEFAULT_ATTRIBUTION = Path("scripts/analysis/outputs/partvp/analysis_fail/per_target_failures.parquet")
+DEFAULT_OUT_DIR = Path("scripts/analysis/outputs/partvp/analysis_fleet")
 THRESHOLDS_KM = (5, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000)
 
 
@@ -300,7 +301,62 @@ def add_scopes(df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([pooled, per_cfg], ignore_index=True)
 
 
+CONFIG_LABELS = {
+    "global-global":   "Global\n(AS16509→Global)",
+    "na-global":       "US→Global\n(AS7018→Global)",
+    "europe-global":   "EU→Global\n(AS3209→Global)",
+    "na-us":           "US→US\n(AS7018→US)",
+    "na-na":           "US→NA\n(AS7018→NA)",
+    "europe-europe":   "EU→EU\n(AS3209→EU)",
+    "europe-country":  "EU→FR\n(AS3215→FR)",
+}
+
+
+GLOBAL_TARGET_CONFIGS = {"global-global", "na-global", "europe-global"}
+
+
+def plot_margin_bins(df: pd.DataFrame, out_path: Path) -> None:
+    """Failure rate for margin ≤ 0 targets across the three global-target setups.
+
+    Filters to targets without a distinguishable VP (margin ≤ 0) within the
+    three setups that share the same 713-target global pool, pooled across
+    variants. Proves that VP-limited geometry drives near-certain failure
+    regardless of which VP fleet is used.
+    """
+    d = df[
+        df["config"].isin(GLOBAL_TARGET_CONFIGS)
+        & (df["target_distinguishable_vp_margin_km"] <= 0)
+    ].dropna(subset=["fail"]).copy()
+    grp = (
+        d.groupby("config")
+        .agg(fail_rate=("fail", "mean"), n=("fail", "size"))
+        .reset_index()
+    )
+    grp["label"] = grp["config"].map(CONFIG_LABELS).fillna(grp["config"])
+    grp = grp.sort_values("fail_rate", ascending=False).reset_index(drop=True)
+
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    bars = ax.bar(grp["label"], grp["fail_rate"], color="#e15759")
+    for bar, (_, row) in zip(bars, grp.iterrows()):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.01,
+            f"n={int(row['n'])}",
+            ha="center", va="bottom", fontsize=8,
+        )
+    ax.set_ylim(0, 1.12)
+    ax.set_ylabel("Failure rate")
+    ax.set_title("Failure rate when no target-distinguishable VP exists (margin ≤ 0)")
+    ax.axhline(0.5, color="grey", lw=0.8, ls="--", alpha=0.5, label="50%")
+    ax.grid(True, axis="y", alpha=0.3)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_bins(bins: pd.DataFrame, out_path: Path) -> None:
+    """4-bin descriptive figure combining abs_km threshold and margin sign (kept for reference)."""
     order = ["neither bad", "absolute only", "margin only", "both bad"]
     sub = bins[bins["scope"] == "pooled"].set_index("geom_bin").reindex(order)
     fig, ax = plt.subplots(figsize=(7, 4.2))
@@ -310,7 +366,7 @@ def plot_bins(bins: pd.DataFrame, out_path: Path) -> None:
                 f"n={n}", ha="center", va="bottom", fontsize=9)
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("failure rate")
-    ax.set_title("Failure rate by fleet-geometry bin")
+    ax.set_title("Failure rate by fleet-geometry bin (abs_km + margin)")
     ax.grid(True, axis="y", alpha=0.3)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -414,7 +470,8 @@ def main() -> None:
     rules.to_csv(args.out_dir / "fleet_geometry_rule_quality.csv", index=False)
     bins.to_csv(args.out_dir / "fleet_geometry_combined_bins.csv", index=False)
     model_auc.to_csv(args.out_dir / "fleet_geometry_model_auc.csv", index=False)
-    plot_bins(bins, args.out_dir / "fleet_geometry_bins.png")
+    plot_margin_bins(df, args.out_dir / "fleet_geometry_bins.png")
+    plot_bins(bins, args.out_dir / "fleet_geometry_combined_bins.png")
     write_report(
         by_config, auc, rules, bins, model_auc, abs_threshold_km,
         args.out_dir / "FLEET_GEOMETRY_ONLY.md",

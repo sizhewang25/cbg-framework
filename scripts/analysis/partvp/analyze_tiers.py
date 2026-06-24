@@ -19,8 +19,8 @@ the question (0.5 = no signal; >0.5 means "higher feature → positive class",
 
 CLI:
     python -m scripts.analysis.partvp.analyze_tiers \\
-        --features scripts/analysis/partvp/outputs/data/*.parquet \\
-        --out-dir scripts/analysis/partvp/outputs/analysis
+        --features scripts/analysis/outputs/partvp/data/*.parquet \\
+        --out-dir scripts/analysis/outputs/partvp/analysis
 """
 
 from __future__ import annotations

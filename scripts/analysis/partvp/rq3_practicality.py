@@ -19,8 +19,8 @@ the whole-process footprint.
 CLI:
     python -m scripts.analysis.partvp.rq3_practicality \\
         --run-dir scripts/benchmark/v2/outputs/global_as16509_final \\
-        --features scripts/analysis/partvp/outputs/data/global_as16509_final.parquet \\
-        --out-dir scripts/analysis/partvp/outputs/analysis_rq3
+        --features scripts/analysis/outputs/partvp/data/global_as16509_final.parquet \\
+        --out-dir scripts/analysis/outputs/partvp/analysis_rq3
 """
 from __future__ import annotations
 

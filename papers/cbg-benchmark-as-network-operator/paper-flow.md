@@ -271,28 +271,79 @@ competitor. Both degrees of proximity-limited are in that state for the large ma
 
 **Classification accuracy (same 713 targets):**
 
-| Fleet | n VPs | Degree | Shortest-ping | Vanilla | Million-scale | Octant | Spotter |
-| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| AS16509 → global | 30 | Fairly limited | 23.4% | 24.3% | 23.0% | **25.2%** | 7.0% |
-| AS7018 → global | 125 | Extremely limited | 5.3% | 3.9% | **6.6%** | 5.5% | 3.0% |
-| AS3209 → global | 164 | Extremely limited | 6.3% | 2.7% | **6.0%** | 2.0% | 2.5% |
+| Fleet | n VPs | Shortest-ping | Vanilla | Million-scale | Octant | Spotter |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Global(AS16509) → Global | 30 | 23.4% | 24.3% | 23.0% | **25.2%** | 7.0% |
+| US(AS7018) → Global | 125 | 5.3% | 3.9% | **6.6%** | 5.5% | 3.0% |
+| EU(AS3209) → Global | 164 | 6.3% | 2.7% | **6.0%** | 2.0% | 2.5% |
 
-The extremely-limited rows are materially worse than the fairly-limited row: all variants cluster in
-the 2–7% range (vs. 23–25% for the global fleet), confirming that no CBG variant recovers from a
-country-scale fleet evaluated against a global target set. The accuracy is near-random relative to
-the 257-cluster answer space (random baseline ≈ 1/257 ≈ 0.4%). The shortest-ping baseline is 5.3% (AS7018→global) and 6.3% (AS3209→global) — both
-barely above the random floor, confirming that country-scale fleets produce near-random shortest-ping
-picks when evaluated against a global target set.
+**Fleet geometry by setup** (from `outputs/partvp/analysis_fleet/fleet_geometry_by_config.csv`):
 
-**VP proximity is the dominant failure driver.** In the fairly-limited setup, missing a
-target-distinguishing VP (`margin ≤ 0`) covers **84.4–91.8%** of failures depending on variant;
-among targets missing such a VP, **92.6%** fail. The failure attribution AUC of `fleet_abs_km`
-against failure is **0.84–0.96** (Million-scale). Variant-level accuracy differences (1–5 pp
-between Vanilla/Octant and baseline) are noise relative to the fleet geometry bottleneck.
+| Fleet | n VPs | Median VP km | Median margin | % missing VP | Degree |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Global(AS16509) → Global | 30 | 348 km | −313 km | 77.0% | Fairly limited |
+| US(AS7018) → Global | 125 | 6,269 km | −6,226 km | 92.4% | Extremely limited |
+| EU(AS3209) → Global | 164 | 968 km | −916 km | 85.4% | Extremely limited |
+
+The extremely-limited rows are materially worse than the fairly-limited row: all variants collapse to
+the 2–7% range (vs. 23–25% for the global fleet). Calibrated variants (Vanilla, Octant, Spotter)
+fall at or below the shortest-ping baseline — tight LTD models with distant VPs produce constraints
+that exclude the truth, and there is no recovery once the feasible region is pushed away.
+
+**Million-scale is the exception at the floor.** It ties or marginally exceeds the shortest-ping
+baseline in both extremely-limited setups (6.6% vs. 5.3% for AS7018→global; 6.0% vs. 6.3% for
+AS3209→global). This is not genuine multilateration — it is degeneration to shortest-ping via the
+circle-filtering mechanism. With a VP 6,000+ km away, the SoI upper bound is so large that it
+barely excludes any competing centroid; the intersection is dominated by whichever single VP is
+closest, and the centroid snaps to the same answer cell that shortest-ping would choose. The
+mechanism is circle over-inclusion, not EMPTY_REGION fallback — the region is non-empty but
+geometrically uninformative. Million-scale's calibration-free design avoids the tight-constraint
+pathology of Vanilla/Octant/Spotter, but its ceiling in this regime is strictly shortest-ping, not
+real CBG.
+
+**VP proximity is the dominant failure driver.** The table below quantifies how much of each
+setup's failure is explained by missing a target-distinguishing VP (from
+`outputs/partvp/analysis_fleet/vp_proximity_failure_assessment_by_setup.csv`):
+
+| Fleet | Failures explained by missing VP | Fail rate when missing VP | Fail rate when VP present |
+| --- | ---: | ---: | ---: |
+| Global(AS16509) → Global | 88.6% | 92.2% | 39.8% |
+| US(AS7018) → Global | 96.7% | 99.2% | 40.7% |
+| EU(AS3209) → Global | 89.3% | 100.0% | 70.2% |
+
+The pattern is consistent and strengthens with proximity degradation: in the na-global setup,
+96.7% of all failures come from targets with no distinguishing VP, and when one is missing the
+failure rate is essentially certain (99.2%). The europe-global setup reaches 100% failure rate
+when the VP is missing — not a single target without a distinguishing VP succeeds. The
+gap between "missing VP" and "VP present" columns is the causal signal: algorithm choice cannot
+close it. The failure attribution AUC of `fleet_abs_km` against failure (from
+`fleet_geometry_auc.csv`) reaches **0.96–0.99** for Million-scale across all three setups,
+confirming that raw VP distance alone — before running any CBG — nearly perfectly sorts successes
+from failures. Variant-level accuracy differences (1–5 pp between Vanilla/Octant and baseline)
+are noise relative to this bottleneck.
 
 **Spotter is the structural exception:** its k·σ bands collapse the feasible region regardless of
 proximity (7% accuracy vs. 23% baseline); its failure mode is LTD model collapse, not fleet
 proximity.
+
+**Target-distinguishable VP margin as the primary geometry metric.** The proximity analysis above
+references `fleet_abs_km` for coverage percentages, but raw distance is setup-dependent: 300 km
+separates high-failure from low-failure in the global fleet, while 50 km does the same in a
+US-regional setup. We therefore establish **target-distinguishable VP margin**
+(`margin = d(C, N)/2 − fleet_abs_km`) as the primary VP–target geometry diagnostic used in
+§§6.2–6.3. Margin's zero-crossing is geometrically motivated and requires no per-setup
+calibration: by the triangle inequality, a positive margin certifies that the nearest VP is
+guaranteed to produce a shorter RTT to truth centroid `C` than to the nearest competing centroid
+`N`, independent of RTT noise; a negative margin certifies the opposite. Figure `fleet_geometry_bins.png` quantifies this directly: within the three global-target setups,
+pooled over variants, targets with `margin ≤ 0` fail at **92–100%** — 100% for EU→Global,
+99.2% for US→Global, and 92.2% for the global fleet. The failure rate is near-certain and
+consistent across all three VP fleets despite spanning two orders of magnitude in median VP
+distance (35 km to 6,269 km). Crucially, the margin threshold at zero requires no km cutoff:
+it is the same geometric certificate regardless of which fleet is deployed.
+This makes margin the right axis for characterizing the transition from the proximity-limited
+regime (§6.1: all three setups have strongly negative median margins, −313 to −6,226 km) to the
+proximity-sufficient regime (§6.2: median margins flip to +62 km and +38 km for the same AT&T
+and Vodafone fleets redirected to their home target populations).
 
 ### 6.2 Proximity-sufficient regime — per-variant characterization
 

@@ -15,9 +15,9 @@ proximity. Outputs a per-run table + a grouped-bar figure of Tier-1 rate by
 
 CLI:
     python -m scripts.analysis.partvp.analyze_inward_outward \\
-        --features scripts/analysis/partvp/outputs/data/europe_as3209_eu.parquet \\
-                   scripts/analysis/partvp/outputs/data/europe_as3215_eu.parquet \\
-        --out-dir scripts/analysis/partvp/outputs/analysis_eu
+        --features scripts/analysis/outputs/partvp/data/europe_as3209_eu.parquet \\
+                   scripts/analysis/outputs/partvp/data/europe_as3215_eu.parquet \\
+        --out-dir scripts/analysis/outputs/partvp/analysis_eu
 """
 from __future__ import annotations
 

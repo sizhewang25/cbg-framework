@@ -173,7 +173,7 @@ textbook_combos:
   - octant_cbg
   - spotter_cbg
 
-feature_parquet: scripts/analysis/partvp/outputs/data/my_operator_final.parquet
+feature_parquet: scripts/analysis/outputs/partvp/data/my_operator_final.parquet
 
 # Plotting params (for failure attribution figure)
 cluster_radius_km: 50
@@ -220,7 +220,7 @@ and builds the tidy feature table used by all downstream analysis scripts.
 ```bash
 python -m scripts.analysis.partvp.extract_features \
     --run-dir scripts/benchmark/v2/outputs_partvp/my_operator_final \
-    --out scripts/analysis/partvp/outputs/data/my_operator_final.parquet
+    --out scripts/analysis/outputs/partvp/data/my_operator_final.parquet
 ```
 
 The output is a single parquet with one row per `(combo_id, target_id)` carrying
@@ -231,7 +231,7 @@ Check it:
 ```bash
 python -c "
 import pandas as pd
-df = pd.read_parquet('scripts/analysis/partvp/outputs/data/my_operator_final.parquet')
+df = pd.read_parquet('scripts/analysis/outputs/partvp/data/my_operator_final.parquet')
 print(df.groupby('combo_id')['match'].agg(['sum','count','mean']).round(3))
 "
 ```
@@ -244,8 +244,8 @@ This is your first quick accuracy check — compare to the paper's §6.2 table.
 
 ```bash
 python -m scripts.analysis.partvp.tolerance_dividend \
-    --features scripts/analysis/partvp/outputs/data/my_operator_final.parquet \
-    --out scripts/analysis/partvp/outputs/analysis/tolerance_dividend.csv
+    --features scripts/analysis/outputs/partvp/data/my_operator_final.parquet \
+    --out scripts/analysis/outputs/partvp/analysis/tolerance_dividend.csv
 ```
 
 Reads: `within_r` (within 50 km of truth centroid) and `match` (same-centroid).
@@ -264,8 +264,8 @@ Two scripts work together. First, compute the per-target fleet geometry:
 
 ```bash
 python -m scripts.analysis.partvp.fleet_geometry_explainability \
-    --attribution scripts/analysis/partvp/outputs/analysis_fail/per_target_failures.parquet \
-    --out-dir scripts/analysis/partvp/outputs/analysis_fleet
+    --attribution scripts/analysis/outputs/partvp/analysis_fail/per_target_failures.parquet \
+    --out-dir scripts/analysis/outputs/partvp/analysis_fleet
 ```
 
 If `per_target_failures.parquet` doesn't exist yet, run `characterize_failures.py`
@@ -277,8 +277,8 @@ Then compute the proximity-failure coverage:
 
 ```bash
 python -m scripts.analysis.partvp.assess_vp_proximity_failures \
-    --fleet-frame scripts/analysis/partvp/outputs/analysis_fleet/fleet_geometry_per_target.parquet \
-    --out-dir scripts/analysis/partvp/outputs/analysis_fleet
+    --fleet-frame scripts/analysis/outputs/partvp/analysis_fleet/fleet_geometry_per_target.parquet \
+    --out-dir scripts/analysis/outputs/partvp/analysis_fleet
 ```
 
 Key outputs:
@@ -298,7 +298,7 @@ similarly sparse you should see comparable numbers.
 ```bash
 python -m scripts.analysis.partvp.characterize_failures \
     --configs scripts/analysis/config/my_operator_final_us.yaml \
-    --out-dir scripts/analysis/partvp/outputs/analysis_fail
+    --out-dir scripts/analysis/outputs/partvp/analysis_fail
 ```
 
 The `--configs` flag (added in the current codebase) accepts one or more
@@ -324,8 +324,8 @@ AUC ~0.64–0.68 for a typical setup.
 ```bash
 python -m scripts.analysis.partvp.region_confidence \
     --run-dir scripts/benchmark/v2/outputs_partvp/my_operator_final \
-    --out-csv scripts/analysis/partvp/outputs/analysis/region_confidence.csv \
-    --out-parquet scripts/analysis/partvp/outputs/data/region_confidence_my_operator_final.parquet
+    --out-csv scripts/analysis/outputs/partvp/analysis/region_confidence.csv \
+    --out-parquet scripts/analysis/outputs/partvp/data/region_confidence_my_operator_final.parquet
 ```
 
 Key number: `l1_precision` (region overlaps exactly one answer cell → correct?)
@@ -340,8 +340,8 @@ bounded answer space has room to be unambiguous).
 ```bash
 python -m scripts.analysis.partvp.rq3_practicality \
     --run-dir scripts/benchmark/v2/outputs/my_operator_final \
-    --features scripts/analysis/partvp/outputs/data/my_operator_final.parquet \
-    --out-dir scripts/analysis/partvp/outputs/analysis_rq3
+    --features scripts/analysis/outputs/partvp/data/my_operator_final.parquet \
+    --out-dir scripts/analysis/outputs/partvp/analysis_rq3
 ```
 
 Note: pass `outputs/` (Stage A, not `outputs_partvp/`) here — you want the
@@ -372,27 +372,27 @@ poetry run snakemake -s scripts/benchmark/v2/Snakefile --configfile $CFG -j 8
 python -m scripts.analysis.partvp.run_textbook_config --config $ACFG
 python -m scripts.analysis.partvp.extract_features \
     --run-dir scripts/benchmark/v2/outputs_partvp/${RUN_ID} \
-    --out scripts/analysis/partvp/outputs/data/${RUN_ID}.parquet
+    --out scripts/analysis/outputs/partvp/data/${RUN_ID}.parquet
 python -m scripts.analysis.partvp.tolerance_dividend \
-    --features scripts/analysis/partvp/outputs/data/${RUN_ID}.parquet \
-    --out scripts/analysis/partvp/outputs/analysis/tolerance_dividend.csv
+    --features scripts/analysis/outputs/partvp/data/${RUN_ID}.parquet \
+    --out scripts/analysis/outputs/partvp/analysis/tolerance_dividend.csv
 python -m scripts.analysis.partvp.characterize_failures \
     --configs $ACFG \
-    --out-dir scripts/analysis/partvp/outputs/analysis_fail
+    --out-dir scripts/analysis/outputs/partvp/analysis_fail
 python -m scripts.analysis.partvp.fleet_geometry_explainability \
-    --attribution scripts/analysis/partvp/outputs/analysis_fail/per_target_failures.parquet \
-    --out-dir scripts/analysis/partvp/outputs/analysis_fleet
+    --attribution scripts/analysis/outputs/partvp/analysis_fail/per_target_failures.parquet \
+    --out-dir scripts/analysis/outputs/partvp/analysis_fleet
 python -m scripts.analysis.partvp.assess_vp_proximity_failures \
-    --fleet-frame scripts/analysis/partvp/outputs/analysis_fleet/fleet_geometry_per_target.parquet \
-    --out-dir scripts/analysis/partvp/outputs/analysis_fleet
+    --fleet-frame scripts/analysis/outputs/partvp/analysis_fleet/fleet_geometry_per_target.parquet \
+    --out-dir scripts/analysis/outputs/partvp/analysis_fleet
 python -m scripts.analysis.partvp.region_confidence \
     --run-dir scripts/benchmark/v2/outputs_partvp/${RUN_ID} \
-    --out-csv scripts/analysis/partvp/outputs/analysis/region_confidence.csv \
-    --out-parquet scripts/analysis/partvp/outputs/data/region_confidence_${RUN_ID}.parquet
+    --out-csv scripts/analysis/outputs/partvp/analysis/region_confidence.csv \
+    --out-parquet scripts/analysis/outputs/partvp/data/region_confidence_${RUN_ID}.parquet
 python -m scripts.analysis.partvp.rq3_practicality \
     --run-dir scripts/benchmark/v2/outputs/${RUN_ID} \
-    --features scripts/analysis/partvp/outputs/data/${RUN_ID}.parquet \
-    --out-dir scripts/analysis/partvp/outputs/analysis_rq3
+    --features scripts/analysis/outputs/partvp/data/${RUN_ID}.parquet \
+    --out-dir scripts/analysis/outputs/partvp/analysis_rq3
 ```
 
 ---

@@ -31,9 +31,9 @@ from scripts.analysis.partvp.characterize_failures import TEXTBOOK
 
 
 DEFAULT_FLEET_FRAME = Path(
-    "scripts/analysis/partvp/outputs/analysis_fleet/fleet_geometry_per_target.parquet"
+    "scripts/analysis/outputs/partvp/analysis_fleet/fleet_geometry_per_target.parquet"
 )
-DEFAULT_OUT_DIR = Path("scripts/analysis/partvp/outputs/analysis_fleet")
+DEFAULT_OUT_DIR = Path("scripts/analysis/outputs/partvp/analysis_fleet")
 VARIANT_ORDER = {name: i for i, name in enumerate(TEXTBOOK)}
 
 

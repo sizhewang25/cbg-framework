@@ -50,7 +50,7 @@ spotter -- blockers are pervasive and absorbed by weighting):
     so octant/spotter's baseline blockers are not miscounted as failures.
 T_i is the p90 of part_min_infl among that variant's MATCHED targets.
 
-Outputs (under --out-dir, default scripts/analysis/partvp/outputs/analysis_fail):
+Outputs (under --out-dir, default scripts/analysis/outputs/partvp/analysis_fail):
   failure_taxonomy.csv     config x variant: outcome shares + mechanism shares.
   failure_separation.csv   config x variant x feature: AUC of match-vs-fail.
   failure_attribution.png  stacked attribution bars per config x variant.
@@ -83,19 +83,25 @@ TEXTBOOK = ["vanilla_cbg", "million_scale_cbg", "octant_cbg", "spotter_cbg"]
 # config label -> (feature parquet, participant-emitting run dir)
 CONFIGS: dict[str, tuple[str, str]] = {
     "global-global": (
-        "scripts/analysis/partvp/outputs/data/global_as16509_final.parquet",
+        "scripts/analysis/outputs/partvp/data/global_as16509_final.parquet",
         "scripts/benchmark/v2/outputs/global_as16509_final"),
+    "na-global": (
+        "scripts/analysis/outputs/partvp/data/north_america_as7018_final.parquet",
+        "scripts/benchmark/v2/outputs/north_america_as7018_final"),
+    "europe-global": (
+        "scripts/analysis/outputs/partvp/data/europe_as3209_final.parquet",
+        "scripts/benchmark/v2/outputs/europe_as3209_final"),
     "europe-europe": (
-        "scripts/analysis/partvp/outputs/data_eu/europe_as3215_eu.parquet",
+        "scripts/analysis/outputs/partvp/data_eu/europe_as3215_eu.parquet",
         "scripts/benchmark/v2/outputs_partvp/europe_as3215_eu"),
     "europe-country": (
-        "scripts/analysis/partvp/outputs/data/europe_as3215_final_fr.parquet",
+        "scripts/analysis/outputs/partvp/data/europe_as3215_final_fr.parquet",
         "scripts/benchmark/v2/outputs_partvp/europe_as3215_final_fr"),
     "na-na": (
-        "scripts/analysis/partvp/outputs/data/north_america_as7018_final_na.parquet",
+        "scripts/analysis/outputs/partvp/data/north_america_as7018_final_na.parquet",
         "scripts/benchmark/v2/outputs_partvp/north_america_as7018_final_na"),
     "na-us": (
-        "scripts/analysis/partvp/outputs/data/north_america_as7018_final_us.parquet",
+        "scripts/analysis/outputs/partvp/data/north_america_as7018_final_us.parquet",
         "scripts/benchmark/v2/outputs_partvp/north_america_as7018_final_us"),
 }
 
@@ -125,6 +131,11 @@ def _blocker_frame(run_dir: Path) -> pd.DataFrame:
         if combo_id not in TEXTBOOK:
             continue
         df = pd.concat([load_targets(d).to_pandas() for d in dirs], ignore_index=True)
+        if "mtl_participants" not in df.columns:
+            for _, r in df.iterrows():
+                rows.append({"combo_id": combo_id, "target_id": r["target_id"],
+                             "n_part_obs": 0, "n_blockers": 0, "frac_blockers": 0.0})
+            continue
         for _, r in df.iterrows():
             parts = r["mtl_participants"]
             n_block = n = 0
@@ -368,7 +379,7 @@ def _load_configs_from_yamls(yaml_paths: list[Path]) -> tuple[dict[str, tuple[st
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out-dir", type=Path,
-                    default=Path("scripts/analysis/partvp/outputs/analysis_fail"))
+                    default=Path("scripts/analysis/outputs/partvp/analysis_fail"))
     ap.add_argument(
         "--configs", nargs="+", type=Path, default=None, metavar="YAML",
         help=(
