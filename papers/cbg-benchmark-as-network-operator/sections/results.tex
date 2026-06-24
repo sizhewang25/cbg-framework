@@ -7,6 +7,16 @@
 % ─────────────────────────────────────────────────────────────────────────────
 \subsection{Proximity-Limited Regime}
 \label{sec:results-proximity-limited}
+\textit{[Table: three fleet × global-target configurations. Finding: no CBG variant escapes
+sparse-VP failure. AS16509→global (30 VPs, 23--25\% accuracy, baseline 23.4\%);
+AS7018→global (125 US VPs, 3.9--6.6\%, baseline 5.3\%);
+AS3209→global (164 EU VPs, 2.0--6.0\%, baseline 6.3\%).
+Fleet-geometry attribution: fleet\_abs\_km AUC 0.84--0.96; missing target-distinguishing VP covers
+84.4--91.8\% of failures. Spotter is the structural exception: 7\% despite fleet geometry (LTD
+collapse, not VP placement).
+Figure: fleet\_abs\_km CDF with failure overlay, all setups.]}
+
+
 
 % PAPER-FLOW §6.1
 % Fixed target set: 713 global RIPE anchors, 257 centroids at R=50 km.
@@ -31,6 +41,14 @@
 % ─────────────────────────────────────────────────────────────────────────────
 \subsection{Proximity-Sufficient Regime}
 \label{sec:results-proximity-sufficient}
+\textit{[Same AS7018/AS3209 fleets, now vs. home targets. Natural experiment: fleet constant,
+target set changes; proximity regime changes. Results: AS7018→US (35.1 km median VP, baseline
+39.6\%): Vanilla 45.8\%, MS 43.8\%, Octant 51.0\%, Spotter 6.3\%. AS3209→DE (4.6 km median,
+baseline 50.0\%): Vanilla 18.8\%, MS 46.9\%, Octant 39.6\%, Spotter 17.7\%. Tolerance dividend:
+US Vanilla +31.3 pp/68\%, Octant +27.1 pp/53\%; DE all $\leq$+9 pp (3--5$\times$ smaller).
+Per-variant fingerprints: Vanilla EMPTY dominant in DE (38\%); MS all-INCLUSIVE resolution-limited;
+Octant INCLUSIVE with RTT-inflation driver; Spotter structural collapse persists.
+Figure: accuracy table + dividend table both setups.]}
 
 % PAPER-FLOW §6.2
 % Same AS7018 + AS3209 fleets, now evaluated against HOME target populations.
@@ -47,17 +65,38 @@
 %     Median fleet_abs_km = 4.6 km; median margin = +38.6 km; 2.1% missing. n VPs = 164.
 %     Shortest-ping baseline = 50.0%.
 %     Variant accuracy: Vanilla 18.8%, MS 46.9%, Octant 39.6%, Spotter 17.7%.
+%     Tolerance dividend: Vanilla +6.3 pp / 33%; MS +5.2 pp / 11%;
+%                         Octant +5.2 pp / 13%; Spotter +9.4 pp / 53%.
+%     DE dividend is 3–5× smaller than US — VP proximity (4.6 km median) already lifts within-R
+%     high, leaving little room for the finite-answer-space to add correct answers.
 %
 % Per-variant behavior:
 %   Vanilla: EMPTY dominates (38% in DE) — low-envelope under-prediction empties region.
 %   Million-scale: all INCLUSIVE misclassification — SoI r_v >= 0 always; resolution-limited.
-%   Octant: INCLUSIVE misclassification (RTT-inflation → wrong centroid; EXCLUSIVE=0 at R=50km).
-%   Spotter: INCLUSIVE misclassification (k·σ bands too wide; region overlaps truth but spans
-%            many clusters — not EMPTY as initially assumed).
+%   Octant: EXCLUSIVE dominates (~50% in US/DE) — joint annulus intersection drifts beyond
+%           D_truth entirely; but classification accuracy preserved by EXCLUSIVE-but-correct snapping
+%           (~27/48 EXCLUSIVE predictions still correct US; this is the tolerance dividend source).
+%   Spotter: EXCLUSIVE dominates (~89-99%) — k·σ bands produce huge annuli; almost entire accuracy
+%            (6.3% US) comes from EXCLUSIVE-but-correct predictions (6/95 EXCLUSIVE → right cell).
 
 % ─────────────────────────────────────────────────────────────────────────────
 \subsection{Success and Failure Analysis}
 \label{sec:results-failure}
+\textit{[Two-layer failure taxonomy: (A) geometric partition of MTL region vs. truth disk:
+EMPTY\_REGION, EXCLUSIVE\_REGION, INCLUSIVE (success or misclassification);
+(B) phase attribution (P1 band residuals, P2 participant geometry, P3 centroid rule).
+Key finding: EXCLUSIVE is large for annulus variants --- Octant $\approx$50\%, Spotter $\approx$89--99\%
+(Shapely polygon-disk intersection, verified on official outputs/).
+Per-VP band check was insufficient: each VP's annulus may reach D\_truth, but the joint
+intersection can drift entirely beyond D\_truth. Classification accuracy survives via
+\emph{EXCLUSIVE-but-correct} centroid snapping: Octant's entire 27\,pp tolerance dividend
+comes from $\approx$27/48 EXCLUSIVE predictions that still snap to the right answer cell;
+Spotter's 6.3\% accuracy is entirely EXCLUSIVE-but-correct.
+Disk variants (Vanilla, Million-scale): EXCLUSIVE $\approx$0--14\%; failure is INCLUSIVE misclassification.
+Feature attribution: (1)~VP proximity primary; (2)~answer-space isolation (\texttt{nearest\_other\_centroid\_km}
+AUC 0.64--0.68); (3)~angular surround (\texttt{part\_circ\_var} AUC up to 0.82 in DE, regime-gated).
+Confidence flag: L1 (region in exactly one cell) precision 0.66--0.91, covers 30--56\% correct answers.
+Figure: failure attribution stacked bars (both regimes); per-feature AUC boxplot.]}
 
 % PAPER-FLOW §6.3
 % Focuses on proximity-sufficient setups; attribution figures cover both regimes side by side.
@@ -68,17 +107,23 @@
 %   Layer B (phase attribution): Phase 1 band residuals r_v, Phase 2 participant geometry,
 %                                Phase 3 centroid rule.
 %
-% Key finding — EXCLUSIVE=0 in proximity-sufficient setups (verified by Shapely polygon-disk
-% intersection on correct planar_circle + geometric_centroid data):
-%   The R=50 km bounded metric absorbs geometric containment failures. All wrong predictions are
-%   INCLUSIVE misclassifications. This shifts residual failure entirely to Phase 3 (centroid).
-%   [PENDING: confirm EXCLUSIVE=0 on official outputs/ data; see exclusive_verification.md]
+% Key finding — EXCLUSIVE is large for annulus variants (VERIFIED by Shapely polygon-disk
+% intersection, both official outputs/ and outputs_partvp/ data):
+%   Per-VP band check was insufficient. Joint intersection of all annuli can drift beyond D_truth
+%   entirely (EXCLUSIVE), even when each individual VP band reaches D_truth.
+%   Classification accuracy is preserved because EXCLUSIVE centroids snap to the correct cell
+%   (Voronoi cells extend beyond D_truth's 50 km disk). This is the EXCLUSIVE-but-correct mechanism.
 %
-% Per-variant partition (na-us / eu-de, from outputs_partvp with planar_circle after rerun):
-%   vanilla_cbg:      EMPTY 16%/38%, EXCL 0%, INCL-success 46%/19%, INCL-misclass 39%/44%
-%   million_scale_cbg: EMPTY 0%/0%,  EXCL 0%, INCL-success 44%/47%, INCL-misclass 56%/53%
-%   octant_cbg:        EMPTY 0%/0%,  EXCL 0%, INCL-success 51%/40%, INCL-misclass 49%/60%
-%   spotter_cbg:       EMPTY 0%/0%,  EXCL 0%, INCL-success 6%/18%,  INCL-misclass 94%/82%
+% Per-variant partition (na-us / eu-de; Shapely reconstruction, from exclusive_results.csv):
+%   vanilla_cbg:       EMPTY 15%/38%, EXCL 10%/14%, INCL-success 19%/13%, INCL-misclass 56%/36%
+%   million_scale_cbg: EMPTY 0%/0%,   EXCL 1%/0%,   INCL-success 36%/41%, INCL-misclass 63%/59%
+%   octant_cbg:        EMPTY 0%/0%,   EXCL 50%/52%, INCL-success 23%/32%, INCL-misclass 27%/16%
+%   spotter_cbg:       EMPTY 0%/0%,   EXCL 99%/89%, INCL-success 0%/8%,   INCL-misclass 1%/3%
+%
+%   Octant: ~27 of 48 EXCLUSIVE US predictions are still correctly classified (centroid snaps
+%           to right cell despite region missing D_truth). This accounts for the ~27 pp tolerance dividend.
+%   Spotter: 6 of 95 EXCLUSIVE US predictions are correctly classified — Spotter's entire 6.3%
+%            accuracy is EXCLUSIVE-but-correct tolerance. All correct answers are tolerance artifacts.
 %
 % Per-feature attribution of INCLUSIVE failures:
 %   1. Proximity (primary): part_min_rtt_ms AUC~0.32; close VP → Tier-1 lock-in.
@@ -94,6 +139,13 @@
 % ─────────────────────────────────────────────────────────────────────────────
 \subsection{Proprietary Single-ASN Dataset}
 \label{sec:results-proprietary}
+\textit{[Cleanest operator regime: one operator ASN $\to$ one target ASN, 200+ IPs, 20+ US clusters,
+VP topology matched to public dataset. Expected: accuracy jumps substantially vs. RIPE
+(driven by VP proximity and clean single-ASN RTTs); residual $\sim$20\% failure fully
+interpretable by §\ref{sec:results-failure} taxonomy with no no-proximity confound.
+The residual failure analysis here is the paper's strongest evidence for the taxonomy,
+because the proximity confound is absent.
+RESULTS TO BE FILLED after operator dataset evaluation is complete.]}
 
 % PAPER-FLOW §6.4
 % Cleanest operator regime: one operator ASN → one target ASN, 200+ IPs, 20+ US clusters.
@@ -104,6 +156,13 @@
 % ─────────────────────────────────────────────────────────────────────────────
 \subsection{Production Cost}
 \label{sec:results-cost}
+\textit{[Cost is entirely in the centroid phase. Monte Carlo medoid (Octant/Spotter): 190--390\,ms/target,
+3.2\,targets/s. Geometric centroid: $\approx$0.25\,ms/target, 65\,targets/s.
+$\approx$20$\times$ throughput gain; equal or better accuracy (\texttt{octant\_hull\_geo} 30.0\%
+vs.~\texttt{octant\_cbg} 25.2\%). LTD and MTL are negligible by comparison.
+Figure: per-phase latency boxplot; accuracy vs. throughput scatter (the two Pareto points are
+Monte Carlo and geometric centroid).
+VERIFIED from \texttt{rq3\_runtime\_global\_as16509\_final.csv}.]}
 
 % PAPER-FLOW §6.5  (VERIFIED against rq3_runtime_global_as16509_final.csv)
 % Cost lives in the centroid phase:

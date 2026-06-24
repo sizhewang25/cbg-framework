@@ -27,33 +27,20 @@ Before reporting, all metrics cited for the first time are defined here.
 
 ---
 
-## §2.3 — Variant Table: Vanilla and Million-Scale Combo Mismatch
+## §2.3 — Variant Table: Official Config (Issue #1: RESOLVED)
 
-**Status: INACCURATE — config does not match table.**
+**Status: RESOLVED.** Decision: the paper's §2.3 variant table and implementation note have been updated to reflect the actual run configs (`planar_circle + geometric_centroid` for Vanilla and Million-scale). This is the benchmark's official configuration; Vanilla and Million-scale use `PlanarCircleMTL` + `geometric_centroid`, not `spherical_circle + boundary_vertex_mean` as originally cited in the paper.
 
-The paper's §2.3 table defines the four textbook variants as:
+**Official four-variant config** (all `_final` configs; `global_as16509_final.yaml`, `north_america_as7018_final_us.yaml`, `europe_as3209_final_de.yaml`):
 
-| Variant | LTD | MTL | CTR |
-| --- | --- | --- | --- |
-| Vanilla | Low Envelope | **Spherical circle** | **Boundary-Vertex Mean** |
-| Million-scale | Speed-of-internet | **Spherical circle** | **Boundary-Vertex Mean** |
-| Octant | Bounded Hull/Spline | Planar annulus | Monte Carlo |
-| Spotter | Normal Distribution | Planar annulus | Monte Carlo |
-
-The actual combo definitions in all `_final` configs (`global_as16509_final.yaml`, `north_america_as7018_final_us.yaml`, `europe_as3209_final_de.yaml`) are:
-
-| combo_id | ltd | mtl (actual) | ctr (actual) |
+| combo_id | ltd | mtl | ctr |
 | --- | --- | --- | --- |
 | `vanilla_cbg` | `low_envelope` | **`planar_circle`** | **`geometric_centroid`** |
 | `million_scale_cbg` | `speed_of_internet` | **`planar_circle`** | **`geometric_centroid`** |
 | `octant_cbg` | `bounded_spline` | `planar_annulus_weighted` | `monte_carlo_medoid` |
 | `spotter_cbg` | `normal_dist` | `planar_annulus_weighted` | `monte_carlo_medoid` |
 
-**`planar_circle` ≠ `spherical_circle`**: `PlanarCircleMTL` approximates each RTT disk as a polygon in degree space (flat-earth, Shapely intersection). `SphericalCircleMTL` uses great-circle geometry on the sphere. Both exist in the codebase (`scripts/framework/v2/__init__.py` exports both), but only `planar_circle` is used in the experiments.
-
-**`geometric_centroid` ≠ `boundary_vertex_mean`**: `BoundaryVertexMeanCTR` takes the unweighted mean of intersection polygon boundary vertices. `geometric_centroid` computes the area-weighted polygon centroid. The config comments (lines 14, 16 in `global_as16509_final.yaml`) incorrectly describe the combos as "spherical_circle + boundary_vertex_mean" while the actual YAML uses `planar_circle + geometric_centroid`.
-
-**Action required:** Decide whether the four "textbook" variants in the paper should be corrected to reflect what's actually run (`planar_circle + geometric_centroid`), or whether the experiments need to be rerun with the true textbook implementations (`spherical_circle + boundary_vertex_mean` for Vanilla and Million-scale). The paper as written is misrepresenting the benchmarked implementations for two of the four variants.
+Implementation note documented in paper-flow §2.3: `PlanarCircleMTL` approximates each RTT disk as a degree-space Shapely polygon (flat-earth); `geometric_centroid` is area-weighted. Paper-flow §7 phase-ablation results compare these against the spherical/BVM originals.
 
 ---
 
@@ -119,32 +106,27 @@ Fleet geometry (computed from VP JSON + cluster centroids via haversine):
 
 Both are dramatically worse than the "fairly limited" global fleet (AS16509: 348 km, −313 km, 77%). Random baseline for 257 clusters ≈ 0.4%; the extremely-limited setups achieve only 2–7%, confirming that country-scale fleets against global targets are essentially non-functional for CBG regardless of variant.
 
-### Claim: Shortest-ping baseline 23.4% (global)
+### Claim: Shortest-ping baselines (global 23.4%, US 39.6%, DE 50.0%, cross-region 5.3%/6.3%)
 
-**Status: CANNOT VERIFY from available analysis outputs.**
+**Status: VERIFIED (Issue #7 resolved).** Confirmed by running `plot_cluster_match_bars.py` on all 5 final run directories:
 
-The baseline requires RTT-based computation via `shortest_ping_baseline_rates()` in `scripts/analysis/plot_cluster_cdf.py`, which reads from the benchmark input directory (actual shortest-RTT VP location per fold). A geometric proxy (fraction of targets where `avail_min_vp_km < nearest_other_centroid_km / 2`) gives **22.3%** for global — close to 23.4% (1.1 pp gap). Plausible but not confirmed from code output.
+| Setup | Claimed | Verified |
+| --- | --- | --- |
+| AS16509→global | 23.4% | **23.4%** ✓ |
+| AS7018→US | 39.6% | **39.6%** ✓ |
+| AS3209→DE | 50.0% | **50.0%** ✓ |
+| AS7018→global | 5.3% (new) | **5.3%** ✓ |
+| AS3209→global | 6.3% (new) | **6.3%** ✓ |
 
 ---
 
 ## §6.2 — Proximity-Sufficient Regime
 
-### Critical Issue: AS3209→DE fleet metrics are from a different setup
+### AS3209→DE fleet metrics (Issue #2: RESOLVED)
 
-**Status: INACCURATE — fleet metrics in table belong to AS3215→FR.**
+**Status: RESOLVED.** Original stale numbers (from AS3215→FR) replaced with correct AS3209→DE values. The fleet analysis had been run on AS3215 (Orange France, n=39, median VP 1.49 km) rather than AS3209 (Vodafone Germany, n=96). Paper-flow §6.2 updated.
 
-The paper's §6.2 fleet table attributes these metrics to "AS3209→DE":
-
-| metric | paper value | actual source |
-| --- | --- | --- |
-| Median `fleet_abs_km` | 1.5 km | **AS3215→FR** (n=39) |
-| Median margin | +62.3 km | **AS3215→FR** ✓ |
-| % missing target-dist. VP | 7.7% | **AS3215→FR** ✓ |
-| n targets / clusters | 96 / 21 | **AS3209→DE** (n=96, clusters TBD) |
-
-Verification: `fleet_geometry_per_target.parquet` shows `europe-country` config maps to `run_id = europe_as3215_final_fr` (not `europe_as3209_final_de`). The fleet analysis was run on AS3215 (Orange France, n=39 targets, median VP distance 1.49 km), not AS3209 (Vodafone Germany, n=96 targets).
-
-**Actual AS3209→DE fleet metrics** (computed from `europe_as3209_final_de.parquet`):
+**Verified AS3209→DE fleet metrics** (from `europe_as3209_final_de.parquet`):
 
 | metric | actual value |
 | --- | --- |
@@ -154,31 +136,16 @@ Verification: `fleet_geometry_per_target.parquet` shows `europe-country` config 
 | Median margin | **+38.6 km** |
 | % missing target-dist. VP | **2.1%** |
 
-These differ materially from the AS3215→FR numbers cited in the paper. The fleet geometry analysis must be re-run targeting `europe_as3209_final_de` to get the correct numbers for the AS3209→DE row.
+### Claim: AS3209→DE classification accuracy (Issue #4: RESOLVED)
 
-### Claim: AS3209→DE classification accuracy
+**Status: RESOLVED.** All four variants confirmed. Spotter "pending" note was stale.
 
-**Status: DATA EXISTS, but Spotter labeled "pending" when it should not be.**
-
-| combo | paper claims | data (AS3209→DE) | source |
-| --- | ---: | ---: | --- |
-| vanilla_cbg | 18.8% | **18.75%** ✓ | `data/europe_as3209_final_de.parquet` |
-| million_scale_cbg | 46.9% | **46.88%** ✓ | same |
-| octant_cbg | 39.6% | **39.58%** ✓ | same |
-| spotter_cbg | *pending* | **17.71%** — stale note | same |
-
-The Spotter result for AS3209→DE is 17.71% and is present in the data. The "pending (rerun required)" note in the paper is stale. Update the table with 17.71% for Spotter.
-
-*For reference — AS3215→FR accuracy (the setup whose fleet metrics are cited in the table):*
-
-| combo | AS3215→FR value |
-| --- | ---: |
-| vanilla_cbg | 20.5% |
-| million_scale_cbg | 53.8% |
-| octant_cbg | 56.4% |
-| spotter_cbg | 35.9% |
-
-These numbers are materially different from the AS3209→DE numbers. The accuracy table and fleet table currently describe two different experiments.
+| combo | verified value | source |
+| --- | ---: | --- |
+| vanilla_cbg | **18.75%** ✓ | `data/europe_as3209_final_de.parquet` |
+| million_scale_cbg | **46.88%** ✓ | same |
+| octant_cbg | **39.58%** ✓ | same |
+| spotter_cbg | **17.71%** ✓ | same |
 
 ### Claim: AS7018→US classification accuracy
 
@@ -193,9 +160,9 @@ These numbers are materially different from the AS3209→DE numbers. The accurac
 
 N = 96 targets, 5-fold cross-validation (fold sizes: 23+13+20+20+20 = 96).
 
-### Claim: AS7018→US fleet geometry (96/32, 35.1 km, +62.0 km, 43.8%)
+### Claim: AS7018→US fleet geometry (96/32, 35.1 km, +62.0 km, 43.8%) — Issues #2/#8 RESOLVED
 
-**Status: VERIFIED (except cluster count unverified).**
+**Status: VERIFIED.**
 
 | metric | paper claims | data value |
 | --- | --- | --- |
@@ -203,29 +170,15 @@ N = 96 targets, 5-fold cross-validation (fold sizes: 23+13+20+20+20 = 96).
 | Median `fleet_abs_km` | 35.1 km | **35.15 km** ✓ |
 | Median margin | +62.0 km | **+62.02 km** ✓ |
 | % missing | 43.8% | **43.75%** ✓ |
-| n clusters (answer space) | 32 | **not verified** — not in current analysis outputs |
+| n clusters (answer space) | 32 | **32** ✓ (confirmed from `clusters.csv` for `north_america_as7018_final_us`) |
 
-The "32 clusters" figure cannot be confirmed from available data without running the clustering step on the US anchor subset.
+### Claim: Tolerance dividend (§6.2, AS7018→US and AS3209→DE)
 
-### Claim: Shortest-ping baseline (39.6% US, 50.0% DE)
+**Status: VERIFIED (both setups).**
 
-**Status: CANNOT VERIFY from available analysis outputs.**
+From `analysis/tolerance_dividend.csv`:
 
-Same issue as global: requires RTT-based computation from input fold data. Geometric proxy (avail_min_vp_km < nearest_other_centroid_km / 2) gives 56.2% for US and 97.9% for DE — both substantially higher than the paper's claimed baselines. The large gap is plausible (RTT-shortest VP ≠ distance-closest VP due to routing topology) but cannot be confirmed without running `plot_cluster_match_bars.py` on the inputs directory.
-
-**Blocker for verifying baselines:** To compute the baseline for any setup, run:
-```bash
-cd /home/nuwinslab/workspace/atnt/cbg-framework
-python -m scripts.analysis.plot_cluster_match_bars \
-    --run-dir scripts/benchmark/v2/outputs/<run_id> --radius-km 50
-```
-The script auto-discovers the inputs directory and prints baseline accuracy.
-
-### Claim: Tolerance dividend (§6.2, AS7018→US)
-
-**Status: VERIFIED.**
-
-From `analysis/tolerance_dividend.csv` (`north_america_as7018_final_us`):
+**AS7018→US** (`north_america_as7018_final_us`):
 
 | combo | dividend (abs pp) | paper | dividend (rel %) | paper |
 | --- | ---: | --- | ---: | --- |
@@ -234,7 +187,18 @@ From `analysis/tolerance_dividend.csv` (`north_america_as7018_final_us`):
 | octant_cbg | +27.08 pp | "+27.1 pp" ✓ | **53.1%** | "53%" ✓ |
 | spotter_cbg | +6.25 pp | "+6.3 pp" ✓ | **100%** | "~100%*" ✓ |
 
-Paper claim "53–71% of all correct answers are tolerance wins" uses the range from octant (53%) to vanilla (68%) — confirmed ✓. The 71% bound appears in the contribution summary and may be rounded from an intermediate computation; the vanilla value here is 68%.
+Paper claim "53–71% of all correct answers are tolerance wins" uses the range octant (53%) to vanilla (68%) — confirmed ✓. The 71% bound in the contribution summary may be rounded from an intermediate value.
+
+**AS3209→DE** (`europe_as3209_final_de`) — NEW, not yet in paper draft:
+
+| combo | dividend (abs pp) | dividend (rel %) |
+| --- | ---: | ---: |
+| vanilla_cbg | **+6.25 pp** | **33.3%** |
+| million_scale_cbg | **+5.21 pp** | **11.1%** |
+| octant_cbg | **+5.21 pp** | **13.2%** |
+| spotter_cbg | **+9.38 pp** | **52.9%** |
+
+DE dividend is 3–5× smaller than US (ex-Spotter: 11–33% vs. 45–68%). With median VP at 4.6 km, within-R rate is already high, leaving little headroom for the tolerance gain. This contrast has been added to paper-flow §6.2 and intro.tex contribution #3.
 
 ---
 
@@ -259,24 +223,34 @@ The paper says "Octant RTT inflation AUC 0.82 in EU-country". The `fleet_geometr
 
 **Status: COMPUTED.** Data from `outputs_partvp/` fold `targets.parquet`. See `failure_taxonomy_output.md` for methodology.
 
-| Setup | combo | EMPTY | EXCLUSIVE | INCL-success | INCL-misclass |
-| --- | --- | ---: | ---: | ---: | ---: |
-| na-us | vanilla_cbg | 15 (16%) | 0 | 44 (46%) | 37 (39%) |
-| na-us | million_scale_cbg | 0 | 0 | 42 (44%) | 54 (56%) |
-| na-us | octant_cbg | 0 | 0 | 49 (51%) | 47 (49%) |
-| na-us | spotter_cbg | 0 | 0 | 6 (6%) | 90 (94%) |
-| eu-de | vanilla_cbg | 36 (38%) | 0 | 18 (19%) | 42 (44%) |
-| eu-de | million_scale_cbg | 0 | 0 | 45 (47%) | 51 (53%) |
-| eu-de | octant_cbg | 0 | 0 | 38 (40%) | 58 (60%) |
-| eu-de | spotter_cbg | 0 | 0 | 17 (18%) | 79 (82%) |
+| Setup | combo | data_src | EMPTY | EXCLUSIVE | INCL-success | INCL-misclass |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| na-us | vanilla_cbg | outputs/ | 14 (15%) | **10 (10%)** | 18 (19%) | 54 (56%) |
+| na-us | million_scale_cbg | outputs/ | 0 | 1 (1%) | 35 (36%) | 60 (63%) |
+| na-us | octant_cbg | outputs_partvp/ | 0 | **48 (50%)** | 22 (23%) | 26 (27%) |
+| na-us | spotter_cbg | outputs_partvp/ | 0 | **95 (99%)** | 0 (0%) | 1 (1%) |
+| eu-de | vanilla_cbg | outputs/ | 36 (38%) | **13 (14%)** | 12 (13%) | 35 (36%) |
+| eu-de | million_scale_cbg | outputs/ | 0 | 0 (0%) | 39 (41%) | 57 (59%) |
+| eu-de | octant_cbg | outputs/ | 0 | **50 (52%)** | 31 (32%) | 15 (16%) |
+| eu-de | spotter_cbg | outputs/ | 0 | **85 (89%)** | 8 (8%) | 3 (3%) |
 
-**Key finding: EXCLUSIVE = 0 everywhere.** Every VP band (disk for Vanilla/MS, annulus for Octant/Spotter) is geometrically wide enough to reach D_truth's 50 km cluster disk even when the prediction is wrong. All wrong predictions are INCLUSIVE-misclass: the feasible region overlaps truth but the centroid resolves to the wrong cluster.
+**Key finding: EXCLUSIVE is large for annulus-based variants.** Proper Shapely polygon-disk intersection (reconstructing the joint MTL polygon and testing R.intersects(D_truth)) shows:
+- **Octant: ~50% EXCLUSIVE** in both US (48/96) and DE (50/96)
+- **Spotter: ~89–99% EXCLUSIVE** in US (95/96) and DE (85/96)
+- Vanilla: ~10–14% EXCLUSIVE (disk-based; EMPTY is the larger failure mode)
+- Million-scale: ~0–1% EXCLUSIVE (SoI upper-bound never pushes outward)
 
-**Paper corrections applied to paper-flow.md:**
-- §6.2 Octant: "EXCLUSIVE_REGION failures" → "INCLUSIVE misclassification" (AUC 0.82 describes RTT-inflation → failure, but the failure manifests as wrong centroid, not exclusion)
-- §6.3 table: Octant row corrected to "INCLUSIVE misclassification (49% US / 60% DE)"; Spotter row corrected from "EMPTY_REGION" to "INCLUSIVE misclassification (94% US / 82% DE)"
+The prior per-VP band check was a necessary but not sufficient condition for EXCLUSIVE=0. Each individual VP's annulus may reach D_truth's disk, but the *joint* intersection of all annuli can drift entirely beyond D_truth when RTT inflation pushes inner bounds outward across multiple VPs simultaneously.
 
-**Important caveat on partvp configs:** The `outputs_partvp/` runs use an older config where `vanilla_cbg` and `million_scale_cbg` may use `spherical_circle + boundary_vertex_mean` instead of `planar_circle + geometric_centroid`. The EMPTY counts (STATUS=FALLBACK) are config-independent (both can empty), but the INCLUSIVE-misclass split could differ between planar and spherical MTL. The official benchmark uses `planar_circle + geometric_centroid`; the taxonomy counts here are from the partvp legacy configs. Directionally correct but not bit-identical to the main benchmark outputs.
+**EXCLUSIVE-but-correct phenomenon (the tolerance mechanism):** The centroid of an EXCLUSIVE region (polygon does not overlap D_truth's 50 km disk) can still snap to the correct answer cell, because Voronoi cells extend beyond D_truth. This is why classification accuracy survives despite large EXCLUSIVE fractions:
+- Octant US: ~27 of 48 EXCLUSIVE predictions still correctly classified (centroid snaps to right cell). This accounts for nearly the entire ~27 pp tolerance dividend.
+- Spotter US: 6 of 95 EXCLUSIVE predictions correctly classified — Spotter's entire 6.3% accuracy is EXCLUSIVE-but-correct.
+
+**Paper corrections applied to paper-flow.md and intro.tex:**
+- §6.2 Octant paragraph: removed EXCLUSIVE=0 claim; replaced with verified ~50% EXCLUSIVE + EXCLUSIVE-but-correct explanation
+- §6.3 key finding box: replaced "EXCLUSIVE=0" with correct counts and EXCLUSIVE-but-correct narrative
+- intro.tex contribution #4: replaced "EXCLUSIVE=0" with verified EXCLUSIVE counts
+- results.tex §6.3: removed PENDING note; added correct partition and mechanism explanation
 
 ---
 
@@ -305,7 +279,7 @@ From `analysis_rq3/rq3_runtime_global_as16509_final.csv`:
 | 2 | §6.2 fleet table | AS3209→DE fleet metrics (1.5 km, 62.3 km, 7.7%) were from AS3215→FR | ~~HIGH~~ | **RESOLVED** | paper-flow.md §6.2 updated to correct AS3209→DE values: 4.6 km, +38.6 km, 2.1% |
 | 3 | §6.1 | AS7018→global and AS3209→global TBD rows | ~~HIGH~~ | **RESOLVED** | Data confirmed in `north_america_as7018_final` and `europe_as3209_final` outputs; accuracy and fleet metrics filled in |
 | 4 | §6.2 | Spotter DE labeled "pending" | ~~LOW~~ | **RESOLVED** | Updated to 17.7% |
-| 5 | §6.3 | EMPTY/EXCLUSIVE/INCLUSIVE partition not yet computed | ~~MED~~ | **RESOLVED** | Computed from `outputs_partvp/` fold targets.parquet. EXCLUSIVE = 0 everywhere. Vanilla: EMPTY=16%/38% (US/DE). All other failures are INCLUSIVE-misclass. Paper-flow §6.2/§6.3 corrected. See `failure_taxonomy_output.md`. |
+| 5 | §6.3 | EMPTY/EXCLUSIVE/INCLUSIVE partition — prior per-VP check was wrong | ~~MED~~ | **RESOLVED** | Verified by Shapely polygon-disk intersection (`exclusive_verify.py`). EXCLUSIVE is **large** for annulus variants: Octant ~50% (US/DE), Spotter ~89–99%. Disk variants near-zero. EXCLUSIVE-but-correct centroid snapping preserves classification accuracy. Paper-flow §6.2/§6.3/intro.tex corrected. See `exclusive_verification.md`. |
 | 6 | §6.3 | "AUC 0.82 in EU-country" mixes two AUC definitions | ~~MED~~ | **RESOLVED** | 0.82 = RTT-inflation → failure AUC (from `WHEN_CBG_FAILS.md`, mechanism attribution); 0.684 = fleet_abs_km → error AUC (fleet geometry). Different response variables. Paper-flow §6.3 clarified with parenthetical. |
 | 7 | §6.1/6.2 | Shortest-ping baseline (23.4% global, 39.6% US, 50.0% DE, TBD for cross-region) unverifiable | ~~MED~~ | **RESOLVED** | Ran `plot_cluster_match_bars.py` for all 5 final runs: global=23.4% ✓, US=39.6% ✓, DE=50.0% ✓, AS7018→global=5.3% (new), AS3209→global=6.3% (new). Paper-flow §6.1 TBD rows filled. |
 | 8 | §6.2 | Cluster counts (96/32 US, 96/21 DE, 713/257 global) not all confirmed | ~~LOW~~ | **RESOLVED** | All confirmed: global=257 (from clusters.csv), US=32 (from clusters.csv for north_america_as7018_final_us), DE=21 (from plot_cluster_match_bars.py n_centroids output for europe_as3209_final_de). |
@@ -325,9 +299,10 @@ From `analysis_rq3/rq3_runtime_global_as16509_final.csv`:
 - §6.2 AS3209→DE CBG accuracy (Vanilla 18.8%, MS 46.9%, Octant 39.6%, Spotter 17.7%) — Spotter no longer pending
 - §6.2 AS3209→DE fleet geometry (4.6 km, +38.6 km, 2.1% missing, 164 VPs) — corrected from FR metrics
 - §6.2 Tolerance dividend for AS7018→US (all four variants within 0.1 pp)
+- §6.2 Tolerance dividend for AS3209→DE (Vanilla +6.3 pp/33%, MS +5.2 pp/11%, Octant +5.2 pp/13%, Spotter +9.4 pp/53%) — 3–5× smaller than US as expected given 4.6 km median VP distance
 - §6.5 Runtime numbers for `octant_hull_geo` and `octant_cbg` (accuracy, throughput, centroid latency)
 - §6.1 global cluster count: 257 clusters (confirmed from `clusters.csv`)
 - §6.1 shortest-ping baselines: global=23.4%, US=39.6%, DE=50.0% (all confirmed); AS7018→global=5.3%, AS3209→global=6.3% (new)
 - §6.2 cluster counts: US=32 (confirmed from `clusters.csv`), DE=21 (confirmed from `plot_cluster_match_bars.py`)
 - §6.3 AUC distinction: 0.82 = RTT-inflation→failure attribution AUC; 0.684 = fleet_abs_km→error AUC (separate metrics)
-- §6.3 EMPTY/EXCLUSIVE/INCLUSIVE partition: EXCLUSIVE = 0 everywhere; Vanilla EMPTY = 16%/38% (US/DE); all other failures INCLUSIVE-misclass; corrections applied to §6.2 Octant and §6.3 failure table
+- §6.3 EMPTY/EXCLUSIVE/INCLUSIVE partition (Shapely polygon-disk verified): Octant ~50% EXCLUSIVE (US/DE), Spotter ~89–99% EXCLUSIVE; disk variants near-zero; EXCLUSIVE-but-correct centroid snapping is the tolerance mechanism; Octant's ~27 pp tolerance dividend = ~27/48 EXCLUSIVE-but-correct predictions; corrections applied to §6.2 Octant, §6.3 key finding, intro.tex #4

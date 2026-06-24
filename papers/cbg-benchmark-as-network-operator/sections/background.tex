@@ -18,13 +18,40 @@
 \label{sec:background-toolkit}
 % TODO: table comparing DNS-based, Geofeed, traceroute, and latency/CBG on pros/cons
 % under operator constraints (scale, privacy, cost, freshness).
+\textit{[Compares DNS-based, Geofeed, traceroute, and latency/CBG methods on scale, privacy, cost,
+and freshness under operator constraints. Key point: latency methods double as validation for the
+other three — operators use speed-of-Internet circles to sanity-check Geofeed/rDNS claims before
+ingesting them as training labels.]}
 
 \subsection{Constraint-Based Geolocation}
 \label{sec:background-cbg}
 % TODO: three-phase pipeline; notation; speed-of-light model; RTT → distance conversion.
+\textit{[Three-phase pipeline: (1) LTD — per-VP latency-to-distance model maps RTT to a
+geometric band; (2) MTL — intersect all VP constraints to form the feasible region R;
+(3) CTR — select a point estimate from R. Inputs: RTT measurements + VP locations.
+Outputs: estimated target lat/lon. Speed-of-Internet bound: $d \leq \frac{2}{3}c \cdot \text{RTT}/2$.]}
 
 \subsection{The Four Foundational Variants}
 \label{sec:background-variants}
 % TODO: variant table (Vanilla, Million-scale, Octant, Spotter) with LTD / MTL / CTR columns.
 % Implementation note: this benchmark uses planar_circle + geometric_centroid for
 % Vanilla and Million-scale (not the original spherical-circle + BVM).
+
+\begin{table}[h]
+\caption{The four foundational CBG variants and their phase implementations.}
+\label{tab:variants}
+\begin{tabular}{llll}
+\hline
+\textbf{Variant} & \textbf{LTD (P1)} & \textbf{MTL (P2)} & \textbf{CTR (P3)} \\
+\hline
+Vanilla       & Low Envelope    & Planar circle             & Geometric centroid \\
+Million-scale & Speed-of-Internet & Planar circle           & Geometric centroid \\
+Octant        & Bounded Spline  & Planar annulus (weighted) & Monte Carlo medoid \\
+Spotter       & Normal Distribution & Planar annulus (weighted) & Monte Carlo medoid \\
+\hline
+\end{tabular}
+\end{table}
+
+\textit{[Note: this benchmark uses \texttt{planar\_circle + geometric\_centroid} for Vanilla and
+Million-scale. Speed-of-Internet (Million-scale) is the only calibration-free LTD variant — this
+asymmetry drives the Anchored/Unanchored two-track taxonomy in \S\ref{sec:intro-challenges}.]}

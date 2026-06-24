@@ -31,15 +31,34 @@
 \subsection{Weighted Intersection}
 \label{sec:improved-weighted}
 % TODO
+\textit{[Compare: vanilla\_cbg → vanilla\_cbg\_weighted (annulus-weighted);
+million\_scale\_cbg → million\_scale\_cbg\_weighted; octant\_cbg → octant\_top (top constraint);
+spotter\_cbg → spotter\_top (top constraint).
+Question: does weighting repair INCLUSIVE misclassification and EXCLUSIVE, and for which variants?
+Data lives in \texttt{outputs/} for all improved combos.]}
 
 \subsection{Geometric vs. Monte Carlo Centroid}
 \label{sec:improved-centroid}
 % TODO
+\textit{[Holding MTL fixed, swap centroid rule: octant\_cbg $\to$ octant\_cbg\_geo;
+spotter\_cbg $\to$ spotter\_cbg\_geo. Directly targets Phase 3 INCLUSIVE resolution failures.
+Production-cost payoff already shown in §\ref{sec:results-cost} ($20\times$ throughput);
+here we quantify the accuracy trade-off.]}
 
 \subsection{Tight vs. Loose Constraint}
 \label{sec:improved-constraint}
 % TODO
+\textit{[Holding centroid = geometric, compare Octant constraint tightness:
+octant\_cbg\_geo (standard, tight) vs.\ octant\_hull\_geo (hull-relaxed, loose).
+Loosening reduces EMPTY\_REGION and EXCLUSIVE at cost of resolution coarseness.
+Does loosening recover EMPTY failures without introducing new INCLUSIVE misclassifications?
+Front-runner result: octant\_hull\_geo 30.0\% / 65 targets/s beats octant\_cbg 25.2\% / 3.2 targets/s.]}
 
 \subsection{Head-to-Head Comparison}
 \label{sec:improved-head2head}
 % TODO
+\textit{[Best new combo across all setups vs.\ the four textbook baselines.
+Current front-runner: \texttt{octant\_hull\_geo} (geometric centroid + hull-relaxed annulus) —
+30.0\% at 65 targets/s globally, beating default Octant at 25.2\% / 3.2 targets/s.
+Table: all setups × all variants (textbook + improved), classification accuracy.
+TO BE FINALIZED after §7.1--§7.3 are computed.]}

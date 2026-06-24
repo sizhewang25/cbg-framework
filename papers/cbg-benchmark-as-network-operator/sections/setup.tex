@@ -36,15 +36,41 @@
 \subsection{Datasets}
 \label{sec:setup-datasets}
 % TODO
+\textit{[Two datasets with complementary roles.
+Public RIPE: 713 anchors, RTTs from three ASN fleets (AS16509 / 30 global VPs, AS7018 / 125 US VPs,
+AS3209 / 164 EU VPs); reproducible and public but noisy for the operator question (sparse per-ASN
+anchor counts — no single target ASN contributes $>7$ anchors in the US).
+Proprietary: user-plane/mobile-core RTTs from one operator toward a single target ASN,
+200+ IPs across 20+ US clusters; cleanest operator regime (one operator ASN to one target ASN).
+VP topology between datasets matched on VP count, geographic spread, and pairwise distance distribution.]}
 
 \subsection{Setup Construction and Answer Space}
 \label{sec:setup-construction}
 % TODO
+\textit{[Bounded-answer-space construction: ground-truth coordinates clustered via complete-linkage
+agglomerative clustering at $R = 50$\,km. Yields 257 global / 32 US / 21 DE answer cells.
+Each cell has a centroid; a prediction is correct iff it snaps to the truth's centroid.
+Five VP-target setups: global-global (AS16509), US-global (AS7018→713), EU-global (AS3209→713),
+US-home (AS7018→96 US targets), DE-home (AS3209→96 DE targets).
+5-fold cross-validation: $(K-1)/K$ folds calibrate LTD; held-out fold evaluates targets.]}
 
 \subsection{Physics-Validation Primitive}
 \label{sec:setup-soi}
 % TODO
+\textit{[Speed-of-Internet (SoI) circle per VP: $C_v = \{x : d(v,x) \leq \tfrac{2}{3}c \cdot \text{RTT}(v,T)/2\}$.
+A claimed target location is \emph{physics-consistent} iff it lies inside at least $k$ of $N$ VP circles
+(default $k = N$; relax to majority for congested VPs).
+Calibration-free: runs on operator-owned VP locations without labeled training data.
+Bootstraps Anchored-track training: Geofeed/rDNS records validated by SoI become labeled RTT-distance pairs.
+Trade-off: SoI-consistent $\neq$ uniquely identified; multiple candidate sites may fall inside $\bigcap_v C_v$.]}
 
 \subsection{Evaluation Metrics}
 \label{sec:setup-metrics}
 % TODO
+\textit{[Primary: classification accuracy (same-centroid) and shortest-ping VP baseline.
+Continuous proxy: within-$R$ rate (predicted point within 50 km of truth centroid).
+Gap metric: \emph{tolerance dividend} = same\_centroid\_acc $-$ within\_$R$; measures answer-space tolerance wins.
+Fleet geometry: \texttt{fleet\_abs\_km} = $d(V^*, C)$; \texttt{target\_distinguishable\_vp\_margin} = $d(C,N)/2 - d(V^*,C)$.
+Inference-time confidence: L1 (MTL region overlaps exactly one answer cell) achieves precision 0.66--0.91.
+Practicality: per-phase runtime (p50 ms/target) and throughput (targets/s).
+All metrics reported per variant × setup; key contrast is classification accuracy vs. within-$R$..]}

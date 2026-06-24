@@ -1,0 +1,33 @@
+# Analysis config for europe_as3215_final_fr benchmark run.
+# Single-source pointer to the benchmark config; analysis-specific fields added here.
+#
+# Run with:
+#   snakemake -s scripts/analysis/Snakefile \
+#       --configfile scripts/analysis/config/europe_as3215_final_fr.yaml -j 4
+
+run_id: europe_as3215_final_fr
+source: ripe_atlas_asn_corpora
+setup: probes_to_anchors
+slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+# Pointer to the benchmark config that produced the outputs this analysis reads.
+benchmark_config: scripts/benchmark/v2/config/europe_as3215_final_fr.yaml
+
+# Human-readable label used in characterize_failures.py and other analysis scripts.
+config_label: europe-country
+
+# Four textbook variants this analysis focuses on.
+textbook_combos: [vanilla_cbg, million_scale_cbg, octant_cbg, spotter_cbg]
+
+# Feature parquet produced by the partvp pipeline.
+feature_parquet: scripts/analysis/partvp/outputs/data/europe_as3215_final_fr.parquet
+
+# Root directory where benchmark v2 outputs for this run_id live.
+v2_outputs_root: scripts/benchmark/v2/outputs_partvp
+
+# Plotting parameters.
+merge_folds: true
+group_by: ltd
+phase_stat: p95
+include_fit: true
+runtime_stat: p50

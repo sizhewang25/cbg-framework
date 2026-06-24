@@ -63,12 +63,14 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import yaml
 from sklearn.metrics import roc_auc_score
 
 from scripts.analysis._v2_io import discover_combos, group_combos_by_id, load_targets
@@ -324,12 +326,67 @@ def write_report(tax: pd.DataFrame, sep: pd.DataFrame, out_path: Path) -> None:
     logger.info("Saved: %s", out_path)
 
 
+def _load_configs_from_yamls(yaml_paths: list[Path]) -> tuple[dict[str, tuple[str, str]], list[str]]:
+    """Load CONFIGS dict and TEXTBOOK list from a list of analysis config YAML paths.
+
+    Each YAML must contain:
+      config_label      : str  — key in the returned CONFIGS dict
+      feature_parquet   : str  — path to the feature parquet file
+      run_id            : str  — benchmark run identifier
+      v2_outputs_root   : str  — root under which run_id's output tree lives
+                                 (default: "scripts/benchmark/v2/outputs")
+      textbook_combos   : list — textbook combo IDs (taken from first YAML found;
+                                 intersection across all YAMLs is used if they differ)
+    """
+    configs: dict[str, tuple[str, str]] = {}
+    textbook_sets: list[set[str]] = []
+    for p in yaml_paths:
+        with open(p) as f:
+            cfg: dict[str, Any] = yaml.safe_load(f)
+        label: str = cfg["config_label"]
+        feat: str = cfg["feature_parquet"]
+        run_id: str = cfg["run_id"]
+        root: str = cfg.get("v2_outputs_root", "scripts/benchmark/v2/outputs")
+        run_dir = str(Path(root) / run_id)
+        configs[label] = (feat, run_dir)
+        tc = cfg.get("textbook_combos")
+        if tc:
+            textbook_sets.append(set(tc))
+    if textbook_sets:
+        # intersection keeps only combos present in all configs
+        common = textbook_sets[0]
+        for s in textbook_sets[1:]:
+            common = common & s
+        # preserve order from first YAML
+        first_tc = list(yaml.safe_load(open(yaml_paths[0]))["textbook_combos"])
+        textbook = [c for c in first_tc if c in common]
+    else:
+        textbook = list(TEXTBOOK)
+    return configs, textbook
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out-dir", type=Path,
                     default=Path("scripts/analysis/partvp/outputs/analysis_fail"))
+    ap.add_argument(
+        "--configs", nargs="+", type=Path, default=None, metavar="YAML",
+        help=(
+            "List of analysis config YAML paths (scripts/analysis/config/<name>.yaml). "
+            "Each YAML must contain config_label, feature_parquet, run_id, and optionally "
+            "v2_outputs_root (default: scripts/benchmark/v2/outputs) and textbook_combos. "
+            "When given, replaces the hardcoded CONFIGS dict and TEXTBOOK list. "
+            "Without --configs the built-in CONFIGS dict is used (backward-compatible)."
+        ),
+    )
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    # Allow --configs to override the module-level CONFIGS and TEXTBOOK.
+    global CONFIGS, TEXTBOOK
+    if args.configs:
+        CONFIGS, TEXTBOOK = _load_configs_from_yamls(args.configs)
+        logger.info("Loaded %d configs from --configs: %s", len(CONFIGS), list(CONFIGS))
 
     tax, sep, per_target = analyze()
     args.out_dir.mkdir(parents=True, exist_ok=True)

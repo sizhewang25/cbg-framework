@@ -23,11 +23,31 @@
 \subsection{Framework Anatomy}
 \label{sec:framework-anatomy}
 % TODO
+\textit{[Three interchangeable phases with concrete implementations:
+(P1) LTD — Speed-of-Internet $\mid$ Low Envelope $\mid$ Bounded Hull/Spline $\mid$ Normal Dist.;
+(P2) MTL constraint shape — Planar disk $\mid$ Planar annulus (unweighted/weighted);
+(P3) CTR — Boundary-Vertex Mean $\mid$ Geometric (area-weighted) centroid $\mid$ Monte Carlo medoid.
+A combo is a (P1, P2, P3) triple. The four textbook variants are four such combos.
+Figure: component selection diagram.]}
 
 \subsection{Constraint Preprocessing}
 \label{sec:framework-preprocessing}
 % TODO
+\textit{[Phase 2 subroutines that filter/weight before intersection:
+(1) Redundant-disk filter — drops VPs whose disk is contained by another (Octant);
+(2) Inside-all filter — retains only VPs whose band contains the joint interior point;
+(3) Constraint weighting — scales each annulus by its VP's LTD fit quality (Octant/Spotter);
+(4) Octant hull adjustment — on empty intersection, relax the inner annulus bound.
+Key failure mode: one tight band remaining after filtering nulls the entire intersection
+(documented in~\cite{finding_spherical_circle_brittle}).]}
 
 \subsection{Fallback Paths}
 \label{sec:framework-fallback}
 % TODO
+\textit{[When the joint intersection is empty (EMPTY\_REGION), variants fall back in one of two ways:
+(a)~loosen the tightest constraint and re-intersect (Octant hull adjustment);
+(b)~return the shortest-ping VP location directly (Vanilla/Million-scale FALLBACK).
+The fallback decision is variant-specific and is the primary driver of the EMPTY\_REGION
+class in the §\ref{sec:results-failure} taxonomy.
+Speed-of-Internet is the only variant that cannot produce EMPTY\_REGION by construction
+($r_v \geq 0$ always), because its bands are upper-bound disks with no inner annulus.]}

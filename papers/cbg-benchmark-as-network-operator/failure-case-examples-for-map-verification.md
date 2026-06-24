@@ -313,6 +313,82 @@ For each config x variant, mechanisms are ranked by failure count. The report ke
 | `vanilla_cbg` | `ERRONEOUS_CONTAINMENT` | 17 / 33% | `209.195.0.34` | `fold_1` | `GIVE_UP` | `FALLBACK` | - | 2.2 | 414.9 | 2.08 | 0.50 | 4 | 33.8915, -84.4705 | 33.9985, -84.4725 |
 | `vanilla_cbg` | `OTHER` | 16 / 31% | `208.90.108.84` | `fold_4` | `WRONG` | `SUCCESS` | 503.6 | 36.2 | 344.2 | 2.51 | 0.00 | 24 | 36.0405, -94.1685 | 34.3867, -89.0068 |
 
+### eu-de (`europe_as3209_final_de`)
+
+- Run ID: `europe_as3209_final_de`
+- Config for map renderer: `scripts/analysis/partvp/cfg_textbook/europe_as3209_final_de.yaml`
+- Useful Voronoi overlay: `--landmass Germany`
+
+`vanilla_cbg`:
+
+```bash
+.venv/bin/python -m scripts.visualization.benchmark.v2.cluster_world_map \
+  --config scripts/analysis/partvp/cfg_textbook/europe_as3209_final_de.yaml \
+  --combo vanilla_cbg \
+  --landmass Germany
+```
+
+`million_scale_cbg`:
+
+```bash
+.venv/bin/python -m scripts.visualization.benchmark.v2.cluster_world_map \
+  --config scripts/analysis/partvp/cfg_textbook/europe_as3209_final_de.yaml \
+  --combo million_scale_cbg \
+  --landmass Germany
+```
+
+`octant_cbg`:
+
+```bash
+.venv/bin/python -m scripts.visualization.benchmark.v2.cluster_world_map \
+  --config scripts/analysis/partvp/cfg_textbook/europe_as3209_final_de.yaml \
+  --combo octant_cbg \
+  --landmass Germany
+```
+
+`spotter_cbg`:
+
+```bash
+.venv/bin/python -m scripts.visualization.benchmark.v2.cluster_world_map \
+  --config scripts/analysis/partvp/cfg_textbook/europe_as3209_final_de.yaml \
+  --combo spotter_cbg \
+  --landmass Germany
+```
+
+**Setup note:** The eu-de fleet is dense (max `avail_min_vp_km` = 79 km across all targets), so NO_PROXIMITY never triggers here. All failures are proximity-sufficient cases; the dominant mechanisms are ERRONEOUS_CONTAINMENT (vanilla only, caused by blocking VPs collapsing the feasible region to empty) and RTT_INFLATION (advanced combos, inflated RTTs push the annulus away from truth). This makes eu-de the cleanest setup for isolating inflation as a failure driver.
+
+**Failure counts (match=False):** vanilla_cbg 78/96 (81%), million_scale_cbg 51/96 (53%), octant_cbg 58/96 (60%), spotter_cbg 79/96 (82%). Note: `per_target_failures.parquet` does not cover this run_id; mechanisms below are assigned by rule (FALLBACK→ERRONEOUS_CONTAINMENT; part_min_infl≥3.5 and VP<50 km→RTT_INFLATION; else→OTHER).
+
+| variant | mechanism | mech n/share | target_id | fold | outcome | status | err->cell km | nearest VP km | next cell km | min infl | blocker frac | n part | true lat,lon | pred lat,lon |
+|---|---|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---|---|
+| `vanilla_cbg` | `ERRONEOUS_CONTAINMENT` | 36 / 46% | `185.138.143.34` | `fold_2` | `WRONG` | `FALLBACK` | 16.7 | 5.92 | 88.6 | 4.54 | — | 12 | 50.1285, 8.5975 | 49.9805, 8.5575 |
+| `vanilla_cbg` | `RTT_INFLATION` | 28 / 36% | `62.176.249.60` | `fold_0` | `WRONG` | `SUCCESS` | 120.7 | 26.92 | 109.5 | 4.27 | — | 9 | 52.4305, 10.7915 | 52.2712, 12.3284 |
+| `vanilla_cbg` | `OTHER` | 14 / 18% | `91.190.224.98` | `fold_4` | `WRONG` | `SUCCESS` | 270.8 | 21.70 | 74.6 | 3.38 | — | 12 | 52.3105, 7.4385 | 51.0802, 10.8306 |
+| `million_scale_cbg` | `RTT_INFLATION` | 27 / 53% | `212.9.170.190` | `fold_0` | `WRONG` | `SUCCESS` | 147.9 | 8.97 | 75.0 | 4.52 | — | 1 | 48.7115, 9.1695 | 49.9805, 8.5575 |
+| `million_scale_cbg` | `OTHER` | 24 / 47% | `77.220.233.1` | `fold_3` | `WRONG` | `SUCCESS` | 335.4 | 1.23 | 161.0 | 2.52 | — | 3 | 51.0395, 13.7285 | 50.1813, 9.1704 |
+| `octant_cbg` | `RTT_INFLATION` | 32 / 55% | `212.62.68.29` | `fold_4` | `WRONG` | `SUCCESS` | 93.4 | 3.34 | 74.6 | 4.14 | — | 34 | 52.1175, 8.6495 | 52.9575, 8.6691 |
+| `octant_cbg` | `OTHER` | 26 / 45% | `31.172.2.193` | `fold_0` | `WRONG` | `SUCCESS` | 175.3 | 4.81 | 161.0 | 3.02 | — | 21 | 52.4995, 13.3715 | 52.8344, 10.8307 |
+| `spotter_cbg` | `OTHER` | 62 / 78% | `88.198.173.54` | `fold_2` | `WRONG` | `SUCCESS` | 183.1 | 6.34 | 73.5 | 2.31 | — | 73 | 49.4485, 11.0085 | 50.8906, 12.2507 |
+| `spotter_cbg` | `RTT_INFLATION` | 17 / 22% | `80.237.204.24` | `fold_4` | `WRONG` | `SUCCESS` | 225.2 | 5.30 | 82.1 | 3.84 | — | 72 | 50.9095, 7.0575 | 51.2131, 10.2441 |
+
+`blocker frac` is — for eu-de because `per_target_failures.parquet` does not cover this run_id; the column is not present in the base feature parquet.
+
+## Feature Study Examples (§6.3)
+
+The table below cross-references the four §6.3 features against specific targets from any setup. Each row is a manually verifiable case: open the cluster map for the listed setup/combo, find the target by ID and fold, and the map metadata should confirm the key metric value. For F4, load the per-combo fold targets.parquet to inspect individual VP bearing angles.
+
+| Feature | Setup | Variant | target_id | fold | true lat,lon | pred lat,lon | key metric | why it illustrates the feature |
+|---|---|---|---|---|---|---|---|---|
+| **F1: VP proximity** | `north_america_as7018_final_us` | `vanilla_cbg` | `104.225.102.122` | `fold_0` | 33.4215, -112.0125 | 33.7644, -114.7907 | avail_min_vp_km = 481.9 | Median NO_PROXIMITY case: nearest fleet VP is 482 km away; CBG constraint circles never reach the truth region; prediction lands 559 km off. |
+| **F1: VP proximity** | `north_america_as7018_final_us` | `million_scale_cbg` | `192.1.110.32` | `fold_4` | 42.3895, -71.1495 | 40.3975, -74.1395 | avail_min_vp_km = 333.5 | Single-VP measurement (n_part=1): the only participating VP is 334 km away, forcing a coarse constraint that misses Boston for central NJ (334 km error). |
+| **F2: RTT inflation → EXCLUSIVE candidate** | `europe_as3209_final_de` | `octant_cbg` | `185.32.187.206` | `fold_2` | 50.1095, 8.6815 | 57.3522, 8.3926 | part_min_infl = 14.76, avail_min_vp_km = 0.3 | VP is 280 m away yet Octant places the target 806 km north (near Denmark). RTT inflation = 14.76× physical slope shifts the annulus far from truth; prime EXCLUSIVE_REGION candidate once Shapely reconstruction is available. |
+| **F2: RTT inflation → EXCLUSIVE candidate** | `europe_as3209_final_de` | `octant_cbg` | `93.190.252.148` | `fold_3` | 49.5095, 8.5315 | 50.3281, 8.5487 | part_min_infl = 8.45, avail_min_vp_km = 1.8 | Single-VP measurement (n_part=1) with 8.45× inflation; VP at 1.8 km but prediction is 91 km north — Octant cannot recover when the sole constraint is badly inflated. |
+| **F2: RTT inflation (spotter partial mitigation)** | `europe_as3209_final_de` | `spotter_cbg` | `185.32.187.206` | `fold_2` | 50.1095, 8.6815 | 50.6674, 11.3549 | part_min_infl = 13.29, avail_min_vp_km = 0.3 | Same target as F2-A but Spotter's large participant pool (n_part=96) and high angular surround (circ_var=0.79) reduce the error from 806 km to 199 km — shows Spotter partially compensating for inflation via geometry. |
+| **F3: answer-space isolation (isolated → correct)** | `north_america_as7018_final_us` | `million_scale_cbg` | `151.139.52.113` | `fold_0` | 32.7985, -96.8215 | 32.9805, -96.7125 | nearest_other_centroid_km = 431.4 | Target is 431 km from its nearest competing cluster centroid; even a weak CBG constraint snaps to the correct region (22 km error). Illustrates isolation as a success buffer. |
+| **F3: answer-space isolation (crowded → wrong snap)** | `europe_as3209_final_de` | `million_scale_cbg` | `212.101.201.29` | `fold_0` | 51.9585, 7.6395 | 51.2695, 6.8085 | nearest_other_centroid_km = 74.6 | Target lies only 75 km from the nearest competing centroid; a single VP with 6.9× RTT inflation is enough to snap the prediction to the wrong cluster (96 km error). Dense DE cluster layout amplifies any inflation error. |
+| **F4: angular surround (high variance → better result)** | `europe_as3209_final_de` | `spotter_cbg` | `185.138.143.34` | `fold_2` | 50.1285, 8.5975 | 50.2966, 8.2707 | part_circ_var = 0.748 | 66 VPs surround the target from all bearings (circ_var=0.748); despite VP at only 6 km and moderate inflation (2.28×), geometry constrains the prediction to 30 km — the best result for this target across all combos. |
+| **F4: angular surround (low variance → failure)** | `north_america_as7018_final_us` | `million_scale_cbg` | `170.39.225.183` | `fold_2` | 39.1395, -94.5815 | 32.9805, -96.7125 | part_circ_var = 0.000 | Single-VP measurement (circ_var=0.000, n_part=1): no angular information at all; the constraint is a single circle and the centroid snaps to the nearest cluster, placing Kansas City in Dallas (711 km error). |
+
 ## Notes
 
 - `err->cell km` is distance from the prediction to the truth centroid, matching the map's `d->cell` label.

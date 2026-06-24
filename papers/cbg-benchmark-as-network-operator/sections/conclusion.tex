@@ -1,6 +1,23 @@
 \section{Conclusion}
 \label{sec:conclusion}
 
+\textit{[Synthesizes the paper's six contributions and their deployment implications.
+Paragraph 1: VP proximity is the binding constraint at global scale; the operator's first lever is
+deploying VPs co-located with target ASN infrastructure. The proximity-sufficient regime is where
+CBG variants diverge, and where the bounded answer space does the most work (53--68\% tolerance
+dividend in the US matched-regional setup).
+Paragraph 2: The failure taxonomy (EMPTY/EXCLUSIVE/INCLUSIVE) and the three-lever feature model
+(proximity, answer-space isolation, angular surround) give operators a diagnostic interface for any
+CBG variant. At $R = 50$\,km, EXCLUSIVE is large for annulus variants (Octant $\approx$50\%,
+Spotter $\approx$89--99\%) but classification accuracy survives via EXCLUSIVE-but-correct centroid
+snapping; this is the core mechanism behind the tolerance dividend. For disk variants (Vanilla,
+Million-scale), INCLUSIVE misclassification is the dominant failure, making centroid resolution
+the remaining bottleneck.
+Paragraph 3: Geometric centroid is the production-ready default — 20$\times$ throughput over Monte
+Carlo with equal or better accuracy. Per-ASN calibration is mandatory; pooled training corrupts the
+LTD model. The composable open-source framework lets future CBG accuracy claims be pinned to a
+specific (P1, P2, P3) triple.]}
+
 % PAPER-FLOW (implied)
 % Summary: VP proximity dominates at global scale; operators should deploy VPs co-located with
 % target ASN infrastructure (proximity-sufficient regime) where CBG classification accuracy
@@ -12,8 +29,9 @@
 %   2. At operator scale (VP fleet co-located with target ASN), the bounded answer space does
 %      substantial work: 53–68% of all correct answers are wins from answer-space tolerance
 %      alone (tolerance dividend), invisible to coordinate-error metrics.
-%   3. Failure mode at operator scale is exclusively INCLUSIVE misclassification (R=50 km
-%      absorbs containment). The centroid phase is the remaining bottleneck.
+%   3. Failure mode at operator scale depends on variant: annulus variants (Octant ~50%,
+%      Spotter ~89-99% EXCLUSIVE); disk variants (Vanilla, MS: INCLUSIVE-dominant). EXCLUSIVE
+%      predictions can still snap to the right cell (EXCLUSIVE-but-correct = tolerance mechanism).
 %   4. Geometric centroid at ~0.25 ms vs. Monte Carlo at 190–390 ms: 20× throughput,
 %      equal or better accuracy. Deploy geometric centroid at production scale.
 %   5. Per-ASN calibration is mandatory; pooled-ASN training degrades accuracy by corrupting

@@ -117,16 +117,22 @@ an open-source implementation.
     and deployed under a two-track taxonomy (Anchored / Unanchored).
 
   \item \textbf{Tolerance dividend.} We quantify the gap between coordinate-error and
-    classification accuracy as the \emph{tolerance dividend}: in the proximity-sufficient
-    operator regime, 53--68\% of all correct answers are won only by answer-space tolerance,
-    invisible to any coordinate-error metric.
+    classification accuracy as the \emph{tolerance dividend}: in the matched-regional US setup
+    (AS7018, 35\,km median VP distance), 53--68\% of all correct answers are won only by
+    answer-space tolerance, invisible to any coordinate-error metric. The dividend scales with
+    VP-to-target distance and shrinks to 11--33\% in the DE setup (AS3209, 4.6\,km median).
 
-  \item \textbf{Failure taxonomy.} A two-layer geometric taxonomy---EMPTY\_REGION,
-    EXCLUSIVE\_REGION, INCLUSIVE misclassification---partitions every wrong prediction by
-    \emph{where} in the three-phase pipeline the error originates. In proximity-sufficient setups
-    at $R = 50$\,km, EXCLUSIVE = 0: the bounded answer space absorbs containment failures,
-    leaving centroid estimation (Phase 3) as the sole remaining failure mode for
-    non-empty-intersection variants.
+  \item \textbf{Failure taxonomy and EXCLUSIVE-but-correct phenomenon.}
+    A two-layer geometric taxonomy---EMPTY\_REGION, EXCLUSIVE\_REGION, INCLUSIVE
+    misclassification---partitions every wrong prediction by \emph{where} in the three-phase
+    pipeline the error originates. Contrary to intuition, EXCLUSIVE is \emph{not} zero for
+    annulus-based variants in proximity-sufficient setups: Octant exhibits $\approx$50\%
+    EXCLUSIVE (joint annulus intersection drifts beyond D\_truth's disk) and Spotter $\approx$89--99\%
+    EXCLUSIVE. Yet classification accuracy survives: the centroid of an EXCLUSIVE region can still
+    snap to the correct answer cell, because Voronoi cells extend beyond D\_truth's 50\,km disk.
+    We show that Octant's entire tolerance dividend ($\approx$27\,pp in the US setup) is carried by
+    these EXCLUSIVE-but-still-correct predictions. Disk-based variants (Vanilla, Million-scale)
+    remain near-zero EXCLUSIVE (0--14\%), with failures dominated by INCLUSIVE misclassification.
 
   \item \textbf{Per-ASN calibration evidence.} Empirical evidence that pooled-ASN training
     degrades accuracy; per-ASN calibration is the correct methodological default for operator
