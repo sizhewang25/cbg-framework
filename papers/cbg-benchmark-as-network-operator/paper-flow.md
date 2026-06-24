@@ -97,11 +97,17 @@ Inputs/outputs and ground-truth flow follow the diagrams on [[CBG-Benchmark-From
 
 | Variant           | LTD (P1)                   | Multilateration (P2)         | Centroid (P3)        |
 | ----------------- | -------------------------- | ---------------------------- | -------------------- |
-| **Vanilla**       | Low Envelope               | Spherical circle             | Boundary-Vertex Mean |
-| **Million-scale** | Speed-of-internet (no fit) | Spherical circle             | Boundary-Vertex Mean |
-| **Octant**        | Bounded Hull (or Spline)   | Planar annulus (un/weighted) | Monte Carlo          |
-| **Spotter**       | Normal Distribution        | Planar annulus (un/weighted) | Monte Carlo          |
+| **Vanilla**       | Low Envelope               | Planar circle                | Geometric centroid   |
+| **Million-scale** | Speed-of-internet (no fit) | Planar circle                | Geometric centroid   |
+| **Octant**        | Bounded Spline             | Planar annulus (weighted)    | Monte Carlo          |
+| **Spotter**       | Normal Distribution        | Planar annulus (weighted)    | Monte Carlo          |
 
+> **Implementation note.** Vanilla and Million-scale use `PlanarCircleMTL` (disk intersection in degree
+> space via Shapely) + `geometric_centroid` (area-weighted polygon centroid). The original papers
+> describe a spherical-circle MTL and a boundary-vertex-mean centroid; this benchmark replaces both
+> with the planar-polygon equivalents, which are computationally lighter and produce a proper polygon
+> that the geometric centroid can reduce. This is the official config for the benchmark and is
+> reflected in the phase-ablation results of §7.
 
 **Speed-of-Internet (used in Million-scale CBG) is the only calibration-free variant** — Vanilla, Octant, and Spotter all require labeled RTT–distance pairs in their original forms. This asymmetry drives the two-track taxonomy in §1.3: the calibration-free variant serves as the validation primitive in both tracks, while the calibration-required variants act as estimators only when labeled data (from Geofeed/rDNS-validated IPs) is available.
 
@@ -242,12 +248,14 @@ how good CBG can get — and makes the residual ~20% failure fully interpretable
 We fix the target set (713 global RIPE anchors, 257 centroids, `R = 50 km`) and vary only the VP
 fleet. This holds the evaluation criterion constant while degrading VP proximity in two degrees:
 
-- **Fairly limited** — global fleet (AS16509, ~30 VPs worldwide): VPs span the globe but remain
+- **Fairly limited** — global fleet (AS16509, 30 VPs worldwide): VPs span the globe but remain
   sparse relative to 713 targets. Median `fleet_abs_km` = 348 km; 77% of targets miss a
   target-distinguishing VP.
 - **Extremely limited** — country-scale fleets evaluated against the same global target set:
-  AS7018 (AT&T, US-only, 96 country VPs → 713 global targets) and AS3209 (Vodafone, EU-only).
-  Median `fleet_abs_km` exceeds 900–1200 km; >90–95% of targets miss a target-distinguishing VP.
+  AS7018 (AT&T, 125 US VPs → 713 global targets): median `fleet_abs_km` = 6,268 km; 92.4% missing.
+  AS3209 (Vodafone, 164 EU VPs → 713 global targets): median `fleet_abs_km` = 972 km; 85.4% missing.
+  In both cases the fleet's geographic span is narrower than the target population's span by orders
+  of magnitude — the country fleet is simply the wrong instrument for a global target set.
 
 **Fleet-geometry metrics (analytically derived).** Let `C` be the truth centroid, `N` the nearest
 competing centroid, and `V*` the closest available VP to `C`:
@@ -263,15 +271,17 @@ competitor. Both degrees of proximity-limited are in that state for the large ma
 
 **Classification accuracy (same 713 targets):**
 
-| Fleet | Degree | Shortest-ping | Vanilla | Million-scale | Octant | Spotter |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| AS16509 → global | Fairly limited | 23.4% | 24.3% | 23.0% | **25.2%** | 7.0% |
-| AS7018 → global | Extremely limited | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
-| AS3209 → global | Extremely limited | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
+| Fleet | n VPs | Degree | Shortest-ping | Vanilla | Million-scale | Octant | Spotter |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| AS16509 → global | 30 | Fairly limited | 23.4% | 24.3% | 23.0% | **25.2%** | 7.0% |
+| AS7018 → global | 125 | Extremely limited | *TBD* | 3.9% | **6.6%** | 5.5% | 3.0% |
+| AS3209 → global | 164 | Extremely limited | *TBD* | 2.7% | **6.0%** | 2.0% | 2.5% |
 
-The extremely-limited rows are expected to be materially worse than the fairly-limited row,
-showing that the same proximity deficit compounds further when the fleet's geographic span is
-narrower than the target population's span. No CBG variant recovers from either degree.
+The extremely-limited rows are materially worse than the fairly-limited row: all variants cluster in
+the 2–7% range (vs. 23–25% for the global fleet), confirming that no CBG variant recovers from a
+country-scale fleet evaluated against a global target set. The accuracy is near-random relative to
+the 257-cluster answer space (random baseline ≈ 1/257 ≈ 0.4%). The shortest-ping baseline for the
+extremely-limited setups is TBD (requires RTT-based computation from input data).
 
 **VP proximity is the dominant failure driver.** In the fairly-limited setup, missing a
 target-distinguishing VP (`margin ≤ 0`) covers **84.4–91.8%** of failures depending on variant;
@@ -289,10 +299,10 @@ proximity.
 *home* target populations. This natural experiment — same fleet, different target set — isolates the
 regime effect from the fleet composition effect.
 
-| Fleet → targets | Targets / clusters | Median `fleet_abs_km` | Median margin | % missing target-dist. VP |
-| --- | ---: | ---: | ---: | ---: |
-| AS7018 → US | 96 / 32 | 35.1 km | +62.0 km | 43.8% |
-| AS3209 → DE | 96 / 21 | 1.5 km | +62.3 km | 7.7% |
+| Fleet → targets | Targets / clusters | n VPs | Median `fleet_abs_km` | Median margin | % missing target-dist. VP |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| AS7018 → US | 96 / 32 | 125 | 35.1 km | +62.0 km | 43.8% |
+| AS3209 → DE | 96 / 21 | 164 | 4.6 km | +38.6 km | 2.1% |
 
 Median margin is positive; the proximity constraint is lifted for most targets.
 
@@ -304,7 +314,7 @@ Median margin is positive; the proximity constraint is lifted for most targets.
 | Vanilla | 45.8% | 18.8% |
 | Million-scale | 43.8% | **46.9%** |
 | Octant | **51.0%** | 39.6% |
-| Spotter | 6.3% | pending |
+| Spotter | 6.3% | 17.7% |
 
 With proximity solved, the four variants diverge — each with a distinct behavior profile across
 both setups:
