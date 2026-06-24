@@ -67,23 +67,104 @@ single curve also delivers:
 
 ---
 
-## 2. Failure analysis & named failure modes
+## 2. Failure taxonomy (canonical, 2026-06-23)
 
-These modes are surfaced by the answer-space metric (FALLBACK / failures count as inaccurate).
+A prediction is scored against the bounded answer space: **success iff the predicted cell equals the
+truth's cell**. We separate **what failed (region geometry)** from **why it failed (root cause)** —
+two layers that earlier notes conflated ("containment" was an effect, "RTT inflation" a cause; listing
+them side by side was the source of the mess).
 
-- **Missing target-distinguishing VP.** The main cross-variant fleet-geometry failure primitive:
-  no available VP lies within `d(C,N)/2` of the truth centroid. This explains most failures for
-  million-scale and much of vanilla/octant in sparse setups; it is the paper's clean answer to
-  "CBG fails when the operator fleet cannot distinguish the target from its nearest plausible
-  answer-space neighbor."
-- **Spotter collapse.** The k·σ bands produce constraints that frequently empty the inside-all
-  intersection → fallback → counted inaccurate; worst when targets are far (7% on the global
-  run). Cross-ref `[[finding_spherical_circle_brittle]]`.
-- **Octant long-range limit.** The bounded spline cannot extrapolate beyond the VP cloud →
-  degrades on far targets. This is why a regional single-ASN VP fleet fails on out-of-region
-  targets.
+### 2.1 Layer A — geometric partition of the MTL feasible region
 
-(Both feed `paper-flow.md` §6.5 once stabilized.)
+Every prediction falls into exactly one class, defined **purely by the geometry of the MTL feasible
+region `R` relative to the truth's answer-space cell `D_truth`**. `R` is reconstructed offline from
+the persisted `mtl_participants` constraints. The discriminating predicate is the **polygon–disk
+intersection `R ∩ D_truth`**, not a point-in-region test — because the answer space is not a point:
+`D_truth` is the cluster disk of radius `r = 50 km` centred on the truth centroid, the same geometry
+used by the evaluation metric.
+
+| Class | Geometric condition | Outcome |
+| --- | --- | --- |
+| **EMPTY_REGION** | `R = ∅` — constraints unsatisfiable → fallback | always failure |
+| **EXCLUSIVE_REGION** | `R ≠ ∅` and `R ∩ D_truth = ∅` — region has no overlap with the truth's answer cell | always failure; no centroid rule can recover |
+| **INCLUSIVE_REGION** | `R ≠ ∅` and `R ∩ D_truth ≠ ∅` — region overlaps the truth's answer cell | success iff the centroid lands inside `D_truth`; else misclassification |
+
+These three are a **mutually exclusive, exhaustive geometric partition**. The key distinction:
+
+- **EXCLUSIVE_REGION** is a Phase 1/2 failure: the variant's LTD model or multilateration placed the
+  *region itself* outside the right answer cell. No centroid rule or post-processing can fix it.
+- **INCLUSIVE_REGION** (misclassified) is a Phase 2/3 failure: the region was geometrically compatible
+  with the correct answer (it overlapped `D_truth`), but the centroid selection — shaped by region
+  one-sidedness, answer-space density, or centroid rule — landed outside it. The algorithm had the
+  information to succeed but failed to resolve it.
+
+Using `R ∩ D_truth` (not `y ∈ R`) keeps the taxonomy **consistent with the evaluation criterion**:
+the same cluster radius `r` is used in both the scoring rule and the geometric discriminator.
+
+### 2.2 Layer B — root-cause attribution across the 3 CBG phases
+
+The geometric class is the *effect*; the cause is attributed across the pipeline. The per-VP **signed
+distance residual `r_v = d̂_v − d_true(v, target)` (km)** is the primary lever, but it is itself an
+output of the variant's LTD model and is surrounded by Phase-2/3 causes.
+
+**Phase 1 — Latency-to-distance (per participating VP).**
+- **Band-validity:** `1[d_true ∈ [lo_v, hi_v]]` — does this VP's constraint admit the truth? (disks:
+  `lo_v = 0`; Octant/Spotter annuli: both edges bite). The *fraction of participants whose band
+  excludes truth* is the direct driver of EMPTY/EXCLUSIVE.
+- **Signed residual to nearest band edge (km)** — generalizes `r_v` to annuli; negative = truth excluded.
+- **Residual decomposition (measurement vs. model):** split `r_v` into (i) an *inflation* term —
+  excess RTT over the propagation floor at `d_true` — and (ii) a *model* term — how the variant's
+  envelope/slope/σ maps even a clean RTT to its band. This makes "RTT-distance model per variant" a
+  *measured* cause, not an assertion: lets us say a band excluded truth because the low-envelope is
+  too tight (model) vs. because RTT was inflated and pushed the annulus outward (measurement). The
+  **variant LTD identity** enters here as a categorical cause.
+
+**Phase 2 — Multilateration.**
+- **Participant selection:** `n_part`, and *which* VPs the redundant-disk / inside-all filter dropped
+  (dropping the wrong constraint is a cause; `[[finding_spherical_circle_brittle]]` = one retained
+  tight disk empties the region → EMPTY_REGION).
+- **Constraint weights** (Octant/Spotter weighted annulus): an over-weighted biased constraint drags
+  the region off the truth → EXCLUSIVE_REGION.
+- **Participant geometry:** `part_circ_var`, `part_max_gap_deg`, `part_min_dist` — one-sidedness and
+  proximity set region shape/size → the main INCLUSIVE-misclassification lever.
+- **Region area** (resolution proxy).
+
+**Phase 3 — Centroid selection.**
+- The centroid rule (boundary-vertex-mean / geometric / Monte-Carlo) can resolve the *same* region to
+  different cells — a pure INCLUSIVE-misclassification sub-cause. Measure: centroid→truth distance vs.
+  region extent.
+
+### 2.3 Causal hypothesis (falsifiable)
+
+| Class | Dominant phase | Primary cause signal |
+| --- | --- | --- |
+| **EMPTY_REGION** | P1 (+ P2 filter) | ≥1 band excludes `D_truth` (model-tight or inflation-shifted annulus) → no common intersection |
+| **EXCLUSIVE_REGION** | P1 + P2 weights | collective band bias / mis-weighting places `R` outside `D_truth`; `R ∩ D_truth = ∅` even though `R ≠ ∅` |
+| **INCLUSIVE_REGION** (misclassified) | P2 geometry + P3 centroid | `R ∩ D_truth ≠ ∅` but centroid falls outside `D_truth`: one-sided geometry, answer-space crowding, or centroid rule failure |
+
+This restores the precise role of inflation: it is a Phase-1 *measurement* term that for upper-bound
+disks (Vanilla, Million-scale) only loosens constraints → feeds INCLUSIVE-misclassification; for
+annuli (Octant, Spotter) it can also shift the band outward and exclude `D_truth` entirely →
+additionally feeds EMPTY/EXCLUSIVE. That asymmetry is why the variants fail differently.
+
+**Implementation note (`R ∩ D_truth` test):** reconstruct `R` from the persisted `mtl_participants`
+annuli (reuse `compute_feasible_region_unweighted` from `region_confidence.py`); test overlap against
+the cluster disk `D_truth = disk(truth_centroid, r=50 km)` via sampled interior points + haversine.
+This is the same sampling approach used in `region_confidence.py`; the §8 planar-frame caveat applies
+equally, and L1 precision there is already a mild lower bound for the same reason.
+
+### 2.4 Named failure modes restated as root-cause instances
+
+The earlier ad-hoc modes are now instances of the table above:
+- **Missing target-distinguishing VP** — a Phase-2 geometry/proximity cause; in proximity-limited
+  regimes it drives EXCLUSIVE_REGION and INCLUSIVE-misclassification (the fleet-geometry primitive of
+  §1, `[[finding_when_cbg_fails]]`).
+- **Spotter collapse** — Phase-1 model cause: wide k·σ bands → EMPTY_REGION
+  (`[[finding_spherical_circle_brittle]]`).
+- **Octant long-range limit** — Phase-1 model cause: bounded spline cannot extrapolate beyond the VP
+  cloud → EXCLUSIVE_REGION / EMPTY_REGION on far targets.
+
+(Feeds `paper-flow.md` §6.3/§6.5 once the per-class counts and cause attribution are computed.)
 
 ---
 
