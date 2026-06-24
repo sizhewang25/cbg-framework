@@ -257,18 +257,26 @@ The paper says "Octant RTT inflation AUC 0.82 in EU-country". The `fleet_geometr
 
 ### Per-variant failure profile (EMPTY / EXCLUSIVE / INCLUSIVE)
 
-**Status: PARTIALLY VERIFIED from failure_taxonomy.csv. Full three-way split not yet computed.**
+**Status: COMPUTED.** Data from `outputs_partvp/` fold `targets.parquet`. See `failure_taxonomy_output.md` for methodology.
 
-The `failure_taxonomy.csv` uses an older four-category scheme (`no_proximity`, `rtt_inflation`, `containment`, `other`). The paper's canonical two-layer taxonomy (EMPTY_REGION / EXCLUSIVE_REGION / INCLUSIVE_REGION) has not yet been computed from the MTL polygon data. The `failure_taxonomy.csv` values for europe-country (which correspond to AS3215→FR, not AS3209→DE) show:
+| Setup | combo | EMPTY | EXCLUSIVE | INCL-success | INCL-misclass |
+| --- | --- | ---: | ---: | ---: | ---: |
+| na-us | vanilla_cbg | 15 (16%) | 0 | 44 (46%) | 37 (39%) |
+| na-us | million_scale_cbg | 0 | 0 | 42 (44%) | 54 (56%) |
+| na-us | octant_cbg | 0 | 0 | 49 (51%) | 47 (49%) |
+| na-us | spotter_cbg | 0 | 0 | 6 (6%) | 90 (94%) |
+| eu-de | vanilla_cbg | 36 (38%) | 0 | 18 (19%) | 42 (44%) |
+| eu-de | million_scale_cbg | 0 | 0 | 45 (47%) | 51 (53%) |
+| eu-de | octant_cbg | 0 | 0 | 38 (40%) | 58 (60%) |
+| eu-de | spotter_cbg | 0 | 0 | 17 (18%) | 79 (82%) |
 
-| config | variant | give_up | wrong |
-| --- | --- | ---: | ---: |
-| europe-country (FR) | vanilla_cbg | 16 of 31 failures | 15 |
-| europe-country (FR) | million_scale_cbg | 2 of 18 | 16 |
-| europe-country (FR) | octant_cbg | 0 of 17 | 17 |
-| europe-country (FR) | spotter_cbg | 9 of 25 | 16 |
+**Key finding: EXCLUSIVE = 0 everywhere.** Every VP band (disk for Vanilla/MS, annulus for Octant/Spotter) is geometrically wide enough to reach D_truth's 50 km cluster disk even when the prediction is wrong. All wrong predictions are INCLUSIVE-misclass: the feasible region overlaps truth but the centroid resolves to the wrong cluster.
 
-`give_up` ≈ EMPTY_REGION (fallback); `wrong` ≈ EXCLUSIVE or INCLUSIVE misclassification (but these are not yet separated). The full EMPTY/EXCLUSIVE/INCLUSIVE partition requires implementing the polygon-disk intersection test described in `discussion.md §2.1` — **this analysis has not been run yet**.
+**Paper corrections applied to paper-flow.md:**
+- §6.2 Octant: "EXCLUSIVE_REGION failures" → "INCLUSIVE misclassification" (AUC 0.82 describes RTT-inflation → failure, but the failure manifests as wrong centroid, not exclusion)
+- §6.3 table: Octant row corrected to "INCLUSIVE misclassification (49% US / 60% DE)"; Spotter row corrected from "EMPTY_REGION" to "INCLUSIVE misclassification (94% US / 82% DE)"
+
+**Important caveat on partvp configs:** The `outputs_partvp/` runs use an older config where `vanilla_cbg` and `million_scale_cbg` may use `spherical_circle + boundary_vertex_mean` instead of `planar_circle + geometric_centroid`. The EMPTY counts (STATUS=FALLBACK) are config-independent (both can empty), but the INCLUSIVE-misclass split could differ between planar and spherical MTL. The official benchmark uses `planar_circle + geometric_centroid`; the taxonomy counts here are from the partvp legacy configs. Directionally correct but not bit-identical to the main benchmark outputs.
 
 ---
 
@@ -297,10 +305,10 @@ From `analysis_rq3/rq3_runtime_global_as16509_final.csv`:
 | 2 | §6.2 fleet table | AS3209→DE fleet metrics (1.5 km, 62.3 km, 7.7%) were from AS3215→FR | ~~HIGH~~ | **RESOLVED** | paper-flow.md §6.2 updated to correct AS3209→DE values: 4.6 km, +38.6 km, 2.1% |
 | 3 | §6.1 | AS7018→global and AS3209→global TBD rows | ~~HIGH~~ | **RESOLVED** | Data confirmed in `north_america_as7018_final` and `europe_as3209_final` outputs; accuracy and fleet metrics filled in |
 | 4 | §6.2 | Spotter DE labeled "pending" | ~~LOW~~ | **RESOLVED** | Updated to 17.7% |
-| 5 | §6.3 | EMPTY/EXCLUSIVE/INCLUSIVE partition not yet computed | **MED** | Open | Implement polygon-disk intersection taxonomy (see `discussion.md §2.1`) |
-| 6 | §6.3 | "AUC 0.82 in EU-country" mixes two AUC definitions | **MED** | Open | Clarify: fleet_abs_km AUC for europe-country/octant = 0.684; the 0.82 is RTT-inflation AUC from `WHEN_CBG_FAILS.md` |
-| 7 | §6.1/6.2 | Shortest-ping baseline (23.4% global, 39.6% US, 50.0% DE, TBD for cross-region) unverifiable | **MED** | Open | Run `python -m scripts.analysis.plot_cluster_match_bars --run-dir scripts/benchmark/v2/outputs/<run_id> --radius-km 50` for each final run |
-| 8 | §6.2 | Cluster counts (96/32 US, 96/21 DE, 713/257 global) not all confirmed | **LOW** | Partially open | 257 global clusters confirmed (`north_america_as7018_final/clusters/clusters.csv` has 257 rows); 32 US and 21 DE need verification |
+| 5 | §6.3 | EMPTY/EXCLUSIVE/INCLUSIVE partition not yet computed | ~~MED~~ | **RESOLVED** | Computed from `outputs_partvp/` fold targets.parquet. EXCLUSIVE = 0 everywhere. Vanilla: EMPTY=16%/38% (US/DE). All other failures are INCLUSIVE-misclass. Paper-flow §6.2/§6.3 corrected. See `failure_taxonomy_output.md`. |
+| 6 | §6.3 | "AUC 0.82 in EU-country" mixes two AUC definitions | ~~MED~~ | **RESOLVED** | 0.82 = RTT-inflation → failure AUC (from `WHEN_CBG_FAILS.md`, mechanism attribution); 0.684 = fleet_abs_km → error AUC (fleet geometry). Different response variables. Paper-flow §6.3 clarified with parenthetical. |
+| 7 | §6.1/6.2 | Shortest-ping baseline (23.4% global, 39.6% US, 50.0% DE, TBD for cross-region) unverifiable | ~~MED~~ | **RESOLVED** | Ran `plot_cluster_match_bars.py` for all 5 final runs: global=23.4% ✓, US=39.6% ✓, DE=50.0% ✓, AS7018→global=5.3% (new), AS3209→global=6.3% (new). Paper-flow §6.1 TBD rows filled. |
+| 8 | §6.2 | Cluster counts (96/32 US, 96/21 DE, 713/257 global) not all confirmed | ~~LOW~~ | **RESOLVED** | All confirmed: global=257 (from clusters.csv), US=32 (from clusters.csv for north_america_as7018_final_us), DE=21 (from plot_cluster_match_bars.py n_centroids output for europe_as3209_final_de). |
 
 ---
 
@@ -319,3 +327,7 @@ From `analysis_rq3/rq3_runtime_global_as16509_final.csv`:
 - §6.2 Tolerance dividend for AS7018→US (all four variants within 0.1 pp)
 - §6.5 Runtime numbers for `octant_hull_geo` and `octant_cbg` (accuracy, throughput, centroid latency)
 - §6.1 global cluster count: 257 clusters (confirmed from `clusters.csv`)
+- §6.1 shortest-ping baselines: global=23.4%, US=39.6%, DE=50.0% (all confirmed); AS7018→global=5.3%, AS3209→global=6.3% (new)
+- §6.2 cluster counts: US=32 (confirmed from `clusters.csv`), DE=21 (confirmed from `plot_cluster_match_bars.py`)
+- §6.3 AUC distinction: 0.82 = RTT-inflation→failure attribution AUC; 0.684 = fleet_abs_km→error AUC (separate metrics)
+- §6.3 EMPTY/EXCLUSIVE/INCLUSIVE partition: EXCLUSIVE = 0 everywhere; Vanilla EMPTY = 16%/38% (US/DE); all other failures INCLUSIVE-misclass; corrections applied to §6.2 Octant and §6.3 failure table

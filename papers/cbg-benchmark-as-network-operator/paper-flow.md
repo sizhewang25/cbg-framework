@@ -274,14 +274,15 @@ competitor. Both degrees of proximity-limited are in that state for the large ma
 | Fleet | n VPs | Degree | Shortest-ping | Vanilla | Million-scale | Octant | Spotter |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
 | AS16509 → global | 30 | Fairly limited | 23.4% | 24.3% | 23.0% | **25.2%** | 7.0% |
-| AS7018 → global | 125 | Extremely limited | *TBD* | 3.9% | **6.6%** | 5.5% | 3.0% |
-| AS3209 → global | 164 | Extremely limited | *TBD* | 2.7% | **6.0%** | 2.0% | 2.5% |
+| AS7018 → global | 125 | Extremely limited | 5.3% | 3.9% | **6.6%** | 5.5% | 3.0% |
+| AS3209 → global | 164 | Extremely limited | 6.3% | 2.7% | **6.0%** | 2.0% | 2.5% |
 
 The extremely-limited rows are materially worse than the fairly-limited row: all variants cluster in
 the 2–7% range (vs. 23–25% for the global fleet), confirming that no CBG variant recovers from a
 country-scale fleet evaluated against a global target set. The accuracy is near-random relative to
-the 257-cluster answer space (random baseline ≈ 1/257 ≈ 0.4%). The shortest-ping baseline for the
-extremely-limited setups is TBD (requires RTT-based computation from input data).
+the 257-cluster answer space (random baseline ≈ 1/257 ≈ 0.4%). The shortest-ping baseline is 5.3% (AS7018→global) and 6.3% (AS3209→global) — both
+barely above the random floor, confirming that country-scale fleets produce near-random shortest-ping
+picks when evaluated against a global target set.
 
 **VP proximity is the dominant failure driver.** In the fairly-limited setup, missing a
 target-distinguishing VP (`margin ≤ 0`) covers **84.4–91.8%** of failures depending on variant;
@@ -333,14 +334,17 @@ design is both its strength (no training data required) and its ceiling (looser 
 to resolve).
 
 **Octant.** Annulus MTL with bounded-hull LTD. Best accuracy in the US setup (51.0%);
-weaker in DE (39.6%). RTT inflation becomes a measurable driver in this regime — AUC 0.82 in
-EU-country — because the annulus inner bound can be pushed past the truth by inflated RTTs,
-producing EXCLUSIVE_REGION failures that Vanilla's disk-based MTL avoids differently.
+weaker in DE (39.6%). RTT inflation becomes a measurable driver in this regime — AUC 0.82
+(RTT-inflation → failure attribution, distinct from the §6.1 fleet_abs_km AUC 0.84–0.96) in
+EU-country — because the annulus inner bound pushed outward by inflated RTTs shifts the feasible
+region, producing **INCLUSIVE misclassification** (R overlaps D_truth's 50 km disk, but the
+centroid resolves to the wrong cluster). Notably, EXCLUSIVE = 0: the R=50 km bounded metric
+absorbs what would be a containment failure at finer resolution.
 
 **Spotter.** Structural collapse persists regardless of VP proximity. Tier-1 ≈ 0–3% in every
 proximity-sufficient run. The k·σ bands remain wide; the feasible region rarely isolates the right
 cell even when a VP is co-located at 1.5 km. Spotter's rare correct answers are driven by
-answer-space isolation, not by measurement geometry. Pending for DE (rerun required).
+answer-space isolation, not by measurement geometry.
 
 **Tolerance dividend.** The metric choice matters most in this regime, where the bounded answer
 space does real work. Per-variant dividend (absolute pp gain / share of correct answers that are
@@ -390,12 +394,26 @@ CBG phases:
 
 **Per-variant failure profile (proximity-sufficient, causal summary):**
 
-| Variant | Dominant class | Primary cause |
+| Variant | Dominant class (US / DE) | Primary cause |
 | --- | --- | --- |
-| Vanilla | EMPTY_REGION | Low-envelope under-predicts at close VP–target range; `r_v < 0` → constraints exclude truth |
-| Million-scale | INCLUSIVE misclassification | SoI `r_v ≥ 0` always; resolution limited by region coarseness and answer-space density |
-| Octant | EXCLUSIVE_REGION + INCLUSIVE | RTT inflation shifts annulus outward (AUC 0.82 in EU-country); one-sided geometry at P2 |
-| Spotter | EMPTY_REGION | k·σ bands produce EMPTY regardless of proximity; not a fleet-geometry failure |
+| Vanilla | EMPTY_REGION (16% / 38%) | Low-envelope `r_v < 0` → intersection empties; EXCLUSIVE = 0 (R=50 km absorbs geometric containment) |
+| Million-scale | INCLUSIVE misclassification (56% / 53%) | SoI `r_v ≥ 0`; region overlaps truth but centroid resolves to wrong cluster |
+| Octant | INCLUSIVE misclassification (49% / 60%) | RTT inflation shifts feasible region; centroid resolves wrong; AUC 0.82 (RTT-inflation prediction); EXCLUSIVE = 0 |
+| Spotter | INCLUSIVE misclassification (94% / 82%) | k·σ bands produce an oversized overlapping region spanning multiple clusters; not EMPTY as expected |
+
+> **Key finding.** EXCLUSIVE_REGION = 0 in both proximity-sufficient setups for all four variants.
+> The R=50 km bounded answer space absorbs what would be containment failures at finer resolution —
+> every VP band is geometrically wide enough to reach D_truth's cluster disk. All wrong predictions
+> are therefore INCLUSIVE misclassifications: the feasible region is valid and overlaps truth, but
+> the centroid resolves to the wrong cluster. This shifts the residual failure story entirely to
+> Phase 3 (centroid estimation) and confirms the tolerance-dividend framing from §6.2.
+>
+> **Provenance caveat.** Taxonomy counts are from `outputs_partvp/` which uses the *pre-final* config
+> for Vanilla and Million-scale: `spherical_circle + boundary_vertex_mean` (not the official
+> `planar_circle + geometric_centroid`). EXCLUSIVE = 0 is expected to hold under the official config
+> (band radii are numerically similar; the geometric property is config-robust). Vanilla EMPTY%
+> and INCLUSIVE-misclass percentages are indicative only and should be re-verified once the official
+> `planar_circle + geometric_centroid` runs store per-target MTL participants.
 
 **Attribution figure.** `analysis_fail/failure_attribution.png` shows the failure-mode breakdown
 (no-proximity / EMPTY / EXCLUSIVE / INCLUSIVE-misclassified) per variant × setup, for both the
