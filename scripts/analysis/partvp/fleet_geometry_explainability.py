@@ -312,42 +312,61 @@ CONFIG_LABELS = {
 }
 
 
-GLOBAL_TARGET_CONFIGS = {"global-global", "na-global", "europe-global"}
+GLOBAL_TARGET_CONFIGS = ["global-global", "na-global", "europe-global"]
+
+VARIANT_LABELS = {
+    "vanilla_cbg":       "Vanilla",
+    "million_scale_cbg": "Million-scale",
+    "octant_cbg":        "Octant",
+    "spotter_cbg":       "Spotter",
+}
+VARIANT_COLORS = {
+    "Vanilla":       "#4e79a7",
+    "Million-scale": "#f28e2b",
+    "Octant":        "#59a14f",
+    "Spotter":       "#e15759",
+}
 
 
 def plot_margin_bins(df: pd.DataFrame, out_path: Path) -> None:
-    """Failure rate for margin ≤ 0 targets across the three global-target setups.
+    """Grouped bar chart: failure rate for margin ≤ 0 targets, 4 variants × 3 global-target setups.
 
-    Filters to targets without a distinguishable VP (margin ≤ 0) within the
-    three setups that share the same 713-target global pool, pooled across
-    variants. Proves that VP-limited geometry drives near-certain failure
-    regardless of which VP fleet is used.
+    Each group is one setup (global-global, na-global, europe-global); each bar
+    within the group is one of the four textbook variants. Only targets with
+    margin ≤ 0 are included, proving VP-limited geometry drives near-certain
+    failure regardless of variant or VP fleet.
     """
     d = df[
         df["config"].isin(GLOBAL_TARGET_CONFIGS)
+        & df["combo_id"].isin(VARIANT_LABELS)
         & (df["target_distinguishable_vp_margin_km"] <= 0)
     ].dropna(subset=["fail"]).copy()
-    grp = (
-        d.groupby("config")
-        .agg(fail_rate=("fail", "mean"), n=("fail", "size"))
-        .reset_index()
-    )
-    grp["label"] = grp["config"].map(CONFIG_LABELS).fillna(grp["config"])
-    grp = grp.sort_values("fail_rate", ascending=False).reset_index(drop=True)
+    d["variant_label"] = d["combo_id"].map(VARIANT_LABELS)
+    d["config_label"] = d["config"].map(CONFIG_LABELS).fillna(d["config"])
 
-    fig, ax = plt.subplots(figsize=(9, 4.5))
-    bars = ax.bar(grp["label"], grp["fail_rate"], color="#e15759")
-    for bar, (_, row) in zip(bars, grp.iterrows()):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.01,
-            f"n={int(row['n'])}",
-            ha="center", va="bottom", fontsize=8,
-        )
-    ax.set_ylim(0, 1.12)
+    configs = [CONFIG_LABELS[c] for c in GLOBAL_TARGET_CONFIGS]
+    variants = list(VARIANT_LABELS.values())
+    x = np.arange(len(configs))
+    width = 0.18
+    offsets = np.linspace(-(len(variants) - 1) / 2, (len(variants) - 1) / 2, len(variants)) * width
+
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    for offset, variant in zip(offsets, variants):
+        rates, ns = [], []
+        for cfg_label in configs:
+            sub = d[(d["config_label"] == cfg_label) & (d["variant_label"] == variant)]
+            rates.append(sub["fail"].mean() if len(sub) else float("nan"))
+            ns.append(len(sub))
+        ax.bar(x + offset, rates, width=width,
+               label=variant, color=VARIANT_COLORS[variant])
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(configs)
+    ax.set_ylim(0, 1.0)
     ax.set_ylabel("Failure rate")
     ax.set_title("Failure rate when no target-distinguishable VP exists (margin ≤ 0)")
-    ax.axhline(0.5, color="grey", lw=0.8, ls="--", alpha=0.5, label="50%")
+    ax.axhline(0.5, color="grey", lw=0.8, ls="--", alpha=0.5)
+    ax.legend(title="Variant", loc="upper right")
     ax.grid(True, axis="y", alpha=0.3)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)

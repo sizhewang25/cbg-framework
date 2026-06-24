@@ -334,12 +334,20 @@ US-regional setup. We therefore establish **target-distinguishable VP margin**
 §§6.2–6.3. Margin's zero-crossing is geometrically motivated and requires no per-setup
 calibration: by the triangle inequality, a positive margin certifies that the nearest VP is
 guaranteed to produce a shorter RTT to truth centroid `C` than to the nearest competing centroid
-`N`, independent of RTT noise; a negative margin certifies the opposite. Figure `fleet_geometry_bins.png` quantifies this directly: within the three global-target setups,
-pooled over variants, targets with `margin ≤ 0` fail at **92–100%** — 100% for EU→Global,
-99.2% for US→Global, and 92.2% for the global fleet. The failure rate is near-certain and
-consistent across all three VP fleets despite spanning two orders of magnitude in median VP
-distance (35 km to 6,269 km). Crucially, the margin threshold at zero requires no km cutoff:
-it is the same geometric certificate regardless of which fleet is deployed.
+`N`, independent of RTT noise; a negative margin certifies the opposite. Figure `fleet_geometry_bins.png` quantifies this per variant across all three setups:
+
+| Setup | Vanilla | Million-scale | Octant | Spotter |
+| --- | ---: | ---: | ---: | ---: |
+| Global(AS16509) → Global | 92.7% | 97.8% | 86.2% | 92.0% |
+| US(AS7018) → Global | 99.5% | 98.8% | 97.0% | 97.4% |
+| EU(AS3209) → Global | 100.0% | 100.0% | 99.8% | 100.0% |
+
+Every cell exceeds 86%. The lowest entry — Octant in the global fleet at 86.2% — reflects its
+stronger LTD model recovering a small fraction of marginal-margin targets, but the floor is still
+well above chance. Critically, no variant escapes: Spotter (which has a structural LTD collapse
+independent of proximity) and Vanilla (tight low-envelope) are indistinguishable from Million-scale
+and Octant within this `margin ≤ 0` population. The failure is driven by geometry, not algorithm
+choice.
 This makes margin the right axis for characterizing the transition from the proximity-limited
 regime (§6.1: all three setups have strongly negative median margins, −313 to −6,226 km) to the
 proximity-sufficient regime (§6.2: median margins flip to +62 km and +38 km for the same AT&T
