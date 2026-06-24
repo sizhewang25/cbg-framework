@@ -53,10 +53,10 @@ combos:
   # ---- Vanilla CBG family ---------------------------------------------------------
   - combo_id: vanilla_cbg
     ltd: low_envelope
-    mtl: spherical_circle
-    ctr: boundary_vertex_mean
+    mtl: planar_circle
+    ctr: geometric_centroid
     mtl_kwargs:
-      speed_ratio: 0.6667
+      n_pts: 64
       enable_circle_filter: true
 
   - combo_id: vanilla_cbg_geo
@@ -72,12 +72,12 @@ combos:
   # Million-scale variants
   - combo_id: million_scale_cbg
     ltd: speed_of_internet
-    mtl: spherical_circle
-    ctr: boundary_vertex_mean
+    mtl: planar_circle
+    ctr: geometric_centroid
     ltd_kwargs:
       speed_ratio: 0.6667
     mtl_kwargs:
-      speed_ratio: 0.6667
+      n_pts: 64
       enable_circle_filter: true
 
   - combo_id: million_scale_cbg_geo
