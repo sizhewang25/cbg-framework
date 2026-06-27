@@ -251,6 +251,48 @@ def geo_allowed_ids(combo_dirs: list[Path]) -> set[str] | None:
     return allowed
 
 
+def combo_match_series(combo_dirs: list[Path], index: _CentroidIndex) -> pd.Series:
+    """Per-target match boolean for one combo, indexed by target_id.
+
+    Non-SUCCESS rows (FALLBACK / hard failures) → False. Pools across all fold
+    dirs in `combo_dirs`. Series name is taken from the first dir's basename
+    (the combo_id directory name)."""
+    frames = [load_targets(d).to_pandas() for d in combo_dirs]
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    name = combo_dirs[0].name if combo_dirs else None
+    if df.empty:
+        return pd.Series(dtype=bool, name=name)
+
+    success = df["status"].isin(_CBG_STATUSES).to_numpy()
+    t_idx, _ = index.query(df["target_lat"], df["target_lon"])
+
+    match = np.zeros(len(df), dtype=bool)
+    if success.any():
+        sub = df[success]
+        p_idx, _ = index.query(sub["pred_lat"], sub["pred_lon"])
+        match[success] = (t_idx[success] == p_idx) & (p_idx >= 0)
+
+    return pd.Series(match, index=df["target_id"].to_numpy(), name=name)
+
+
+def shortest_ping_match_series(
+    inputs_dir: Path, index: _CentroidIndex,
+    allowed_ids: set[str] | None = None,
+) -> pd.Series:
+    """Per-target match boolean for the shortest-ping VP baseline, indexed by target_id.
+
+    `allowed_ids` restricts the target set (e.g. to a geo subset)."""
+    rows = _shortest_ping_rows(inputs_dir)
+    if allowed_ids is not None:
+        rows = rows[rows["target_id"].isin(allowed_ids)]
+    if rows.empty:
+        return pd.Series(dtype=bool, name="shortest_ping")
+    v_idx, _ = index.query(rows["vp_lat"], rows["vp_lon"])
+    t_idx, _ = index.query(rows["target_lat"], rows["target_lon"])
+    match = (v_idx == t_idx) & (v_idx >= 0)
+    return pd.Series(match, index=rows["target_id"].to_numpy(), name="shortest_ping")
+
+
 def _read_meta(clusters_dir: Path) -> tuple[int, int]:
     """(n_centroids, n_targets) from a cluster-eval dir. Respects active geo filter."""
     cdir = Path(clusters_dir)
