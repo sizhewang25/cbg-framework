@@ -252,7 +252,7 @@ fleet. This holds the evaluation criterion constant while degrading VP proximity
   sparse relative to 713 targets. Median `fleet_abs_km` = 348 km; 77% of targets miss a
   target-distinguishing VP.
 - **Extremely limited** — country-scale fleets evaluated against the same global target set:
-  AS7018 (AT&T, 125 US VPs → 713 global targets): median `fleet_abs_km` = 6,268 km; 92.4% missing.
+  AS7018 (AT&T, 122 US VPs → 713 global targets): median `fleet_abs_km` = 6,268 km; 92.4% missing.
   AS3209 (Vodafone, 164 EU VPs → 713 global targets): median `fleet_abs_km` = 972 km; 85.4% missing.
   In both cases the fleet's geographic span is narrower than the target population's span by orders
   of magnitude — the country fleet is simply the wrong instrument for a global target set.
@@ -361,7 +361,7 @@ regime effect from the fleet composition effect.
 
 | Fleet → targets | Targets / clusters | n VPs | Median `fleet_abs_km` | Median margin | % missing target-dist. VP |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| AS7018 → US | 96 / 32 | 125 | 35.1 km | +62.0 km | 43.8% |
+| AS7018 → US | 96 / 32 | 122 | 35.1 km | +62.0 km | 43.8% |
 | AS3209 → DE | 96 / 21 | 164 | 4.6 km | +38.6 km | 2.1% |
 
 Median margin is positive; the proximity constraint is lifted for most targets.
@@ -371,8 +371,8 @@ Median margin is positive; the proximity constraint is lifted for most targets.
 | | AS7018→US | AS3209→DE |
 | --- | ---: | ---: |
 | Shortest-ping | 39.6% | 50.0% |
-| Vanilla | 45.8% | 18.8% |
-| Million-scale | 43.8% | **46.9%** |
+| Vanilla | 42.7% | 15.6% |
+| Million-scale | 48.9% | **47.9%** |
 | Octant | **51.0%** | 39.6% |
 | Spotter | 6.3% | 17.7% |
 
@@ -380,17 +380,20 @@ With proximity solved, the four variants diverge — each with a distinct behavi
 both setups:
 
 **Vanilla.** Low-envelope LTD fits a tight upper bound; distance estimates frequently
-under-predict; constraints exclude the truth. Accuracy collapses in DE→DE (18.8% vs. 50.0%
-baseline) despite near-perfect VP proximity. The failure mode is structural: the tight
-low-envelope works for moderate-distance VP–target pairs but breaks at metro-scale colocation where
-a very small RTT is mapped to a band that excludes the truth.
+under-predict; constraints exclude the truth. Accuracy collapses in DE→DE (15.6% vs. 50.0%
+baseline) despite near-perfect VP proximity, and 36 of 96 targets produce an empty intersection
+that forces a give-up. The failure mode is structural: the tight low-envelope works for
+moderate-distance VP–target pairs but breaks at metro-scale colocation where a very small RTT is
+mapped to a band that excludes the truth.
 
 **Million-scale.** Speed-of-Internet is a calibration-free upper bound, so `r_v ≥ 0` by
 construction — it never excludes the truth from the feasible region. Failures are entirely
 resolution failures (wrong-cell, not give-up). Accuracy is competitive across both setups
-(43.8% US, 46.9% DE), consistent with the "nails-or-misses" fingerprint. The calibration-free
-design is both its strength (no training data required) and its ceiling (looser region → harder
-to resolve).
+(48.9% US, 47.9% DE) and surpasses Vanilla in US where Vanilla's give-ups are penalized. The
+calibration-free design is both its strength (no training data required) and its ceiling
+(looser region → harder to resolve). Its tolerance dividend is the smallest of all variants
+(32% US, 7% DE), meaning most of its correct answers are genuine within-50-km hits, not
+answer-space rescues.
 
 **Octant.** Annulus MTL with bounded-hull LTD. Best accuracy in the US setup (51.0%);
 weaker in DE (39.6%). RTT inflation is the primary driver in this regime — AUC 0.82
@@ -401,8 +404,8 @@ both US (48/96) and DE (50/96). The joint annulus intersection drifts beyond D_t
 despite each individual VP band geometrically reaching D_truth. Classification accuracy is
 preserved because the centroid of the EXCLUSIVE region often still points to the correct answer
 cell: ~27 of 48 EXCLUSIVE US predictions are still correctly classified, accounting for nearly the
-entire 27 pp tolerance dividend (§6.2 table). This is the core tolerance mechanism — the bounded
-answer space recovers EXCLUSIVE predictions via centroid snapping.
+entire 27.1 pp tolerance dividend. This is the core tolerance mechanism — the bounded answer space
+recovers EXCLUSIVE predictions via centroid snapping.
 
 **Spotter.** Structural collapse persists regardless of VP proximity, now with a striking
 mechanism: **~89–99% EXCLUSIVE**. The joint weighted-annulus intersection never reaches D_truth's
@@ -420,12 +423,12 @@ tolerance wins):
 
 | | Vanilla | Million-scale | Octant | Spotter |
 | --- | --- | --- | --- | --- |
-| AS7018→US | +31.3 pp / 68% | +19.8 pp / 45% | +27.1 pp / 53% | +6.3 pp / 100%* |
-| AS3209→DE | +6.3 pp / 33% | +5.2 pp / 11% | +5.2 pp / 13% | +9.4 pp / 53%* |
+| AS7018→US | +25.0 pp / 59% | +15.6 pp / 32% | +27.1 pp / 53% | +6.2 pp / 100%* |
+| AS3209→DE | +4.2 pp / 27% | +3.1 pp / 7% | +5.2 pp / 13% | +9.4 pp / 53%* |
 
 (*Spotter relative is not meaningful on a collapsed base.)
 
-The US dividend (45–68% ex-Spotter) is dramatically larger than the DE dividend (11–33% ex-Spotter),
+The US dividend (32–59% ex-Spotter) is dramatically larger than the DE dividend (7–27% ex-Spotter),
 which is directionally expected: in DE the median VP is 4.6 km from its target, so the within-R rate
 is already high and the gap to classification accuracy is narrow. In the US setup the median VP is
 35 km away — far enough that many predictions are "correct-cell but >50 km off", producing a large
@@ -454,7 +457,9 @@ centroid. Using the cluster disk (not a point) keeps the taxonomy consistent wit
 criterion.
 
 **Per-feature attribution.** For each failure class, we report the dominant cause across the three
-CBG phases:
+CBG phases. Mechanism labels used in the paper map to `characterize_failures.py` output as follows:
+`TRUTH_EXCLUSION` = `ERRONEOUS_CONTAINMENT`, `RTT_INFLATION` = `RTT_INFLATION`,
+`NO_PROXIMITY` = `NO_PROXIMITY`, `OTHER` = `OTHER`.
 
 - **Phase 1 — LTD:** per-VP band-validity `1[d_true ∈ [lo_v, hi_v]]` and signed distance
   residual `r_v = d̂_v − d_true` (km); residual decomposed into *inflation* (excess RTT over
@@ -496,9 +501,9 @@ Counts from proper joint Shapely polygon reconstruction (not per-VP band check):
 > - Spotter US: 95 EXCLUSIVE, **~6 correct** — Spotter's entire 6.3% accuracy is a tolerance artifact.
 >
 > This substantially revises the per-variant narrative:
-> - **Octant's 51% accuracy** = 22% INCL_success + 28% EXCLUSIVE-but-centroid-correct (tolerance)
+> - **Octant's 51% accuracy** = ~24% INCL_success + ~27% EXCLUSIVE-but-centroid-correct (tolerance)
 > - **Spotter's 6.3% accuracy** = ~0% INCL_success + ~6% EXCLUSIVE-but-centroid-correct (tolerance)
-> - **Million-scale's 44%** = 36% INCL_success + ~8% EXCLUSIVE-but-correct + ~0% EMPTY-correct
+> - **Million-scale's 48.9%** = ~33% INCL_success + ~16% EXCLUSIVE-but-correct + ~0% EMPTY-correct
 >
 > The failure story shifts: Octant and Spotter fail primarily via **EXCLUSIVE_REGION** (Phase 1/2
 > bias that drifts the feasible region beyond D_truth), not INCLUSIVE misclassification. Disk-based
@@ -510,16 +515,36 @@ proximity-limited setups from §6.1 and the proximity-sufficient setups from §6
 makes the regime transition visible: the no-proximity bar dominates the left panel; variant-specific
 bars dominate the right.
 
-**eu-de as a clean RTT-inflation isolation.** The eu-de setup (AS3209 fleet, 96 DE targets,
+**eu-de as a clean proximity-removed setup.** The eu-de setup (AS3209 fleet, 96 DE targets,
 max `avail_min_vp_km` = 79 km across all targets) has **zero no-proximity failures** for all four
-variants — the fleet is close enough that proximity cannot be the cause. This makes eu-de the
-cleanest setup to isolate RTT inflation as a failure driver. In this setup, Octant fails 55% of
-its wrong predictions via RTT_INFLATION (annulus shifted outward by inflated RTTs); Million-scale
-53%; Vanilla fails primarily via ERRONEOUS_CONTAINMENT (46%, low-envelope empties region) rather
-than inflation. The prime F2 candidate for manual verification:
+variants — validated by `characterize_failures.py` against
+`scripts/analysis/outputs/partvp/analysis_fail/eu_de/failure_taxonomy.csv`.
+With proximity eliminated, the failure taxonomy shifts to variant-specific geometry:
+
+| Variant | ERRONEOUS\_CONTAINMENT | RTT\_INFLATION | OTHER | infl AUC |
+|---|---|---|---|---|
+| Vanilla | 59% (36 give-ups + excess blockers) | 4% | 37% | 0.40 |
+| Million-scale | 0% | 0% | **100%** | 0.09 |
+| Octant | 24% | 2% | **74%** | 0.42 |
+| Spotter | **85%** | 3% | 13% | 0.47 |
+
+RTT inflation AUC is below 0.5 for all variants — meaning targets with higher inflation succeed
+*more* often than they fail. For Million-scale, matched predictions have median inflation 18.1×
+vs. wrong predictions 3.9×: the permissive SoI LTD absorbs all inflation, and failures are
+purely resolution failures (centroid snaps to wrong cluster). For Octant, inflation is ubiquitous
+(97% of wrong predictions have part_min_infl > 2×) but equally pervasive in correct predictions
+— it does not distinguish MATCH from WRONG. The dominant failure mode for both MS and Octant is
+**OTHER** (centroid resolution failure: the feasible region overlaps D_truth but the centroid
+snaps to a neighboring cluster). Vanilla's 59% TRUTH_EXCLUSION is driven by its 36
+give-ups (46% of failures) — the tight low-envelope excludes the truth and empties the region.
+Spotter's 85% TRUTH_EXCLUSION reflects its normal_dist bands systematically excluding
+D_truth, the same structural collapse seen in §6.2.
+
+The prime RTT-inflation anomaly for manual inspection:
 `185.32.187.206`, eu-de, octant\_cbg, fold\_2 — VP at 280 m, inflation 14.76×, prediction 806 km
-north (near Denmark). This is the most likely EXCLUSIVE\_REGION case in the dataset once
-proper Shapely polygon-disk reconstruction is applied.
+north (near Denmark). This is the dataset's most extreme inflation outlier and likely an
+EXCLUSIVE\_REGION case, but it is one of only 1–2 inflation-attributed failures in the full eu-de
+set.
 
 **Participating-VP characterization of INCLUSIVE_REGION.** Among predictions where `R ∩ D_truth ≠
 ∅`, success depends on three geometrically motivated factors (pooled AUC across 6 runs × 4
@@ -529,9 +554,9 @@ textbook combos):
    nearest participating VP RTT ≲ 5–7 ms ⇒ Tier-1. Globally CBG degenerates to shortest-ping
    (`n_part` ≈ 1); regionally 7–20 participating VPs enable genuine multilateration that doubles
    Tier-1 and halves Tier-3.
-2. **Answer-space isolation** (`nearest_other_centroid_km`, AUC 0.64–0.68 globally): among
-   far-from-VP targets, an isolated truth centroid (~265 km to next) still snaps right; a crowded
-   one (~135 km) does not. Carries zero signal in small in-country answer spaces.
+2. **Answer-space isolation** (`nearest_other_centroid_km`, AUC 0.36–0.56 globally, ex-Spotter):
+   among far-from-VP targets, an isolated truth centroid (~265 km to next) still snaps right; a
+   crowded one (~135 km) does not. Carries zero signal in small in-country answer spaces.
 3. **Angular surround** (`part_circ_var`, AUC up to 0.82 in DE): secondary, regime-gated — visible
    only when proximity is already satisfied and multiple VPs participate. Distance-controlled
    inward/outward experiment confirms a genuine ~1.5–2× residual angular effect.
