@@ -241,6 +241,8 @@ def analyze() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 def plot_attribution(tax: pd.DataFrame, out_path: Path) -> None:
     configs = list(CONFIGS.keys())
     fig, axes = plt.subplots(1, len(configs), figsize=(4.0 * len(configs), 4.6), sharey=True)
+    if len(configs) == 1:
+        axes = [axes]
     colors = {"acc": "#59a14f", "f_no_proximity": "#4E79A7", "f_rtt_inflation": "#f28e2b",
               "f_containment": "#e15759", "f_other": "#bab0ac"}
     for ax, cfg in zip(axes, configs):

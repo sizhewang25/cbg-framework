@@ -37,6 +37,7 @@ Slice grammar: `fold_N` where N indexes a file `anchor_fold_<N>.json` in
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import re
@@ -78,6 +79,8 @@ class RipeAtlasASNCorporaSource(DataSource):
         ping_table: Optional[str] = None,
         max_rtt_ms: int = _DEFAULT_RTT_THRESHOLD_MS,
         filter_clause: str = _DEFAULT_FILTER,
+        vp_allowlist_csv: Optional[str | Path] = None,
+        target_allowlist_csv: Optional[str | Path] = None,
         rtt_query: Optional[Callable[..., dict[str, dict[str, list[float]]]]] = None,
     ) -> None:
         if setup != DataSource.PROBES_TO_ANCHORS:
@@ -120,6 +123,16 @@ class RipeAtlasASNCorporaSource(DataSource):
         )
         self._max_rtt_ms = max_rtt_ms
         self._filter_clause = filter_clause
+        # Optional IP allowlists — only IPs present in the CSV are kept; None
+        # means no filtering (all IPs pass).
+        self._allowed_vp_ips: Optional[frozenset[str]] = (
+            self._read_ip_allowlist(vp_allowlist_csv, "vp_id")
+            if vp_allowlist_csv is not None else None
+        )
+        self._allowed_target_ips: Optional[frozenset[str]] = (
+            self._read_ip_allowlist(target_allowlist_csv, "target_id")
+            if target_allowlist_csv is not None else None
+        )
         # Tests inject `rtt_query=`; production keeps it None and we
         # lazy-import compute_rtts_per_dst_src on first iteration so importing
         # this module doesn't require ClickHouse.
@@ -272,14 +285,17 @@ class RipeAtlasASNCorporaSource(DataSource):
             geom = (p.get("geometry") or {}).get("coordinates")
             if not ip or not geom or len(geom) < 2:
                 continue
+            if self._allowed_vp_ips is not None and ip not in self._allowed_vp_ips:
+                continue
             lon, lat = geom[0], geom[1]
             coords[ip] = Coord(lat=float(lat), lon=float(lon))
             self._probe_asn_by_ip[ip] = normalize_asn(p.get("asn_v4"))
             self._probe_country_by_ip[ip] = p.get("country_code")
         self._probe_coords = coords
         logger.info(
-            "loaded %d probes from %s (AS%d)",
+            "loaded %d probes from %s (AS%d)%s",
             len(coords), probes_file, self._probe_asn,
+            f" [vp allowlist: {len(self._allowed_vp_ips)} IPs]" if self._allowed_vp_ips is not None else "",
         )
 
     def _load_anchors(self) -> None:
@@ -319,6 +335,8 @@ class RipeAtlasASNCorporaSource(DataSource):
                     continue
                 if not self._keep_anchor(a.get("country_code")):
                     continue
+                if self._allowed_target_ips is not None and ip not in self._allowed_target_ips:
+                    continue
                 lon, lat = geom[0], geom[1]
                 coords[ip] = Coord(lat=float(lat), lon=float(lon))
                 self._anchor_asn_by_ip[ip] = normalize_asn(a.get("asn_v4"))
@@ -333,12 +351,17 @@ class RipeAtlasASNCorporaSource(DataSource):
         self._anchor_coords = coords
         self._eval_anchors = eval_anchors
         self._fit_anchors = fit_anchors
+        allowlist_desc = (
+            f" [target allowlist: {len(self._allowed_target_ips)} IPs]"
+            if self._allowed_target_ips is not None else ""
+        )
         logger.info(
             "loaded %d anchors over K=%d folds: eval=fold_%d (%d anchors), "
-            "fit=union of %d other folds (%d anchors)%s",
+            "fit=union of %d other folds (%d anchors)%s%s",
             len(coords), k, self._fold_index,
             len(eval_anchors), k - 1, len(fit_anchors),
             f" [geo filter: {geo_desc}]" if geo_desc else "",
+            allowlist_desc,
         )
 
     def _load_rtts(self) -> None:
@@ -385,3 +408,67 @@ class RipeAtlasASNCorporaSource(DataSource):
             "(out of %d corpus probes)",
             len(out), len(active_probes), len(probe_ips),
         )
+
+    # ---- CSV I/O -------------------------------------------------------------
+
+    @staticmethod
+    def _read_ip_allowlist(csv_path: str | Path, id_column: str) -> frozenset[str]:
+        """Return the set of IPs in *id_column* of a vp/target allowlist CSV."""
+        with open(csv_path, newline="") as fh:
+            reader = csv.DictReader(fh)
+            return frozenset(row[id_column] for row in reader if row.get(id_column))
+
+    def dump_canonical_csv(self, path: str | Path) -> int:
+        """Write all loaded (vp, target, rtt_ms) triples to the GenericCSVSource schema.
+
+        Produces one row per observation, covering both eval and fit anchors.
+        The output is directly consumable by GenericCSVSource (see sources/README.md).
+        Any vp_allowlist_csv / target_allowlist_csv configured at construction
+        are already reflected in the loaded data, so the dump is pre-filtered.
+        Returns the number of data rows written.
+        """
+        self._ensure_loaded()
+        assert (
+            self._rtts_by_anchor is not None
+            and self._probe_coords is not None
+            and self._anchor_coords is not None
+        )
+        fieldnames = [
+            "vp_id", "vp_lat", "vp_lon", "vp_asn", "vp_country", "vp_continent",
+            "target_id", "target_lat", "target_lon", "target_asn",
+            "target_country", "target_continent",
+            "rtt_ms",
+        ]
+        rows = 0
+        with open(path, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames)
+            writer.writeheader()
+            for anchor_ip in sorted(self._rtts_by_anchor):
+                anchor_coord = self._anchor_coords.get(anchor_ip)
+                if anchor_coord is None:
+                    continue
+                anchor_country = self._anchor_country_by_ip.get(anchor_ip)
+                anchor_asn = self._anchor_asn_by_ip.get(anchor_ip)
+                for probe_ip, rtt in self._rtts_by_anchor[anchor_ip].items():
+                    probe_coord = self._probe_coords.get(probe_ip)
+                    if probe_coord is None or rtt <= 0:
+                        continue
+                    probe_country = self._probe_country_by_ip.get(probe_ip)
+                    writer.writerow({
+                        "vp_id": probe_ip,
+                        "vp_lat": probe_coord.lat,
+                        "vp_lon": probe_coord.lon,
+                        "vp_asn": self._probe_asn_by_ip.get(probe_ip) or "",
+                        "vp_country": probe_country or "",
+                        "vp_continent": continent_of(probe_country) if probe_country else "",
+                        "target_id": anchor_ip,
+                        "target_lat": anchor_coord.lat,
+                        "target_lon": anchor_coord.lon,
+                        "target_asn": anchor_asn or "",
+                        "target_country": anchor_country or "",
+                        "target_continent": continent_of(anchor_country) if anchor_country else "",
+                        "rtt_ms": rtt,
+                    })
+                    rows += 1
+        logger.info("wrote %d canonical CSV rows to %s", rows, path)
+        return rows

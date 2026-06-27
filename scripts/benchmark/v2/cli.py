@@ -517,5 +517,179 @@ def cmd_cluster_eval(
     typer.echo(f"cluster-eval done for {len(setup_dirs)} (source, setup) tree(s).")
 
 
+# ---- cluster-score (pre-score predictions against answer space) --------------
+
+@app.command("cluster-score")
+def cmd_cluster_score(
+    run_id: str = typer.Option(..., help="Run id to score."),
+    source: str = typer.Option(..., help="Source name (filters which combos to score)."),
+    clusters_dir: Path = typer.Option(
+        ..., help="cluster-eval output dir containing clusters.csv and assignments.csv."),
+    out_dir: Path = typer.Option(..., help="Where to write per-combo *_scored.csv and baseline.csv."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root containing <run_id>/."),
+    inputs_root: Path = typer.Option(DEFAULT_INPUTS_ROOT, help="Root for eval_observations (baseline)."),
+    inputs_dir: Optional[Path] = typer.Option(
+        None, help="Explicit inputs dir for baseline (overrides auto-derive from run layout)."),
+) -> None:
+    """Score every combo's CBG predictions against the precomputed cluster answer space.
+
+    Reads clusters.csv + assignments.csv from `--clusters-dir` (written by
+    `cluster-eval`). For each combo: joins truth-side cluster from assignments
+    (no BallTree re-query), runs a single BallTree query for prediction coords,
+    writes ``<out_dir>/<combo_id>_scored.csv`` with columns
+    ``success, match, error_to_centroid_km, truth_centroid_km, error_km``.
+    Also computes the shortest-ping-VP baseline from eval_observations and
+    writes ``<out_dir>/baseline.csv`` with columns
+    ``target_id, vp_matches_centroid, vp_to_centroid_km``.
+    The plot scripts consume these CSVs directly, skipping redundant BallTree work.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from sklearn.neighbors import BallTree
+
+    from scripts.analysis._v2_io import (
+        discover_combos,
+        group_combos_by_id,
+        load_targets,
+    )
+    from scripts.libs.cbg.rtt_model import haversine_distance
+
+    # Load answer space --------------------------------------------------------
+    cdir = Path(clusters_dir)
+    clusters_csv = pd.read_csv(cdir / "clusters.csv")
+    assignments = pd.read_csv(cdir / "assignments.csv")
+
+    c_lat = clusters_csv["centroid_lat"].to_numpy(dtype=float)
+    c_lon = clusters_csv["centroid_lon"].to_numpy(dtype=float)
+    _tree = BallTree(np.radians(np.column_stack([c_lat, c_lon])), metric="haversine")
+
+    def _query(lats, lons):
+        lats, lons = np.asarray(lats, dtype=float), np.asarray(lons, dtype=float)
+        idx = np.full(len(lats), -1, dtype=int)
+        valid = ~(np.isnan(lats) | np.isnan(lons))
+        if valid.any():
+            _, i = _tree.query(
+                np.radians(np.column_stack([lats[valid], lons[valid]])), k=1
+            )
+            idx[valid] = i[:, 0]
+        return idx
+
+    def _dist(lats, lons, idx):
+        idx = np.asarray(idx)
+        ok = idx >= 0
+        out = np.full(len(idx), np.nan, dtype=float)
+        if ok.any():
+            out[ok] = haversine_distance(
+                np.asarray(lats, dtype=float)[ok],
+                np.asarray(lons, dtype=float)[ok],
+                c_lat[idx[ok]],
+                c_lon[idx[ok]],
+            )
+        return out
+
+    truth_cluster = assignments.set_index("target_id")["cluster_id"].to_dict()
+    truth_dist_km = assignments.set_index("target_id")["dist_to_centroid_km"].to_dict()
+    allowed_ids = set(assignments["target_id"])
+
+    # Discover and score combos ------------------------------------------------
+    run_dir = outputs_root / run_id
+    combo_dirs = discover_combos(run_dir, source, None)
+    grouped = group_combos_by_id(combo_dirs)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for combo_id, dirs in sorted(grouped.items()):
+        frames = [load_targets(d).to_pandas() for d in dirs]
+        df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if len(df):
+            df = df[df["target_id"].isin(allowed_ids)].reset_index(drop=True)
+        n = len(df)
+        if n == 0:
+            typer.echo(f"  [{combo_id}] no in-scope targets; skipping")
+            continue
+
+        success = df["status"].isin(("SUCCESS",)).to_numpy()
+        t_cl = np.array(
+            [truth_cluster.get(tid, -1) for tid in df["target_id"]], dtype=int
+        )
+        t_km = np.array(
+            [truth_dist_km.get(tid, float("nan")) for tid in df["target_id"]],
+            dtype=float,
+        )
+
+        match = np.zeros(n, dtype=bool)
+        err = np.full(n, float("nan"), dtype=float)
+        if success.any():
+            sub = df[success]
+            p_idx = _query(sub["pred_lat"], sub["pred_lon"])
+            ts = t_cl[success]
+            match[success] = (ts == p_idx) & (p_idx >= 0) & (ts >= 0)
+            err[success] = _dist(sub["pred_lat"], sub["pred_lon"], ts)
+
+        scored = pd.DataFrame({
+            "success": success,
+            "match": match,
+            "error_to_centroid_km": err,
+            "truth_centroid_km": t_km,
+            "error_km": df["error_km"].to_numpy(dtype=float),
+        })
+        scored.to_csv(out_dir / f"{combo_id}_scored.csv", index=False)
+        acc = float(match.sum()) / n
+        typer.echo(f"  [{combo_id}] n={n}  accuracy={acc:.1%}")
+
+    # Shortest-ping-VP baseline ------------------------------------------------
+    if inputs_dir is not None:
+        idir: Optional[Path] = inputs_dir
+    elif combo_dirs:
+        first = combo_dirs[0]
+        setup = first.parents[1].name
+        cand = inputs_root / source / run_id / setup
+        idir = cand if cand.exists() else None
+    else:
+        idir = None
+
+    if idir is not None:
+        direct = idir / "eval_observations.parquet"
+        obs_paths = (
+            [direct] if direct.exists()
+            else sorted(idir.glob("*/eval_observations.parquet"))
+        )
+        if obs_paths:
+            obs = pd.concat(
+                [pq.read_table(p).to_pandas() for p in obs_paths], ignore_index=True
+            )
+            if not obs.empty:
+                idx_min = obs.groupby("target_id")["latency_ms"].idxmin()
+                cols = ["target_id", "target_lat", "target_lon", "vp_lat", "vp_lon"]
+                rows = obs.loc[idx_min, cols].reset_index(drop=True)
+                rows = rows[rows["target_id"].isin(allowed_ids)].reset_index(drop=True)
+                if len(rows):
+                    t_cl_b = np.array(
+                        [truth_cluster.get(tid, -1) for tid in rows["target_id"]],
+                        dtype=int,
+                    )
+                    v_idx = _query(rows["vp_lat"], rows["vp_lon"])
+                    vp_to_centroid = _dist(rows["vp_lat"], rows["vp_lon"], t_cl_b)
+                    baseline = pd.DataFrame({
+                        "target_id": rows["target_id"].to_numpy(),
+                        "vp_matches_centroid": (
+                            (v_idx == t_cl_b) & (v_idx >= 0) & (t_cl_b >= 0)
+                        ),
+                        "vp_to_centroid_km": vp_to_centroid,
+                    })
+                    baseline.to_csv(out_dir / "baseline.csv", index=False)
+                    typer.echo(f"  baseline: {len(rows)} targets → {out_dir / 'baseline.csv'}")
+        else:
+            typer.echo(f"  no eval_observations under {idir}; skipping baseline", err=True)
+    else:
+        typer.echo(
+            "  no inputs dir resolved; skipping baseline (pass --inputs-dir to enable)",
+            err=True,
+        )
+
+    typer.echo(f"cluster-score done: {len(grouped)} combos → {out_dir}")
+
+
 if __name__ == "__main__":
     app()

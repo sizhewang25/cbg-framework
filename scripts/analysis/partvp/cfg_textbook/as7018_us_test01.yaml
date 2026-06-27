@@ -1,0 +1,71 @@
+run_id: as7018_us_test01
+source: generic_csv
+setup: probes_to_anchors
+config_label: as7018-us
+feature_parquet: scripts/analysis/partvp/outputs/data/as7018_us_test01.parquet
+slices:
+- fold_0
+- fold_1
+- fold_2
+- fold_3
+- fold_4
+source_kwargs:
+  csv_path: datasets/ripe_as7018/as7018-us-test01.csv
+  k: 5
+  seed: 42
+  asn_bucket_top_n: 20
+enable_fallback: true
+seed: 42
+combos:
+- combo_id: vanilla_cbg
+  ltd: low_envelope
+  mtl: planar_circle
+  ctr: geometric_centroid
+  mtl_kwargs:
+    n_pts: 64
+    enable_circle_filter: true
+- combo_id: million_scale_cbg
+  ltd: speed_of_internet
+  mtl: planar_circle
+  ctr: geometric_centroid
+  ltd_kwargs:
+    speed_ratio: 0.6667
+  mtl_kwargs:
+    n_pts: 64
+    enable_circle_filter: true
+- combo_id: octant_cbg
+  ltd: bounded_spline
+  mtl: planar_annulus_weighted
+  ctr: monte_carlo_medoid
+  ltd_kwargs:
+    target_coverage: 0.9
+    cutoff_min_points: 5
+    fit_spline: true
+    spline_n_knots: 4
+    bin_size_ms: 5.0
+  mtl_kwargs:
+    n_pts: 64
+    enable_circle_filter: true
+    weight_tau_ms: 50.0
+    weight_threshold: 0.9
+  ctr_kwargs:
+    n_samples: 1024
+- combo_id: spotter_cbg
+  ltd: normal_dist
+  mtl: planar_annulus_weighted
+  ctr: monte_carlo_medoid
+  ltd_kwargs:
+    n_bins: 40
+    min_per_bin: 5
+    deg_mu: 3
+    deg_sigma: 2
+    bin_size_ms: 5.0
+    cutoff_min_points: 5
+  mtl_kwargs:
+    n_pts: 64
+    enable_circle_filter: true
+    weight_tau_ms: 50.0
+    weight_threshold: 0.9
+  ctr_kwargs:
+    n_samples: 1024
+outputs_root: scripts/benchmark/v2/outputs_partvp

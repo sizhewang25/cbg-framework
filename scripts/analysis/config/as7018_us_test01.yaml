@@ -1,0 +1,65 @@
+# Analysis config for the as7018_us_test01 benchmark run.
+# 53 AS7018 RIPE probes × 78 US anchors (reciprocal set), 4 textbook combos.
+#
+# Run with:
+#   snakemake -s scripts/analysis/Snakefile \
+#       --configfile scripts/analysis/config/as7018_us_test01.yaml -j 16
+
+run_id: as7018_us_test01
+source: generic_csv
+setup: probes_to_anchors
+slices: []
+merge_folds: true
+
+benchmark_config: scripts/benchmark/v2/config/as7018_us_test01.yaml
+config_label: as7018-us
+
+textbook_combos: [vanilla_cbg, million_scale_cbg, octant_cbg, spotter_cbg]
+feature_parquet: scripts/analysis/partvp/outputs/data/as7018_us_test01.parquet
+
+group_by: ltd
+phase_stat: p95
+include_fit: true
+runtime_stat: p50
+
+combos:
+  - vanilla_cbg
+  - vanilla_cbg_geo
+  - million_scale_cbg
+  - million_scale_cbg_geo
+  - octant_cbg
+  - octant_cbg_top
+  - octant_cbg_top_geo
+  - octant_cbg_hull
+  - octant_cbg_hull_geo
+  - spotter_cbg
+  - spotter_cbg_top
+  - spotter_cbg_top_geo
+  - spotter_cbg_c100
+  - spotter_cbg_c100_geo
+  - spotter_cbg_c80
+  - spotter_cbg_c80_geo
+
+diff_pairs:
+  - [vanilla_cbg,         shortest_ping]
+  - [million_scale_cbg,   shortest_ping]
+  - [octant_cbg,          shortest_ping]
+  - [spotter_cbg,         shortest_ping]
+  - [vanilla_cbg_geo,     shortest_ping]
+  - [million_scale_cbg_geo, shortest_ping]
+  - [octant_cbg_top_geo,  shortest_ping]
+  - [octant_cbg_hull_geo, shortest_ping]
+  - [spotter_cbg_c100_geo, shortest_ping]
+  - [spotter_cbg_c80_geo, shortest_ping]
+
+merge_pairs:
+  - vanilla_cbg
+  - vanilla_cbg_geo
+  - million_scale_cbg
+  - million_scale_cbg_geo
+  - octant_cbg
+  - octant_cbg_top_geo
+  - octant_cbg_hull_geo
+  - spotter_cbg
+  - spotter_cbg_c100_geo
+  - spotter_cbg_c80_geo

@@ -46,6 +46,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from scripts.analysis._v2_io import (
@@ -57,7 +58,8 @@ from scripts.analysis._v2_io import (
     route_geo_path,
     set_geo_filter_from_args,
 )
-from scripts.analysis.plot_cluster_cdf import (
+from scripts.analysis._cluster_data import (
+    _read_meta,
     build_answer_space,
     combo_frame,
     geo_allowed_ids,
@@ -165,6 +167,10 @@ def main() -> None:
     parser.add_argument("--inputs-root", type=Path,
                         default=Path("scripts/benchmark/v2/inputs"),
                         help="Root of materialized inputs, used to auto-derive --inputs-dir.")
+    parser.add_argument("--scored-dir", type=Path, default=None,
+                        help="Pre-scored directory from `cluster-score` (per-combo *_scored.csv "
+                             "and baseline.csv). When given, skips BallTree construction and "
+                             "combo_frame computation.")
     add_geo_filter_args(parser)
     args = parser.parse_args()
 
@@ -176,6 +182,79 @@ def main() -> None:
         route_geo_path(args.out_dir) if args.out_dir
         else analysis_out_dir(run_dir, "cluster")
     )
+
+    if args.scored_dir is not None:
+        scored_dir = Path(args.scored_dir)
+        n_centroids, n_targets = (
+            _read_meta(args.clusters_dir) if args.clusters_dir else (0, 0)
+        )
+        logger.info("answer space: %d targets → %d centroids (R=%.0f km)",
+                    n_targets, n_centroids, args.radius_km)
+
+        rows = []
+        for csv_path in sorted(scored_dir.glob("*_scored.csv")):
+            combo_id = csv_path.stem[: -len("_scored")]
+            df = pd.read_csv(csv_path)
+            n = len(df)
+            rows.append({
+                "combo_id": combo_id,
+                "n": n,
+                "n_scored": int(df["success"].sum()) if n else 0,
+                "accuracy": float(df["match"].mean()) if n else float("nan"),
+                "within_r": float(
+                    (df["error_to_centroid_km"] <= args.radius_km).mean()
+                ) if n else float("nan"),
+            })
+        rates = pd.DataFrame(rows)
+
+        base_acc = base_within = float("nan")
+        n_base = 0
+        bpath = scored_dir / "baseline.csv"
+        if bpath.exists():
+            bdf = pd.read_csv(bpath)
+            n_base = len(bdf)
+            if n_base:
+                base_acc = float(bdf["vp_matches_centroid"].mean())
+                finite = np.isfinite(bdf["vp_to_centroid_km"])
+                base_within = (
+                    float((bdf["vp_to_centroid_km"][finite] <= args.radius_km).mean())
+                    if finite.any() else float("nan")
+                )
+            logger.info(
+                "baseline: same-centroid=%.1f%% within_R=%.1f%% (n=%d)",
+                100 * base_acc, 100 * base_within, n_base,
+            )
+        else:
+            logger.warning(
+                "no baseline.csv in %s; skipping shortest-ping baseline", scored_dir
+            )
+
+        png_path = out_dir / f"{run_dir.name}_cluster_accuracy.png"
+        fig = plot_bars(
+            rates, png_path,
+            title=(
+                f"Cluster classification accuracy — {run_dir.name} "
+                f"({n_centroids} centroids, R={args.radius_km:.0f} km)"
+            ),
+            radius_km=args.radius_km,
+            baseline_acc=base_acc, baseline_within=base_within, n_base=n_base,
+        )
+        plt.close(fig)
+
+        csv = rates.sort_values("accuracy", ascending=False).copy()
+        csv["n_failed"] = csv["n"] - csv["n_scored"]
+        csv = csv[["combo_id", "n", "n_scored", "n_failed", "accuracy", "within_r"]]
+        baseline_row = pd.DataFrame([{
+            "combo_id": "shortest_ping_baseline",
+            "n": n_base, "n_scored": n_base, "n_failed": 0,
+            "accuracy": base_acc, "within_r": base_within,
+        }])
+        csv = pd.concat([csv, baseline_row], ignore_index=True)
+        csv_path = png_path.with_suffix(".csv")
+        csv.to_csv(csv_path, index=False)
+        logger.info("Saved: %s", csv_path)
+        logger.info("Ranked %d combos to %s", len(rates), out_dir)
+        return
 
     index, n_centroids, n_targets = build_answer_space(
         run_dir, args.source, args.slice_, args.radius_km, clusters_dir=args.clusters_dir

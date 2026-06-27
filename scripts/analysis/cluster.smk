@@ -40,6 +40,16 @@ RUN_DIR = V2_OUTPUTS_ROOT / RUN_ID
 SETUP_DIR = RUN_DIR / SOURCE / SETUP                 # parent of all fold dirs
 CLUSTERS_DIR = SETUP_DIR / "clusters"                # global answer space
 ANALYSIS_CLUSTER = ANALYSIS_ROOT / RUN_ID / "cluster"
+SCORED_DIR = SETUP_DIR / "cluster_scored"
+
+# Materialized fold inputs — source-agnostic stratification.
+# Auto-discover fold IDs from eval_observations.parquet files so no extra
+# config key is needed; the list is empty when folds haven't been materialized.
+_FOLDS_DIR = V2_INPUTS_ROOT / SOURCE / RUN_ID / SETUP
+FOLD_IDS = sorted(
+    p.parent.name
+    for p in _FOLDS_DIR.glob("fold_*/eval_observations.parquet")
+)
 
 
 def _safe(value: str) -> str:
@@ -48,6 +58,10 @@ def _safe(value: str) -> str:
 
 def _geo_clusters_dir(level: str, value: str) -> Path:
     return CLUSTERS_DIR / "geo" / level / _safe(value)
+
+
+def _geo_scored_dir(level: str, value: str) -> Path:
+    return SCORED_DIR / "geo" / level / _safe(value)
 
 
 def _geo_analysis_dir(level: str, value: str) -> Path:
@@ -66,6 +80,8 @@ def _all_targets():
         d = _geo_analysis_dir(g["level"], g["value"])
         t.append(str(d / f"{RUN_ID}_cluster_accuracy.png"))
         t.append(str(d / "cdf"))
+    if FOLD_IDS:
+        t.append(str(ANALYSIS_CLUSTER / f"{RUN_ID}_stratification.png"))
     return t
 
 
@@ -113,74 +129,133 @@ rule cluster_eval_geo:
         " --geo-value '{params.value}'"
 
 
+# ---- [1b] cluster-score (pre-score predictions; reused by all plot rules) ---
+rule cluster_score_global:
+    input:
+        clusters = CLUSTERS_DIR / "clusters.csv",
+    output:
+        scored_dir = directory(SCORED_DIR),
+    params:
+        run_id = RUN_ID,
+        source = SOURCE,
+        outputs_root = str(V2_OUTPUTS_ROOT),
+        inputs_root = str(V2_INPUTS_ROOT),
+        clusters_dir = str(CLUSTERS_DIR),
+        out_dir = str(SCORED_DIR),
+    shell:
+        CLI + ".benchmark.v2.cli cluster-score"
+        " --run-id {params.run_id}"
+        " --source {params.source}"
+        " --outputs-root {params.outputs_root}"
+        " --inputs-root {params.inputs_root}"
+        " --clusters-dir {params.clusters_dir}"
+        " --out-dir {params.out_dir}"
+
+
+rule cluster_score_geo:
+    input:
+        clusters = CLUSTERS_DIR / "geo" / "{level}" / "{value}" / "clusters.csv",
+    output:
+        scored_dir = directory(
+            SETUP_DIR / "cluster_scored" / "geo" / "{level}" / "{value}"
+        ),
+    params:
+        run_id = RUN_ID,
+        source = SOURCE,
+        outputs_root = str(V2_OUTPUTS_ROOT),
+        inputs_root = str(V2_INPUTS_ROOT),
+        clusters_dir = lambda w: str(CLUSTERS_DIR / "geo" / w.level / w.value),
+        out_dir = lambda w: str(
+            SETUP_DIR / "cluster_scored" / "geo" / w.level / w.value
+        ),
+    shell:
+        CLI + ".benchmark.v2.cli cluster-score"
+        " --run-id {params.run_id}"
+        " --source {params.source}"
+        " --outputs-root {params.outputs_root}"
+        " --inputs-root {params.inputs_root}"
+        " --clusters-dir {params.clusters_dir}"
+        " --out-dir {params.out_dir}"
+
+
 # ---- [2] accuracy bars ------------------------------------------------------
 rule cluster_bars_global:
     input:
-        clusters = CLUSTERS_DIR / "clusters.csv",
+        scored_dir = SCORED_DIR,
     output:
         png = ANALYSIS_CLUSTER / f"{RUN_ID}_cluster_accuracy.png",
     params:
         run_dir = str(RUN_DIR), source = SOURCE,
         clusters_dir = str(CLUSTERS_DIR), radius = RADIUS_KM,
         inputs_root = str(V2_INPUTS_ROOT),
+        scored_dir = str(SCORED_DIR),
     shell:
         CLI + ".analysis.plot_cluster_match_bars"
         " --run-dir {params.run_dir} --source {params.source}"
         " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
         " --inputs-root {params.inputs_root}"
+        " --scored-dir {params.scored_dir}"
 
 
 rule cluster_bars_geo:
     input:
-        clusters = CLUSTERS_DIR / "geo" / "{level}" / "{value}" / "clusters.csv",
+        scored_dir = SETUP_DIR / "cluster_scored" / "geo" / "{level}" / "{value}",
     output:
         png = ANALYSIS_ROOT / RUN_ID / "geo" / "{level}" / "{value}" / "cluster" / f"{RUN_ID}_cluster_accuracy.png",
     params:
         run_dir = str(RUN_DIR), source = SOURCE,
-        clusters_dir = str(CLUSTERS_DIR), radius = RADIUS_KM,
+        clusters_dir = lambda w: str(CLUSTERS_DIR / "geo" / w.level / w.value),
+        radius = RADIUS_KM,
         inputs_root = str(V2_INPUTS_ROOT),
         value = lambda w: w.value.replace("_", " "),
+        scored_dir = lambda w: str(SETUP_DIR / "cluster_scored" / "geo" / w.level / w.value),
     shell:
         CLI + ".analysis.plot_cluster_match_bars"
         " --run-dir {params.run_dir} --source {params.source}"
         " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
         " --inputs-root {params.inputs_root}"
         " --geo-level {wildcards.level} --geo-value '{params.value}'"
+        " --scored-dir {params.scored_dir}"
 
 
 # ---- [3] per-combo CDFs (directory of PNGs) ---------------------------------
 rule cluster_cdf_global:
     input:
-        clusters = CLUSTERS_DIR / "clusters.csv",
+        scored_dir = SCORED_DIR,
     output:
         cdf_dir = directory(ANALYSIS_CLUSTER / "cdf"),
     params:
         run_dir = str(RUN_DIR), source = SOURCE,
         clusters_dir = str(CLUSTERS_DIR), radius = RADIUS_KM,
         inputs_root = str(V2_INPUTS_ROOT),
+        scored_dir = str(SCORED_DIR),
     shell:
         CLI + ".analysis.plot_cluster_cdf"
         " --run-dir {params.run_dir} --source {params.source}"
         " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
         " --inputs-root {params.inputs_root}"
+        " --scored-dir {params.scored_dir}"
 
 
 rule cluster_cdf_geo:
     input:
-        clusters = CLUSTERS_DIR / "geo" / "{level}" / "{value}" / "clusters.csv",
+        scored_dir = SETUP_DIR / "cluster_scored" / "geo" / "{level}" / "{value}",
     output:
         cdf_dir = directory(ANALYSIS_ROOT / RUN_ID / "geo" / "{level}" / "{value}" / "cluster" / "cdf"),
     params:
         run_dir = str(RUN_DIR), source = SOURCE,
-        clusters_dir = str(CLUSTERS_DIR), radius = RADIUS_KM,
+        clusters_dir = lambda w: str(CLUSTERS_DIR / "geo" / w.level / w.value),
+        radius = RADIUS_KM,
         inputs_root = str(V2_INPUTS_ROOT),
         value = lambda w: w.value.replace("_", " "),
+        scored_dir = lambda w: str(SETUP_DIR / "cluster_scored" / "geo" / w.level / w.value),
     shell:
         CLI + ".analysis.plot_cluster_cdf"
         " --run-dir {params.run_dir} --source {params.source}"
         " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
         " --inputs-root {params.inputs_root}"
         " --geo-level {wildcards.level} --geo-value '{params.value}'"
+        " --scored-dir {params.scored_dir}"
 
 
 # ---- [4] targets + VPs map --------------------------------------------------
@@ -199,3 +274,25 @@ rule plot_targets_vps:
         CLI + ".visualization.plot_targets_vps"
         " --targets {params.targets} --vps {params.vps}"
         " --out {output.png}"
+
+
+# ---- [5] stratification diagnostic ------------------------------------------
+# Reconstructed from materialized fold inputs — works for any source.
+# Guarded so configs whose folds haven't been materialized yet are silently
+# skipped (FOLD_IDS is empty when the fold dirs don't exist at parse time).
+if FOLD_IDS:
+    rule plot_stratification:
+        input:
+            evals = expand(
+                str(_FOLDS_DIR / "{fold}" / "eval_observations.parquet"),
+                fold=FOLD_IDS,
+            ),
+            tg_configs = str(_FOLDS_DIR / FOLD_IDS[0] / "tg_configs.parquet"),
+        output:
+            png = ANALYSIS_CLUSTER / f"{RUN_ID}_stratification.png",
+        params:
+            inputs_dir = str(_FOLDS_DIR),
+        shell:
+            CLI + ".analysis.plot_stratification"
+            " --inputs-dir {params.inputs_dir}"
+            " --out {output.png}"
