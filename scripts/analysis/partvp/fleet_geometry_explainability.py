@@ -3,13 +3,13 @@
 This is a deliberately narrow follow-up to ``characterize_failures.py``. It
 keeps complementary fleet-geometry metrics:
 
-  * ``fleet_abs_km``: distance from the closest available VP to the target's
+  * ``closest_vp_dist_km``: distance from the closest available VP to the target's
     truth centroid.
-  * ``target_distinguishable_vp_distance_km``: loose per-target bound
-    ``cell_gap_km / 2``. If ``fleet_abs_km`` is below this bound, the closest
+  * ``target_distinguishable_vp_dist_km``: loose per-target bound
+    ``cell_gap_km / 2``. If ``closest_vp_dist_km`` is below this bound, the closest
     VP is guaranteed to be closer to the truth centroid than to the nearest
     competing centroid.
-  * ``target_distinguishable_vp_margin_km``: bound minus ``fleet_abs_km``.
+  * ``target_distinguishable_vp_margin_km``: bound minus ``closest_vp_dist_km``.
     Positive means the fleet has a target-distinguishing VP; non-positive means
     it does not under this loose centroid rule.
 
@@ -47,8 +47,8 @@ from sklearn.preprocessing import StandardScaler
 
 from scripts.analysis._v2_io import discover_combos, group_combos_by_id, load_targets
 from scripts.analysis.plot_cluster_cdf import build_answer_space
-from scripts.analysis.partvp.characterize_failures import CONFIGS, TEXTBOOK, _haversine_vec
-from scripts.analysis.partvp.extract_features import _nearest_other_centroid_km
+from scripts.analysis._fleet_geometry import compute_fleet_geometry
+from scripts.analysis.partvp.characterize_failures import CONFIGS, TEXTBOOK
 
 logger = logging.getLogger(__name__)
 
@@ -76,44 +76,7 @@ def _target_coords(run_dir: Path) -> pd.DataFrame:
 def _fleet_geometry_for_config(config: str, run_dir: Path) -> pd.DataFrame:
     """Centroid-consistent closest-VP geometry for one config."""
     index, _, _ = build_answer_space(run_dir, None, None, 50.0, clusters_dir=None)
-    target = _target_coords(run_dir)
-
-    t_idx, _ = index.query(target["target_lat"], target["target_lon"])
-    gap = _nearest_other_centroid_km(index.lat, index.lon)
-    target = target.copy()
-    target["truth_centroid_lat"] = index.lat[t_idx]
-    target["truth_centroid_lon"] = index.lon[t_idx]
-    target["cell_gap_km"] = gap[t_idx]
-
-    inputs_dir = _input_dir_for(run_dir)
-    paths = sorted(inputs_dir.glob("*/eval_observations.parquet"))
-    direct = inputs_dir / "eval_observations.parquet"
-    if not paths and direct.exists():
-        paths = [direct]
-    if not paths:
-        raise FileNotFoundError(f"no eval_observations.parquet under {inputs_dir}")
-
-    obs = pd.concat([pq.read_table(p).to_pandas() for p in paths], ignore_index=True)
-    obs = obs.drop_duplicates(["target_id", "vp_id"])
-    obs = obs.merge(
-        target[["target_id", "truth_centroid_lat", "truth_centroid_lon", "cell_gap_km"]],
-        on="target_id",
-        how="inner",
-    )
-    obs["vp_to_centroid_km"] = _haversine_vec(
-        obs["truth_centroid_lat"], obs["truth_centroid_lon"],
-        obs["vp_lat"], obs["vp_lon"],
-    )
-    out = obs.groupby("target_id").agg(
-        fleet_abs_km=("vp_to_centroid_km", "min"),
-        cell_gap_km=("cell_gap_km", "first"),
-        n_obs=("vp_id", "nunique"),
-    ).reset_index()
-    out["target_distinguishable_vp_distance_km"] = out["cell_gap_km"] / 2.0
-    out["target_distinguishable_vp_margin_km"] = (
-        out["target_distinguishable_vp_distance_km"] - out["fleet_abs_km"]
-    )
-    out["has_target_distinguishing_vp"] = out["target_distinguishable_vp_margin_km"] > 0
+    out = compute_fleet_geometry(_input_dir_for(run_dir), index)
     out["config"] = config
     return out
 
@@ -176,11 +139,11 @@ def _rule_metrics(y: pd.Series, pred: pd.Series) -> dict[str, float]:
 def geometry_summary(geometry: pd.DataFrame) -> pd.DataFrame:
     return geometry.groupby("config").agg(
         n=("target_id", "size"),
-        abs_p25=("fleet_abs_km", lambda s: s.quantile(0.25)),
-        abs_med=("fleet_abs_km", "median"),
-        abs_p75=("fleet_abs_km", lambda s: s.quantile(0.75)),
+        abs_p25=("closest_vp_dist_km", lambda s: s.quantile(0.25)),
+        abs_med=("closest_vp_dist_km", "median"),
+        abs_p75=("closest_vp_dist_km", lambda s: s.quantile(0.75)),
         gap_med=("cell_gap_km", "median"),
-        distinguishable_distance_med=("target_distinguishable_vp_distance_km", "median"),
+        distinguishable_distance_med=("target_distinguishable_vp_dist_km", "median"),
         distinguishable_margin_med=("target_distinguishable_vp_margin_km", "median"),
         pct_missing_target_distinguishing_vp=("has_target_distinguishing_vp", lambda s: (~s).mean()),
     ).reset_index()
@@ -192,7 +155,7 @@ def auc_table(df: pd.DataFrame) -> pd.DataFrame:
         rows.append({
             "config": cfg,
             "variant": variant,
-            "auc_abs": _auc_rank(d["fail"], d["fleet_abs_km"]),
+            "auc_abs": _auc_rank(d["fail"], d["closest_vp_dist_km"]),
             "auc_distinguishable_margin_bad": _auc_rank(
                 d["fail"], -d["target_distinguishable_vp_margin_km"],
             ),
@@ -216,7 +179,7 @@ def rule_quality(df: pd.DataFrame) -> pd.DataFrame:
                 "scope": scope,
                 "rule": f"abs > {threshold:g} km",
                 "threshold": float(threshold),
-                **_rule_metrics(d["fail"], d["fleet_abs_km"] > threshold),
+                **_rule_metrics(d["fail"], d["closest_vp_dist_km"] > threshold),
             })
     return pd.DataFrame(rows)
 
@@ -228,7 +191,7 @@ def best_abs_threshold(rules: pd.DataFrame, scope: str = "pooled") -> float:
 
 def combined_bins(df: pd.DataFrame, abs_threshold_km: float) -> pd.DataFrame:
     d = df.copy()
-    d["abs_bad"] = d["fleet_abs_km"] > abs_threshold_km
+    d["abs_bad"] = d["closest_vp_dist_km"] > abs_threshold_km
     d["margin_bad"] = d["target_distinguishable_vp_margin_km"] <= 0
     d["geom_bin"] = np.select(
         [
@@ -249,8 +212,8 @@ def combined_bins(df: pd.DataFrame, abs_threshold_km: float) -> pd.DataFrame:
             "n": len(sub),
             "share": len(sub) / len(d[d["scope"].eq(scope)]),
             "fail_rate": sub["fail"].mean(),
-            "med_abs_km": sub["fleet_abs_km"].median(),
-            "med_distinguishable_distance_km": sub["target_distinguishable_vp_distance_km"].median(),
+            "med_abs_km": sub["closest_vp_dist_km"].median(),
+            "med_distinguishable_distance_km": sub["target_distinguishable_vp_dist_km"].median(),
             "med_distinguishable_margin_km": sub["target_distinguishable_vp_margin_km"].median(),
         })
     return pd.DataFrame(rows)
@@ -263,9 +226,9 @@ def model_auc_table(df: pd.DataFrame) -> pd.DataFrame:
     log transform keeps the heavy-tailed distance features well-scaled.
     """
     d = df.dropna(
-        subset=["fleet_abs_km", "target_distinguishable_vp_margin_km", "fail"],
+        subset=["closest_vp_dist_km", "target_distinguishable_vp_margin_km", "fail"],
     ).copy()
-    d["log_abs"] = np.log1p(d["fleet_abs_km"])
+    d["log_abs"] = np.log1p(d["closest_vp_dist_km"])
     margin_bad = -d["target_distinguishable_vp_margin_km"]
     d["signed_log_margin_bad"] = np.sign(margin_bad) * np.log1p(np.abs(margin_bad))
 
@@ -415,7 +378,7 @@ def write_report(
     lines.append("# Fleet geometry only\n")
     lines.append("This analysis keeps centroid-consistent fleet metrics. The key VP-proximity "
                  "decision is whether `target_distinguishable_vp_margin_km = "
-                 "d(truth centroid, nearest competing centroid) / 2 - fleet_abs_km` is "
+                 "d(truth centroid, nearest competing centroid) / 2 - closest_vp_dist_km` is "
                  "positive. If it is positive, the closest available VP is guaranteed to "
                  "favor the truth centroid over that nearest competitor.\n")
     lines.append("Fixed-km thresholds are kept only as descriptive comparisons. They are not "
@@ -428,7 +391,7 @@ def write_report(
                  f"(precision {distinguishable.precision:.2f}, "
                  f"recall {distinguishable.recall:.2f}).\n")
     lines.append(f"* Absolute distance alone is still useful as a continuous feature. For reference "
-                 f"only, the descriptive fixed-km rule `fleet_abs_km > {abs_threshold_km:g} km` "
+                 f"only, the descriptive fixed-km rule `closest_vp_dist_km > {abs_threshold_km:g} km` "
                  f"has pooled balanced accuracy **{best_abs.bal_acc:.2f}** "
                  f"(precision {best_abs.precision:.2f}, recall {best_abs.recall:.2f}).\n")
     lines.append("* Combined bins use the target-distinguishable VP margin and the descriptive "

@@ -30,9 +30,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from scripts.analysis._cluster_data import build_answer_space, resolve_inputs_dir
+from scripts.analysis._fleet_geometry import compute_fleet_geometry
 from scripts.analysis._v2_io import (
     add_geo_filter_args,
     analysis_out_dir,
+    discover_combos,
     resolve_run_dir,
     route_geo_path,
     set_geo_filter_from_args,
@@ -90,6 +93,17 @@ def main() -> None:
                         help="Path to targets.csv (auto-resolved from run dir when omitted).")
     parser.add_argument("--out-dir", type=Path, default=None,
                         help="Output dir (default: scripts/analysis/outputs/<run_id>/cluster).")
+    parser.add_argument("--radius-km", type=float, default=50.0,
+                        help="Cluster radius for answer space (must match the classification table). Default 50.")
+    parser.add_argument("--clusters-dir", type=Path, default=None,
+                        help="Precomputed cluster-eval dir (passed to build_answer_space).")
+    parser.add_argument("--source", default=None, help="Filter combos by source name.")
+    parser.add_argument("--slice", dest="slice_", default=None, help="Filter combos by slice id.")
+    parser.add_argument("--inputs-dir", type=Path, default=None,
+                        help="Materialized inputs dir for fleet geometry. Auto-derived when omitted.")
+    parser.add_argument("--inputs-root", type=Path,
+                        default=Path("scripts/benchmark/v2/inputs"),
+                        help="Root of materialized inputs, used to auto-derive --inputs-dir.")
     add_geo_filter_args(parser)
     args = parser.parse_args()
 
@@ -134,6 +148,26 @@ def main() -> None:
         result = stats
 
     result = result.sort_values(["n_correct", "category"], ascending=[True, True])
+
+    # Fleet geometry features
+    try:
+        combo_dirs = discover_combos(run_dir, args.source, args.slice_)
+        index, _, _ = build_answer_space(
+            run_dir, args.source, args.slice_, args.radius_km,
+            clusters_dir=args.clusters_dir,
+        )
+        inputs_dir = resolve_inputs_dir(run_dir, combo_dirs, args.inputs_root, args.inputs_dir)
+        if inputs_dir is not None:
+            fleet = compute_fleet_geometry(inputs_dir, index)
+            fleet = fleet.set_index("target_id")
+            result = result.join(fleet, how="left")
+            logger.info("Attached fleet geometry (%d/%d targets)",
+                        fleet.index.isin(result.index).sum(), len(result))
+        else:
+            logger.warning("no inputs dir resolved; skipping fleet geometry "
+                           "(pass --inputs-dir to enable)")
+    except Exception as e:
+        logger.warning("could not compute fleet geometry: %s", e)
 
     # Distribution summary
     counts = result["category"].value_counts()
