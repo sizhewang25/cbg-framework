@@ -1,0 +1,20 @@
+run_id: north_america_as7018_final_us
+source: ripe_atlas_asn_corpora
+setup: probes_to_anchors
+radius_km: 50
+cluster_geos: []
+v2_outputs_root: scripts/benchmark/v2/outputs
+v2_inputs_root:  scripts/benchmark/v2/inputs
+analysis_root:   scripts/analysis/outputs
+
+classification_combos:
+  - name: vanilla_cbg
+    label: Vanilla
+  - name: million_scale_cbg
+    label: SOI
+  - name: octant_cbg
+    label: Octant (Spline)
+  - name: octant_cbg_hull
+    label: Octant (Hull)
+  - name: spotter_cbg
+    label: Spotter
