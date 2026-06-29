@@ -82,6 +82,7 @@ class RipeAtlasASNCorporaSource(DataSource):
         vp_allowlist_csv: Optional[str | Path] = None,
         target_allowlist_csv: Optional[str | Path] = None,
         rtt_query: Optional[Callable[..., dict[str, dict[str, list[float]]]]] = None,
+        min_obs: Optional[int] = None,
     ) -> None:
         if setup != DataSource.PROBES_TO_ANCHORS:
             raise ValueError(
@@ -137,6 +138,7 @@ class RipeAtlasASNCorporaSource(DataSource):
         # lazy-import compute_rtts_per_dst_src on first iteration so importing
         # this module doesn't require ClickHouse.
         self._rtt_query = rtt_query
+        self._min_obs = min_obs
 
         # Lazily populated caches; first iter_*() call triggers loading.
         self._probe_coords: Optional[dict[str, Coord]] = None
@@ -401,6 +403,19 @@ class RipeAtlasASNCorporaSource(DataSource):
                     active_probes.add(probe_ip)
             if collapsed:
                 out[anchor_ip] = collapsed
+        if self._min_obs is not None:
+            dropped = {a for a, rtts in out.items() if len(rtts) < self._min_obs}
+            if dropped:
+                out = {a: rtts for a, rtts in out.items() if a not in dropped}
+                active_probes = {p for rtts in out.values() for p in rtts}
+                self._eval_anchors -= dropped
+                self._fit_anchors -= dropped
+                logger.info(
+                    "min_obs=%d: dropped %d anchors (%d eval, %d fit remaining)",
+                    self._min_obs, len(dropped),
+                    len(self._eval_anchors), len(self._fit_anchors),
+                )
+
         self._rtts_by_anchor = out
         self._active_probes = active_probes
         logger.info(

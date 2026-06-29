@@ -102,6 +102,7 @@ class GenericCSVSource(DataSource):
         k: int = 5,
         seed: int = 42,
         asn_bucket_top_n: int = 20,
+        min_obs: Optional[int] = None,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
@@ -135,6 +136,7 @@ class GenericCSVSource(DataSource):
         self._k = k
         self._seed = seed
         self._asn_bucket_top_n = asn_bucket_top_n
+        self._min_obs = min_obs
 
         # Lazily populated by `_ensure_loaded`.
         self._df: Optional[pd.DataFrame] = None
@@ -224,6 +226,8 @@ class GenericCSVSource(DataSource):
             self._load_csv()
             if self._fold_index is not None:
                 self._apply_stratification()
+            if self._min_obs is not None:
+                self._apply_min_obs_filter()
         assert self._df is not None
         return self._df
 
@@ -305,6 +309,19 @@ class GenericCSVSource(DataSource):
             len(targets), self._k, self._fold_index,
             len(eval_targets), self._k - 1, len(fit_targets),
         )
+
+    def _apply_min_obs_filter(self) -> None:
+        assert self._df is not None and self._min_obs is not None
+        counts = self._df.groupby("target_id")["target_id"].transform("count")
+        before = self._df["target_id"].nunique()
+        self._df = self._df[counts >= self._min_obs].reset_index(drop=True)
+        after = self._df["target_id"].nunique()
+        surviving = set(self._df["target_id"].astype(str))
+        if self._eval_targets is not None:
+            self._eval_targets &= surviving
+        if self._fit_targets is not None:
+            self._fit_targets &= surviving
+        logger.info("min_obs=%d: %d → %d targets", self._min_obs, before, after)
 
 
 def _raw_str(value: str) -> str:

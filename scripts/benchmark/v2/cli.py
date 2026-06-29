@@ -77,6 +77,14 @@ def cmd_materialize_inputs(
         help="Root directory for materialized inputs. Output goes to <root>/<source>/<run_id>/<setup>/<slice>/.",
     ),
     force: bool = typer.Option(False, help="Re-materialize even if manifest already exists."),
+    min_obs: Optional[int] = typer.Option(
+        None,
+        help=(
+            "Drop targets with fewer than this many VP observations. "
+            "Applies to eval targets, fit samples, tg_configs, and removes VPs "
+            "that only appear in dropped rows. Forwarded to the source constructor."
+        ),
+    ),
 ) -> None:
     """Pull data from a DataSource into vp_configs / fit_samples / eval_observations parquet."""
     if source not in SOURCES:
@@ -84,7 +92,10 @@ def cmd_materialize_inputs(
         raise typer.Exit(code=2)
 
     source_cls = SOURCES[source]
-    src = source_cls(slice=slice, setup=setup, **json.loads(source_kwargs))
+    kwargs = json.loads(source_kwargs)
+    if min_obs is not None:
+        kwargs["min_obs"] = min_obs
+    src = source_cls(slice=slice, setup=setup, **kwargs)
     out_dir = inputs_dir_for(src, inputs_root, run_id=run_id)
     if (out_dir / "manifest.json").exists() and not force:
         typer.echo(f"Already materialized at {out_dir} (use --force to overwrite).")
