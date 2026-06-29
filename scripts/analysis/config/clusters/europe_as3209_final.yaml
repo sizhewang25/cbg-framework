@@ -1,8 +1,7 @@
 run_id: europe_as3209_final
 source: ripe_atlas_asn_corpora
 setup: probes_to_anchors 
-radius_km: 50             
-cluster_geos: []
+radius_km: 50      
 v2_outputs_root: scripts/benchmark/v2/outputs
 v2_inputs_root:  scripts/benchmark/v2/inputs
 analysis_root:   scripts/analysis/outputs
@@ -18,3 +17,5 @@ classification_combos:
     label: Octant (Hull)
   - name: spotter_cbg
     label: Spotter
+
+voronoi_params: []

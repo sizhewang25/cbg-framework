@@ -11,16 +11,17 @@
 #   [1] cluster-eval (CLI) → <v2_outputs>/<run_id>/<source>/<setup>/
 #         targets.csv, vps.csv               (merged unique entities across folds)
 #         clusters/{clusters,assignments}.csv + meta.json   (global answer space)
-#         clusters/geo/<level>/<value>/...    (one per `cluster_geos` entry)
-#   [2] plot_cluster_match_bars  → <analysis>/<run_id>/[geo/<l>/<v>/]cluster/<run>_cluster_accuracy.png
-#   [3] plot_cluster_cdf         → <analysis>/<run_id>/[geo/<l>/<v>/]cluster/cdf/   (one PNG per combo)
+#   [2] plot_cluster_match_bars  → <analysis>/<run_id>/cluster/<run>_cluster_accuracy.png
+#   [3] plot_cluster_cdf         → <analysis>/<run_id>/cluster/cdf/   (one PNG per combo)
 #   [4] plot_targets_vps         → <analysis>/<run_id>/cluster/<run>_targets_vps.png   (targets + VPs map)
+#   [5] plot_ground_truth_clusters → <analysis>/<run_id>/cluster/<run>_ground_truth_clusters[_<geo>].png
 #
 # Config keys:
 #   run_id   (required)   source (required)   setup (default probes_to_anchors)
 #   radius_km            (default 50)
-#   cluster_geos         (default []) — list of {level: continent|country, value: <name>};
-#                        each adds a per-geo answer space + a per-geo bars/cdf set.
+#   voronoi_params         (default []) — list of {level: continent|country, value: <name>};
+#                        each adds a geo-filtered answer space + ground-truth cluster map
+#                        (with Voronoi overlay clipped to that landmass).
 #   v2_outputs_root / v2_inputs_root / analysis_root  (defaults match the repo layout)
 
 from pathlib import Path
@@ -29,7 +30,7 @@ RUN_ID = config["run_id"]
 SOURCE = config["source"]
 SETUP  = config.get("setup", "probes_to_anchors")
 RADIUS_KM = float(config.get("radius_km", 50))
-CLUSTER_GEOS = config.get("cluster_geos", []) or []   # [{level, value}, ...]
+VORONOI_PARAMS = config.get("voronoi_params", []) or []   # [{level, value}, ...]
 
 V2_OUTPUTS_ROOT = Path(config.get("v2_outputs_root", "scripts/benchmark/v2/outputs"))
 V2_INPUTS_ROOT  = Path(config.get("v2_inputs_root",  "scripts/benchmark/v2/inputs"))
@@ -56,30 +57,16 @@ def _safe(value: str) -> str:
     return str(value).replace(" ", "_").replace("/", "_")
 
 
-def _geo_clusters_dir(level: str, value: str) -> Path:
-    return CLUSTERS_DIR / "geo" / level / _safe(value)
-
-
-def _geo_scored_dir(level: str, value: str) -> Path:
-    return SCORED_DIR / "geo" / level / _safe(value)
-
-
-def _geo_analysis_dir(level: str, value: str) -> Path:
-    # Mirrors _v2_io.analysis_out_dir routing: geo segment after the run_id.
-    return ANALYSIS_ROOT / RUN_ID / "geo" / level / _safe(value) / "cluster"
-
-
 # ---- Targets ----------------------------------------------------------------
 def _all_targets():
     t = [
         str(ANALYSIS_CLUSTER / f"{RUN_ID}_cluster_accuracy.png"),
         str(ANALYSIS_CLUSTER / "cdf"),
         str(ANALYSIS_CLUSTER / f"{RUN_ID}_targets_vps.png"),
+        str(ANALYSIS_CLUSTER / f"{RUN_ID}_ground_truth_clusters.png"),
     ]
-    for g in CLUSTER_GEOS:
-        d = _geo_analysis_dir(g["level"], g["value"])
-        t.append(str(d / f"{RUN_ID}_cluster_accuracy.png"))
-        t.append(str(d / "cdf"))
+    for g in VORONOI_PARAMS:
+        t.append(str(ANALYSIS_CLUSTER / f"{RUN_ID}_ground_truth_clusters_{_safe(g['value'])}.png"))
     if FOLD_IDS:
         t.append(str(ANALYSIS_CLUSTER / f"{RUN_ID}_stratification.png"))
     return t
@@ -107,28 +94,6 @@ rule cluster_eval_global:
         " --radius-km {params.radius}"
 
 
-rule cluster_eval_geo:
-    output:
-        clusters = CLUSTERS_DIR / "geo" / "{level}" / "{value}" / "clusters.csv",
-    params:
-        run_id = RUN_ID,
-        radius = RADIUS_KM,
-        outputs_root = str(V2_OUTPUTS_ROOT),
-        inputs_root = str(V2_INPUTS_ROOT),
-        # The wildcard `value` is already path-safe; cluster-eval re-applies the
-        # same safe-ing, so passing the original value name back is fine here
-        # because configured geo values are expected to be path-safe-equal.
-        value = lambda w: w.value.replace("_", " "),
-    shell:
-        CLI + ".benchmark.v2.cli cluster-eval"
-        " --run-id {params.run_id}"
-        " --outputs-root {params.outputs_root}"
-        " --inputs-root {params.inputs_root}"
-        " --radius-km {params.radius}"
-        " --geo-level {wildcards.level}"
-        " --geo-value '{params.value}'"
-
-
 # ---- [1b] cluster-score (pre-score predictions; reused by all plot rules) ---
 rule cluster_score_global:
     input:
@@ -142,32 +107,6 @@ rule cluster_score_global:
         inputs_root = str(V2_INPUTS_ROOT),
         clusters_dir = str(CLUSTERS_DIR),
         out_dir = str(SCORED_DIR),
-    shell:
-        CLI + ".benchmark.v2.cli cluster-score"
-        " --run-id {params.run_id}"
-        " --source {params.source}"
-        " --outputs-root {params.outputs_root}"
-        " --inputs-root {params.inputs_root}"
-        " --clusters-dir {params.clusters_dir}"
-        " --out-dir {params.out_dir}"
-
-
-rule cluster_score_geo:
-    input:
-        clusters = CLUSTERS_DIR / "geo" / "{level}" / "{value}" / "clusters.csv",
-    output:
-        scored_dir = directory(
-            SETUP_DIR / "cluster_scored" / "geo" / "{level}" / "{value}"
-        ),
-    params:
-        run_id = RUN_ID,
-        source = SOURCE,
-        outputs_root = str(V2_OUTPUTS_ROOT),
-        inputs_root = str(V2_INPUTS_ROOT),
-        clusters_dir = lambda w: str(CLUSTERS_DIR / "geo" / w.level / w.value),
-        out_dir = lambda w: str(
-            SETUP_DIR / "cluster_scored" / "geo" / w.level / w.value
-        ),
     shell:
         CLI + ".benchmark.v2.cli cluster-score"
         " --run-id {params.run_id}"
@@ -197,27 +136,6 @@ rule cluster_bars_global:
         " --scored-dir {params.scored_dir}"
 
 
-rule cluster_bars_geo:
-    input:
-        scored_dir = SETUP_DIR / "cluster_scored" / "geo" / "{level}" / "{value}",
-    output:
-        png = ANALYSIS_ROOT / RUN_ID / "geo" / "{level}" / "{value}" / "cluster" / f"{RUN_ID}_cluster_accuracy.png",
-    params:
-        run_dir = str(RUN_DIR), source = SOURCE,
-        clusters_dir = lambda w: str(CLUSTERS_DIR / "geo" / w.level / w.value),
-        radius = RADIUS_KM,
-        inputs_root = str(V2_INPUTS_ROOT),
-        value = lambda w: w.value.replace("_", " "),
-        scored_dir = lambda w: str(SETUP_DIR / "cluster_scored" / "geo" / w.level / w.value),
-    shell:
-        CLI + ".analysis.plot_cluster_match_bars"
-        " --run-dir {params.run_dir} --source {params.source}"
-        " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
-        " --inputs-root {params.inputs_root}"
-        " --geo-level {wildcards.level} --geo-value '{params.value}'"
-        " --scored-dir {params.scored_dir}"
-
-
 # ---- [3] per-combo CDFs (directory of PNGs) ---------------------------------
 rule cluster_cdf_global:
     input:
@@ -234,27 +152,6 @@ rule cluster_cdf_global:
         " --run-dir {params.run_dir} --source {params.source}"
         " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
         " --inputs-root {params.inputs_root}"
-        " --scored-dir {params.scored_dir}"
-
-
-rule cluster_cdf_geo:
-    input:
-        scored_dir = SETUP_DIR / "cluster_scored" / "geo" / "{level}" / "{value}",
-    output:
-        cdf_dir = directory(ANALYSIS_ROOT / RUN_ID / "geo" / "{level}" / "{value}" / "cluster" / "cdf"),
-    params:
-        run_dir = str(RUN_DIR), source = SOURCE,
-        clusters_dir = lambda w: str(CLUSTERS_DIR / "geo" / w.level / w.value),
-        radius = RADIUS_KM,
-        inputs_root = str(V2_INPUTS_ROOT),
-        value = lambda w: w.value.replace("_", " "),
-        scored_dir = lambda w: str(SETUP_DIR / "cluster_scored" / "geo" / w.level / w.value),
-    shell:
-        CLI + ".analysis.plot_cluster_cdf"
-        " --run-dir {params.run_dir} --source {params.source}"
-        " --clusters-dir {params.clusters_dir} --radius-km {params.radius}"
-        " --inputs-root {params.inputs_root}"
-        " --geo-level {wildcards.level} --geo-value '{params.value}'"
         " --scored-dir {params.scored_dir}"
 
 
@@ -276,7 +173,36 @@ rule plot_targets_vps:
         " --out {output.png}"
 
 
-# ---- [5] stratification diagnostic ------------------------------------------
+# ---- [5] ground-truth cluster map -------------------------------------------
+rule plot_ground_truth_clusters_global:
+    input:
+        clusters = CLUSTERS_DIR / "clusters.csv",
+    output:
+        png = ANALYSIS_CLUSTER / f"{RUN_ID}_ground_truth_clusters.png",
+    params:
+        clusters_dir = str(CLUSTERS_DIR),
+    shell:
+        CLI + ".visualization.cluster.plot_ground_truth_clusters"
+        " --clusters-dir {params.clusters_dir}"
+        " --out {output.png}"
+
+
+rule plot_ground_truth_clusters_geo:
+    input:
+        clusters = CLUSTERS_DIR / "clusters.csv",
+    output:
+        png = ANALYSIS_CLUSTER / f"{RUN_ID}_ground_truth_clusters_{{value}}.png",
+    params:
+        clusters_dir = str(CLUSTERS_DIR),
+        value = lambda w: w.value.replace("_", " "),
+    shell:
+        CLI + ".visualization.cluster.plot_ground_truth_clusters"
+        " --clusters-dir {params.clusters_dir}"
+        " --landmass '{params.value}'"
+        " --out {output.png}"
+
+
+# ---- [6] stratification diagnostic ------------------------------------------
 # Reconstructed from materialized fold inputs — works for any source.
 # Guarded so configs whose folds haven't been materialized yet are silently
 # skipped (FOLD_IDS is empty when the fold dirs don't exist at parse time).
