@@ -85,6 +85,16 @@ rule run_combo:
             if "seed" in COMBOS_BY_ID[wc.combo_id]
             else (f"--seed {config['seed']}" if "seed" in config else "")
         ),
+        # Traffic-weighted eval threshold; per-combo wins over run-level.
+        # Empty flag = unweighted eval over every obs.
+        pair_weight_min_flag = lambda wc: (
+            f"--pair-weight-min {COMBOS_BY_ID[wc.combo_id]['pair_weight_min']}"
+            if "pair_weight_min" in COMBOS_BY_ID[wc.combo_id]
+            else (
+                f"--pair-weight-min {config['pair_weight_min']}"
+                if "pair_weight_min" in config else ""
+            )
+        ),
     shell:
         CLI + " run-combo"
         " --source {params.source} --slice {wildcards.slice} --setup {params.setup}"
@@ -99,6 +109,7 @@ rule run_combo:
         " --outputs-root {params.outputs_root}"
         " {params.enable_fallback}"
         " {params.seed_flag}"
+        " {params.pair_weight_min_flag}"
 
 # ---- Summarize once all combos are done -------------------------------------
 rule summarize:

@@ -141,6 +141,16 @@ def cmd_run_combo(
             "stochastic stage (currently MonteCarloMedoidCTR). Recorded in targets.parquet."
         ),
     ),
+    pair_weight_min: Optional[float] = typer.Option(
+        None,
+        help=(
+            "Traffic-weighted eval: keep only obs with pair_weight >= this value; "
+            "targets left with zero obs drop out of the eval set entirely (count "
+            "recorded in run.json). Omit for unweighted eval over every obs. "
+            "Unweighted sources default pair_weight to 1.0, so thresholds <= 1.0 "
+            "are no-ops there."
+        ),
+    ),
     inputs_root: Path = typer.Option(DEFAULT_INPUTS_ROOT, help="Root containing <source>/<slice>/*.parquet."),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root for run outputs."),
     enable_fallback: bool = typer.Option(True, help="Enable nearest-VP fallback on pipeline failure."),
@@ -169,6 +179,7 @@ def cmd_run_combo(
         mtl_kwargs=json.loads(mtl_kwargs),
         ctr_kwargs=json.loads(ctr_kwargs),
         base_seed=seed,
+        pair_weight_min=pair_weight_min,
     )
     out_dir = outputs_combo_dir(outputs_root, run_id, src, cid)
     run_one_combo(

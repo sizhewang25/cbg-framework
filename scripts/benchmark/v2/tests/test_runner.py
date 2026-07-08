@@ -196,5 +196,121 @@ class TestRunOneCombo(unittest.TestCase):
         self.assertEqual(type(ltd).__name__, "LowEnvelopeLTD")
 
 
+class TestPairWeightEval(unittest.TestCase):
+    """pair_weight round-trip through materialize + the runner's
+    --pair-weight-min traffic-weighted eval filter."""
+
+    # Two targets in one city: 2001 has one heavy (8.0) and one light (2.0)
+    # obs; 2002 has only light obs (1.0, 1.5). At threshold 5.0, 2001 keeps
+    # a single obs and 2002 drops out of the eval set entirely.
+    _CSV = textwrap.dedent("""
+        vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+        1.1.1.1,33.0,-84.0,2001,33.5,-84.5,atlanta,5.0,8.0
+        2.2.2.2,34.0,-85.0,2001,33.5,-84.5,atlanta,6.0,2.0
+        1.1.1.1,33.0,-84.0,2002,32.5,-83.5,atlanta,6.5,1.0
+        2.2.2.2,34.0,-85.0,2002,32.5,-83.5,atlanta,7.0,1.5
+    """).strip() + "\n"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.csv_path = root / "weighted.csv"
+        self.csv_path.write_text(self._CSV)
+        self.src = GenericCSVSource(
+            slice="all", setup="anchors_to_probes", csv_path=self.csv_path,
+        )
+        self.root = root
+        self.inputs_dir = materialize_inputs(
+            self.src, root=root / "inputs", run_id="pw-test",
+        )
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _spec(self, combo_id: str, pair_weight_min=None) -> ComboSpec:
+        return ComboSpec(
+            combo_id=combo_id,
+            ltd="speed_of_internet", mtl="planar_circle", ctr="geometric_centroid",
+            ltd_kwargs={}, mtl_kwargs={}, ctr_kwargs={},
+            pair_weight_min=pair_weight_min,
+        )
+
+    def test_pair_weight_round_trips_through_parquet(self) -> None:
+        from scripts.benchmark.v2.inputs import load_eval_targets_parquet
+
+        table = pq.read_table(self.inputs_dir / "eval_observations.parquet")
+        self.assertIn("pair_weight", table.column_names)
+        self.assertEqual(
+            sorted(table.column("pair_weight").to_pylist()),
+            [1.0, 1.5, 2.0, 8.0],
+        )
+        targets = load_eval_targets_parquet(
+            self.inputs_dir / "eval_observations.parquet"
+        )
+        by_id = {t.target_id: t for t in targets}
+        assert by_id["2001"].obs_weights is not None
+        self.assertEqual(sorted(by_id["2001"].obs_weights), [2.0, 8.0])
+
+    def test_unweighted_source_defaults_weight_to_one(self) -> None:
+        csv_path = self.root / "no_weight.csv"
+        csv_path.write_text(_SYNTH_CSV)
+        src = GenericCSVSource(
+            slice="all", setup="anchors_to_probes", csv_path=csv_path,
+        )
+        inputs_dir = materialize_inputs(src, root=self.root / "inputs2", run_id="pw-test")
+        table = pq.read_table(inputs_dir / "eval_observations.parquet")
+        self.assertEqual(set(table.column("pair_weight").to_pylist()), {1.0})
+
+    def test_pair_weight_min_filters_obs_and_drops_targets(self) -> None:
+        out_dir = outputs_combo_dir(
+            self.root / "outputs", "pw-test", self.src, "pw_combo",
+        )
+        run_one_combo(
+            self._spec("pw_combo", pair_weight_min=5.0),
+            inputs_dir=self.inputs_dir, out_dir=out_dir,
+            run_id="pw-test", source_name="generic_csv", slice_name="all",
+        )
+        meta = json.loads((out_dir / "run.json").read_text())
+        self.assertEqual(meta["pair_weight_min"], 5.0)
+        # 2002 has no obs >= 5.0 → excluded from the test set entirely.
+        self.assertEqual(meta["n_targets"], 1)
+        self.assertEqual(meta["n_targets_dropped_below_min_weight"], 1)
+
+        rows = pq.read_table(out_dir / "targets.parquet").to_pylist()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["target_id"], "2001")
+        # Only the 8.0-weight obs survives the threshold.
+        self.assertEqual(rows[0]["n_obs"], 1)
+        self.assertEqual(len(rows[0]["ltd_predictions"]), 1)
+        self.assertEqual(rows[0]["ltd_predictions"][0]["vp_id"], "1.1.1.1")
+
+    def test_no_threshold_keeps_every_obs(self) -> None:
+        out_dir = outputs_combo_dir(
+            self.root / "outputs", "pw-test", self.src, "pw_all",
+        )
+        run_one_combo(
+            self._spec("pw_all", pair_weight_min=None),
+            inputs_dir=self.inputs_dir, out_dir=out_dir,
+            run_id="pw-test", source_name="generic_csv", slice_name="all",
+        )
+        meta = json.loads((out_dir / "run.json").read_text())
+        self.assertIsNone(meta["pair_weight_min"])
+        self.assertIsNone(meta["n_targets_dropped_below_min_weight"])
+        self.assertEqual(meta["n_targets"], 2)
+        rows = pq.read_table(out_dir / "targets.parquet").to_pylist()
+        self.assertEqual({r["n_obs"] for r in rows}, {2})
+
+    def test_threshold_emptying_eval_set_raises(self) -> None:
+        out_dir = outputs_combo_dir(
+            self.root / "outputs", "pw-test", self.src, "pw_too_high",
+        )
+        with self.assertRaises(ValueError):
+            run_one_combo(
+                self._spec("pw_too_high", pair_weight_min=100.0),
+                inputs_dir=self.inputs_dir, out_dir=out_dir,
+                run_id="pw-test", source_name="generic_csv", slice_name="all",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

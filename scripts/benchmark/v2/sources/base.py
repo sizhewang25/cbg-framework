@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Iterator, Optional
 
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
@@ -36,11 +36,17 @@ class EvalTarget:
 
     target_id and true_coord are the geolocation ground truth (anchor coords
     for RIPE Atlas / Vultr — both have hard-GT anchors).
+
+    obs_weights, when present, aligns index-for-index with `obs` and carries
+    each pair's traffic weight (`pair_weight` in the canonical CSV schema).
+    None means the source has no weight notion — the materializer writes the
+    neutral default 1.0 for every obs.
     """
 
     target_id: str
     true_coord: Coord
     obs: list[tuple[VpId, Coord, Latency]]
+    obs_weights: Optional[list[float]] = None
 
 
 @dataclass(frozen=True)

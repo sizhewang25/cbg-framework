@@ -125,6 +125,64 @@ inputs/<source>/<setup>/<slice>/{vp_configs,fit_samples,eval_observations}.parqu
 outputs/<run_id>/<source>/<setup>/<slice>/<combo_id>/{run.json, targets.parquet, fit_checkpoint.pkl}
 ```
 
+## Location-weighted split + traffic-weighted eval
+
+Beyond the K-fold `fold_N` slices, `generic_csv` supports a
+traffic-ranked holdout driven by an optional `pair_weight` column in the
+canonical CSV — the (vp, target) pair's traffic in whatever unit the
+dataset uses (e.g. TB; raw values, no normalization needed: the split
+ranking is scale-invariant and an absolute `--pair-weight-min` threshold
+stays interpretable in that unit). Defaults: column absent → 1.0
+everywhere ("no weight notion" — target weight degenerates to obs count,
+thresholds ≤ 1.0 are no-ops); cell NaN in a present column → 0.0
+("unknown traffic = weightless" — can't outrank measured flows or pass a
+weighted-eval threshold).
+
+**Split (`wsplit<P>`, e.g. `wsplit20`).** Per `target_city` (must be
+non-blank for every target), targets are ranked by *summed* `pair_weight`
+descending (ties broken by `target_id`) and the top `ceil(P/100 × n)` are
+held out as the eval set; the rest form the fit corpus. Two invariants:
+every city contributes ≥ 1 eval target (a 1-target city goes entirely to
+eval and is simply absent from fit — test-side location coverage is
+guaranteed), and no top-weight target ever leaks into LTD training. The
+split is location-proportional by construction; within each city the
+held-out targets are the traffic-heavy ones, so the benchmark scores
+exactly the targets an operator cares about, on a model that never saw
+them. With `--min-obs`, the obs filter runs *before* the split so it can
+never silently drop a held-out top-weight target afterwards.
+
+**Eval (`--pair-weight-min X` on `run-combo`).** Unweighted eval (default)
+geolocates each target from **all** of its VP obs. Traffic-weighted eval
+keeps only obs with `pair_weight >= X`; targets left with zero qualifying
+obs are excluded from the test set entirely (the count lands in `run.json`
+as `n_targets_dropped_below_min_weight`, and the run aborts loudly if the
+threshold empties the whole eval set). The threshold is a run-combo flag —
+stamped into `run.json`, settable per combo or run-wide in the Snakemake
+config (`pair_weight_min:`) — so both eval modes run from a single
+materialization: `pair_weight` is just a column in
+`eval_observations.parquet`, carried through by every source (unweighted
+sources write 1.0 everywhere).
+
+```bash
+poetry run python -m scripts.benchmark.v2.cli materialize-inputs \
+    --source generic_csv --slice wsplit20 --run-id wtest-001 \
+    --source-kwargs '{"csv_path": "path/to/weighted.csv"}'
+
+# unweighted eval: all obs per held-out target
+poetry run python -m scripts.benchmark.v2.cli run-combo \
+    --source generic_csv --slice wsplit20 --run-id wtest-001 \
+    --ltd speed_of_internet --mtl planar_circle --ctr geometric_centroid \
+    --source-kwargs '{"csv_path": "path/to/weighted.csv"}'
+
+# traffic-weighted eval: only obs with pair_weight >= 5.0
+poetry run python -m scripts.benchmark.v2.cli run-combo \
+    --source generic_csv --slice wsplit20 --run-id wtest-001 \
+    --combo-id vanilla_cbg_pw5 \
+    --ltd speed_of_internet --mtl planar_circle --ctr geometric_centroid \
+    --source-kwargs '{"csv_path": "path/to/weighted.csv"}' \
+    --pair-weight-min 5.0
+```
+
 ## Stage instrumentation
 
 `CBGModel.geolocate(obs, instrument=...)` accepts a callable that returns a

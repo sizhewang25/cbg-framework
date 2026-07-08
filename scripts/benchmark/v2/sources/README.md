@@ -25,6 +25,7 @@ implements the contract against a fixed canonical schema:
 | `vp_asn`, `target_asn` | int | no |
 | `vp_country`, `vp_continent`, `vp_region`, `vp_city` | str | no |
 | `target_country`, `target_continent`, `target_region`, `target_city` | str | no |
+| `pair_weight` | float (≥ 0) | no — traffic weight of the (vp, target) pair in the dataset's unit (e.g. TB); column absent → 1.0 everywhere, NaN cell in a present column → 0.0 (unknown = weightless) |
 
 Steps:
 
@@ -33,10 +34,14 @@ Steps:
    to set `DEFAULT_CSV` to your file's path.
 3. `python -m scripts.benchmark.v2.cli materialize-inputs --source generic_csv --slice all`
 
-Slices: `all` (everything) or `head<k>` (first k targets after a
-deterministic sort — a cheap smoke slice). Both setups (probes_to_anchors
-and anchors_to_probes) work out of the box; the same columns play the VP
-role under one setup and the target role under the other.
+Slices: `all` (everything), `head<k>` (first k targets after a
+deterministic sort — a cheap smoke slice), `fold_N` (DistGeo K-fold
+train/test partition), or `wsplit<P>` (location-weighted holdout: per
+`target_city`, the top ceil(P/100 × n) targets by summed `pair_weight`
+go to eval, the rest to fit — requires a non-blank `target_city` on
+every target). Both setups (probes_to_anchors and anchors_to_probes)
+work out of the box; the same columns play the VP role under one setup
+and the target role under the other.
 
 To benchmark several CSVs side-by-side, subclass `GenericCSVSource` and
 give each subclass a distinct `name` — that's the only thing that
@@ -111,6 +116,10 @@ seeds `CBGModel.geolocate(obs)`.
   invent a label.
 - `obs` empty is allowed but the runner will mark that row
   `INSUFFICIENT_DATA` immediately, so usually filter upstream.
+- `obs_weights` (optional) aligns index-for-index with `obs` and carries
+  each pair's traffic weight. Leave it `None` when your data has no
+  weight notion — the materializer writes the neutral default 1.0, which
+  keeps `--pair-weight-min` thresholds ≤ 1.0 a no-op on your source.
 
 ### `slice_id` and `setup_id`
 

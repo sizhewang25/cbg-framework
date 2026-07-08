@@ -53,6 +53,12 @@ class ComboSpec:
     numpy.random.SeedSequence and applied to any stage exposing an `rng`
     attribute (today, only MonteCarloMedoidCTR). Recorded in the row's
     `seed` column so a single (combo, target) can be replayed exactly.
+
+    `pair_weight_min`, when non-None, switches to traffic-weighted eval:
+    each target keeps only the obs with pair_weight >= the threshold, and
+    targets left with zero obs drop out of the eval set entirely (counted
+    in run.json as n_targets_dropped_below_min_weight). None = unweighted
+    eval over every obs.
     """
     combo_id: str
     ltd: str
@@ -62,6 +68,7 @@ class ComboSpec:
     mtl_kwargs: dict[str, Any]
     ctr_kwargs: dict[str, Any]
     base_seed: Optional[int] = None
+    pair_weight_min: Optional[float] = None
 
 
 def run_one_combo(
@@ -82,6 +89,11 @@ def run_one_combo(
     # --- 1. Load inputs ------------------------------------------------------
     fit_samples = load_fit_samples_parquet(inputs_dir / "fit_samples.parquet")
     eval_targets = load_eval_targets_parquet(inputs_dir / "eval_observations.parquet")
+    n_targets_dropped_below_min_weight: Optional[int] = None
+    if spec.pair_weight_min is not None:
+        eval_targets, n_targets_dropped_below_min_weight = _filter_by_pair_weight(
+            eval_targets, spec.pair_weight_min,
+        )
 
     # --- 2. Construct + fit model -------------------------------------------
     model = CBGModel.from_config(
@@ -135,6 +147,8 @@ def run_one_combo(
         "mtl_kwargs": spec.mtl_kwargs,
         "ctr_kwargs": spec.ctr_kwargs,
         "base_seed": spec.base_seed,
+        "pair_weight_min": spec.pair_weight_min,
+        "n_targets_dropped_below_min_weight": n_targets_dropped_below_min_weight,
         "enable_fallback": enable_fallback,
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "n_fit_samples": len(fit_samples),
@@ -150,6 +164,39 @@ def run_one_combo(
     }
     (out_dir / "run.json").write_text(json.dumps(run_meta, indent=2) + "\n")
     return out_dir
+
+
+# ---- traffic-weighted eval ---------------------------------------------------
+
+def _filter_by_pair_weight(eval_targets, pair_weight_min: float):
+    """Keep only obs with pair_weight >= threshold; drop targets left empty.
+
+    Returns (kept_targets, n_dropped). Raises if the threshold empties the
+    whole eval set — a silent zero-target run would look like success."""
+    from scripts.benchmark.v2.sources.base import EvalTarget
+
+    kept: list = []
+    n_dropped = 0
+    for t in eval_targets:
+        weights = t.obs_weights if t.obs_weights is not None else [1.0] * len(t.obs)
+        filtered = [
+            (o, w) for o, w in zip(t.obs, weights) if w >= pair_weight_min
+        ]
+        if not filtered:
+            n_dropped += 1
+            continue
+        kept.append(EvalTarget(
+            target_id=t.target_id,
+            true_coord=t.true_coord,
+            obs=[o for o, _ in filtered],
+            obs_weights=[w for _, w in filtered],
+        ))
+    if not kept:
+        raise ValueError(
+            f"pair_weight_min={pair_weight_min} filtered out every obs of all "
+            f"{n_dropped} eval targets — threshold exceeds the data's weights"
+        )
+    return kept, n_dropped
 
 
 # ---- per-target row construction --------------------------------------------

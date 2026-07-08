@@ -185,11 +185,17 @@ def _write_eval_observations(
     vp_lats: list[float] = []
     vp_lons: list[float] = []
     latencies: list[float] = []
+    pair_weights: list[float] = []
 
     n_targets = 0
     for t in targets:
         n_targets += 1
-        for vp_id, vp_coord, latency in t.obs:
+        if t.obs_weights is not None and len(t.obs_weights) != len(t.obs):
+            raise ValueError(
+                f"target {t.target_id!r}: obs_weights length "
+                f"{len(t.obs_weights)} != obs length {len(t.obs)}"
+            )
+        for i, (vp_id, vp_coord, latency) in enumerate(t.obs):
             target_ids.append(t.target_id)
             target_lats.append(t.true_coord.lat)
             target_lons.append(t.true_coord.lon)
@@ -197,6 +203,9 @@ def _write_eval_observations(
             vp_lats.append(vp_coord.lat)
             vp_lons.append(vp_coord.lon)
             latencies.append(float(latency))
+            pair_weights.append(
+                float(t.obs_weights[i]) if t.obs_weights is not None else 1.0
+            )
 
     table = pa.table(
         {
@@ -207,6 +216,7 @@ def _write_eval_observations(
             "vp_lat": vp_lats,
             "vp_lon": vp_lons,
             "latency_ms": latencies,
+            "pair_weight": pair_weights,
         },
         schema=bench_schema.EVAL_OBSERVATIONS_SCHEMA,
     )
@@ -258,5 +268,14 @@ def load_eval_targets_parquet(path: Path) -> "list[EvalTarget]":
             )
             for r in grouped[target_id]
         ]
-        out.append(EvalTarget(target_id=target_id, true_coord=true_coord, obs=obs))
+        # Parquets written before pair_weight existed lack the key entirely;
+        # fall back to the neutral default so old inputs stay loadable.
+        obs_weights = [
+            float(w) if (w := r.get("pair_weight")) is not None else 1.0
+            for r in grouped[target_id]
+        ]
+        out.append(EvalTarget(
+            target_id=target_id, true_coord=true_coord,
+            obs=obs, obs_weights=obs_weights,
+        ))
     return out

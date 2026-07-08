@@ -9,6 +9,12 @@ Canonical schema (one row per `(vp, target, rtt)` observation):
   optional:
     vp_asn, vp_country, vp_continent, vp_region, vp_city
     target_asn, target_country, target_continent, target_region, target_city
+    pair_weight                      float (>=0)          — traffic weight of the
+                                     (vp, target) pair, in whatever unit the
+                                     dataset uses (e.g. TB). Column absent →
+                                     1.0 everywhere (target weight degenerates
+                                     to obs count); column present but cell
+                                     NaN → 0.0 (unknown traffic = weightless).
 
 `vp_*` columns **always** supply the VP-role data; `target_*` columns **always**
 supply the target-role data. The `setup` flag is descriptive metadata only —
@@ -27,6 +33,14 @@ Slicing (`--slice`):
                Deterministic in (k, seed, asn_bucket_top_n) source_kwargs.
                When `target_asn` is absent / missing, those targets land in
                the `asn_none` bucket and still round-robin into the K folds.
+  wsplit<P>  — location-weighted holdout (P in 1..99, e.g. wsplit20). Per
+               `target_city` (must be non-blank for every target), rank
+               targets by summed pair_weight descending (ties broken by
+               target_id) and send the top ceil(P/100 * n) to the eval set;
+               the rest go to fit. Every city contributes >= 1 eval target
+               (a 1-target city goes entirely to eval and is absent from
+               fit) — test-side location coverage is the invariant, and no
+               top-weight target ever leaks into the fit corpus.
 
 Source kwargs (defaults match the prior VultrCSVSource):
   csv_path           : Path | str   — required; canonical-schema CSV path.
@@ -38,6 +52,7 @@ Source kwargs (defaults match the prior VultrCSVSource):
 from __future__ import annotations
 
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Iterator, Optional
@@ -83,6 +98,7 @@ _OPTIONAL_STR = (
 )
 
 _FOLD_SLICE_RE = re.compile(r"^fold_(\d+)$")
+_WSPLIT_SLICE_RE = re.compile(r"^wsplit(\d{1,2})$")
 
 
 class GenericCSVSource(DataSource):
@@ -113,6 +129,8 @@ class GenericCSVSource(DataSource):
                 f"{self.name!r} requires `csv_path` (path to a canonical-schema CSV)"
             )
         fold_match = _FOLD_SLICE_RE.match(slice)
+        wsplit_match = _WSPLIT_SLICE_RE.match(slice)
+        wsplit_pct = None
         if fold_match is not None:
             fold_index = int(fold_match.group(1))
             if fold_index >= k:
@@ -120,19 +138,29 @@ class GenericCSVSource(DataSource):
                     f"slice fold index {fold_index} >= k={k} "
                     f"(available: fold_0..fold_{k - 1})"
                 )
+        elif wsplit_match is not None:
+            fold_index = None
+            wsplit_pct = int(wsplit_match.group(1))
+            if not 1 <= wsplit_pct <= 99:
+                raise ValueError(
+                    f"wsplit percentage must be in 1..99, got {wsplit_pct} "
+                    f"(slice {slice!r})"
+                )
         elif slice == "all" or slice.startswith("head"):
             # `head<k>` is fully validated inside _apply_slice when the row
             # parser runs; constructor only confirms the prefix is legal.
             fold_index = None
         else:
             raise ValueError(
-                f"unknown slice {slice!r}; expected 'all', 'head<k>', or 'fold_N'"
+                f"unknown slice {slice!r}; expected 'all', 'head<k>', "
+                f"'fold_N', or 'wsplit<P>'"
             )
 
         self._slice = slice
         self._setup = setup
         self._csv_path = Path(csv_path)
         self._fold_index = fold_index
+        self._wsplit_pct = wsplit_pct
         self._k = k
         self._seed = seed
         self._asn_bucket_top_n = asn_bucket_top_n
@@ -209,25 +237,37 @@ class GenericCSVSource(DataSource):
                 lat=float(first["target_lat"]),
                 lon=float(first["target_lon"]),
             )
-            obs: list[tuple[VpId, Coord, Latency]] = [
-                (
+            obs: list[tuple[VpId, Coord, Latency]] = []
+            obs_weights: list[float] = []
+            for r in group.itertuples(index=False):
+                obs.append((
                     VpId(str(r.vp_id)),
                     Coord(lat=float(r.vp_lat), lon=float(r.vp_lon)),
                     Latency(float(r.rtt_ms)),
-                )
-                for r in group.itertuples(index=False)
-            ]
-            yield EvalTarget(target_id=tg_id_str, true_coord=true_coord, obs=obs)
+                ))
+                obs_weights.append(float(r.pair_weight))
+            yield EvalTarget(
+                target_id=tg_id_str, true_coord=true_coord,
+                obs=obs, obs_weights=obs_weights,
+            )
 
     # ---- internals -----------------------------------------------------------
 
     def _ensure_loaded(self) -> pd.DataFrame:
         if self._df is None:
             self._load_csv()
-            if self._fold_index is not None:
-                self._apply_stratification()
-            if self._min_obs is not None:
-                self._apply_min_obs_filter()
+            if self._wsplit_pct is not None:
+                # min_obs must run BEFORE the weight split: dropping a
+                # top-weight target after the split would silently shrink
+                # test-side location coverage — the split's invariant.
+                if self._min_obs is not None:
+                    self._apply_min_obs_filter()
+                self._apply_weight_split()
+            else:
+                if self._fold_index is not None:
+                    self._apply_stratification()
+                if self._min_obs is not None:
+                    self._apply_min_obs_filter()
         assert self._df is not None
         return self._df
 
@@ -244,8 +284,46 @@ class GenericCSVSource(DataSource):
             )
         df = df.dropna(subset=list(_REQUIRED))
         df = df[df["rtt_ms"] > 0].copy()
+        df = self._normalize_pair_weight(df)
         df = self._apply_slice(df, self._slice)
         self._df = df.reset_index(drop=True)
+
+    def _normalize_pair_weight(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Guarantee a numeric non-negative `pair_weight` column.
+
+        Two distinct defaults, deliberately:
+          * column absent  → 1.0 everywhere ("this dataset has no weight
+            notion"; summed target weight degenerates to obs count, and
+            pair-weight-min thresholds <= 1.0 stay no-ops).
+          * column present but cell NaN/non-numeric → 0.0 ("traffic unknown
+            = weightless"): the pair can never outrank genuinely heavy
+            flows in the wsplit ranking nor survive a weighted-eval
+            threshold. Filling 1.0 here would masquerade as 1 unit of real
+            traffic (e.g. 1 TB) among measured values.
+        """
+        if "pair_weight" not in df.columns:
+            df["pair_weight"] = 1.0
+            if self._wsplit_pct is not None:
+                logger.info(
+                    "CSV %s has no pair_weight column; defaulting to 1.0 — "
+                    "wsplit ranks targets by obs count", self._csv_path,
+                )
+            return df
+        df["pair_weight"] = pd.to_numeric(df["pair_weight"], errors="coerce")
+        n_missing = int(df["pair_weight"].isna().sum())
+        if n_missing:
+            logger.info(
+                "pair_weight: %d missing/non-numeric cells defaulted to 0.0 "
+                "(unknown traffic = weightless)",
+                n_missing,
+            )
+            df["pair_weight"] = df["pair_weight"].fillna(0.0)
+        if (df["pair_weight"] < 0).any():
+            raise ValueError(
+                f"CSV {self._csv_path}: pair_weight must be >= 0 "
+                f"(found negative values)"
+            )
+        return df
 
     @staticmethod
     def _apply_slice(df: pd.DataFrame, slice_name: str) -> pd.DataFrame:
@@ -253,7 +331,7 @@ class GenericCSVSource(DataSource):
         lives in cached id sets, not in row drops."""
         if slice_name == "all":
             return df
-        if _FOLD_SLICE_RE.match(slice_name):
+        if _FOLD_SLICE_RE.match(slice_name) or _WSPLIT_SLICE_RE.match(slice_name):
             return df
         if slice_name.startswith("head"):
             try:
@@ -269,7 +347,8 @@ class GenericCSVSource(DataSource):
                 )
             return df[df["target_id"].astype(str).isin(keep)].copy()
         raise ValueError(
-            f"unknown slice {slice_name!r}; expected 'all', 'head<k>', or 'fold_N'"
+            f"unknown slice {slice_name!r}; expected 'all', 'head<k>', "
+            f"'fold_N', or 'wsplit<P>'"
         )
 
     def _apply_stratification(self) -> None:
@@ -308,6 +387,57 @@ class GenericCSVSource(DataSource):
             "fit=union of %d other folds (%d targets)",
             len(targets), self._k, self._fold_index,
             len(eval_targets), self._k - 1, len(fit_targets),
+        )
+
+    def _apply_weight_split(self) -> None:
+        """Location-weighted holdout (`wsplit<P>`). Per target_city, the top
+        ceil(P/100 * n) targets by summed pair_weight go to the eval set;
+        the rest go to fit. Deterministic: ties break on target_id."""
+        assert self._df is not None and self._wsplit_pct is not None
+        df = self._df
+        if "target_city" not in df.columns:
+            raise ValueError(
+                f"slice {self._slice!r} requires a target_city column "
+                f"(missing from {self._csv_path})"
+            )
+
+        unique = df.drop_duplicates("target_id").copy()
+        unique["target_id"] = unique["target_id"].astype(str)
+        city = unique["target_city"].astype(str).str.strip()
+        blank = ~unique["target_city"].notna() | (city == "")
+        if blank.any():
+            raise ValueError(
+                f"slice {self._slice!r} requires a non-blank target_city for "
+                f"every target; {int(blank.sum())} of {len(unique)} targets "
+                f"have none (e.g. {unique.loc[blank, 'target_id'].head(3).tolist()})"
+            )
+
+        weight_by_target = (
+            df.assign(target_id=df["target_id"].astype(str))
+            .groupby("target_id")["pair_weight"].sum()
+        )
+
+        eval_targets: set[str] = set()
+        fit_targets: set[str] = set()
+        n_cities_without_fit = 0
+        for _, group in unique.groupby(city):
+            ranked = sorted(
+                group["target_id"],
+                key=lambda t: (-weight_by_target[t], t),
+            )
+            n_eval = math.ceil(self._wsplit_pct / 100 * len(ranked))
+            eval_targets.update(ranked[:n_eval])
+            fit_targets.update(ranked[n_eval:])
+            if n_eval == len(ranked):
+                n_cities_without_fit += 1
+
+        self._eval_targets = eval_targets
+        self._fit_targets = fit_targets
+        logger.info(
+            "weight-split %d targets over %d cities at %d%%: eval=%d "
+            "(top-sum-weight per city), fit=%d (%d cities absent from fit)",
+            len(unique), city.nunique(), self._wsplit_pct,
+            len(eval_targets), len(fit_targets), n_cities_without_fit,
         )
 
     def _apply_min_obs_filter(self) -> None:

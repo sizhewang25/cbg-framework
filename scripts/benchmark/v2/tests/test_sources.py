@@ -910,5 +910,192 @@ class TestRipeAtlasASNCorporaGeoFilter(unittest.TestCase):
         self.assertEqual(self._all_anchor_ids(src), {a[0] for a in self._ANCHORS})
 
 
+# Weighted canonical CSV for the wsplit<P> slice. Three cities:
+#   atlanta — 5 targets, summed weights a1=100, a2=45+46=91 (two VP rows —
+#             exercises per-target summing), a3=50, a4=10, a5=5
+#   boston  — 2 targets, b1=10, b2=200
+#   chicago — 1 target,  c1=7 (singleton city: goes entirely to eval)
+_WEIGHTED_CSV = textwrap.dedent("""
+    vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+    1.1.1.1,33.0,-84.0,a1,40.0,-100.0,atlanta,10.0,100
+    1.1.1.1,33.0,-84.0,a2,41.0,-101.0,atlanta,11.0,45
+    2.2.2.2,47.0,-122.0,a2,41.0,-101.0,atlanta,11.5,46
+    1.1.1.1,33.0,-84.0,a3,42.0,-102.0,atlanta,12.0,50
+    1.1.1.1,33.0,-84.0,a4,43.0,-103.0,atlanta,13.0,10
+    1.1.1.1,33.0,-84.0,a5,44.0,-104.0,atlanta,14.0,5
+    1.1.1.1,33.0,-84.0,b1,45.0,-105.0,boston,15.0,10
+    1.1.1.1,33.0,-84.0,b2,46.0,-106.0,boston,16.0,200
+    1.1.1.1,33.0,-84.0,c1,47.0,-107.0,chicago,17.0,7
+""").strip() + "\n"
+
+
+class TestGenericCSVSource_WeightSplit(unittest.TestCase):
+    """Location-weighted holdout (`wsplit<P>`): per target_city, the top
+    ceil(P/100 * n) targets by summed pair_weight are held out for eval."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.csv_path = Path(self.tmp.name) / "weighted.csv"
+        self.csv_path.write_text(_WEIGHTED_CSV)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _make(self, slice: str = "wsplit20", csv_path: Path | None = None) -> GenericCSVSource:
+        return GenericCSVSource(
+            slice=slice, setup="anchors_to_probes",
+            csv_path=csv_path or self.csv_path,
+        )
+
+    def _split(self, src: GenericCSVSource) -> tuple[set[str], set[str]]:
+        list(src.iter_eval_targets())  # force loading
+        assert src._eval_targets is not None and src._fit_targets is not None
+        return src._eval_targets, src._fit_targets
+
+    def test_wsplit20_holds_out_top_weight_target_per_city(self) -> None:
+        eval_t, fit_t = self._split(self._make("wsplit20"))
+        # atlanta: ceil(0.2*5)=1 → a1 (weight 100); boston: ceil(0.2*2)=1 →
+        # b2 (200); chicago: ceil(0.2*1)=1 → c1 (whole city).
+        self.assertEqual(eval_t, {"a1", "b2", "c1"})
+        self.assertEqual(fit_t, {"a2", "a3", "a4", "a5", "b1"})
+
+    def test_wsplit_sums_pair_weights_across_vps(self) -> None:
+        """a2's weight is split over two VP rows (45+46=91) — the ranking
+        must sum them, beating a3's single 50 at the 40% cut."""
+        eval_t, _ = self._split(self._make("wsplit40"))
+        # atlanta: ceil(0.4*5)=2 → {a1, a2}; boston: ceil(0.8)=1 → {b2}.
+        self.assertEqual(eval_t, {"a1", "a2", "b2", "c1"})
+
+    def test_wsplit_eval_fit_disjoint_and_cover_all(self) -> None:
+        eval_t, fit_t = self._split(self._make())
+        self.assertTrue(eval_t.isdisjoint(fit_t))
+        self.assertEqual(
+            eval_t | fit_t,
+            {"a1", "a2", "a3", "a4", "a5", "b1", "b2", "c1"},
+        )
+
+    def test_wsplit_singleton_city_absent_from_fit(self) -> None:
+        """A 1-target city goes entirely to eval — test-side location
+        coverage is the invariant; the fit corpus just loses that city."""
+        eval_t, fit_t = self._split(self._make())
+        self.assertIn("c1", eval_t)
+        self.assertNotIn("c1", fit_t)
+
+    def test_wsplit_every_city_covered_in_eval(self) -> None:
+        eval_ids, _ = self._split(self._make())
+        # a/b/c target_id prefix == city in the fixture.
+        self.assertEqual({tid[0] for tid in eval_ids}, {"a", "b", "c"})
+
+    def test_wsplit_deterministic(self) -> None:
+        eval_a, _ = self._split(self._make())
+        eval_b, _ = self._split(self._make())
+        self.assertEqual(eval_a, eval_b)
+
+    def test_wsplit_tie_breaks_on_target_id(self) -> None:
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+            1.1.1.1,33.0,-84.0,t_b,40.0,-100.0,x,10.0,100
+            1.1.1.1,33.0,-84.0,t_a,41.0,-101.0,x,11.0,100
+        """).strip() + "\n"
+        path = Path(self.tmp.name) / "tie.csv"
+        path.write_text(csv)
+        eval_t, fit_t = self._split(self._make("wsplit50", csv_path=path))
+        self.assertEqual(eval_t, {"t_a"})
+        self.assertEqual(fit_t, {"t_b"})
+
+    def test_wsplit_missing_pair_weight_ranks_by_obs_count(self) -> None:
+        """No pair_weight column → uniform 1.0 → summed weight degenerates
+        to obs count, so the most-measured target is held out."""
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,x,10.0
+            2.2.2.2,47.0,-122.0,t1,40.0,-100.0,x,11.0
+            3.3.3.3,35.0,-90.0,t1,40.0,-100.0,x,12.0
+            1.1.1.1,33.0,-84.0,t2,41.0,-101.0,x,13.0
+            1.1.1.1,33.0,-84.0,t3,42.0,-102.0,x,14.0
+        """).strip() + "\n"
+        path = Path(self.tmp.name) / "no_weight.csv"
+        path.write_text(csv)
+        eval_t, _ = self._split(self._make("wsplit20", csv_path=path))
+        self.assertEqual(eval_t, {"t1"})
+
+    def test_wsplit_nan_weight_in_present_column_sinks_to_zero(self) -> None:
+        """NaN in an existing pair_weight column fills 0.0 (unknown traffic
+        = weightless), so it can never outrank a measured flow — unlike the
+        absent-column case, which fills the neutral 1.0."""
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,x,10.0,
+            1.1.1.1,33.0,-84.0,t2,41.0,-101.0,x,11.0,0.5
+        """).strip() + "\n"
+        path = Path(self.tmp.name) / "nan_weight.csv"
+        path.write_text(csv)
+        eval_t, fit_t = self._split(self._make("wsplit50", csv_path=path))
+        # t1's unknown weight (NaN → 0.0) loses to t2's measured 0.5.
+        self.assertEqual(eval_t, {"t2"})
+        self.assertEqual(fit_t, {"t1"})
+
+    def test_wsplit_eval_targets_carry_obs_weights(self) -> None:
+        src = self._make("wsplit40")
+        by_id = {t.target_id: t for t in src.iter_eval_targets()}
+        a2 = by_id["a2"]
+        assert a2.obs_weights is not None
+        self.assertEqual(len(a2.obs_weights), len(a2.obs))
+        self.assertEqual(sorted(a2.obs_weights), [45.0, 46.0])
+
+    def test_wsplit_missing_city_column_raises(self) -> None:
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,pair_weight
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0,1
+        """).strip() + "\n"
+        path = Path(self.tmp.name) / "no_city.csv"
+        path.write_text(csv)
+        src = self._make(csv_path=path)
+        with self.assertRaises(ValueError):
+            list(src.iter_eval_targets())
+
+    def test_wsplit_blank_city_cell_raises(self) -> None:
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,atlanta,10.0,1
+            1.1.1.1,33.0,-84.0,t2,41.0,-101.0,,11.0,1
+        """).strip() + "\n"
+        path = Path(self.tmp.name) / "blank_city.csv"
+        path.write_text(csv)
+        src = self._make(csv_path=path)
+        with self.assertRaises(ValueError):
+            list(src.iter_eval_targets())
+
+    def test_wsplit_negative_weight_raises(self) -> None:
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,atlanta,10.0,-5
+        """).strip() + "\n"
+        path = Path(self.tmp.name) / "neg_weight.csv"
+        path.write_text(csv)
+        src = self._make(csv_path=path)
+        with self.assertRaises(ValueError):
+            list(src.iter_eval_targets())
+
+    def test_wsplit_invalid_pct_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            self._make("wsplit0")
+        # 3-digit percentages don't match the slice grammar at all.
+        with self.assertRaises(ValueError):
+            self._make("wsplit100")
+
+    def test_fold_slices_unaffected_by_weight_column(self) -> None:
+        """The weighted CSV still works under the existing fold grammar —
+        pair_weight is carried but ignored by DistGeo stratification."""
+        src = GenericCSVSource(
+            slice="fold_0", setup="anchors_to_probes",
+            csv_path=self.csv_path, k=2,
+        )
+        eval_t = {t.target_id for t in src.iter_eval_targets()}
+        assert src._fit_targets is not None
+        self.assertTrue(eval_t.isdisjoint(src._fit_targets))
+        self.assertGreater(len(eval_t), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
