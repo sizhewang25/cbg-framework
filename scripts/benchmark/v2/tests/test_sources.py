@@ -1097,5 +1097,142 @@ class TestGenericCSVSource_WeightSplit(unittest.TestCase):
         self.assertGreater(len(eval_t), 0)
 
 
+# Fixture for the materialize-time traffic-weighted eval mask
+# (`eval_pair_weight_min`). Per-target flow weights, chosen so a threshold
+# of 10 exercises every case:
+#   t1 — mixed: one heavy flow (100) + one light (3)  → survives, loses vp 2.2.2.2
+#   t2 — all light (5)                                → dropped from eval
+#   t3 — all heavy (50, 60)                           → survives intact
+#   t4 — mixed the other way: 8 + 12                  → survives via vp 2.2.2.2
+_EVAL_MASK_CSV = textwrap.dedent("""
+    vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,pair_weight
+    1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0,100
+    2.2.2.2,47.0,-122.0,t1,40.0,-100.0,11.0,3
+    1.1.1.1,33.0,-84.0,t2,41.0,-101.0,12.0,5
+    1.1.1.1,33.0,-84.0,t3,42.0,-102.0,13.0,50
+    2.2.2.2,47.0,-122.0,t3,42.0,-102.0,14.0,60
+    1.1.1.1,33.0,-84.0,t4,43.0,-103.0,15.0,8
+    2.2.2.2,47.0,-122.0,t4,43.0,-103.0,16.0,12
+""").strip() + "\n"
+
+# Targets whose max flow weight clears the threshold of 10.
+_EVAL_MASK_SURVIVORS = {"t1", "t3", "t4"}
+
+
+class TestGenericCSVSource_EvalWeightFilter(unittest.TestCase):
+    """Materialize-time traffic-weighted eval mask (`eval_pair_weight_min`):
+    an eval target survives iff >= 1 obs clears the threshold, surviving
+    targets keep only the clearing obs, and the fit side is untouched."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.csv_path = Path(self.tmp.name) / "eval_mask.csv"
+        self.csv_path.write_text(_EVAL_MASK_CSV)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _make(
+        self,
+        slice: str = "fold_0",
+        eval_pair_weight_min: float | None = 10.0,
+        **kwargs,
+    ) -> GenericCSVSource:
+        return GenericCSVSource(
+            slice=slice, setup="anchors_to_probes",
+            csv_path=self.csv_path, k=2,
+            eval_pair_weight_min=eval_pair_weight_min,
+            **kwargs,
+        )
+
+    def test_fold_eval_set_is_unfiltered_eval_intersect_survivors(self) -> None:
+        """Fold membership is DistGeo's business; the mask must only
+        intersect the fold's eval set with the weight-clearing targets."""
+        unfiltered = {t.target_id for t in self._make(eval_pair_weight_min=None).iter_eval_targets()}
+        filtered = {t.target_id for t in self._make().iter_eval_targets()}
+        self.assertEqual(filtered, unfiltered & _EVAL_MASK_SURVIVORS)
+
+    def test_fit_side_untouched(self) -> None:
+        """Full-mesh training: fit target set and fit sample stream are
+        byte-identical with and without the mask. Dropped eval targets do
+        NOT migrate into fit."""
+        plain, masked = self._make(eval_pair_weight_min=None), self._make()
+        fit_plain = list(plain.iter_fit_samples())
+        fit_masked = list(masked.iter_fit_samples())
+        self.assertEqual(fit_plain, fit_masked)
+        self.assertEqual(plain._fit_targets, masked._fit_targets)
+
+    def test_surviving_targets_keep_only_clearing_obs(self) -> None:
+        unfiltered_n_obs = {
+            t.target_id: len(t.obs)
+            for t in self._make(eval_pair_weight_min=None).iter_eval_targets()
+        }
+        expected_n_obs = {"t1": 1, "t3": 2, "t4": 1}  # at thr=10 (t2 dropped)
+        for t in self._make().iter_eval_targets():
+            assert t.obs_weights is not None
+            self.assertEqual(len(t.obs), len(t.obs_weights))
+            self.assertTrue(all(w >= 10.0 for w in t.obs_weights))
+            self.assertEqual(len(t.obs), expected_n_obs[t.target_id])
+            self.assertLessEqual(len(t.obs), unfiltered_n_obs[t.target_id])
+
+    def test_mixed_target_loses_the_light_vp(self) -> None:
+        """slice='all' makes every target an eval target, so the per-obs
+        restriction is checkable deterministically: t1 keeps only its heavy
+        flow's VP, t4 only its 12-weight VP, t2 vanishes."""
+        by_id = {t.target_id: t for t in self._make(slice="all").iter_eval_targets()}
+        self.assertEqual(set(by_id), _EVAL_MASK_SURVIVORS)
+        self.assertEqual([str(vp) for vp, _, _ in by_id["t1"].obs], ["1.1.1.1"])
+        self.assertEqual([str(vp) for vp, _, _ in by_id["t4"].obs], ["2.2.2.2"])
+        self.assertEqual(len(by_id["t3"].obs), 2)
+
+    def test_all_slice_fit_stream_stays_full(self) -> None:
+        """On split-less slices the mask sets _eval_targets but leaves
+        _fit_targets None — the fit stream still yields every CSV row."""
+        src = self._make(slice="all")
+        self.assertEqual(len(list(src.iter_fit_samples())), 7)
+
+    def test_threshold_dropping_every_target_raises(self) -> None:
+        src = self._make(eval_pair_weight_min=1000.0)
+        with self.assertRaises(ValueError):
+            list(src.iter_eval_targets())
+
+    def test_negative_threshold_raises_at_construction(self) -> None:
+        with self.assertRaises(ValueError):
+            self._make(eval_pair_weight_min=-1.0)
+
+    def test_absent_weight_column_defaults_make_low_thresholds_noop(self) -> None:
+        """No pair_weight column → uniform 1.0, so thr <= 1.0 changes
+        nothing and thr > 1.0 empties the eval set loudly."""
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0
+            1.1.1.1,33.0,-84.0,t2,41.0,-101.0,11.0
+        """).strip() + "\n"
+        path = Path(self.tmp.name) / "no_weight.csv"
+        path.write_text(csv)
+        noop = GenericCSVSource(
+            slice="all", setup="anchors_to_probes",
+            csv_path=path, eval_pair_weight_min=1.0,
+        )
+        self.assertEqual({t.target_id for t in noop.iter_eval_targets()}, {"t1", "t2"})
+        too_high = GenericCSVSource(
+            slice="all", setup="anchors_to_probes",
+            csv_path=path, eval_pair_weight_min=2.0,
+        )
+        with self.assertRaises(ValueError):
+            list(too_high.iter_eval_targets())
+
+    def test_min_obs_runs_before_the_mask(self) -> None:
+        """min_obs=2 first drops single-obs targets (t2), then the mask
+        restricts what's left — eval ends up exactly the multi-obs
+        survivors, each with only clearing obs."""
+        src = self._make(slice="all", min_obs=2)
+        by_id = {t.target_id: t for t in src.iter_eval_targets()}
+        self.assertEqual(set(by_id), {"t1", "t3", "t4"})
+        for t in by_id.values():
+            assert t.obs_weights is not None
+            self.assertTrue(all(w >= 10.0 for w in t.obs_weights))
+
+
 if __name__ == "__main__":
     unittest.main()

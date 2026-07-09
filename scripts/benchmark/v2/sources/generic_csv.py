@@ -47,6 +47,14 @@ Source kwargs (defaults match the prior VultrCSVSource):
   k                  : int = 5      — fold count for `fold_N`.
   seed               : int = 42     — DistGeo RNG seed.
   asn_bucket_top_n   : int = 20     — DistGeo bucket cap.
+  min_obs            : int = None   — drop targets with fewer VP observations.
+  eval_pair_weight_min : float = None — traffic-weighted eval mask, applied
+                       AFTER the slice's fit/eval split (and after min_obs):
+                       an eval target survives iff >= 1 of its obs has
+                       pair_weight >= this value, and surviving targets keep
+                       only those clearing obs in iter_eval_targets. The fit
+                       side is untouched — training always sees the full
+                       mesh; only the evaluated view is traffic-restricted.
 """
 
 from __future__ import annotations
@@ -119,6 +127,7 @@ class GenericCSVSource(DataSource):
         seed: int = 42,
         asn_bucket_top_n: int = 20,
         min_obs: Optional[int] = None,
+        eval_pair_weight_min: Optional[float] = None,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
@@ -127,6 +136,10 @@ class GenericCSVSource(DataSource):
         if csv_path is None:
             raise ValueError(
                 f"{self.name!r} requires `csv_path` (path to a canonical-schema CSV)"
+            )
+        if eval_pair_weight_min is not None and eval_pair_weight_min < 0:
+            raise ValueError(
+                f"eval_pair_weight_min must be >= 0, got {eval_pair_weight_min}"
             )
         fold_match = _FOLD_SLICE_RE.match(slice)
         wsplit_match = _WSPLIT_SLICE_RE.match(slice)
@@ -165,6 +178,7 @@ class GenericCSVSource(DataSource):
         self._seed = seed
         self._asn_bucket_top_n = asn_bucket_top_n
         self._min_obs = min_obs
+        self._eval_pair_weight_min = eval_pair_weight_min
 
         # Lazily populated by `_ensure_loaded`.
         self._df: Optional[pd.DataFrame] = None
@@ -240,6 +254,11 @@ class GenericCSVSource(DataSource):
             obs: list[tuple[VpId, Coord, Latency]] = []
             obs_weights: list[float] = []
             for r in group.itertuples(index=False):
+                if (
+                    self._eval_pair_weight_min is not None
+                    and float(r.pair_weight) < self._eval_pair_weight_min
+                ):
+                    continue
                 obs.append((
                     VpId(str(r.vp_id)),
                     Coord(lat=float(r.vp_lat), lon=float(r.vp_lon)),
@@ -268,6 +287,11 @@ class GenericCSVSource(DataSource):
                     self._apply_stratification()
                 if self._min_obs is not None:
                     self._apply_min_obs_filter()
+            # Eval weight mask runs LAST: the split defines the eval set,
+            # min_obs prunes sparse targets, and this only shrinks the eval
+            # side further. The fit side is never touched.
+            if self._eval_pair_weight_min is not None:
+                self._apply_eval_weight_filter()
         assert self._df is not None
         return self._df
 
@@ -439,6 +463,32 @@ class GenericCSVSource(DataSource):
             len(unique), city.nunique(), self._wsplit_pct,
             len(eval_targets), len(fit_targets), n_cities_without_fit,
         )
+
+    def _apply_eval_weight_filter(self) -> None:
+        """Traffic-weighted eval mask (`eval_pair_weight_min`). An eval target
+        survives iff >= 1 of its obs has pair_weight >= the threshold;
+        iter_eval_targets then emits only the clearing obs. Fit targets and
+        fit samples are untouched (full-mesh training)."""
+        assert self._df is not None and self._eval_pair_weight_min is not None
+        df = self._df
+        thr = self._eval_pair_weight_min
+        surviving = set(df.loc[df["pair_weight"] >= thr, "target_id"].astype(str))
+        base = (
+            self._eval_targets
+            if self._eval_targets is not None
+            else set(df["target_id"].astype(str))
+        )
+        kept = base & surviving
+        if not kept:
+            raise ValueError(
+                f"eval_pair_weight_min={thr} left zero eval targets in slice "
+                f"{self._slice!r} — the threshold exceeds the data's weights"
+            )
+        logger.info(
+            "eval_pair_weight_min=%s: eval targets %d → %d (fit side untouched)",
+            thr, len(base), len(kept),
+        )
+        self._eval_targets = kept
 
     def _apply_min_obs_filter(self) -> None:
         assert self._df is not None and self._min_obs is not None

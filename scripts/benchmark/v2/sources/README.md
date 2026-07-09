@@ -43,6 +43,15 @@ every target). Both setups (probes_to_anchors and anchors_to_probes)
 work out of the box; the same columns play the VP role under one setup
 and the target role under the other.
 
+Orthogonally to the slice, the `eval_pair_weight_min` source kwarg (CLI:
+`--eval-pair-weight-min`) applies a traffic mask to the eval side at
+materialize time: after the slice's fit/eval split (and after `min_obs`),
+an eval target survives only if ≥ 1 of its obs has `pair_weight >=` the
+threshold, and surviving targets keep only those clearing obs in
+`eval_observations.parquet`. Fit samples are untouched (full-mesh
+training). Use with `fold_N` for k-fold training with traffic-weighted
+evaluation.
+
 To benchmark several CSVs side-by-side, subclass `GenericCSVSource` and
 give each subclass a distinct `name` — that's the only thing that
 distinguishes them in the on-disk tree and the `SOURCES` registry.

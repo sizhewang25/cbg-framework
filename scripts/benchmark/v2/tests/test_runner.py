@@ -311,6 +311,32 @@ class TestPairWeightEval(unittest.TestCase):
                 run_id="pw-test", source_name="generic_csv", slice_name="all",
             )
 
+    def test_materialize_time_eval_weight_filter_bakes_into_parquet(self) -> None:
+        """eval_pair_weight_min at materialize time: the parquet itself holds
+        only clearing obs (2001's 8.0 row), dropped targets are absent, the
+        manifest counts reflect the mask — and fit_samples stay full-mesh,
+        identical to the unfiltered materialization."""
+        src = GenericCSVSource(
+            slice="all", setup="anchors_to_probes", csv_path=self.csv_path,
+            eval_pair_weight_min=5.0,
+        )
+        inputs_dir = materialize_inputs(
+            src, root=self.root / "inputs_masked", run_id="pw-test",
+        )
+
+        table = pq.read_table(inputs_dir / "eval_observations.parquet")
+        self.assertEqual(table.column("target_id").to_pylist(), ["2001"])
+        self.assertEqual(table.column("pair_weight").to_pylist(), [8.0])
+        self.assertEqual(table.column("vp_id").to_pylist(), ["1.1.1.1"])
+
+        manifest = json.loads((inputs_dir / "manifest.json").read_text())
+        self.assertEqual(manifest["n_eval_targets"], 1)
+        self.assertEqual(manifest["n_eval_observations"], 1)
+
+        fit_masked = pq.read_table(inputs_dir / "fit_samples.parquet")
+        fit_full = pq.read_table(self.inputs_dir / "fit_samples.parquet")
+        self.assertTrue(fit_masked.equals(fit_full))
+
 
 if __name__ == "__main__":
     unittest.main()

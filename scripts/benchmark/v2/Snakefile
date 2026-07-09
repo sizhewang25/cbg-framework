@@ -48,6 +48,14 @@ rule materialize:
         run_id = RUN_ID,
         inputs_root = str(INPUTS_ROOT),
         source_kwargs_json = json.dumps(SOURCE_KWARGS),
+        # Materialize-time traffic-weighted eval mask (see generic_csv.py):
+        # eval targets keep only obs with pair_weight >= this value and drop
+        # out entirely when none clears; fit samples stay full-mesh. Changes
+        # the materialized inputs, so use a distinct run_id per threshold.
+        eval_pair_weight_min_flag = lambda wc: (
+            f"--eval-pair-weight-min {config['eval_pair_weight_min']}"
+            if "eval_pair_weight_min" in config else ""
+        ),
     shell:
         CLI + " materialize-inputs"
         " --source {params.source}"
@@ -56,6 +64,7 @@ rule materialize:
         " --run-id {params.run_id}"
         " --inputs-root {params.inputs_root}"
         " --source-kwargs '{params.source_kwargs_json}'"
+        " {params.eval_pair_weight_min_flag}"
 
 # ---- Run one (slice, combo) -------------------------------------------------
 rule run_combo:

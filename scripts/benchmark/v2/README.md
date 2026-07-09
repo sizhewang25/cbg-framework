@@ -183,6 +183,38 @@ poetry run python -m scripts.benchmark.v2.cli run-combo \
     --pair-weight-min 5.0
 ```
 
+**Materialize-time eval mask (`--eval-pair-weight-min X` on
+`materialize-inputs`, config key `eval_pair_weight_min:`).** The
+alternative to a traffic-based split: keep the geo-stratified `fold_N`
+slices over the *full* ground-truth set (every target trains in K−1 folds
+and tests once — no labels sacrificed to a traffic holdout) and let
+traffic enter only as an eval-side mask, baked into the materialized
+inputs. Applied after stratification (and after `--min-obs`): a fold's
+eval target survives iff ≥ 1 of its obs has `pair_weight >= X`, and
+surviving targets keep only those clearing obs in
+`eval_observations.parquet`. Fit samples are untouched — training always
+sees the full mesh, and the train/eval asymmetry is deliberate: the model
+is as well-fit as possible while the test-time observation is restricted
+to the VPs that actually carry traffic to the target (expect looser
+geometry and honest accuracy drops; that's operational fidelity, not
+regression). Because the mask is in the parquet, every downstream consumer
+(cluster-score's shortest-ping baseline, world maps, manifest counts) sees
+the same restricted eval set — unlike run-time `--pair-weight-min`, which
+only the runner applies. The two knobs are redundant when the mask is on;
+keep using `--pair-weight-min` when you want to sweep thresholds over one
+unfiltered materialization. The mask changes the inputs themselves, so use
+a distinct `run_id` per threshold (inputs live under
+`<root>/<source>/<run_id>/...`).
+
+```bash
+# k-fold + traffic-masked eval: full-mesh training, eval only the
+# targets/flows with pair_weight >= 5.0 in each fold
+poetry run python -m scripts.benchmark.v2.cli materialize-inputs \
+    --source generic_csv --slice fold_0 --run-id ktraffic-001 \
+    --source-kwargs '{"csv_path": "path/to/weighted.csv"}' \
+    --eval-pair-weight-min 5.0
+```
+
 ## Stage instrumentation
 
 `CBGModel.geolocate(obs, instrument=...)` accepts a callable that returns a

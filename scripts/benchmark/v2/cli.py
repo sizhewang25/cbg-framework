@@ -85,6 +85,16 @@ def cmd_materialize_inputs(
             "that only appear in dropped rows. Forwarded to the source constructor."
         ),
     ),
+    eval_pair_weight_min: Optional[float] = typer.Option(
+        None,
+        help=(
+            "Traffic-weighted eval at materialize time: keep an eval target only "
+            "if >= 1 obs has pair_weight >= this value, and drop its "
+            "below-threshold obs from eval_observations.parquet. Fit samples are "
+            "unaffected (full-mesh training). Applied after the slice's fit/eval "
+            "split and after --min-obs. Forwarded to the source constructor."
+        ),
+    ),
 ) -> None:
     """Pull data from a DataSource into vp_configs / fit_samples / eval_observations parquet."""
     if source not in SOURCES:
@@ -95,6 +105,8 @@ def cmd_materialize_inputs(
     kwargs = json.loads(source_kwargs)
     if min_obs is not None:
         kwargs["min_obs"] = min_obs
+    if eval_pair_weight_min is not None:
+        kwargs["eval_pair_weight_min"] = eval_pair_weight_min
     src = source_cls(slice=slice, setup=setup, **kwargs)
     out_dir = inputs_dir_for(src, inputs_root, run_id=run_id)
     if (out_dir / "manifest.json").exists() and not force:
