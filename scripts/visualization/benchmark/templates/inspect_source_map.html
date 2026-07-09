@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Flow map — __TITLE__</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html, body { height: 100%; margin: 0; }
+  #map { height: 100%; }
+  /* Lay the top-right corner out as a grid: stats panel beside the layer
+     toggles, focus panel below them. */
+  .leaflet-top.leaflet-right {
+    display: grid;
+    grid-template-columns: max-content max-content;
+    justify-content: end;
+    align-items: start;
+    gap: 8px;
+    padding: 10px;
+  }
+  .leaflet-top.leaflet-right .leaflet-control {
+    margin: 0;
+    clear: none !important;
+    float: none !important;
+  }
+  .leaflet-top.leaflet-right .stats-panel { grid-column: 1; grid-row: 1; }
+  .leaflet-top.leaflet-right .leaflet-control-layers { grid-column: 2; grid-row: 1; }
+  .leaflet-top.leaflet-right .focus-panel { grid-column: 2; grid-row: 2; justify-self: end; }
+  .stats-panel {
+    background: white;
+    padding: 8px;
+    font-size: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .focus-panel {
+    background: white;
+    padding: 8px;
+    font-size: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    width: min(280px, calc(100vw - 40px));
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    box-sizing: border-box;
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+const PAYLOAD = __PAYLOAD__;
+</script>
+<script>
+__SCRIPT__
+</script>
+</body>
+</html>
