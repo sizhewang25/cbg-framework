@@ -69,12 +69,15 @@ def _plot_cdf(ax: plt.Axes, counts: pd.Series, title: str, xlabel: str) -> None:
 
 
 def inspect(csv_path: Path, out_dir: Path) -> dict[str, Any]:
-    df = pd.read_csv(csv_path, dtype={"vp_id": str, "target_id": str})
+    df = pd.read_csv(csv_path)
+    df.columns = df.columns.str.strip().str.lower()
     missing = [c for c in _REQUIRED if c not in df.columns]
     if missing:
         raise SystemExit(
             f"{csv_path} is not a canonical CSV — missing columns: {missing}"
         )
+    df["vp_id"] = df["vp_id"].astype(str)
+    df["target_id"] = df["target_id"].astype(str)
 
     vp_counts = df.groupby("vp_id").size()
     tg_counts = df.groupby("target_id").size()
