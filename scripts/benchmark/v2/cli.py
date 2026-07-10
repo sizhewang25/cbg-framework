@@ -313,6 +313,15 @@ def cmd_eval_source(
         "40,100,500,1000",
         help="Comma-separated km thresholds for the resolvability table.",
     ),
+    cluster_radius_km: float = typer.Option(
+        50.0,
+        help=(
+            "Answer-space coherence radius R (km): targets are clustered into "
+            "R-coherent regions (same construction as cluster-eval) and the "
+            "summary reports n_clusters plus the share of targets whose "
+            "nearest available VP is within R."
+        ),
+    ),
 ) -> None:
     """Score a canonical CSV's CBG-friendliness (geographic topology + RTT quality).
 
@@ -320,7 +329,8 @@ def cmd_eval_source(
     >= 1 RTT observation for the pair) — reports the geography axis
     (closest_vp_km), the RTT axis (min_rtt_ms / best_radius_km /
     min_inflation), and the combined inverse-RTT-weighted mean VP distance
-    (rtt_weighted_dist_km). Writes <stem>_eval_per_target.csv +
+    (rtt_weighted_dist_km), and sizes the answer space by clustering targets
+    at the coherence radius R. Writes <stem>_eval_per_target.csv +
     <stem>_eval_stats.json and prints the summary.
     """
     from scripts.benchmark.v2.eval_source import eval_source
@@ -340,7 +350,9 @@ def cmd_eval_source(
         typer.echo("--thresholds must contain at least one value", err=True)
         raise typer.Exit(code=2)
 
-    stats = eval_source(csv, out_dir or csv.parent, thr)
+    stats = eval_source(
+        csv, out_dir or csv.parent, thr, cluster_radius_km=cluster_radius_km
+    )
     typer.echo(json.dumps(stats, indent=2))
 
 
