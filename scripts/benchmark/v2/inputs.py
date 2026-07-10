@@ -185,7 +185,7 @@ def _write_eval_observations(
     vp_lats: list[float] = []
     vp_lons: list[float] = []
     latencies: list[float] = []
-    pair_weights: list[float] = []
+    weights: list[float] = []
 
     n_targets = 0
     for t in targets:
@@ -203,7 +203,7 @@ def _write_eval_observations(
             vp_lats.append(vp_coord.lat)
             vp_lons.append(vp_coord.lon)
             latencies.append(float(latency))
-            pair_weights.append(
+            weights.append(
                 float(t.obs_weights[i]) if t.obs_weights is not None else 1.0
             )
 
@@ -216,7 +216,7 @@ def _write_eval_observations(
             "vp_lat": vp_lats,
             "vp_lon": vp_lons,
             "latency_ms": latencies,
-            "pair_weight": pair_weights,
+            "weight": weights,
         },
         schema=bench_schema.EVAL_OBSERVATIONS_SCHEMA,
     )
@@ -268,10 +268,11 @@ def load_eval_targets_parquet(path: Path) -> "list[EvalTarget]":
             )
             for r in grouped[target_id]
         ]
-        # Parquets written before pair_weight existed lack the key entirely;
-        # fall back to the neutral default so old inputs stay loadable.
+        # Older parquets named the column `pair_weight`, and ones written
+        # before weights existed lack the key entirely; fall back so old
+        # inputs stay loadable.
         obs_weights = [
-            float(w) if (w := r.get("pair_weight")) is not None else 1.0
+            float(w) if (w := r.get("weight", r.get("pair_weight"))) is not None else 1.0
             for r in grouped[target_id]
         ]
         out.append(EvalTarget(

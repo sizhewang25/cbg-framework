@@ -89,7 +89,7 @@ def cmd_materialize_inputs(
         None,
         help=(
             "Traffic-weighted eval at materialize time: keep an eval target only "
-            "if >= 1 obs has pair_weight >= this value, and drop its "
+            "if >= 1 obs has weight >= this value, and drop its "
             "below-threshold obs from eval_observations.parquet. Fit samples are "
             "unaffected (full-mesh training). Applied after the slice's fit/eval "
             "split and after --min-obs. Forwarded to the source constructor."
@@ -156,10 +156,10 @@ def cmd_run_combo(
     pair_weight_min: Optional[float] = typer.Option(
         None,
         help=(
-            "Traffic-weighted eval: keep only obs with pair_weight >= this value; "
+            "Traffic-weighted eval: keep only obs with weight >= this value; "
             "targets left with zero obs drop out of the eval set entirely (count "
             "recorded in run.json). Omit for unweighted eval over every obs. "
-            "Unweighted sources default pair_weight to 1.0, so thresholds <= 1.0 "
+            "Unweighted sources default weight to 1.0, so thresholds <= 1.0 "
             "are no-ops there."
         ),
     ),

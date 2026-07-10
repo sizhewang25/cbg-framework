@@ -64,7 +64,7 @@ EVAL_OBSERVATIONS_SCHEMA = pa.schema([
     # Traffic weight of this (vp, target) pair. Sources without a weight
     # notion get the neutral default 1.0, so `--pair-weight-min` thresholds
     # <= 1.0 keep every obs on unweighted data.
-    pa.field("pair_weight", pa.float64(), nullable=False),
+    pa.field("weight", pa.float64(), nullable=False),
 ])
 
 # ---- Outputs -----------------------------------------------------------------

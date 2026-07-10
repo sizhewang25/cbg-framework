@@ -916,7 +916,7 @@ class TestRipeAtlasASNCorporaGeoFilter(unittest.TestCase):
 #   boston  — 2 targets, b1=10, b2=200
 #   chicago — 1 target,  c1=7 (singleton city: goes entirely to eval)
 _WEIGHTED_CSV = textwrap.dedent("""
-    vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+    vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
     1.1.1.1,33.0,-84.0,a1,40.0,-100.0,atlanta,10.0,100
     1.1.1.1,33.0,-84.0,a2,41.0,-101.0,atlanta,11.0,45
     2.2.2.2,47.0,-122.0,a2,41.0,-101.0,atlanta,11.5,46
@@ -931,7 +931,7 @@ _WEIGHTED_CSV = textwrap.dedent("""
 
 class TestGenericCSVSource_WeightSplit(unittest.TestCase):
     """Location-weighted holdout (`wsplit<P>`): per target_city, the top
-    ceil(P/100 * n) targets by summed pair_weight are held out for eval."""
+    ceil(P/100 * n) targets by summed weight are held out for eval."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -959,7 +959,7 @@ class TestGenericCSVSource_WeightSplit(unittest.TestCase):
         self.assertEqual(eval_t, {"a1", "b2", "c1"})
         self.assertEqual(fit_t, {"a2", "a3", "a4", "a5", "b1"})
 
-    def test_wsplit_sums_pair_weights_across_vps(self) -> None:
+    def test_wsplit_sums_weights_across_vps(self) -> None:
         """a2's weight is split over two VP rows (45+46=91) — the ranking
         must sum them, beating a3's single 50 at the 40% cut."""
         eval_t, _ = self._split(self._make("wsplit40"))
@@ -993,7 +993,7 @@ class TestGenericCSVSource_WeightSplit(unittest.TestCase):
 
     def test_wsplit_tie_breaks_on_target_id(self) -> None:
         csv = textwrap.dedent("""
-            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
             1.1.1.1,33.0,-84.0,t_b,40.0,-100.0,x,10.0,100
             1.1.1.1,33.0,-84.0,t_a,41.0,-101.0,x,11.0,100
         """).strip() + "\n"
@@ -1003,8 +1003,8 @@ class TestGenericCSVSource_WeightSplit(unittest.TestCase):
         self.assertEqual(eval_t, {"t_a"})
         self.assertEqual(fit_t, {"t_b"})
 
-    def test_wsplit_missing_pair_weight_ranks_by_obs_count(self) -> None:
-        """No pair_weight column → uniform 1.0 → summed weight degenerates
+    def test_wsplit_missing_weight_ranks_by_obs_count(self) -> None:
+        """No weight column → uniform 1.0 → summed weight degenerates
         to obs count, so the most-measured target is held out."""
         csv = textwrap.dedent("""
             vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms
@@ -1020,11 +1020,11 @@ class TestGenericCSVSource_WeightSplit(unittest.TestCase):
         self.assertEqual(eval_t, {"t1"})
 
     def test_wsplit_nan_weight_in_present_column_sinks_to_zero(self) -> None:
-        """NaN in an existing pair_weight column fills 0.0 (unknown traffic
+        """NaN in an existing weight column fills 0.0 (unknown traffic
         = weightless), so it can never outrank a measured flow — unlike the
         absent-column case, which fills the neutral 1.0."""
         csv = textwrap.dedent("""
-            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
             1.1.1.1,33.0,-84.0,t1,40.0,-100.0,x,10.0,
             1.1.1.1,33.0,-84.0,t2,41.0,-101.0,x,11.0,0.5
         """).strip() + "\n"
@@ -1045,7 +1045,7 @@ class TestGenericCSVSource_WeightSplit(unittest.TestCase):
 
     def test_wsplit_missing_city_column_raises(self) -> None:
         csv = textwrap.dedent("""
-            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,pair_weight
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,weight
             1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0,1
         """).strip() + "\n"
         path = Path(self.tmp.name) / "no_city.csv"
@@ -1056,7 +1056,7 @@ class TestGenericCSVSource_WeightSplit(unittest.TestCase):
 
     def test_wsplit_blank_city_cell_raises(self) -> None:
         csv = textwrap.dedent("""
-            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
             1.1.1.1,33.0,-84.0,t1,40.0,-100.0,atlanta,10.0,1
             1.1.1.1,33.0,-84.0,t2,41.0,-101.0,,11.0,1
         """).strip() + "\n"
@@ -1068,7 +1068,7 @@ class TestGenericCSVSource_WeightSplit(unittest.TestCase):
 
     def test_wsplit_negative_weight_raises(self) -> None:
         csv = textwrap.dedent("""
-            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
             1.1.1.1,33.0,-84.0,t1,40.0,-100.0,atlanta,10.0,-5
         """).strip() + "\n"
         path = Path(self.tmp.name) / "neg_weight.csv"
@@ -1086,7 +1086,7 @@ class TestGenericCSVSource_WeightSplit(unittest.TestCase):
 
     def test_fold_slices_unaffected_by_weight_column(self) -> None:
         """The weighted CSV still works under the existing fold grammar —
-        pair_weight is carried but ignored by DistGeo stratification."""
+        weight is carried but ignored by DistGeo stratification."""
         src = GenericCSVSource(
             slice="fold_0", setup="anchors_to_probes",
             csv_path=self.csv_path, k=2,
@@ -1105,7 +1105,7 @@ class TestGenericCSVSource_WeightSplit(unittest.TestCase):
 #   t3 — all heavy (50, 60)                           → survives intact
 #   t4 — mixed the other way: 8 + 12                  → survives via vp 2.2.2.2
 _EVAL_MASK_CSV = textwrap.dedent("""
-    vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,pair_weight
+    vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,weight
     1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0,100
     2.2.2.2,47.0,-122.0,t1,40.0,-100.0,11.0,3
     1.1.1.1,33.0,-84.0,t2,41.0,-101.0,12.0,5
@@ -1201,7 +1201,7 @@ class TestGenericCSVSource_EvalWeightFilter(unittest.TestCase):
             self._make(eval_pair_weight_min=-1.0)
 
     def test_absent_weight_column_defaults_make_low_thresholds_noop(self) -> None:
-        """No pair_weight column → uniform 1.0, so thr <= 1.0 changes
+        """No weight column → uniform 1.0, so thr <= 1.0 changes
         nothing and thr > 1.0 empties the eval set loudly."""
         csv = textwrap.dedent("""
             vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms

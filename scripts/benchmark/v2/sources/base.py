@@ -38,7 +38,7 @@ class EvalTarget:
     for RIPE Atlas / Vultr — both have hard-GT anchors).
 
     obs_weights, when present, aligns index-for-index with `obs` and carries
-    each pair's traffic weight (`pair_weight` in the canonical CSV schema).
+    each pair's traffic weight (`weight` in the canonical CSV schema).
     None means the source has no weight notion — the materializer writes the
     neutral default 1.0 for every obs.
     """

@@ -103,9 +103,9 @@ def _build_flow_map(df: pd.DataFrame, csv_path: Path, out_path: Path) -> Path | 
         d["rtt_ms"] = pd.to_numeric(d["rtt_ms"], errors="coerce")
         agg_spec["rtt_min"] = ("rtt_ms", "min")
         agg_spec["rtt_med"] = ("rtt_ms", "median")
-    if "pair_weight" in d.columns:
-        d["pair_weight"] = pd.to_numeric(d["pair_weight"], errors="coerce")
-        agg_spec["weight"] = ("pair_weight", "sum")
+    if "weight" in d.columns:
+        d["weight"] = pd.to_numeric(d["weight"], errors="coerce")
+        agg_spec["weight"] = ("weight", "sum")
     pairs = d.groupby(["vp_id", "target_id"], as_index=False).agg(**agg_spec)
     if len(pairs) > _MAX_MAP_PAIRS:
         print(f"{len(pairs)} unique (vp, target) pairs exceeds the "
@@ -188,7 +188,7 @@ def inspect(csv_path: Path, out_dir: Path) -> dict[str, Any]:
         "n_unique_targets": int(tg_counts.size),
         "vp_occurrences": _count_stats(vp_counts),
         "target_observations": _count_stats(tg_counts),
-        "has_pair_weight": "pair_weight" in df.columns,
+        "has_weight": "weight" in df.columns,
     }
 
     fig, (ax_vp, ax_tg) = plt.subplots(1, 2, figsize=(11, 4.2))

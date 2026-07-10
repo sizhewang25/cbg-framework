@@ -197,14 +197,14 @@ class TestRunOneCombo(unittest.TestCase):
 
 
 class TestPairWeightEval(unittest.TestCase):
-    """pair_weight round-trip through materialize + the runner's
+    """weight round-trip through materialize + the runner's
     --pair-weight-min traffic-weighted eval filter."""
 
     # Two targets in one city: 2001 has one heavy (8.0) and one light (2.0)
     # obs; 2002 has only light obs (1.0, 1.5). At threshold 5.0, 2001 keeps
     # a single obs and 2002 drops out of the eval set entirely.
     _CSV = textwrap.dedent("""
-        vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,pair_weight
+        vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
         1.1.1.1,33.0,-84.0,2001,33.5,-84.5,atlanta,5.0,8.0
         2.2.2.2,34.0,-85.0,2001,33.5,-84.5,atlanta,6.0,2.0
         1.1.1.1,33.0,-84.0,2002,32.5,-83.5,atlanta,6.5,1.0
@@ -235,13 +235,13 @@ class TestPairWeightEval(unittest.TestCase):
             pair_weight_min=pair_weight_min,
         )
 
-    def test_pair_weight_round_trips_through_parquet(self) -> None:
+    def test_weight_round_trips_through_parquet(self) -> None:
         from scripts.benchmark.v2.inputs import load_eval_targets_parquet
 
         table = pq.read_table(self.inputs_dir / "eval_observations.parquet")
-        self.assertIn("pair_weight", table.column_names)
+        self.assertIn("weight", table.column_names)
         self.assertEqual(
-            sorted(table.column("pair_weight").to_pylist()),
+            sorted(table.column("weight").to_pylist()),
             [1.0, 1.5, 2.0, 8.0],
         )
         targets = load_eval_targets_parquet(
@@ -259,7 +259,7 @@ class TestPairWeightEval(unittest.TestCase):
         )
         inputs_dir = materialize_inputs(src, root=self.root / "inputs2", run_id="pw-test")
         table = pq.read_table(inputs_dir / "eval_observations.parquet")
-        self.assertEqual(set(table.column("pair_weight").to_pylist()), {1.0})
+        self.assertEqual(set(table.column("weight").to_pylist()), {1.0})
 
     def test_pair_weight_min_filters_obs_and_drops_targets(self) -> None:
         out_dir = outputs_combo_dir(
@@ -326,7 +326,7 @@ class TestPairWeightEval(unittest.TestCase):
 
         table = pq.read_table(inputs_dir / "eval_observations.parquet")
         self.assertEqual(table.column("target_id").to_pylist(), ["2001"])
-        self.assertEqual(table.column("pair_weight").to_pylist(), [8.0])
+        self.assertEqual(table.column("weight").to_pylist(), [8.0])
         self.assertEqual(table.column("vp_id").to_pylist(), ["1.1.1.1"])
 
         manifest = json.loads((inputs_dir / "manifest.json").read_text())

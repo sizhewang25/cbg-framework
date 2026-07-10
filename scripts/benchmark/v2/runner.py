@@ -55,7 +55,7 @@ class ComboSpec:
     `seed` column so a single (combo, target) can be replayed exactly.
 
     `pair_weight_min`, when non-None, switches to traffic-weighted eval:
-    each target keeps only the obs with pair_weight >= the threshold, and
+    each target keeps only the obs with weight >= the threshold, and
     targets left with zero obs drop out of the eval set entirely (counted
     in run.json as n_targets_dropped_below_min_weight). None = unweighted
     eval over every obs.
@@ -91,7 +91,7 @@ def run_one_combo(
     eval_targets = load_eval_targets_parquet(inputs_dir / "eval_observations.parquet")
     n_targets_dropped_below_min_weight: Optional[int] = None
     if spec.pair_weight_min is not None:
-        eval_targets, n_targets_dropped_below_min_weight = _filter_by_pair_weight(
+        eval_targets, n_targets_dropped_below_min_weight = _filter_by_weight(
             eval_targets, spec.pair_weight_min,
         )
 
@@ -168,8 +168,8 @@ def run_one_combo(
 
 # ---- traffic-weighted eval ---------------------------------------------------
 
-def _filter_by_pair_weight(eval_targets, pair_weight_min: float):
-    """Keep only obs with pair_weight >= threshold; drop targets left empty.
+def _filter_by_weight(eval_targets, pair_weight_min: float):
+    """Keep only obs with weight >= threshold; drop targets left empty.
 
     Returns (kept_targets, n_dropped). Raises if the threshold empties the
     whole eval set — a silent zero-target run would look like success."""

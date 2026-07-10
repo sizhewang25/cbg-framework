@@ -9,7 +9,7 @@ Canonical schema (one row per `(vp, target, rtt)` observation):
   optional:
     vp_asn, vp_country, vp_continent, vp_region, vp_city
     target_asn, target_country, target_continent, target_region, target_city
-    pair_weight                      float (>=0)          — traffic weight of the
+    weight                      float (>=0)          — traffic weight of the
                                      (vp, target) pair, in whatever unit the
                                      dataset uses (e.g. TB). Column absent →
                                      1.0 everywhere (target weight degenerates
@@ -35,7 +35,7 @@ Slicing (`--slice`):
                the `asn_none` bucket and still round-robin into the K folds.
   wsplit<P>  — location-weighted holdout (P in 1..99, e.g. wsplit20). Per
                `target_city` (must be non-blank for every target), rank
-               targets by summed pair_weight descending (ties broken by
+               targets by summed weight descending (ties broken by
                target_id) and send the top ceil(P/100 * n) to the eval set;
                the rest go to fit. Every city contributes >= 1 eval target
                (a 1-target city goes entirely to eval and is absent from
@@ -51,7 +51,7 @@ Source kwargs (defaults match the prior VultrCSVSource):
   eval_pair_weight_min : float = None — traffic-weighted eval mask, applied
                        AFTER the slice's fit/eval split (and after min_obs):
                        an eval target survives iff >= 1 of its obs has
-                       pair_weight >= this value, and surviving targets keep
+                       weight >= this value, and surviving targets keep
                        only those clearing obs in iter_eval_targets. The fit
                        side is untouched — training always sees the full
                        mesh; only the evaluated view is traffic-restricted.
@@ -256,7 +256,7 @@ class GenericCSVSource(DataSource):
             for r in group.itertuples(index=False):
                 if (
                     self._eval_pair_weight_min is not None
-                    and float(r.pair_weight) < self._eval_pair_weight_min
+                    and float(r.weight) < self._eval_pair_weight_min
                 ):
                     continue
                 obs.append((
@@ -264,7 +264,7 @@ class GenericCSVSource(DataSource):
                     Coord(lat=float(r.vp_lat), lon=float(r.vp_lon)),
                     Latency(float(r.rtt_ms)),
                 ))
-                obs_weights.append(float(r.pair_weight))
+                obs_weights.append(float(r.weight))
             yield EvalTarget(
                 target_id=tg_id_str, true_coord=true_coord,
                 obs=obs, obs_weights=obs_weights,
@@ -308,12 +308,12 @@ class GenericCSVSource(DataSource):
             )
         df = df.dropna(subset=list(_REQUIRED))
         df = df[df["rtt_ms"] > 0].copy()
-        df = self._normalize_pair_weight(df)
+        df = self._normalize_weight(df)
         df = self._apply_slice(df, self._slice)
         self._df = df.reset_index(drop=True)
 
-    def _normalize_pair_weight(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Guarantee a numeric non-negative `pair_weight` column.
+    def _normalize_weight(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Guarantee a numeric non-negative `weight` column.
 
         Two distinct defaults, deliberately:
           * column absent  → 1.0 everywhere ("this dataset has no weight
@@ -325,26 +325,26 @@ class GenericCSVSource(DataSource):
             threshold. Filling 1.0 here would masquerade as 1 unit of real
             traffic (e.g. 1 TB) among measured values.
         """
-        if "pair_weight" not in df.columns:
-            df["pair_weight"] = 1.0
+        if "weight" not in df.columns:
+            df["weight"] = 1.0
             if self._wsplit_pct is not None:
                 logger.info(
-                    "CSV %s has no pair_weight column; defaulting to 1.0 — "
+                    "CSV %s has no weight column; defaulting to 1.0 — "
                     "wsplit ranks targets by obs count", self._csv_path,
                 )
             return df
-        df["pair_weight"] = pd.to_numeric(df["pair_weight"], errors="coerce")
-        n_missing = int(df["pair_weight"].isna().sum())
+        df["weight"] = pd.to_numeric(df["weight"], errors="coerce")
+        n_missing = int(df["weight"].isna().sum())
         if n_missing:
             logger.info(
-                "pair_weight: %d missing/non-numeric cells defaulted to 0.0 "
+                "weight: %d missing/non-numeric cells defaulted to 0.0 "
                 "(unknown traffic = weightless)",
                 n_missing,
             )
-            df["pair_weight"] = df["pair_weight"].fillna(0.0)
-        if (df["pair_weight"] < 0).any():
+            df["weight"] = df["weight"].fillna(0.0)
+        if (df["weight"] < 0).any():
             raise ValueError(
-                f"CSV {self._csv_path}: pair_weight must be >= 0 "
+                f"CSV {self._csv_path}: weight must be >= 0 "
                 f"(found negative values)"
             )
         return df
@@ -415,7 +415,7 @@ class GenericCSVSource(DataSource):
 
     def _apply_weight_split(self) -> None:
         """Location-weighted holdout (`wsplit<P>`). Per target_city, the top
-        ceil(P/100 * n) targets by summed pair_weight go to the eval set;
+        ceil(P/100 * n) targets by summed weight go to the eval set;
         the rest go to fit. Deterministic: ties break on target_id."""
         assert self._df is not None and self._wsplit_pct is not None
         df = self._df
@@ -438,7 +438,7 @@ class GenericCSVSource(DataSource):
 
         weight_by_target = (
             df.assign(target_id=df["target_id"].astype(str))
-            .groupby("target_id")["pair_weight"].sum()
+            .groupby("target_id")["weight"].sum()
         )
 
         eval_targets: set[str] = set()
@@ -466,13 +466,13 @@ class GenericCSVSource(DataSource):
 
     def _apply_eval_weight_filter(self) -> None:
         """Traffic-weighted eval mask (`eval_pair_weight_min`). An eval target
-        survives iff >= 1 of its obs has pair_weight >= the threshold;
+        survives iff >= 1 of its obs has weight >= the threshold;
         iter_eval_targets then emits only the clearing obs. Fit targets and
         fit samples are untouched (full-mesh training)."""
         assert self._df is not None and self._eval_pair_weight_min is not None
         df = self._df
         thr = self._eval_pair_weight_min
-        surviving = set(df.loc[df["pair_weight"] >= thr, "target_id"].astype(str))
+        surviving = set(df.loc[df["weight"] >= thr, "target_id"].astype(str))
         base = (
             self._eval_targets
             if self._eval_targets is not None
