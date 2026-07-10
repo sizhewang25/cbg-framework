@@ -301,6 +301,49 @@ def _summarize_combo(run_json: Path) -> dict:
     return row
 
 
+# ---- eval-source (dataset difficulty scoring) ---------------------------------
+
+@app.command("eval-source")
+def cmd_eval_source(
+    csv: Path = typer.Option(..., help="Canonical-schema CSV to score (see sources/README.md)."),
+    out_dir: Optional[Path] = typer.Option(
+        None, help="Output directory (default: the CSV's directory)."
+    ),
+    thresholds: str = typer.Option(
+        "40,100,500,1000",
+        help="Comma-separated km thresholds for the resolvability table.",
+    ),
+) -> None:
+    """Score a canonical CSV's CBG-friendliness (geographic topology + RTT quality).
+
+    Per target — over its *available* VPs only (a VP counts iff the CSV holds
+    >= 1 RTT observation for the pair) — reports the geography axis
+    (closest_vp_km), the RTT axis (min_rtt_ms / best_radius_km /
+    min_inflation), and the combined inverse-RTT-weighted mean VP distance
+    (rtt_weighted_dist_km). Writes <stem>_eval_per_target.csv +
+    <stem>_eval_stats.json and prints the summary.
+    """
+    from scripts.benchmark.v2.eval_source import eval_source
+
+    if not csv.exists():
+        typer.echo(f"No such CSV: {csv}", err=True)
+        raise typer.Exit(code=2)
+    try:
+        thr = tuple(float(t) for t in thresholds.split(",") if t.strip())
+    except ValueError:
+        typer.echo(
+            f"Invalid --thresholds {thresholds!r}; expected e.g. '40,100,500,1000'",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if not thr:
+        typer.echo("--thresholds must contain at least one value", err=True)
+        raise typer.Exit(code=2)
+
+    stats = eval_source(csv, out_dir or csv.parent, thr)
+    typer.echo(json.dumps(stats, indent=2))
+
+
 # ---- build-airports ----------------------------------------------------------
 
 @app.command("build-airports")
