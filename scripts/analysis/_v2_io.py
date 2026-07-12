@@ -140,6 +140,47 @@ def resolve_run_dir(
     return root / run_id
 
 
+def load_combo_allowlist_from_config(
+    config: Optional[Path],
+    key: str = "classification_combos",
+) -> Optional[list[str]]:
+    """Return combo ids from config[key], normalized to a list of names.
+
+    Supported YAML shapes:
+      - key: ["vanilla_cbg", "octant_cbg"]
+      - key:
+          - {name: "vanilla_cbg", label: "Vanilla"}
+          - {name: "octant_cbg", label: "Octant"}
+
+    Returns None when `config` is None or the key is absent.
+    """
+    if config is None:
+        return None
+
+    import yaml
+
+    cfg = yaml.safe_load(Path(config).read_text()) or {}
+    raw = cfg.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError(f"{key} must be a list of strings or {{name: ...}} mappings")
+
+    names: list[str] = []
+    for i, item in enumerate(raw):
+        if isinstance(item, str):
+            name = item
+        elif isinstance(item, dict):
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"{key}[{i}] mapping must contain a non-empty 'name' string")
+        else:
+            raise ValueError(f"{key}[{i}] must be a string or mapping")
+        names.append(name)
+
+    return names
+
+
 def discover_combos(
     run_dir: Path,
     source: Optional[str] = None,

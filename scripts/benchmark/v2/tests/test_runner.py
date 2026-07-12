@@ -337,6 +337,26 @@ class TestPairWeightEval(unittest.TestCase):
         fit_full = pq.read_table(self.inputs_dir / "fit_samples.parquet")
         self.assertTrue(fit_masked.equals(fit_full))
 
+    def test_materialize_time_eval_kept_fraction_bakes_into_parquet(self) -> None:
+        """eval_kept_traffic_fraction derives a threshold at materialize time,
+        then applies eval-only filtering; fit_samples remain full-mesh."""
+        src = GenericCSVSource(
+            slice="all", setup="anchors_to_probes", csv_path=self.csv_path,
+            eval_kept_traffic_fraction=0.95,
+        )
+        inputs_dir = materialize_inputs(
+            src, root=self.root / "inputs_frac", run_id="pw-test",
+        )
+
+        table = pq.read_table(inputs_dir / "eval_observations.parquet")
+        # Per (vp_id,target_city) weights = [8.0,2.0,1.0,1.5], 95% => thr 2.0
+        self.assertEqual(set(table.column("target_id").to_pylist()), {"2001"})
+        self.assertEqual(sorted(table.column("weight").to_pylist()), [2.0, 8.0])
+
+        fit_frac = pq.read_table(inputs_dir / "fit_samples.parquet")
+        fit_full = pq.read_table(self.inputs_dir / "fit_samples.parquet")
+        self.assertTrue(fit_frac.equals(fit_full))
+
 
 if __name__ == "__main__":
     unittest.main()

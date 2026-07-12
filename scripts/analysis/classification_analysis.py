@@ -29,6 +29,7 @@ import logging
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from scripts.analysis._cluster_data import build_answer_space, resolve_inputs_dir
 from scripts.analysis._fleet_geometry import compute_fleet_geometry
@@ -36,10 +37,12 @@ from scripts.analysis._v2_io import (
     add_geo_filter_args,
     analysis_out_dir,
     discover_combos,
+    load_combo_allowlist_from_config,
     resolve_run_dir,
     route_geo_path,
     set_geo_filter_from_args,
 )
+from scripts.libs.cbg.rtt_model import haversine_distance
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,38 @@ def _targets_csv(run_dir: Path) -> Path | None:
     """Locate targets.csv under the run dir (first match, source/setup level)."""
     hits = sorted(run_dir.rglob("targets.csv"))
     return hits[0] if hits else None
+
+
+def _shortest_ping_error_by_target(
+    inputs_dir: Path,
+    allowed_ids: set[str] | None = None,
+) -> pd.DataFrame:
+    """Per-target shortest-ping VP distance and RTT (`shortest_ping_rtt_ms`)."""
+    direct = inputs_dir / "eval_observations.parquet"
+    paths = ([direct] if direct.exists()
+             else sorted(inputs_dir.glob("*/eval_observations.parquet")))
+    if not paths:
+        raise FileNotFoundError(f"no eval_observations.parquet under {inputs_dir}")
+
+    obs = pd.concat([pq.read_table(p).to_pandas() for p in paths], ignore_index=True)
+    if obs.empty:
+        return pd.DataFrame(columns=["target_id", "shortest_ping_vp_dist_km", "shortest_ping_rtt_ms"])
+
+    if allowed_ids is not None:
+        obs = obs[obs["target_id"].isin(allowed_ids)]
+        if obs.empty:
+            return pd.DataFrame(columns=["target_id", "shortest_ping_vp_dist_km", "shortest_ping_rtt_ms"])
+
+    idx = obs.groupby("target_id")["latency_ms"].idxmin()
+    sp = obs.loc[idx, ["target_id", "target_lat", "target_lon", "vp_lat", "vp_lon", "latency_ms"]].copy()
+    sp = sp.rename(columns={"latency_ms": "shortest_ping_rtt_ms"})
+    sp["shortest_ping_vp_dist_km"] = haversine_distance(
+        sp["target_lat"].to_numpy(dtype=float),
+        sp["target_lon"].to_numpy(dtype=float),
+        sp["vp_lat"].to_numpy(dtype=float),
+        sp["vp_lon"].to_numpy(dtype=float),
+    )
+    return sp[["target_id", "shortest_ping_vp_dist_km", "shortest_ping_rtt_ms"]]
 
 
 def analyze(table: pd.DataFrame) -> pd.DataFrame:
@@ -99,6 +134,13 @@ def main() -> None:
                         help="Precomputed cluster-eval dir (passed to build_answer_space).")
     parser.add_argument("--source", default=None, help="Filter combos by source name.")
     parser.add_argument("--slice", dest="slice_", default=None, help="Filter combos by slice id.")
+    parser.add_argument(
+        "--combos", nargs="*", default=None,
+        help=(
+            "Restrict to these combo_ids. When omitted, uses "
+            "config.classification_combos if present; otherwise includes all combos."
+        ),
+    )
     parser.add_argument("--inputs-dir", type=Path, default=None,
                         help="Materialized inputs dir for fleet geometry. Auto-derived when omitted.")
     parser.add_argument("--inputs-root", type=Path,
@@ -111,6 +153,14 @@ def main() -> None:
     set_geo_filter_from_args(args)
 
     run_dir = resolve_run_dir(args.config, args.run_dir, args.outputs_root)
+    combos = args.combos if args.combos is not None else load_combo_allowlist_from_config(args.config)
+    if args.combos is not None:
+        logger.info("combo filter source: --combos (%d ids)", len(args.combos))
+    elif combos is not None:
+        logger.info("combo filter source: config.classification_combos (%d ids)", len(combos))
+    else:
+        logger.info("combo filter source: all discovered combos")
+
     out_dir = (
         route_geo_path(args.out_dir) if args.out_dir
         else analysis_out_dir(run_dir, "cluster")
@@ -149,25 +199,40 @@ def main() -> None:
 
     result = result.sort_values(["n_correct", "category"], ascending=[True, True])
 
-    # Fleet geometry features
-    try:
-        combo_dirs = discover_combos(run_dir, args.source, args.slice_)
-        index, _, _ = build_answer_space(
-            run_dir, args.source, args.slice_, args.radius_km,
-            clusters_dir=args.clusters_dir,
+    combo_dirs = discover_combos(run_dir, args.source, args.slice_, combos)
+    if combos is not None and combos and not combo_dirs:
+        raise ValueError(
+            "No combo directories matched requested combos "
+            f"{sorted(set(combos))} under {run_dir}"
         )
-        inputs_dir = resolve_inputs_dir(run_dir, combo_dirs, args.inputs_root, args.inputs_dir)
-        if inputs_dir is not None:
+    inputs_dir = resolve_inputs_dir(run_dir, combo_dirs, args.inputs_root, args.inputs_dir)
+    if inputs_dir is not None:
+        # Attach shortest-ping error distance independently from fleet geometry.
+        try:
+            sp_err = _shortest_ping_error_by_target(inputs_dir, allowed_ids=set(result.index.astype(str)))
+            sp_err = sp_err.set_index("target_id")
+            result = result.join(sp_err, how="left")
+            logger.info("Attached shortest-ping error distance (%d/%d targets)",
+                        sp_err.index.isin(result.index).sum(), len(result))
+        except Exception as e:
+            logger.warning("could not compute shortest-ping error distance: %s", e)
+
+        # Fleet geometry features
+        try:
+            index, _, _ = build_answer_space(
+                run_dir, args.source, args.slice_, args.radius_km,
+                clusters_dir=args.clusters_dir,
+            )
             fleet = compute_fleet_geometry(inputs_dir, index)
             fleet = fleet.set_index("target_id")
             result = result.join(fleet, how="left")
             logger.info("Attached fleet geometry (%d/%d targets)",
                         fleet.index.isin(result.index).sum(), len(result))
-        else:
-            logger.warning("no inputs dir resolved; skipping fleet geometry "
-                           "(pass --inputs-dir to enable)")
-    except Exception as e:
-        logger.warning("could not compute fleet geometry: %s", e)
+        except Exception as e:
+            logger.warning("could not compute fleet geometry: %s", e)
+    else:
+        logger.warning("no inputs dir resolved; skipping shortest-ping error distance and fleet geometry "
+                       "(pass --inputs-dir to enable)")
 
     # Distribution summary
     counts = result["category"].value_counts()

@@ -445,7 +445,7 @@
     const filterNote = hidden > 0 ? ` &nbsp;|&nbsp; <span style="color:#b00">${hidden} ${unit} hidden</span>` : "";
     metaDiv.innerHTML =
       `<span class="badge" style="background:${badgeColor};color:#fff">${outcomeTag(t)}</span> ` +
-      `mechanism=<b>${mechTag(t)}</b> &nbsp;|&nbsp; d(pred→truth cell)=<b>${eStr}</b> ` +
+      `IP=<b>${t.target_id}</b> &nbsp;|&nbsp; mechanism=<b>${mechTag(t)}</b> &nbsp;|&nbsp; d(pred→truth cell)=<b>${eStr}</b> ` +
       `(match iff ≤ snap) &nbsp;|&nbsp; nearest VP=${fnum(f.avail_min_vp_km)} · ` +
       `cell gap=${fnum(f.nearest_other_centroid_km)} · RTT infl=${fnum(f.part_min_infl, "x")} · ` +
       `blockers=${fnum(f.frac_blockers, "f")}<br>` +

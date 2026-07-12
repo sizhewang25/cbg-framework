@@ -1234,5 +1234,87 @@ class TestGenericCSVSource_EvalWeightFilter(unittest.TestCase):
             self.assertTrue(all(w >= 10.0 for w in t.obs_weights))
 
 
+class TestGenericCSVSource_EvalKeptTrafficFraction(unittest.TestCase):
+    """Derive eval_pair_weight_min from eval-side kept traffic fraction."""
+
+    _CSV = textwrap.dedent("""
+        vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
+        1.1.1.1,33.0,-84.0,t1,40.0,-100.0,atlanta,10.0,10
+        2.2.2.2,47.0,-122.0,t1,40.0,-100.0,atlanta,11.0,1
+        1.1.1.1,33.0,-84.0,t2,41.0,-101.0,boston,12.0,9
+        2.2.2.2,47.0,-122.0,t2,41.0,-101.0,boston,13.0,1
+    """).strip() + "\n"
+
+    _CSV_NO_CITY = textwrap.dedent("""
+        vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,weight
+        1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0,10
+    """).strip() + "\n"
+
+    _CSV_ZERO = textwrap.dedent("""
+        vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
+        1.1.1.1,33.0,-84.0,t1,40.0,-100.0,atlanta,10.0,0
+        2.2.2.2,47.0,-122.0,t2,41.0,-101.0,boston,11.0,0
+    """).strip() + "\n"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.csv_path = Path(self.tmp.name) / "eval_kept_frac.csv"
+        self.csv_path.write_text(self._CSV)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_fraction_derives_threshold_and_filters_eval_only(self) -> None:
+        src = GenericCSVSource(
+            slice="all", setup="anchors_to_probes", csv_path=self.csv_path,
+            eval_kept_traffic_fraction=0.95,
+        )
+        eval_targets = {t.target_id: t for t in src.iter_eval_targets()}
+        # Per (vp_id,target_city) weights = [10, 1, 9, 1]; 95% requires threshold 1.
+        self.assertEqual(src._eval_pair_weight_min, 1.0)
+        self.assertEqual(set(eval_targets), {"t1", "t2"})
+        self.assertEqual(len(eval_targets["t1"].obs), 2)
+        self.assertEqual(len(eval_targets["t2"].obs), 2)
+
+        fit = list(src.iter_fit_samples())
+        self.assertEqual(len(fit), 4)  # fit stays full-mesh under slice=all
+
+    def test_fraction_with_zero_total_weight_derives_zero_threshold(self) -> None:
+        path = Path(self.tmp.name) / "zero.csv"
+        path.write_text(self._CSV_ZERO)
+        src = GenericCSVSource(
+            slice="all", setup="anchors_to_probes", csv_path=path,
+            eval_kept_traffic_fraction=0.95,
+        )
+        eval_targets = list(src.iter_eval_targets())
+        self.assertEqual(src._eval_pair_weight_min, 0.0)
+        self.assertEqual(len(eval_targets), 2)
+
+    def test_fraction_requires_target_city(self) -> None:
+        path = Path(self.tmp.name) / "no_city.csv"
+        path.write_text(self._CSV_NO_CITY)
+        src = GenericCSVSource(
+            slice="all", setup="anchors_to_probes", csv_path=path,
+            eval_kept_traffic_fraction=0.95,
+        )
+        with self.assertRaises(ValueError):
+            list(src.iter_eval_targets())
+
+    def test_fraction_and_explicit_threshold_together_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            GenericCSVSource(
+                slice="all", setup="anchors_to_probes", csv_path=self.csv_path,
+                eval_pair_weight_min=1.0,
+                eval_kept_traffic_fraction=0.95,
+            )
+
+    def test_invalid_fraction_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            GenericCSVSource(
+                slice="all", setup="anchors_to_probes", csv_path=self.csv_path,
+                eval_kept_traffic_fraction=0.0,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

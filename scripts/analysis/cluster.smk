@@ -31,6 +31,15 @@ SOURCE = config["source"]
 SETUP  = config.get("setup", "probes_to_anchors")
 RADIUS_KM = float(config.get("radius_km", 50))
 VORONOI_PARAMS = config.get("voronoi_params", []) or []   # [{level, value}, ...]
+CLASSIFICATION_COMBOS = config.get("classification_combos") or []
+
+# Path to this workflow's configfile — needed by plot_classification_match_bars
+# which re-reads the YAML directly for classification_combos + labels.
+_ANALYSIS_CONFIG = (
+    str(workflow.configfiles[0])
+    if workflow.configfiles
+    else config.get("config_path", "")
+)
 
 V2_OUTPUTS_ROOT = Path(config.get("v2_outputs_root", "scripts/benchmark/v2/outputs"))
 V2_INPUTS_ROOT  = Path(config.get("v2_inputs_root",  "scripts/benchmark/v2/inputs"))
@@ -69,6 +78,8 @@ def _all_targets():
         t.append(str(ANALYSIS_CLUSTER / f"{RUN_ID}_ground_truth_clusters_{_safe(g['value'])}.png"))
     if FOLD_IDS:
         t.append(str(ANALYSIS_CLUSTER / f"{RUN_ID}_stratification.png"))
+    if CLASSIFICATION_COMBOS:
+        t.append(str(ANALYSIS_CLUSTER / f"{RUN_ID}_classification_accuracy.png"))
     return t
 
 
@@ -168,7 +179,7 @@ rule plot_targets_vps:
         targets = str(SETUP_DIR / "targets.csv"),
         vps = str(SETUP_DIR / "vps.csv"),
     shell:
-        CLI + ".visualization.plot_targets_vps"
+        CLI + ".visualization.cluster.plot_targets_vps"
         " --targets {params.targets} --vps {params.vps}"
         " --out {output.png}"
 
@@ -202,7 +213,22 @@ rule plot_ground_truth_clusters_geo:
         " --out {output.png}"
 
 
-# ---- [6] stratification diagnostic ------------------------------------------
+# ---- [6] classification accuracy bars (classification_combos subset) ---------
+# Only added when classification_combos is non-empty in the config.
+if CLASSIFICATION_COMBOS:
+    rule plot_classification_match_bars:
+        input:
+            scored_dir = SCORED_DIR,
+        output:
+            png = ANALYSIS_CLUSTER / f"{RUN_ID}_classification_accuracy.png",
+        params:
+            config_path = _ANALYSIS_CONFIG,
+        shell:
+            CLI + ".analysis.plot_classification_match_bars"
+            " --config {params.config_path}"
+
+
+# ---- [7] stratification diagnostic ------------------------------------------
 # Reconstructed from materialized fold inputs — works for any source.
 # Guarded so configs whose folds haven't been materialized yet are silently
 # skipped (FOLD_IDS is empty when the fold dirs don't exist at parse time).

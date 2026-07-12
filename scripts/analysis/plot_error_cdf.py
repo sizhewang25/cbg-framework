@@ -36,11 +36,13 @@ from matplotlib.ticker import ScalarFormatter
 from scripts.analysis._v2_io import (
     active_geo_filter,
     add_geo_filter_args,
+    analysis_out_dir,
     discover_combos,
     group_combos_by_id,
     load_summary,
     load_targets,
     palette,
+    resolve_run_dir,
     route_geo_path,
     set_geo_filter_from_args,
 )
@@ -868,6 +870,32 @@ def plot_error_cdf_merge_by_continent(
     return fig_in, fig_rest
 
 
+def _load_config(path: Path) -> dict:
+    import yaml
+
+    cfg = yaml.safe_load(path.read_text())
+    if not isinstance(cfg, dict):
+        raise ValueError(f"config {path} must parse to a mapping")
+    return cfg
+
+
+def _classification_combos_from_config(cfg: dict) -> list[str]:
+    combos = cfg.get("classification_combos") or []
+    if not combos:
+        raise ValueError(
+            "config must define classification_combos as a non-empty list of {name, label}"
+        )
+
+    names: list[str] = []
+    for entry in combos:
+        if not isinstance(entry, dict) or "name" not in entry:
+            raise ValueError(
+                "each classification_combos entry must be a mapping with at least a 'name' key"
+            )
+        names.append(str(entry["name"]))
+    return names
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot error CDF from a v2 benchmark run.",
@@ -875,8 +903,21 @@ def main() -> None:
     parser.add_argument(
         "--run-dir",
         type=Path,
-        required=True,
+        default=None,
         help="Path to outputs/<run_id>/ (contains summary.parquet).",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional analysis cluster config YAML. Can provide run_id/source and "
+             "classification_combos for merged CDF mode.",
+    )
+    parser.add_argument(
+        "--outputs-root",
+        type=Path,
+        default=None,
+        help="Override outputs root when resolving --run-dir from --config.",
     )
     parser.add_argument("--source", default=None, help="Filter combos by source name.")
     parser.add_argument("--slice", dest="slice_", default=None, help="Filter combos by slice id.")
@@ -900,7 +941,7 @@ def main() -> None:
              "is overlaid in every panel.",
     )
     parser.add_argument("--max-x-km", type=float, default=10000.0)
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--title", default=None)
     parser.add_argument(
         "--split-by-main-continent",
@@ -928,11 +969,53 @@ def main() -> None:
              "with the LTD-grouped plots. Combines with "
              "--split-by-main-continent.",
     )
+    parser.add_argument(
+        "--merge-from-classification-combos",
+        action="store_true",
+        help="When set, read combo_ids from config.classification_combos and "
+             "plot them in a single merged CDF panel.",
+    )
     add_geo_filter_args(parser)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     set_geo_filter_from_args(args)
+
+    if args.run_dir is None and args.config is None:
+        raise SystemExit("pass either --run-dir or --config")
+
+    cfg = _load_config(args.config) if args.config is not None else None
+
+    if args.merge_from_classification_combos:
+        if cfg is None:
+            raise SystemExit("--merge-from-classification-combos requires --config")
+        if args.merge_combos:
+            raise SystemExit(
+                "--merge-from-classification-combos and --merge-combos are mutually exclusive"
+            )
+        if args.combos:
+            raise SystemExit(
+                "--merge-from-classification-combos and --combos are mutually exclusive"
+            )
+        args.merge_combos = _classification_combos_from_config(cfg)
+        if args.source is None and cfg.get("source") is not None:
+            args.source = str(cfg["source"])
+
+    args.run_dir = resolve_run_dir(args.config, args.run_dir, args.outputs_root)
+
+    if args.out is None:
+        default_name = (
+            f"{args.run_dir.name}_error_cdf_success_only.png"
+            if args.success_only
+            else f"{args.run_dir.name}_error_cdf.png"
+        )
+        if args.merge_combos:
+            default_name = (
+                f"{args.run_dir.name}_error_cdf_merged_success_only.png"
+                if args.success_only
+                else f"{args.run_dir.name}_error_cdf_merged.png"
+            )
+        args.out = analysis_out_dir(args.run_dir, "cluster", "cdf") / default_name
 
     if active_geo_filter() is not None and args.split_by_main_continent is not None:
         raise SystemExit(

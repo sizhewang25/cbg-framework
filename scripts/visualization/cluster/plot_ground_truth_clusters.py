@@ -163,6 +163,34 @@ def _plot_map(ax, df, res: ClusterResult, *, extent, voronoi: LandmassVoronoi | 
     ax.set_title(title, fontsize=12)
 
 
+def _plot_targets_only_map(
+    ax, df: pd.DataFrame, *, extent, target_size: float
+) -> None:
+    """Draw a plain target map with no cluster/voronoi-derived overlays."""
+    if extent is not None:
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+    else:
+        ax.set_global()
+    ax.add_feature(cfeature.OCEAN, facecolor="#eaf2f8")
+    ax.add_feature(cfeature.LAND, facecolor="#f6f4ef")
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.4, edgecolor="#999999")
+    ax.add_feature(cfeature.BORDERS, linewidth=0.25, edgecolor="#cccccc")
+
+    ax.scatter(
+        df["target_lon"].to_numpy(),
+        df["target_lat"].to_numpy(),
+        s=target_size,
+        c="#1f77b4",
+        marker="o",
+        alpha=0.9,
+        transform=ccrs.PlateCarree(),
+        zorder=3,
+        label="target",
+    )
+    ax.legend(loc="lower left", fontsize=8, framealpha=0.9)
+    ax.set_title(f"Targets only: {len(df):,} coordinates", fontsize=12)
+
+
 def _plot_size_hist(ax, res: ClusterResult, n_coords: int) -> None:
     counts = res.member_counts
     singletons = int((counts == 1).sum())
@@ -215,6 +243,19 @@ def plot_clusters(
     return out_path
 
 
+def plot_targets_only(
+    df: pd.DataFrame, out_path: Path, *, extent=None, target_size: float = 12.0
+) -> Path:
+    fig = plt.figure(figsize=(12.5, 6.8))
+    ax_map = fig.add_subplot(111, projection=ccrs.PlateCarree())
+    _plot_targets_only_map(ax_map, df, extent=extent, target_size=target_size)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -244,6 +285,15 @@ def main() -> None:
         default=Path(__file__).resolve().parent / "outputs" / "ground_truth_clusters.png",
         help="Output image path.",
     )
+    parser.add_argument(
+        "--targets-only", action="store_true",
+        help="Render a plain target map only (no cluster coloring, footprints, "
+             "Voronoi, histogram, or CDF panels).",
+    )
+    parser.add_argument(
+        "--target-size", type=float, default=12.0,
+        help="Marker size for targets in --targets-only mode (default: 12).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -258,22 +308,32 @@ def main() -> None:
 
     voronoi = None
     extent = args.extent
-    if args.landmass:
+    if args.landmass and not args.targets_only:
         clusters = pd.read_csv(args.clusters_dir / "clusters.csv")
         voronoi = build_landmass_voronoi(clusters, args.landmass)
         if extent is None:
             extent = voronoi.focus_extent(pct=0)
+    elif args.landmass and args.targets_only:
+        logger.info("--targets-only set; ignoring --landmass Voronoi underlay")
 
-    out = plot_clusters(df, res, args.out, extent=extent, voronoi=voronoi)
+    if args.targets_only:
+        out = plot_targets_only(
+            df, args.out, extent=extent, target_size=args.target_size
+        )
+    else:
+        out = plot_clusters(df, res, args.out, extent=extent, voronoi=voronoi)
 
     n = len(df)
-    print(f"{n:,} coords → {res.n_clusters:,} regions (cap {res.radius_target_km:.0f} km)")
-    if voronoi is not None:
-        print(f"  partition: {len(voronoi.cells):,} Voronoi cells over {voronoi.label}")
-    print(f"  singletons {int((res.member_counts == 1).sum()):,} "
-          f"({100 * (res.member_counts == 1).mean():.1f}% of regions)")
-    print(f"  radius_km: max {res.radius_km.max():.1f}, "
-          f"p95 {np.percentile(res.radius_km, 95):.1f}, median {np.median(res.radius_km):.1f}")
+    if args.targets_only:
+        print(f"{n:,} target coords (plain map mode)")
+    else:
+        print(f"{n:,} coords → {res.n_clusters:,} regions (cap {res.radius_target_km:.0f} km)")
+        if voronoi is not None:
+            print(f"  partition: {len(voronoi.cells):,} Voronoi cells over {voronoi.label}")
+        print(f"  singletons {int((res.member_counts == 1).sum()):,} "
+              f"({100 * (res.member_counts == 1).mean():.1f}% of regions)")
+        print(f"  radius_km: max {res.radius_km.max():.1f}, "
+              f"p95 {np.percentile(res.radius_km, 95):.1f}, median {np.median(res.radius_km):.1f}")
     print(f"Wrote {out}")
 
 

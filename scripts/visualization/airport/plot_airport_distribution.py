@@ -57,10 +57,16 @@ _CONTINENT_OF_LON = [
 ]
 
 
-def _load(src_csv: Path) -> pd.DataFrame:
-    """Load the raw OurAirports CSV and filter to large+medium scheduled-service
-    airports (same IATA/municipality/scheduled gates as the eval set)."""
-    raw = pd.read_csv(src_csv, low_memory=False)
+def _load(src_path: Path) -> pd.DataFrame:
+    """Load airport rows from CSV/parquet and apply the standard airport gates.
+
+    CSV input is expected to be the raw OurAirports schema. Parquet input can be
+    either raw-equivalent or already-normalized rows with the required columns.
+    """
+    if src_path.suffix.lower() == ".parquet":
+        raw = pd.read_parquet(src_path)
+    else:
+        raw = pd.read_csv(src_path, low_memory=False)
     return filter_airports(raw, types=_VIZ_TYPES)
 
 
@@ -71,12 +77,22 @@ def _lon_band(lon: float) -> str:
     return "Asia/Oceania"
 
 
-def plot_distribution(df: pd.DataFrame, out_path: Path) -> Path:
-    """Render the airport scatter on a PlateCarree world map + a density panel."""
-    fig = plt.figure(figsize=(15, 7))
-    gs = fig.add_gridspec(1, 2, width_ratios=[4, 1], wspace=0.12)
+def plot_distribution(df: pd.DataFrame, out_path: Path, dots_only: bool = False) -> Path:
+    """Render airport points on a world map.
 
-    ax = fig.add_subplot(gs[0, 0], projection=ccrs.PlateCarree())
+    If dots_only=True, render only the map and point cloud (no legend/title/side
+    panel labels).
+    """
+    if dots_only:
+        fig = plt.figure(figsize=(14, 7))
+        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+        axb = None
+    else:
+        fig = plt.figure(figsize=(15, 7))
+        gs = fig.add_gridspec(1, 2, width_ratios=[4, 1], wspace=0.12)
+        ax = fig.add_subplot(gs[0, 0], projection=ccrs.PlateCarree())
+        axb = fig.add_subplot(gs[0, 1])
+
     ax.set_global()
     ax.add_feature(cfeature.OCEAN, facecolor="#eaf2f8")
     ax.add_feature(cfeature.LAND, facecolor="#f6f4ef")
@@ -95,26 +111,26 @@ def plot_distribution(df: pd.DataFrame, out_path: Path) -> Path:
             label=f"{style['label']} ({len(sub):,})",
         )
 
-    kinds = " vs ".join(sorted(t.replace("_airport", "") for t in df["type"].unique()))
-    ax.set_title(
-        f"Scheduled-service airports ({kinds}) — {len(df):,} total "
-        "(OurAirports; eval set = large only)",
-        fontsize=13,
-    )
-    ax.legend(loc="lower left", framealpha=0.9, fontsize=10, markerscale=1.5)
+    if not dots_only:
+        kinds = " vs ".join(sorted(t.replace("_airport", "") for t in df["type"].unique()))
+        ax.set_title(
+            f"Scheduled-service airports ({kinds}) — {len(df):,} total "
+            "(OurAirports; eval set = large only)",
+            fontsize=13,
+        )
+        ax.legend(loc="lower left", framealpha=0.9, fontsize=10, markerscale=1.5)
 
-    # Side panel: coarse longitude-band counts for quick density context.
-    axb = fig.add_subplot(gs[0, 1])
-    bands = df["longitude_deg"].map(_lon_band).value_counts()
-    order = ["Americas", "Europe/Africa", "Asia/Oceania"]
-    counts = [int(bands.get(b, 0)) for b in order]
-    axb.barh(order, counts, color="#888888")
-    for y, c in enumerate(counts):
-        axb.text(c, y, f" {c:,}", va="center", fontsize=9)
-    axb.set_title("by longitude band", fontsize=11)
-    axb.set_xlabel("airports")
-    axb.invert_yaxis()
-    axb.spines[["top", "right"]].set_visible(False)
+        # Side panel: coarse longitude-band counts for quick density context.
+        bands = df["longitude_deg"].map(_lon_band).value_counts()
+        order = ["Americas", "Europe/Africa", "Asia/Oceania"]
+        counts = [int(bands.get(b, 0)) for b in order]
+        axb.barh(order, counts, color="#888888")
+        for y, c in enumerate(counts):
+            axb.text(c, y, f" {c:,}", va="center", fontsize=9)
+        axb.set_title("by longitude band", fontsize=11)
+        axb.set_xlabel("airports")
+        axb.invert_yaxis()
+        axb.spines[["top", "right"]].set_visible(False)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=140, bbox_inches="tight")
@@ -129,22 +145,30 @@ def main() -> None:
         help="Raw OurAirports airports.csv. If omitted, downloads the latest.",
     )
     parser.add_argument(
+        "--src", type=Path, default=None,
+        help="Input file (.csv or .parquet). Overrides --src-csv when set.",
+    )
+    parser.add_argument(
         "--out", type=Path,
         default=Path(__file__).resolve().parent / "outputs" / "airport_distribution.png",
         help="Output image path.",
     )
+    parser.add_argument(
+        "--dots-only", action="store_true",
+        help="Render only map points (no legend/title/side panel labels).",
+    )
     args = parser.parse_args()
 
-    src_csv = args.src_csv
-    if src_csv is None:
+    src_path = args.src if args.src is not None else args.src_csv
+    if src_path is None:
         print("Downloading OurAirports CSV ...")
-        src_csv = download_ourairports_csv()
-    elif not src_csv.exists():
-        raise SystemExit(f"CSV not found at {src_csv}")
+        src_path = download_ourairports_csv()
+    elif not src_path.exists():
+        raise SystemExit(f"Input file not found at {src_path}")
 
-    df = _load(src_csv)
+    df = _load(src_path)
     by_type = df["type"].value_counts()
-    out = plot_distribution(df, args.out)
+    out = plot_distribution(df, args.out, dots_only=args.dots_only)
     print(
         f"Wrote {out} ({len(df):,} airports: "
         f"{by_type.get('large_airport', 0):,} large, "

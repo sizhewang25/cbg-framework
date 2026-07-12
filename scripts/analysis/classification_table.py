@@ -41,6 +41,7 @@ from scripts.analysis._v2_io import (
     analysis_out_dir,
     discover_combos,
     group_combos_by_id,
+    load_combo_allowlist_from_config,
     resolve_run_dir,
     route_geo_path,
     set_geo_filter_from_args,
@@ -54,6 +55,7 @@ def build_table(
     radius_km: float,
     source=None,
     slice_=None,
+    combos: list[str] | None = None,
     clusters_dir: Path | None = None,
     inputs_dir: Path | None = None,
     inputs_root: Path = Path("scripts/benchmark/v2/inputs"),
@@ -65,7 +67,12 @@ def build_table(
     logger.info("answer space: %d targets → %d centroids (R=%.0f km)",
                 n_targets, n_centroids, radius_km)
 
-    combo_dirs = discover_combos(run_dir, source, slice_)
+    combo_dirs = discover_combos(run_dir, source, slice_, combos)
+    if combos is not None and combos and not combo_dirs:
+        raise ValueError(
+            "No combo directories matched requested combos "
+            f"{sorted(set(combos))} under {run_dir}"
+        )
     grouped = group_combos_by_id(combo_dirs)
 
     series_list = []
@@ -108,6 +115,13 @@ def main() -> None:
                         help="Override the outputs root used with --config.")
     parser.add_argument("--source", default=None, help="Filter combos by source name.")
     parser.add_argument("--slice", dest="slice_", default=None, help="Filter combos by slice id.")
+    parser.add_argument(
+        "--combos", nargs="*", default=None,
+        help=(
+            "Restrict to these combo_ids. When omitted, uses "
+            "config.classification_combos if present; otherwise includes all combos."
+        ),
+    )
     parser.add_argument("--out-dir", type=Path, default=None,
                         help="Output dir (default: scripts/analysis/outputs/<run_id>/cluster).")
     parser.add_argument("--radius-km", type=float, default=50.0,
@@ -128,6 +142,14 @@ def main() -> None:
     set_geo_filter_from_args(args)
 
     run_dir = resolve_run_dir(args.config, args.run_dir, args.outputs_root)
+    combos = args.combos if args.combos is not None else load_combo_allowlist_from_config(args.config)
+    if args.combos is not None:
+        logger.info("combo filter source: --combos (%d ids)", len(args.combos))
+    elif combos is not None:
+        logger.info("combo filter source: config.classification_combos (%d ids)", len(combos))
+    else:
+        logger.info("combo filter source: all discovered combos")
+
     out_dir = (
         route_geo_path(args.out_dir) if args.out_dir
         else analysis_out_dir(run_dir, "cluster")
@@ -138,6 +160,7 @@ def main() -> None:
         radius_km=args.radius_km,
         source=args.source,
         slice_=args.slice_,
+        combos=combos,
         clusters_dir=args.clusters_dir,
         inputs_dir=args.inputs_dir,
         inputs_root=args.inputs_root,

@@ -37,6 +37,7 @@ _FOLD_DIR_RE = re.compile(r"^fold_(\d+)$")
 _MAX_SAMPLE = 80  # per-fold sample for pairwise distance (O(n²) guard)
 _TOP_COUNTRIES = 10
 _TOP_ASNS = 15
+_MAP_DOT_ALPHA = 0.45
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -121,7 +122,7 @@ def plot_stratification(inputs_dir: Path, out: Path) -> Path:
         sub = df[df["fold"] == f]
         ax_map.scatter(
             sub["lon"], sub["lat"],
-            s=14, c=[colors[f]], alpha=0.85, edgecolors="none",
+            s=14, c=[colors[f]], alpha=_MAP_DOT_ALPHA, edgecolors="none",
             label=f"fold {f}  (n={fold_sizes.get(f, 0)})",
             transform=ccrs.PlateCarree(), zorder=3,
         )

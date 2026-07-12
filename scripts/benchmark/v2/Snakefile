@@ -56,6 +56,10 @@ rule materialize:
             f"--eval-pair-weight-min {config['eval_pair_weight_min']}"
             if "eval_pair_weight_min" in config else ""
         ),
+        eval_kept_traffic_fraction_flag = lambda wc: (
+            f"--eval-kept-traffic-fraction {config['eval_kept_traffic_fraction']}"
+            if "eval_kept_traffic_fraction" in config else ""
+        ),
     shell:
         CLI + " materialize-inputs"
         " --source {params.source}"
@@ -65,6 +69,7 @@ rule materialize:
         " --inputs-root {params.inputs_root}"
         " --source-kwargs '{params.source_kwargs_json}'"
         " {params.eval_pair_weight_min_flag}"
+        " {params.eval_kept_traffic_fraction_flag}"
 
 # ---- Run one (slice, combo) -------------------------------------------------
 rule run_combo:

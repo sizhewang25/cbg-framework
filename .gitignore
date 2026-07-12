@@ -11,6 +11,8 @@
 *.dat
 *.txt
 *.zip
+*.parquet
+*.parq
 
 # external dataset downloads (reproducible from public endpoints)
 datasets/external_*/

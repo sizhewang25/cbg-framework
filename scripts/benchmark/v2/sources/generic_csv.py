@@ -55,6 +55,10 @@ Source kwargs (defaults match the prior VultrCSVSource):
                        only those clearing obs in iter_eval_targets. The fit
                        side is untouched — training always sees the full
                        mesh; only the evaluated view is traffic-restricted.
+    eval_kept_traffic_fraction : float = None — derive `eval_pair_weight_min`
+                                             from eval-side deduped `(vp_id, target_city)` pair
+                                             weights so at least this pair-level traffic fraction
+                                             is retained, then apply the same eval-only mask above.
 """
 
 from __future__ import annotations
@@ -65,6 +69,7 @@ import re
 from pathlib import Path
 from typing import Iterator, Optional
 
+import numpy as np
 import pandas as pd
 
 from scripts.benchmark.v2.sources.base import (
@@ -128,6 +133,7 @@ class GenericCSVSource(DataSource):
         asn_bucket_top_n: int = 20,
         min_obs: Optional[int] = None,
         eval_pair_weight_min: Optional[float] = None,
+        eval_kept_traffic_fraction: Optional[float] = None,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
@@ -140,6 +146,22 @@ class GenericCSVSource(DataSource):
         if eval_pair_weight_min is not None and eval_pair_weight_min < 0:
             raise ValueError(
                 f"eval_pair_weight_min must be >= 0, got {eval_pair_weight_min}"
+            )
+        if (
+            eval_pair_weight_min is not None
+            and eval_kept_traffic_fraction is not None
+        ):
+            raise ValueError(
+                "Pass only one of eval_pair_weight_min or "
+                "eval_kept_traffic_fraction"
+            )
+        if (
+            eval_kept_traffic_fraction is not None
+            and not (0 < eval_kept_traffic_fraction <= 1)
+        ):
+            raise ValueError(
+                "eval_kept_traffic_fraction must be in (0, 1], "
+                f"got {eval_kept_traffic_fraction}"
             )
         fold_match = _FOLD_SLICE_RE.match(slice)
         wsplit_match = _WSPLIT_SLICE_RE.match(slice)
@@ -179,6 +201,7 @@ class GenericCSVSource(DataSource):
         self._asn_bucket_top_n = asn_bucket_top_n
         self._min_obs = min_obs
         self._eval_pair_weight_min = eval_pair_weight_min
+        self._eval_kept_traffic_fraction = eval_kept_traffic_fraction
 
         # Lazily populated by `_ensure_loaded`.
         self._df: Optional[pd.DataFrame] = None
@@ -290,16 +313,20 @@ class GenericCSVSource(DataSource):
             # Eval weight mask runs LAST: the split defines the eval set,
             # min_obs prunes sparse targets, and this only shrinks the eval
             # side further. The fit side is never touched.
+            if self._eval_kept_traffic_fraction is not None:
+                self._derive_eval_weight_min_from_fraction()
             if self._eval_pair_weight_min is not None:
                 self._apply_eval_weight_filter()
         assert self._df is not None
         return self._df
 
     def _load_csv(self) -> None:
-        df = pd.read_csv(
-            self._csv_path,
-            converters={c: _raw_str for c in _OPTIONAL_STR},
-        )
+        # Lowercase all headers so CSVs with uppercase columns (e.g. VP_ID,
+        # TARGET_LAT) load against the canonical lowercase schema. Converters
+        # cover both cases so the NA-sentinel opt-out applies either way.
+        converters = {c: _raw_str for col in _OPTIONAL_STR for c in (col, col.upper())}
+        df = pd.read_csv(self._csv_path, converters=converters)
+        df.columns = df.columns.str.lower()
         missing = [c for c in _REQUIRED if c not in df.columns]
         if missing:
             raise ValueError(
@@ -489,6 +516,86 @@ class GenericCSVSource(DataSource):
             thr, len(base), len(kept),
         )
         self._eval_targets = kept
+
+    def _derive_eval_weight_min_from_fraction(self) -> None:
+        """Derive eval_pair_weight_min from eval-side pair traffic retention.
+
+        Uses eval-side rows only, deduped at `(vp_id, target_city)` by per-pair
+        max(weight), then descending cumulative sum to the requested kept
+        fraction.
+        """
+        assert self._df is not None and self._eval_kept_traffic_fraction is not None
+        df = self._df
+        frac = self._eval_kept_traffic_fraction
+
+        if "target_city" not in df.columns:
+            raise ValueError(
+                "eval_kept_traffic_fraction requires target_city column"
+            )
+
+        eval_ids = (
+            self._eval_targets
+            if self._eval_targets is not None
+            else set(df["target_id"].astype(str))
+        )
+        eval_df = df[df["target_id"].astype(str).isin(eval_ids)].copy()
+        if eval_df.empty:
+            raise ValueError(
+                f"slice {self._slice!r} has no eval rows to derive "
+                "eval_pair_weight_min"
+            )
+
+        city = eval_df["target_city"].astype(str).str.strip()
+        blank_city = ~eval_df["target_city"].notna() | (city == "")
+        if blank_city.any():
+            raise ValueError(
+                "eval_kept_traffic_fraction requires non-blank target_city "
+                "on eval rows"
+            )
+
+        per_pair = (
+            eval_df.groupby(["vp_id", "target_city"], as_index=False)
+            .agg(weight=("weight", "max"), distinct_values=("weight", "nunique"))
+        )
+        inconsistent_pairs = int((per_pair["distinct_values"] > 1).sum())
+
+        weights = per_pair["weight"].to_numpy(dtype=float)
+        total = float(weights.sum())
+        if total <= 0:
+            self._eval_pair_weight_min = 0.0
+            logger.info(
+                "eval_kept_traffic_fraction=%.3f: all eval-side pair weights "
+                "are zero; derived eval_pair_weight_min=0.0",
+                frac,
+            )
+            return
+
+        weights_sorted = np.sort(weights)[::-1]
+        target = frac * total
+        cum = np.cumsum(weights_sorted)
+        idx = int(np.searchsorted(cum, target, side="left"))
+        idx = min(idx, len(weights_sorted) - 1)
+        threshold = float(weights_sorted[idx])
+
+        kept_pairs = int((weights >= threshold).sum())
+        achieved = float(weights[weights >= threshold].sum() / total)
+        self._eval_pair_weight_min = threshold
+        logger.info(
+            "eval_kept_traffic_fraction=%.3f: derived "
+            "eval_pair_weight_min=%.12g from %d eval-side (vp_id,target_city) "
+            "pairs; kept_pairs=%d (%.2f%% traffic)",
+            frac,
+            threshold,
+            len(per_pair),
+            kept_pairs,
+            100 * achieved,
+        )
+        if inconsistent_pairs:
+            logger.info(
+                "  note: %d eval-side (vp_id,target_city) pairs had "
+                "non-identical row weights; used per-pair max(weight)",
+                inconsistent_pairs,
+            )
 
     def _apply_min_obs_filter(self) -> None:
         assert self._df is not None and self._min_obs is not None

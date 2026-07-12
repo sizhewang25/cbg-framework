@@ -71,11 +71,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import yaml
 from matplotlib.ticker import ScalarFormatter
 
 from scripts.analysis._v2_io import (
     add_geo_filter_args,
     analysis_out_dir,
+    discover_combos,
+    group_combos_by_id,
+    palette,
     resolve_run_dir,
     route_geo_path,
     set_geo_filter_from_args,
@@ -136,6 +140,145 @@ def _cohort_stats(arr: np.ndarray, radius_km: float) -> dict:
         stats["frac_within_radius"] = float((s <= radius_km).mean())
     stats["n"] = n
     return stats
+
+
+def _classification_combos_from_config(config_path: Path) -> list[str]:
+    cfg = yaml.safe_load(config_path.read_text())
+    combos = cfg.get("classification_combos") if isinstance(cfg, dict) else None
+    if not combos:
+        raise ValueError(
+            f"{config_path} must define non-empty classification_combos for merged mode"
+        )
+    names: list[str] = []
+    for entry in combos:
+        if not isinstance(entry, dict) or "name" not in entry:
+            raise ValueError(
+                "each classification_combos entry must be a mapping with a 'name' key"
+            )
+        names.append(str(entry["name"]))
+    return names
+
+
+def _classification_label_map_from_config(config_path: Path) -> dict[str, str]:
+    cfg = yaml.safe_load(config_path.read_text())
+    combos = cfg.get("classification_combos") if isinstance(cfg, dict) else None
+    if not combos:
+        return {}
+    out: dict[str, str] = {}
+    for entry in combos:
+        if not isinstance(entry, dict) or "name" not in entry:
+            continue
+        name = str(entry["name"])
+        label = str(entry.get("label", name))
+        out[name] = label
+    return out
+
+
+def plot_merged_cluster_cdf(
+    errors_by_combo: dict[str, np.ndarray],
+    out_path: Path,
+    *,
+    radius_km: float,
+    label_map: dict[str, str] | None = None,
+    baseline_km: np.ndarray | None = None,
+    max_x_km: float = 10000.0,
+    title: str | None = None,
+    colors: dict[str, str] | None = None,
+) -> plt.Figure:
+    """Single-panel CDF with one line per combo over error-to-centroid values.
+
+    Arrays are expected to be the per-combo SUCCESS-scored `error_to_centroid_km`
+    values (finite filtered by caller or in this function).
+    """
+    fig, ax = plt.subplots(figsize=(8.0, 6.0))
+
+    if colors is None:
+        colors = {cid: None for cid in errors_by_combo}
+    if label_map is None:
+        label_map = {}
+
+    stats_rows: list[tuple[str, str, np.ndarray]] = []
+    for cid, arr in errors_by_combo.items():
+        s = np.asarray(arr, dtype=float)
+        s = s[np.isfinite(s)]
+        if not len(s):
+            continue
+        s_sorted = np.sort(s)
+        y = np.arange(1, len(s_sorted) + 1) / len(s_sorted)
+        label = label_map.get(cid, cid)
+        ax.plot(s_sorted, y, linewidth=2, alpha=0.85, color=colors.get(cid), label=label)
+        stats_rows.append((cid, label, s))
+
+    base = None
+    if baseline_km is not None:
+        base = np.asarray(baseline_km, dtype=float)
+        base = base[np.isfinite(base)]
+        if len(base):
+            b_sorted = np.sort(base)
+            y = np.arange(1, len(b_sorted) + 1) / len(b_sorted)
+            ax.plot(
+                b_sorted,
+                y,
+                color="#888888",
+                linestyle=":",
+                linewidth=1.8,
+                label=f"shortest_ping (n={len(base)})",
+            )
+
+    ax.axvline(radius_km, color="green", linestyle=":", alpha=0.6)
+    ax.text(
+        radius_km,
+        0.02,
+        f" R={radius_km:.0f} km",
+        color="green",
+        fontsize=8,
+        rotation=90,
+        va="bottom",
+        ha="left",
+    )
+
+    ax.set_xscale("log")
+    fmt = ScalarFormatter()
+    fmt.set_scientific(False)
+    ax.xaxis.set_major_formatter(fmt)
+    ax.set_xlim(1, max_x_km)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("error distance to cluster centroid (km)", fontsize=11)
+    ax.set_ylabel("CDF", fontsize=11)
+    ax.grid(True, which="both", alpha=0.3)
+    ax.set_title(title or "Merged cluster CDF", fontsize=13, fontweight="bold")
+    ax.legend(loc="lower right", fontsize=8)
+
+    if stats_rows or (base is not None and len(base)):
+        lines = [f"{'combo':<20} {'n':>5}  p5   p25   p50   p75   p95  <=R"]
+        for cid, label, s in stats_rows:
+            p5, p25, p50, p75, p95 = np.percentile(s, [5, 25, 50, 75, 95])
+            frac = float((s <= radius_km).mean())
+            lines.append(
+                f"{label[:20]:<20} {len(s):5d} {p5:5.0f} {p25:5.0f} {p50:5.0f} {p75:5.0f} {p95:5.0f} {100*frac:4.1f}%"
+            )
+        if base is not None and len(base):
+            p5, p25, p50, p75, p95 = np.percentile(base, [5, 25, 50, 75, 95])
+            frac = float((base <= radius_km).mean())
+            lines.append(
+                f"{'shortest_ping':<20} {len(base):5d} {p5:5.0f} {p25:5.0f} {p50:5.0f} {p75:5.0f} {p95:5.0f} {100*frac:4.1f}%"
+            )
+        ax.text(
+            0.02,
+            0.98,
+            "\n".join(lines),
+            transform=ax.transAxes,
+            fontsize=7,
+            va="top",
+            ha="left",
+            family="monospace",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+        )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    logger.info("Saved: %s", out_path)
+    return fig
 
 
 def plot_combo_cluster_cdf(
@@ -259,6 +402,18 @@ def main() -> None:
                              "and baseline.csv). When given, skips BallTree construction and "
                              "combo_frame computation.")
     parser.add_argument("--max-x-km", type=float, default=10000.0)
+    parser.add_argument(
+        "--merge-combos", nargs="*", default=None,
+        help="Overlay these combo_ids on one merged CDF using error_to_centroid_km.",
+    )
+    parser.add_argument(
+        "--merge-from-classification-combos", action="store_true",
+        help="Read combo_ids from config.classification_combos and produce one merged CDF.",
+    )
+    parser.add_argument(
+        "--merge-out", type=Path, default=None,
+        help="Output path for merged CDF (default: <out-dir>/<run_id>_cluster_cdf_merged.png).",
+    )
     add_geo_filter_args(parser)
     args = parser.parse_args()
 
@@ -266,10 +421,108 @@ def main() -> None:
     set_geo_filter_from_args(args)
 
     run_dir = resolve_run_dir(args.config, args.run_dir, args.outputs_root)
+
+    if args.merge_from_classification_combos:
+        if args.config is None:
+            raise SystemExit("--merge-from-classification-combos requires --config")
+        if args.merge_combos:
+            raise SystemExit(
+                "--merge-from-classification-combos and --merge-combos are mutually exclusive"
+            )
+        args.merge_combos = _classification_combos_from_config(args.config)
+
+    label_map: dict[str, str] = {}
+    if args.config is not None:
+        label_map = _classification_label_map_from_config(args.config)
+
     out_dir = (
         route_geo_path(args.out_dir) if args.out_dir
         else analysis_out_dir(run_dir, "cluster", "cdf")
     )
+
+    # Merged view can run from pre-scored CSVs (fast path) or from raw combo
+    # folders + answer-space build (fallback path).
+    if args.merge_combos and args.scored_dir is not None:
+        scored_dir = Path(args.scored_dir)
+        baseline_km = _load_scored_baseline(scored_dir)
+        if baseline_km is not None:
+            logger.info("baseline: %d targets from %s",
+                        int(np.isfinite(baseline_km).sum()), scored_dir)
+        else:
+            logger.warning("no baseline.csv in %s; skipping shortest-ping baseline", scored_dir)
+
+        errors_by_combo: dict[str, np.ndarray] = {}
+        for combo_id in args.merge_combos:
+            csv_path = scored_dir / f"{combo_id}_scored.csv"
+            if not csv_path.exists():
+                logger.warning("requested merged combo %s not found at %s", combo_id, csv_path)
+                continue
+            df = pd.read_csv(csv_path)
+            if "error_to_centroid_km" not in df.columns:
+                raise SystemExit(
+                    f"{csv_path} is missing error_to_centroid_km; rerun cluster-score first"
+                )
+            err = df["error_to_centroid_km"].to_numpy(dtype=float)
+            errors_by_combo[combo_id] = err[np.isfinite(err)]
+
+        if not errors_by_combo:
+            raise SystemExit("none of the requested merge combos were found")
+
+        # Keep merged colors aligned with run-wide combo palette.
+        all_combo_ids = sorted(group_combos_by_id(discover_combos(run_dir, args.source, args.slice_)).keys())
+        run_palette = palette(all_combo_ids)
+        colors = {cid: run_palette[cid] for cid in errors_by_combo if cid in run_palette}
+
+        merge_out = route_geo_path(args.merge_out) if args.merge_out else out_dir / f"{run_dir.name}_cluster_cdf_merged.png"
+        fig = plot_merged_cluster_cdf(
+            errors_by_combo,
+            merge_out,
+            radius_km=args.radius_km,
+            label_map=label_map,
+            baseline_km=baseline_km,
+            max_x_km=args.max_x_km,
+            title=f"Cluster CDF (merged) — {run_dir.name}",
+            colors=colors,
+        )
+        plt.close(fig)
+
+        rows: list[dict[str, float | str | int]] = []
+        for cid, arr in errors_by_combo.items():
+            stats = _cohort_stats(arr, args.radius_km)
+            rows.append({
+                "combo_id": cid,
+                "cohort": "scored",
+                "n": stats["n"],
+                "p5": stats["p5"],
+                "p25": stats["p25"],
+                "p50": stats["p50"],
+                "p75": stats["p75"],
+                "p95": stats["p95"],
+                "frac_within_radius": stats["frac_within_radius"],
+                "radius_km": args.radius_km,
+            })
+        if baseline_km is not None and np.isfinite(baseline_km).any():
+            b = baseline_km[np.isfinite(baseline_km)]
+            stats = _cohort_stats(b, args.radius_km)
+            rows.append({
+                "combo_id": "shortest_ping",
+                "cohort": "shortest_ping",
+                "n": stats["n"],
+                "p5": stats["p5"],
+                "p25": stats["p25"],
+                "p50": stats["p50"],
+                "p75": stats["p75"],
+                "p95": stats["p95"],
+                "frac_within_radius": stats["frac_within_radius"],
+                "radius_km": args.radius_km,
+            })
+        pd.DataFrame(rows, columns=[
+            "combo_id", "cohort", "n", "p5", "p25", "p50", "p75", "p95",
+            "frac_within_radius", "radius_km",
+        ]).to_csv(merge_out.with_suffix(".csv"), index=False)
+        logger.info("Saved: %s", merge_out.with_suffix(".csv"))
+        logger.info("Wrote merged CDF for %d combos to %s", len(errors_by_combo), merge_out)
+        return
 
     if args.scored_dir is not None:
         scored_dir = Path(args.scored_dir)
@@ -367,6 +620,73 @@ def main() -> None:
     else:
         logger.warning("no inputs dir resolved; skipping shortest-ping baseline "
                        "(pass --inputs-dir to enable)")
+
+    if args.merge_combos:
+        errors_by_combo: dict[str, np.ndarray] = {}
+        for combo_id in args.merge_combos:
+            dirs = grouped.get(combo_id, [])
+            if not dirs:
+                logger.warning("requested merged combo %s not found under run", combo_id)
+                continue
+            df = combo_frame(dirs, index)
+            err = df["error_to_centroid_km"].to_numpy(dtype=float)
+            errors_by_combo[combo_id] = err[np.isfinite(err)]
+
+        if not errors_by_combo:
+            raise SystemExit("none of the requested merge combos were found")
+
+        colors = {cid: palette(sorted(grouped))[cid] for cid in errors_by_combo if cid in grouped}
+
+        merge_out = route_geo_path(args.merge_out) if args.merge_out else out_dir / f"{run_dir.name}_cluster_cdf_merged.png"
+        fig = plot_merged_cluster_cdf(
+            errors_by_combo,
+            merge_out,
+            radius_km=args.radius_km,
+            label_map=label_map,
+            baseline_km=baseline_km,
+            max_x_km=args.max_x_km,
+            title=f"Cluster CDF (merged) — {run_dir.name}",
+            colors=colors,
+        )
+        plt.close(fig)
+
+        rows: list[dict[str, float | str | int]] = []
+        for cid, arr in errors_by_combo.items():
+            stats = _cohort_stats(arr, args.radius_km)
+            rows.append({
+                "combo_id": cid,
+                "cohort": "scored",
+                "n": stats["n"],
+                "p5": stats["p5"],
+                "p25": stats["p25"],
+                "p50": stats["p50"],
+                "p75": stats["p75"],
+                "p95": stats["p95"],
+                "frac_within_radius": stats["frac_within_radius"],
+                "radius_km": args.radius_km,
+            })
+        if baseline_km is not None and np.isfinite(baseline_km).any():
+            b = baseline_km[np.isfinite(baseline_km)]
+            stats = _cohort_stats(b, args.radius_km)
+            rows.append({
+                "combo_id": "shortest_ping",
+                "cohort": "shortest_ping",
+                "n": stats["n"],
+                "p5": stats["p5"],
+                "p25": stats["p25"],
+                "p50": stats["p50"],
+                "p75": stats["p75"],
+                "p95": stats["p95"],
+                "frac_within_radius": stats["frac_within_radius"],
+                "radius_km": args.radius_km,
+            })
+        pd.DataFrame(rows, columns=[
+            "combo_id", "cohort", "n", "p5", "p25", "p50", "p75", "p95",
+            "frac_within_radius", "radius_km",
+        ]).to_csv(merge_out.with_suffix(".csv"), index=False)
+        logger.info("Saved: %s", merge_out.with_suffix(".csv"))
+        logger.info("Wrote merged CDF for %d combos to %s", len(errors_by_combo), merge_out)
+        return
 
     logger.info("%-28s %8s %9s %9s", "combo", "n", "accuracy", "within_R")
     for combo_id, dirs in sorted(grouped.items()):

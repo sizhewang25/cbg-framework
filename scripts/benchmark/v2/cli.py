@@ -31,6 +31,11 @@ from scripts.benchmark.v2.inputs import (
 from scripts.benchmark.v2.runner import ComboSpec, run_one_combo
 from scripts.benchmark.v2.sources import SOURCES
 from scripts.benchmark.v2.sources.base import DataSource as _DataSource
+from scripts.benchmark.v2.cluster_topn import (
+    build_truth_neighbor_index,
+    compute_topk_match_from_truth_neighbors,
+    resolve_effective_top_n,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -95,6 +100,17 @@ def cmd_materialize_inputs(
             "split and after --min-obs. Forwarded to the source constructor."
         ),
     ),
+    eval_kept_traffic_fraction: Optional[float] = typer.Option(
+        None,
+        help=(
+            "Traffic-weighted eval at materialize time: derive eval_pair_weight_min "
+            "from this kept-traffic fraction over eval-side deduped (vp_id, "
+            "target_city) pair weights, then filter eval obs by the derived "
+            "threshold. Fit samples are unaffected (full-mesh training). "
+            "Applied after the slice's fit/eval split and after --min-obs. "
+            "Forwarded to the source constructor."
+        ),
+    ),
 ) -> None:
     """Pull data from a DataSource into vp_configs / fit_samples / eval_observations parquet."""
     if source not in SOURCES:
@@ -105,8 +121,20 @@ def cmd_materialize_inputs(
     kwargs = json.loads(source_kwargs)
     if min_obs is not None:
         kwargs["min_obs"] = min_obs
+    if (
+        eval_pair_weight_min is not None
+        and eval_kept_traffic_fraction is not None
+    ):
+        typer.echo(
+            "Pass only one of --eval-pair-weight-min or "
+            "--eval-kept-traffic-fraction.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     if eval_pair_weight_min is not None:
         kwargs["eval_pair_weight_min"] = eval_pair_weight_min
+    if eval_kept_traffic_fraction is not None:
+        kwargs["eval_kept_traffic_fraction"] = eval_kept_traffic_fraction
     src = source_cls(slice=slice, setup=setup, **kwargs)
     out_dir = inputs_dir_for(src, inputs_root, run_id=run_id)
     if (out_dir / "manifest.json").exists() and not force:
@@ -619,6 +647,14 @@ def cmd_cluster_score(
     inputs_root: Path = typer.Option(DEFAULT_INPUTS_ROOT, help="Root for eval_observations (baseline)."),
     inputs_dir: Optional[Path] = typer.Option(
         None, help="Explicit inputs dir for baseline (overrides auto-derive from run layout)."),
+    top_n: int = typer.Option(
+        1,
+        help=(
+            "Top-N target-side centroid answer space size. "
+            "For each target, S_N(y) = {true centroid} + (N-1) nearest centroids to it. "
+            "A prediction is correct at top-N when its nearest centroid is in S_N(y)."
+        ),
+    ),
 ) -> None:
     """Score every combo's CBG predictions against the precomputed cluster answer space.
 
@@ -626,7 +662,7 @@ def cmd_cluster_score(
     `cluster-eval`). For each combo: joins truth-side cluster from assignments
     (no BallTree re-query), runs a single BallTree query for prediction coords,
     writes ``<out_dir>/<combo_id>_scored.csv`` with columns
-    ``success, match, error_to_centroid_km, truth_centroid_km, error_km``.
+    ``target_id, success, match, error_to_centroid_km, truth_centroid_km, error_km``.
     Also computes the shortest-ping-VP baseline from eval_observations and
     writes ``<out_dir>/baseline.csv`` with columns
     ``target_id, vp_matches_centroid, vp_to_centroid_km``.
@@ -652,6 +688,8 @@ def cmd_cluster_score(
     c_lat = clusters_csv["centroid_lat"].to_numpy(dtype=float)
     c_lon = clusters_csv["centroid_lon"].to_numpy(dtype=float)
     _tree = BallTree(np.radians(np.column_stack([c_lat, c_lon])), metric="haversine")
+    eff_top_n = resolve_effective_top_n(top_n, len(c_lat))
+    truth_neighbors = build_truth_neighbor_index(c_lat, c_lon, eff_top_n)
 
     def _query(lats, lons):
         lats, lons = np.asarray(lats, dtype=float), np.asarray(lons, dtype=float)
@@ -709,20 +747,32 @@ def cmd_cluster_score(
 
         match = np.zeros(n, dtype=bool)
         err = np.full(n, float("nan"), dtype=float)
+        topk_cols = {
+            f"match_top{k}": np.zeros(n, dtype=bool)
+            for k in range(1, eff_top_n + 1)
+        }
         if success.any():
             sub = df[success]
             p_idx = _query(sub["pred_lat"], sub["pred_lon"])
             ts = t_cl[success]
             match[success] = (ts == p_idx) & (p_idx >= 0) & (ts >= 0)
             err[success] = _dist(sub["pred_lat"], sub["pred_lon"], ts)
+            topk_sub = compute_topk_match_from_truth_neighbors(
+                p_idx, ts, truth_neighbors, eff_top_n, column_prefix="match_top"
+            )
+            for k in range(1, eff_top_n + 1):
+                topk_cols[f"match_top{k}"][success] = topk_sub[f"match_top{k}"]
 
         scored = pd.DataFrame({
+            "target_id": df["target_id"].to_numpy(),
             "success": success,
             "match": match,
             "error_to_centroid_km": err,
             "truth_centroid_km": t_km,
             "error_km": df["error_km"].to_numpy(dtype=float),
         })
+        for k in range(1, eff_top_n + 1):
+            scored[f"match_top{k}"] = topk_cols[f"match_top{k}"]
         scored.to_csv(out_dir / f"{combo_id}_scored.csv", index=False)
         acc = float(match.sum()) / n
         typer.echo(f"  [{combo_id}] n={n}  accuracy={acc:.1%}")
@@ -760,6 +810,10 @@ def cmd_cluster_score(
                     )
                     v_idx = _query(rows["vp_lat"], rows["vp_lon"])
                     vp_to_centroid = _dist(rows["vp_lat"], rows["vp_lon"], t_cl_b)
+                    baseline_topk = compute_topk_match_from_truth_neighbors(
+                        v_idx, t_cl_b, truth_neighbors, eff_top_n,
+                        column_prefix="vp_matches_centroid_top",
+                    )
                     baseline = pd.DataFrame({
                         "target_id": rows["target_id"].to_numpy(),
                         "vp_matches_centroid": (
@@ -767,6 +821,10 @@ def cmd_cluster_score(
                         ),
                         "vp_to_centroid_km": vp_to_centroid,
                     })
+                    for k in range(1, eff_top_n + 1):
+                        baseline[f"vp_matches_centroid_top{k}"] = baseline_topk[
+                            f"vp_matches_centroid_top{k}"
+                        ]
                     baseline.to_csv(out_dir / "baseline.csv", index=False)
                     typer.echo(f"  baseline: {len(rows)} targets → {out_dir / 'baseline.csv'}")
         else:
