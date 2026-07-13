@@ -56,6 +56,35 @@ To benchmark several CSVs side-by-side, subclass `GenericCSVSource` and
 give each subclass a distinct `name` — that's the only thing that
 distinguishes them in the on-disk tree and the `SOURCES` registry.
 
+## Pre-split data: GenericPresplitSource
+
+If your train/test split already exists as two separate files, use
+[generic_presplit.py](generic_presplit.py) instead — same canonical schema
+(each file may independently be `.csv` or `.parquet`, inferred from the
+extension), but no splitting logic at all:
+
+```bash
+python -m scripts.benchmark.v2.cli materialize-inputs \
+    --source generic_presplit --slice all --run-id my-run \
+    --source-kwargs '{"train_path": "train.parquet", "test_path": "test.csv"}'
+```
+
+- `train_path` rows → `iter_fit_samples()` (LTD training) only.
+- `test_path` rows → `iter_eval_targets()` (evaluation) only.
+- The clean-split assumption is enforced: a `target_id` present in both
+  files is a **hard error** (LTD-leakage guard), and a shared `vp_id`
+  with conflicting coordinates across the files errors too. Shared VPs
+  with identical coordinates are expected and fine.
+- Slices shrink to `all` and `head<k>` (first k *test* targets by id —
+  smoke slice; the train side is untouched).
+- The legacy `setup` role-swap axis doesn't apply (the canonical columns
+  already assign the roles): the source ignores any `--setup` value and
+  always reports the fixed label `vp_to_target`, so Snakemake configs
+  must set `setup: vp_to_target` for their paths to line up.
+- `min_obs` (applied per file), `eval_pair_weight_min`, and
+  `eval_kept_traffic_fraction` (both test-side-only, same semantics as
+  above) carry over; `fold_N` / `wsplit<P>` do not exist here.
+
 Read on if your data shape doesn't fit this schema (e.g. ClickHouse-backed,
 landmark/probe-coords come from separate files, custom slicing logic).
 

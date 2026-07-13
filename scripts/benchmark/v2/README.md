@@ -11,7 +11,7 @@ post-hoc forensic analysis.
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [cli.py](cli.py)               | Typer commands: `materialize-inputs`, `run-combo`, `summarize`, `build-airports`, `airport-eval`, `geo-eval`                                                                                                                      |
 | [Snakefile](Snakefile)         | Parameterizes the (source × slice × combo) grid                                                                                                                                                                                  |
-| [sources/](sources/)           | DataSource adapters — [generic_csv.py](sources/generic_csv.py), [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py). See [sources/README.md](sources/README.md) for the contract + how to add your own. |
+| [sources/](sources/)           | DataSource adapters — [generic_csv.py](sources/generic_csv.py), [generic_presplit.py](sources/generic_presplit.py), [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py). See [sources/README.md](sources/README.md) for the contract + how to add your own. |
 | [inputs.py](inputs.py)         | Materializes a DataSource into three parquets                                                                                                                                                                                    |
 | [runner.py](runner.py)         | Per-combo fit + geolocate loop with instrumentation                                                                                                                                                                              |
 | [checkpoint.py](checkpoint.py) | Picks LTD checkpoint snapshot (or `.stateless` marker)                                                                                                                                                                           |
@@ -101,6 +101,13 @@ ranking). Smoke runs here are fast — 7 anchor targets, 266+ VPs.
 - **ripe_atlas** — IMC 2023 probes → anchors (the "primary eval" dataset).
 Slices: `all_anchors`, `n<K>`. Requires ClickHouse running with the
 `ping_10k_to_anchors` table populated.
+- **generic_presplit** — like `generic_csv` but takes an already-split
+train/test pair of files (`train_path`, `test_path` source kwargs; each
+`.csv` or `.parquet`). No fold/wsplit logic — train rows feed LTD fitting,
+test rows feed eval, and a target appearing in both files is a hard error.
+Slices: `all`, `head<k>` (test side). The legacy `setup` axis is ignored
+(columns fix the roles); its path segment is always `vp_to_target`, so
+Snakemake configs set `setup: vp_to_target`.
 
 Both adapters yield the same shape (VPs, FitSamples, EvalTargets), so a combo
 spec can be moved between sources by changing one flag.

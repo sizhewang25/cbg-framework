@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, VpConfig
 from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
+from scripts.benchmark.v2.sources.generic_presplit import GenericPresplitSource
 from scripts.benchmark.v2.sources.ripe_atlas import RipeAtlasSource
 from scripts.benchmark.v2.sources.ripe_atlas_asn_corpora import (
     RipeAtlasASNCorporaSource,
@@ -19,6 +20,7 @@ SOURCES: dict[str, type[DataSource]] = {
     RipeAtlasSource.name: RipeAtlasSource,
     RipeAtlasASNCorporaSource.name: RipeAtlasASNCorporaSource,
     GenericCSVSource.name: GenericCSVSource,
+    GenericPresplitSource.name: GenericPresplitSource,
 }
 
 __all__ = [
@@ -28,5 +30,6 @@ __all__ = [
     "RipeAtlasSource",
     "RipeAtlasASNCorporaSource",
     "GenericCSVSource",
+    "GenericPresplitSource",
     "SOURCES",
 ]
