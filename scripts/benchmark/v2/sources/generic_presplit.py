@@ -89,6 +89,11 @@ class GenericPresplitSource(DataSource):
     # constructor argument is accepted (the CLI always passes one) but ignored.
     SETUP_ID = "vp_to_target"
 
+    # Coordinates within this many degrees are treated as "the same VP" when
+    # cross-checking train/test consistency (~11cm at the equator) — absorbs
+    # float32/text round-trip noise without masking a genuine conflict.
+    _COORD_TOL = 1e-6
+
     def __init__(
         self,
         slice: str,
@@ -328,8 +333,10 @@ class GenericPresplitSource(DataSource):
     def _check_vp_coord_conflicts(
         self, train: pd.DataFrame, test: pd.DataFrame
     ) -> None:
-        """A vp_id shared across files must carry identical coordinates —
-        otherwise the union vp_configs catalog would silently pick one."""
+        """A vp_id shared across files must carry the same coordinates (within
+        `_COORD_TOL` degrees, to absorb float32/text round-trip noise between
+        the two files) — otherwise the union vp_configs catalog would
+        silently pick one."""
         def first_coords(df: pd.DataFrame) -> pd.DataFrame:
             out = df.drop_duplicates("vp_id")[["vp_id", "vp_lat", "vp_lon"]].copy()
             out["vp_id"] = out["vp_id"].astype(str)
@@ -340,8 +347,16 @@ class GenericPresplitSource(DataSource):
         if shared.empty:
             return
         mismatch = shared[
-            (a.loc[shared, "vp_lat"].to_numpy() != b.loc[shared, "vp_lat"].to_numpy())
-            | (a.loc[shared, "vp_lon"].to_numpy() != b.loc[shared, "vp_lon"].to_numpy())
+            ~np.isclose(
+                a.loc[shared, "vp_lat"].to_numpy(),
+                b.loc[shared, "vp_lat"].to_numpy(),
+                atol=self._COORD_TOL, rtol=0,
+            )
+            | ~np.isclose(
+                a.loc[shared, "vp_lon"].to_numpy(),
+                b.loc[shared, "vp_lon"].to_numpy(),
+                atol=self._COORD_TOL, rtol=0,
+            )
         ]
         if len(mismatch):
             examples = sorted(mismatch)[:5]

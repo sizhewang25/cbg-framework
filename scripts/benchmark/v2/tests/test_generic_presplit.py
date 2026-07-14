@@ -129,6 +129,19 @@ class TestGenericPresplitSource_Validation(_PresplitBase):
         with self.assertRaisesRegex(ValueError, "conflicting coordinates"):
             list(src.iter_eval_targets())
 
+    def test_vp_coord_conflict_tolerates_float_precision_noise(self) -> None:
+        # Sub-tolerance drift (float32/text round-trip noise) must NOT trip
+        # the guardrail — this is the same VP, not a genuine conflict.
+        near = _TEST_CSV.replace(
+            "2.2.2.2,47.0,-122.0", "2.2.2.2,47.0000001,-122.0000001"
+        )
+        self.test_path.write_text(near)
+        src = self._make()
+        # Should not raise.
+        self.assertEqual(
+            {t.target_id for t in src.iter_eval_targets()}, {"2001", "2002", "2003"}
+        )
+
     def test_missing_paths_raise(self) -> None:
         with self.assertRaises(ValueError):
             GenericPresplitSource(slice="all", train_path=self.train_path)
