@@ -116,8 +116,10 @@ Artifacts (named after the CSV stem):
   <stem>_eval_per_target.csv   per-target metrics + labels
   <stem>_eval_clusters.csv     per-cluster: centroid, members, radius,
                                cell_gap_km, top-N neighbor ids + distances
-  <stem>_vp_mesh_km.csv /      great-circle distance matrices (id-indexed;
-  <stem>_cluster_mesh_km.csv   skipped above mesh_max_n endpoints). The
+  <stem>_vp_mesh_km.csv /      great-circle distance matrices (id-indexed,
+  <stem>_cluster_mesh_km.csv   O(n^2) cells — no size cap; a huge endpoint
+                               count is left to fail loudly rather than
+                               silently produce a smaller artifact). The
                                answer-space mesh is over cluster centroids,
                                not raw targets — targets can be million-scale
                                while centroids stay bounded.
@@ -170,9 +172,6 @@ DEFAULT_SPEARMAN_MIN_PAIRS = 8
 
 # Low-RTT VP set for the anycast / infeasibility test: rtt <= min_rtt + delta.
 DEFAULT_ANYCAST_DELTA_MS = 10.0
-
-# Distance-mesh artifacts are skipped past this many endpoints (O(n^2) cells).
-DEFAULT_MESH_MAX_N = 2000
 
 PROXIMITY_LABELS = (
     "NO_PROXIMITY",
@@ -701,16 +700,14 @@ def write_mesh(
     lat_col: str,
     lon_col: str,
     out_path: Path,
-    max_n: int = DEFAULT_MESH_MAX_N,
-) -> Path | None:
+) -> Path:
     """Write the id-indexed great-circle distance matrix over the frame's
-    unique endpoints; None (with a notice) past max_n endpoints."""
+    unique endpoints. No size cap: the matrix is O(n^2) in the endpoint
+    count, and a pathologically large one is left to raise MemoryError
+    rather than silently produce a smaller (or missing) artifact — a
+    threshold-based skip would be exactly the kind of implicit truncation
+    this precheck is supposed to make visible, not hide."""
     uniq = frame.drop_duplicates(id_col)
-    n = len(uniq)
-    if n > max_n:
-        print(f"{n} unique {id_col}s exceeds the {max_n} mesh cap — "
-              f"skipping {out_path.name}")
-        return None
     lat = uniq[lat_col].to_numpy(dtype=float)
     lon = uniq[lon_col].to_numpy(dtype=float)
     d = haversine_distance(lat[:, None], lon[:, None], lat[None, :], lon[None, :])
@@ -729,7 +726,6 @@ def eval_source(
     top_n_neighbors: int = DEFAULT_TOP_N_NEIGHBORS,
     anycast_delta_ms: float = DEFAULT_ANYCAST_DELTA_MS,
     spearman_min_pairs: int = DEFAULT_SPEARMAN_MIN_PAIRS,
-    mesh_max_n: int = DEFAULT_MESH_MAX_N,
     min_obs: int | None = None,
     eval_pair_weight_min: float | None = None,
     eval_kept_traffic_fraction: float | None = None,
@@ -799,14 +795,12 @@ def eval_source(
 
     vp_mesh = write_mesh(
         pairs, "vp_id", "vp_lat", "vp_lon",
-        out_dir / f"{csv_path.stem}_vp_mesh_km.csv", max_n=mesh_max_n,
+        out_dir / f"{csv_path.stem}_vp_mesh_km.csv",
     )
     cl_mesh = write_mesh(
         clusters, "cluster_id", "centroid_lat", "centroid_lon",
-        out_dir / f"{csv_path.stem}_cluster_mesh_km.csv", max_n=mesh_max_n,
+        out_dir / f"{csv_path.stem}_cluster_mesh_km.csv",
     )
-    if vp_mesh is not None:
-        stats["vp_mesh_csv"] = str(vp_mesh)
-    if cl_mesh is not None:
-        stats["cluster_mesh_csv"] = str(cl_mesh)
+    stats["vp_mesh_csv"] = str(vp_mesh)
+    stats["cluster_mesh_csv"] = str(cl_mesh)
     return stats

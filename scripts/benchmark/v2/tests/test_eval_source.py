@@ -533,15 +533,15 @@ class TestEvalSourcePrecheckOutputs(unittest.TestCase):
             float(m[m > 0].min()), 12 * _DEG_KM, places=1
         )
 
-    def test_mesh_cap_skips_large_matrices(self) -> None:
+    def test_meshes_are_uncapped(self) -> None:
+        """No size cap: the mesh artifacts are always written, however many
+        unique endpoints there are — a pathological size is left to raise
+        MemoryError rather than silently shrink or skip the artifact."""
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = self._ladder_csv(Path(tmp))
-            stats = eval_source(
-                csv_path, Path(tmp), cluster_radius_km=200.0, mesh_max_n=3,
-            )
-            self.assertNotIn("vp_mesh_csv", stats)
-            self.assertNotIn("cluster_mesh_csv", stats)
-            self.assertFalse(list(Path(tmp).glob("*mesh*")))
+            stats = eval_source(csv_path, Path(tmp), cluster_radius_km=200.0)
+            self.assertTrue(Path(stats["vp_mesh_csv"]).exists())
+            self.assertTrue(Path(stats["cluster_mesh_csv"]).exists())
 
     def test_rtt_quality_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

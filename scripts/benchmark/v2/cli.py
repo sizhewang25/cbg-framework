@@ -360,13 +360,6 @@ def cmd_eval_source(
     spearman_min_pairs: int = typer.Option(
         8, help="Minimum pairs per target for the distance-RTT Spearman rho (NaN below)."
     ),
-    mesh_max_n: int = typer.Option(
-        2000,
-        help=(
-            "Skip the VP/cluster-centroid distance-mesh CSVs past this many "
-            "unique endpoints (matrices are O(n^2)). 0 disables the meshes."
-        ),
-    ),
     min_obs: Optional[int] = typer.Option(
         None,
         help=(
@@ -408,8 +401,9 @@ def cmd_eval_source(
     with the cbg_opportunity_share headline), and RTT-quality diagnostics
     (Spearman coherence, SOI violations, anycast disk-disjointness). Writes
     <stem>_eval_per_target.csv, <stem>_eval_clusters.csv, the VP and
-    cluster-centroid distance meshes, and <stem>_eval_stats.json, then
-    prints the summary. --min-obs / --eval-pair-weight-min /
+    cluster-centroid distance meshes (uncapped — a huge endpoint count
+    fails loudly rather than silently shrinking the artifact), and
+    <stem>_eval_stats.json, then prints the summary. --min-obs / --eval-pair-weight-min /
     --eval-kept-traffic-fraction restrict scoring to the same eval-side
     subset the benchmark's source_kwargs / top-level yaml keys would
     actually evaluate (recorded in the stats JSON's eval_filters block).
@@ -434,7 +428,6 @@ def cmd_eval_source(
         top_n_neighbors=top_n_neighbors,
         anycast_delta_ms=anycast_delta_ms,
         spearman_min_pairs=spearman_min_pairs,
-        mesh_max_n=mesh_max_n,
         min_obs=min_obs,
         eval_pair_weight_min=eval_pair_weight_min,
         eval_kept_traffic_fraction=eval_kept_traffic_fraction,

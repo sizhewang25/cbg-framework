@@ -19,7 +19,8 @@
 # eval_source.py's and inspect_source.py's own out_dir defaults):
 #   <csv_dir>/<stem>_eval_per_target.csv, _eval_clusters.csv, _eval_stats.json
 #   <csv_dir>/<stem>_clusters/{clusters,assignments}.csv + meta.json
-#   <csv_dir>/<stem>_vp_mesh_km.csv, _cluster_mesh_km.csv  (skipped past mesh_max_n)
+#   <csv_dir>/<stem>_vp_mesh_km.csv, _cluster_mesh_km.csv  (uncapped — a huge
+#     endpoint count fails loudly (MemoryError) rather than silently shrinking)
 #   <csv_dir>/<stem>_occurrence_cdf.png, _stats.json, _flow_map.html
 #   <csv_dir>/<stem>_cluster_map.png    (Voronoi underlay only if `precheck.landmass` set)
 #
@@ -36,7 +37,7 @@
 # reproduces a bare `eval-source --csv ...` call):
 #   cluster_radius_km   (default 50)      top_n_neighbors      (default 5)
 #   anycast_delta_ms    (default 10)      spearman_min_pairs   (default 8)
-#   mesh_max_n          (default 2000)    landmass             (default: none — no Voronoi underlay)
+#   landmass            (default: none — no Voronoi underlay)
 
 from pathlib import Path
 
@@ -57,7 +58,6 @@ CLUSTER_RADIUS_KM = float(PRECHECK.get("cluster_radius_km", 50.0))
 TOP_N_NEIGHBORS = int(PRECHECK.get("top_n_neighbors", 5))
 ANYCAST_DELTA_MS = float(PRECHECK.get("anycast_delta_ms", 10.0))
 SPEARMAN_MIN_PAIRS = int(PRECHECK.get("spearman_min_pairs", 8))
-MESH_MAX_N = int(PRECHECK.get("mesh_max_n", 2000))
 LANDMASS = PRECHECK.get("landmass")
 
 # Eval-side filters, read from the same keys the real benchmark run uses
@@ -105,7 +105,6 @@ rule eval_source:
         top_n = TOP_N_NEIGHBORS,
         anycast_delta = ANYCAST_DELTA_MS,
         spearman_min = SPEARMAN_MIN_PAIRS,
-        mesh_max_n = MESH_MAX_N,
         min_obs_flag = f"--min-obs {MIN_OBS}" if MIN_OBS is not None else "",
         eval_pair_weight_min_flag = (
             f"--eval-pair-weight-min {EVAL_PAIR_WEIGHT_MIN}"
@@ -123,7 +122,6 @@ rule eval_source:
         " --top-n-neighbors {params.top_n}"
         " --anycast-delta-ms {params.anycast_delta}"
         " --spearman-min-pairs {params.spearman_min}"
-        " --mesh-max-n {params.mesh_max_n}"
         " {params.min_obs_flag}"
         " {params.eval_pair_weight_min_flag}"
         " {params.eval_kept_traffic_fraction_flag}"
