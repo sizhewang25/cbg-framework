@@ -60,6 +60,12 @@ membership so nothing downstream regresses. Verified: 20,000 targets over
 duplicate-coordinate tests). This is orthogonal to the R=0 duplicate-coord
 semantics caveat above (that one's about singleton behavior, not memory).
 
+Also closed Phase 0's last open item: `inspect_dataset.smk`'s output layout
+will be **alongside the CSV**, matching `eval_source.py`'s and
+`inspect_source.py`'s existing `out_dir` defaults (both already `csv.parent`,
+already realized on disk under `datasets/ripe_as7018/`). Phase 0 is now
+fully done; Phases 2–4 remain.
+
 ## Conclusions
 
 <Final assessment when task completes.>

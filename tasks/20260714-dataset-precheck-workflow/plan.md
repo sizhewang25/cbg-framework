@@ -230,7 +230,22 @@ Z% of it baseline-lucky), plus anycast/SOI flag shares" as the headline.
 
 ## Open questions
 
-1. Output naming/layout for the smk (per-config out dir vs alongside CSV).
+1. ~~Output naming/layout for the smk (per-config out dir vs alongside CSV)~~
+  — resolved 2026-07-15: **alongside the CSV**, stem-prefixed (matches
+  `eval_source.py`'s and `inspect_source.py`'s existing `out_dir` defaults,
+  both already `csv.parent`, and the pattern already realized on disk —
+  `datasets/ripe_as7018/as7018-us-test01.csv` sits next to its
+  `_eval_per_target.csv` / `_eval_stats.json` / `_flow_map.html` siblings).
+  `inspect_dataset.smk` just calls both tools with their existing defaults —
+  no new output tree, no smk-side path construction. This fits the task's
+  shape (one CSV, one benchmark yaml, no fan-out), unlike
+  `cluster_world_map.smk` / `mtl_world_map.smk`, which fan out over many yaml
+  configs and need a dedicated `run_id`-keyed tree (their `VIZ_OUT`) to avoid
+  collisions across configs. Caveat: if two yamls ever point at the *same*
+  CSV with *different* precheck params (e.g. different `cluster_radius_km`),
+  their outputs collide (stem-keyed, not param-keyed) — not a real scenario
+  yet, and the CLI's `--out-dir` override is the escape hatch if it becomes
+  one.
 2. ~~SPARSE floor for n_avail_vps~~ — resolved 2026-07-14: no SPARSE label
   (ambiguous against the D-based definitions; folded into the ladder,
   `n_avail_vps` stays a plain metric). The Spearman guard keeps its own

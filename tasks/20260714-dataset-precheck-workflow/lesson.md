@@ -13,6 +13,14 @@
   not a general one: sources with u ≈ n (all-distinct coordinates) get no
   benefit and would need a real algorithmic change (sparse connectivity graph
   instead of a dense precomputed matrix).
+- Output-layout decisions for a new orchestration script should be read off
+  the tools it wraps, not designed fresh: `eval_source.py` and
+  `inspect_source.py` both already default `out_dir` to the CSV's own parent,
+  and that convention is already realized on disk. A dedicated `run_id`-keyed
+  output tree (like `cluster_world_map.smk`'s `VIZ_OUT`) is the right call
+  only when a smk fans out over *many* configs that might reuse resources —
+  it's the fan-out shape that justifies the extra indirection, not a general
+  preference for tidier output trees.
 
 ## 2026-07-14
 

@@ -5,7 +5,7 @@
 - [x] Settle anycast/spread metric: `vp_pair_disk_overlap_km` + iGreedy `n_disjoint_sites` over low-RTT set `rtt ≤ min_rtt + 10ms` (plan.md)
 - [x] Verify `cluster_ground_truth` behavior at R=0 (all singletons; duplicate-coord edge documented in plan.md caveats)
 - [x] Fix `cluster_ground_truth` O(n²) memory blowup at large target counts — cluster over unique `(lat, lon)` rows only, broadcast labels back (2026-07-15)
-- [ ] Decide output layout for inspect_dataset.smk (per-config out dir vs alongside CSV)
+- [x] Decide output layout for inspect_dataset.smk (per-config out dir vs alongside CSV) — resolved 2026-07-15: alongside the CSV, matching eval_source.py/inspect_source.py's existing `csv.parent` defaults (plan.md)
 
 ## Phase 1: eval_source.py extensions (metrics only, canonical CSV in) — DONE 2026-07-14
 - [x] Add `cell_gap_km` per cluster/target (BallTree self-query k=top_n+1, one shot with neighbors)
