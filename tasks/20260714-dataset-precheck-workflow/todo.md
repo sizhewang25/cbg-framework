@@ -28,11 +28,11 @@
 - [ ] Color targets by proximity margin / rtt_regime; show per-target metrics in popups — **descoped to a static color-by (no popups)** per 2026-07-15 decision to reuse the static matplotlib/cartopy plotter rather than build a new interactive map; needs a small opt-in extension to `plot_ground_truth_clusters._plot_map`/`plot_clusters` (color-by `proximity_label` instead of only `cluster_id`) — not yet done
 - [x] Keep existing occurrence CDFs + flow map intact — additive change, both untouched and still produced
 
-## Phase 3: inspect_dataset.smk orchestration
-- [ ] Create `inspect_dataset.smk` reading benchmark config yaml(s) for csv_path + precheck params (style: cluster_world_map.smk)
-- [ ] Rules: eval_source metrics → inspect_source visuals; document run command in header
+## Phase 3: inspect_dataset.smk orchestration — DONE 2026-07-15
+- [x] Create `inspect_dataset.smk` reading benchmark config yaml(s) for csv_path + precheck params (style: cluster_world_map.smk) — lives at `scripts/benchmark/v2/inspect_dataset.smk` (next to the main Snakefile, same `--configfile` convention); reads `source_kwargs.csv_path` + an optional `precheck:` block (cluster_radius_km, top_n_neighbors, anycast_delta_ms, spearman_min_pairs, mesh_max_n, landmass), defaulting to eval_source.py's own DEFAULT_* constants so an absent block reproduces a bare `eval-source` call
+- [x] Rules: eval_source metrics → inspect_source visuals; document run command in header — two rules (`eval_source`, `inspect_source`) + `rule all`; `inspect_source` depends on `eval_source`'s `<stem>_clusters/` dir so the cluster map only renders after clustering exists
 
 ## Phase 4: Verification
-- [ ] Run end-to-end on `datasets/ripe_as7018/as7018-us-test01.csv` with `as7018_us_test01.yaml` (via the Phase-3 smk, once it exists — ad hoc CLI run already done, see below)
-- [ ] Sanity-check metrics against known findings (53 VPs × 78 targets; AS7018 US proximity profile)
-- [x] Eyeball the Voronoi map layer; confirm clipped cells render sanely — done ad hoc 2026-07-15 (`eval-source` → `inspect-source --landmass US` on as7018-us-test01.csv): 17 regions, US-clipped Voronoi cells, singleton/clustered coloring all render correctly; not yet run through the Phase-3 smk since that doesn't exist yet
+- [x] Run end-to-end on `datasets/ripe_as7018/as7018-us-test01.csv` with `as7018_us_test01.yaml` — 2026-07-15: added a `precheck: {landmass: US}` block to the yaml, ran `snakemake -s scripts/benchmark/v2/inspect_dataset.smk --configfile scripts/benchmark/v2/config/as7018_us_test01.yaml -j 1`; dry-run DAG matched expectations, real run completed 3/3 jobs, re-run confirmed idempotent ("Nothing to be done")
+- [x] Sanity-check metrics against known findings (53 VPs × 78 targets; AS7018 US proximity profile) — matches report.md exactly: 4129 pairs, 53 VPs, 78 targets, R=50 → 17 clusters/4 singletons, cbg_opportunity_share=51.3%, opportunity_baseline_lucky_share=0.0
+- [x] Eyeball the Voronoi map layer; confirm clipped cells render sanely — confirmed via the smk-driven run this time (not just ad hoc): 17 regions, US-clipped Voronoi cells, singleton/clustered coloring all render correctly, byte-for-byte the same map as the earlier ad hoc check

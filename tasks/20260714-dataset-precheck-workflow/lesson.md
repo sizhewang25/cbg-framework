@@ -36,6 +36,18 @@
   giving up "popups" (interactive-only), so the proximity-coloring todo item
   had to be explicitly re-scoped to a plain color-by, not silently marked
   done. Note what a scope-simplifying choice costs before checking boxes.
+- A new orchestration smk should read the *same* config yaml the main
+  pipeline uses (`config["source_kwargs"]["csv_path"]`, plus a new optional
+  block), not invent a parallel config path — `inspect_dataset.smk` reads
+  `as7018_us_test01.yaml` directly, so a dataset's precheck and its benchmark
+  runs never drift out of sync. New optional top-level yaml keys (here:
+  `precheck:`) are safe to add — the existing Snakefile/CLI consumers all
+  read via `config.get(...)`, no strict schema anywhere in this pipeline.
+- Always dry-run (`-n -p`) a new smk before executing it — it catches DAG
+  wiring mistakes (a dangling rule with no shell/run recipe, a wrong
+  input/output binding) for free, before touching any files. Re-running with
+  `-n` a second time *after* execution is a cheap idempotence check: "Nothing
+  to be done" confirms the up-to-date detection matches the actual outputs.
 
 ## 2026-07-14
 

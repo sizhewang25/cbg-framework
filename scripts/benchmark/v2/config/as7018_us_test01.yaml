@@ -39,6 +39,13 @@ source_kwargs:
 enable_fallback: true
 seed: 42
 
+# Dataset precheck (scripts/benchmark/v2/inspect_dataset.smk) — every key
+# optional, defaults to eval_source.py's own DEFAULT_* constants. `landmass`
+# clips the cluster/Voronoi map to mainland US, matching this dataset's
+# US-anchor scope.
+precheck:
+  landmass: US
+
 combos:
   # ---- Vanilla CBG family ---------------------------------------------------
   - combo_id: vanilla_cbg
