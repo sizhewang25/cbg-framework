@@ -367,6 +367,35 @@ def cmd_eval_source(
             "unique endpoints (matrices are O(n^2)). 0 disables the meshes."
         ),
     ),
+    min_obs: Optional[int] = typer.Option(
+        None,
+        help=(
+            "Drop targets with fewer than this many observations before "
+            "scoring — mirrors GenericCSVSource/GenericPresplitSource's "
+            "materialize-time source_kwargs.min_obs, so the precheck matches "
+            "what the benchmark run would actually evaluate."
+        ),
+    ),
+    eval_pair_weight_min: Optional[float] = typer.Option(
+        None,
+        help=(
+            "Traffic-weighted eval mask before scoring: a target survives "
+            "only if >= 1 of its obs has weight >= this value, and only "
+            "surviving obs are kept. Mirrors the benchmark's top-level "
+            "eval_pair_weight_min yaml key. Pass only one of "
+            "--eval-pair-weight-min / --eval-kept-traffic-fraction."
+        ),
+    ),
+    eval_kept_traffic_fraction: Optional[float] = typer.Option(
+        None,
+        help=(
+            "Derive --eval-pair-weight-min from this kept-traffic fraction "
+            "over deduped (vp_id, target_city) pair weights, then apply the "
+            "same mask. Mirrors the benchmark's top-level "
+            "eval_kept_traffic_fraction yaml key; requires a target_city "
+            "column."
+        ),
+    ),
 ) -> None:
     """Score a canonical CSV's CBG-friendliness (geographic topology + RTT quality).
 
@@ -380,12 +409,22 @@ def cmd_eval_source(
     (Spearman coherence, SOI violations, anycast disk-disjointness). Writes
     <stem>_eval_per_target.csv, <stem>_eval_clusters.csv, the VP and
     cluster-centroid distance meshes, and <stem>_eval_stats.json, then
-    prints the summary.
+    prints the summary. --min-obs / --eval-pair-weight-min /
+    --eval-kept-traffic-fraction restrict scoring to the same eval-side
+    subset the benchmark's source_kwargs / top-level yaml keys would
+    actually evaluate (recorded in the stats JSON's eval_filters block).
     """
     from scripts.benchmark.v2.eval_source import eval_source
 
     if not csv.exists():
         typer.echo(f"No such CSV: {csv}", err=True)
+        raise typer.Exit(code=2)
+    if eval_pair_weight_min is not None and eval_kept_traffic_fraction is not None:
+        typer.echo(
+            "Pass only one of --eval-pair-weight-min or "
+            "--eval-kept-traffic-fraction.",
+            err=True,
+        )
         raise typer.Exit(code=2)
 
     stats = eval_source(
@@ -396,6 +435,9 @@ def cmd_eval_source(
         anycast_delta_ms=anycast_delta_ms,
         spearman_min_pairs=spearman_min_pairs,
         mesh_max_n=mesh_max_n,
+        min_obs=min_obs,
+        eval_pair_weight_min=eval_pair_weight_min,
+        eval_kept_traffic_fraction=eval_kept_traffic_fraction,
     )
     typer.echo(json.dumps(stats, indent=2))
 

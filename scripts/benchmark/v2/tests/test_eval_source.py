@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import math
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -37,12 +38,14 @@ import pandas as pd
 
 from scripts.benchmark.v2.eval_source import (
     anycast_metrics,
+    apply_eval_target_filters,
     build_pairs,
     cluster_targets,
     eval_source,
     load_canonical_csv,
     per_target_metrics,
     proximity_metrics,
+    _derive_eval_pair_weight_min,
 )
 from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM, THEORETICAL_SLOPE
 
@@ -549,6 +552,176 @@ class TestEvalSourcePrecheckOutputs(unittest.TestCase):
         self.assertIn("anycast_suspect_share", quality)
         # T_HAS is the only closest/fastest disagreement among 4 targets.
         self.assertAlmostEqual(quality["closest_is_shortest_ping_share"], 0.75)
+
+
+# Same fixture as test_sources.py's TestGenericCSVSource_EvalWeightFilter (see
+# that class's docstring): t1 mixed (100, 3) -> survives losing 2.2.2.2, t2
+# all-light (5) -> dropped, t3 all-heavy (50, 60) -> survives intact, t4
+# mixed the other way (8, 12) -> survives losing 1.1.1.1. Reused here (not
+# imported) to lock apply_eval_target_filters's math to the exact same
+# per-target-survivor outcome the real GenericCSVSource produces.
+_EVAL_MASK_CSV = textwrap.dedent("""
+    vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,weight
+    1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0,100
+    2.2.2.2,47.0,-122.0,t1,40.0,-100.0,11.0,3
+    1.1.1.1,33.0,-84.0,t2,41.0,-101.0,12.0,5
+    1.1.1.1,33.0,-84.0,t3,42.0,-102.0,13.0,50
+    2.2.2.2,47.0,-122.0,t3,42.0,-102.0,14.0,60
+    1.1.1.1,33.0,-84.0,t4,43.0,-103.0,15.0,8
+    2.2.2.2,47.0,-122.0,t4,43.0,-103.0,16.0,12
+""").strip() + "\n"
+
+_EVAL_MASK_SURVIVORS = {"t1", "t3", "t4"}
+
+
+class TestApplyEvalTargetFilters(unittest.TestCase):
+    def _load(self, tmp: Path, text: str = _EVAL_MASK_CSV) -> pd.DataFrame:
+        path = tmp / "mask.csv"
+        path.write_text(text)
+        return load_canonical_csv(path)
+
+    def test_min_obs_drops_sparse_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            df = self._load(Path(tmp))
+            out, _ = apply_eval_target_filters(df, min_obs=2)
+        self.assertEqual(set(out["target_id"].unique()), {"t1", "t3", "t4"})
+
+    def test_eval_pair_weight_min_matches_source_survivors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            df = self._load(Path(tmp))
+            out, _ = apply_eval_target_filters(df, eval_pair_weight_min=10.0)
+        self.assertEqual(set(out["target_id"].unique()), _EVAL_MASK_SURVIVORS)
+        # t1 loses its light (2.2.2.2, weight 3) obs; t4 loses 1.1.1.1;
+        # t3 keeps both.
+        self.assertEqual(
+            set(out.loc[out["target_id"] == "t1", "vp_id"]), {"1.1.1.1"}
+        )
+        self.assertEqual(
+            set(out.loc[out["target_id"] == "t4", "vp_id"]), {"2.2.2.2"}
+        )
+        self.assertEqual((out["target_id"] == "t3").sum(), 2)
+
+    def test_min_obs_runs_before_the_mask(self) -> None:
+        """min_obs=2 first drops the single-obs target (t2, which would
+        anyway fail the weight mask), then the mask narrows what's left —
+        same ordering as GenericCSVSource._ensure_loaded."""
+        with tempfile.TemporaryDirectory() as tmp:
+            df = self._load(Path(tmp))
+            out, _ = apply_eval_target_filters(df, min_obs=2, eval_pair_weight_min=10.0)
+        self.assertEqual(set(out["target_id"].unique()), {"t1", "t3", "t4"})
+
+    def test_threshold_dropping_every_target_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            df = self._load(Path(tmp))
+            with self.assertRaises(ValueError):
+                apply_eval_target_filters(df, eval_pair_weight_min=1000.0)
+
+    def test_mutually_exclusive_args_raise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            df = self._load(Path(tmp))
+            with self.assertRaises(ValueError):
+                apply_eval_target_filters(
+                    df, eval_pair_weight_min=1.0, eval_kept_traffic_fraction=0.5
+                )
+
+    def test_negative_threshold_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            df = self._load(Path(tmp))
+            with self.assertRaises(ValueError):
+                apply_eval_target_filters(df, eval_pair_weight_min=-1.0)
+
+    def test_invalid_fraction_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            df = self._load(Path(tmp))
+            with self.assertRaises(ValueError):
+                apply_eval_target_filters(df, eval_kept_traffic_fraction=0.0)
+
+    def test_absent_weight_column_defaults_make_low_thresholds_noop(self) -> None:
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0
+            1.1.1.1,33.0,-84.0,t2,41.0,-101.0,11.0
+        """).strip() + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            df = self._load(Path(tmp), csv)
+            out, _ = apply_eval_target_filters(df, eval_pair_weight_min=1.0)
+        self.assertEqual(set(out["target_id"].unique()), {"t1", "t2"})
+
+
+# Same fixture as test_sources.py's TestGenericCSVSource_EvalKeptTrafficFraction.
+_EVAL_KEPT_FRAC_CSV = textwrap.dedent("""
+    vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
+    1.1.1.1,33.0,-84.0,t1,40.0,-100.0,atlanta,10.0,10
+    2.2.2.2,47.0,-122.0,t1,40.0,-100.0,atlanta,11.0,1
+    1.1.1.1,33.0,-84.0,t2,41.0,-101.0,boston,12.0,9
+    2.2.2.2,47.0,-122.0,t2,41.0,-101.0,boston,13.0,1
+""").strip() + "\n"
+
+
+class TestEvalKeptTrafficFraction(unittest.TestCase):
+    def test_fraction_derives_threshold_matching_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frac.csv"
+            path.write_text(_EVAL_KEPT_FRAC_CSV)
+            df = load_canonical_csv(path)
+            # Per (vp_id,target_city) weights = [10, 1, 9, 1]; 95% -> threshold 1.
+            threshold = _derive_eval_pair_weight_min(df, 0.95)
+        self.assertEqual(threshold, 1.0)
+
+    def test_zero_total_weight_derives_zero_threshold(self) -> None:
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,atlanta,10.0,0
+            2.2.2.2,47.0,-122.0,t2,41.0,-101.0,boston,11.0,0
+        """).strip() + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "zero.csv"
+            path.write_text(csv)
+            df = load_canonical_csv(path)
+            threshold = _derive_eval_pair_weight_min(df, 0.95)
+        self.assertEqual(threshold, 0.0)
+
+    def test_requires_target_city(self) -> None:
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,weight
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0,10
+        """).strip() + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "no_city.csv"
+            path.write_text(csv)
+            df = load_canonical_csv(path)
+            with self.assertRaises(ValueError):
+                _derive_eval_pair_weight_min(df, 0.95)
+
+
+class TestEvalSourceFilterIntegration(unittest.TestCase):
+    """End-to-end: eval_source() itself narrows to the eval-filtered subset
+    and records what it applied."""
+
+    def test_eval_pair_weight_min_shrinks_scored_set_and_records_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "mask.csv"
+            csv_path.write_text(_EVAL_MASK_CSV)
+            stats = eval_source(
+                csv_path, Path(tmp), eval_pair_weight_min=10.0,
+            )
+        self.assertEqual(stats["n_targets"], 3)
+        self.assertEqual(
+            stats["eval_filters"],
+            {
+                "min_obs": None,
+                "eval_pair_weight_min": 10.0,
+                "eval_kept_traffic_fraction": None,
+            },
+        )
+
+    def test_no_filters_leaves_stats_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "mask.csv"
+            csv_path.write_text(_EVAL_MASK_CSV)
+            stats = eval_source(csv_path, Path(tmp))
+        self.assertEqual(stats["n_targets"], 4)
+        self.assertNotIn("eval_filters", stats)
 
 
 if __name__ == "__main__":

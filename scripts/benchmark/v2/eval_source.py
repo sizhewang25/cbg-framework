@@ -8,6 +8,14 @@ so sparse meshes are scored on what a benchmark run would actually see.
 This is the dataset *precheck*: it runs on the full CSV (never per-fold, never
 on benchmark outputs) and answers "how well could shortest-ping / CBG work if
 the whole dataset were the evaluation set", with every property made explicit.
+"Whole dataset" defaults to every row, but when the benchmark's own
+`source_kwargs.min_obs` or top-level `eval_pair_weight_min` /
+`eval_kept_traffic_fraction` yaml keys are set, the *actual* eval set a
+GenericCSVSource/GenericPresplitSource run would see is already a filtered
+subset — pass the matching `min_obs`/`eval_pair_weight_min`/
+`eval_kept_traffic_fraction` kwargs (see `apply_eval_target_filters`) so the
+precheck scores that subset instead of silently diverging from it. The
+resolved filters are recorded in the stats JSON's `eval_filters` block.
 
 Multiple observations of the same (vp, target) pair are collapsed to the
 min-RTT one before aggregation (same convention as inspect_source's flow map).
@@ -131,6 +139,7 @@ from scripts.benchmark.v2.sources.cluster_ground_truth import (
     _write_outputs,
     cluster_ground_truth,
 )
+from scripts.benchmark.v2.sources.generic_csv import _raw_str
 from scripts.libs.cbg.rtt_model import (
     EARTH_RADIUS_KM,
     THEORETICAL_SLOPE,
@@ -142,6 +151,13 @@ _REQUIRED = (
     "target_id", "target_lat", "target_lon",
     "rtt_ms",
 )
+
+# Kept alongside the required columns, when present, so the eval-side filters
+# below (min_obs / eval_pair_weight_min / eval_kept_traffic_fraction) can be
+# applied identically to how GenericCSVSource/GenericPresplitSource do it at
+# materialize time. `_raw_str` opts target_city out of pandas' NA-sentinel
+# coercion, same reason as generic_csv.py's `_OPTIONAL_STR`.
+_OPTIONAL_FOR_FILTERS = ("weight", "target_city")
 
 # Answer-space coherence radius R — matches cluster-eval's default cap.
 DEFAULT_CLUSTER_RADIUS_KM = 50.0
@@ -191,15 +207,23 @@ _PCTS = (5, 25, 50, 75, 95)
 
 def load_canonical_csv(csv_path: Path) -> pd.DataFrame:
     """Load the required canonical columns, case-insensitively, dropping rows
-    with missing values or non-positive RTTs (mirrors GenericCSVSource)."""
-    df = pd.read_csv(csv_path)
+    with missing values or non-positive RTTs (mirrors GenericCSVSource).
+
+    Also keeps `weight` (normalized to a numeric >=0 column, defaulting to
+    1.0 when absent — same two-default convention as generic_csv.py) and
+    `target_city`, when either is present in the CSV, so
+    `apply_eval_target_filters` below can reproduce the materialize-time
+    eval-side filters."""
+    converters = {c: _raw_str for c in ("target_city", "TARGET_CITY")}
+    df = pd.read_csv(csv_path, converters=converters)
     df.columns = df.columns.str.strip().str.lower()
     missing = [c for c in _REQUIRED if c not in df.columns]
     if missing:
         raise ValueError(
             f"{csv_path} is not a canonical CSV — missing columns: {missing}"
         )
-    df = df[list(_REQUIRED)].copy()
+    keep = list(_REQUIRED) + [c for c in _OPTIONAL_FOR_FILTERS if c in df.columns]
+    df = df[keep].copy()
     for col in ("vp_id", "target_id"):
         df[col] = df[col].astype(str)
     for col in ("vp_lat", "vp_lon", "target_lat", "target_lon", "rtt_ms"):
@@ -210,7 +234,120 @@ def load_canonical_csv(csv_path: Path) -> pd.DataFrame:
         raise ValueError(
             f"{csv_path}: no usable rows after dropping NaNs and non-positive RTTs"
         )
+    if "weight" not in df.columns:
+        df["weight"] = 1.0
+    else:
+        df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0.0)
+        if (df["weight"] < 0).any():
+            raise ValueError(f"{csv_path}: weight must be >= 0")
     return df
+
+
+def apply_eval_target_filters(
+    df: pd.DataFrame,
+    *,
+    min_obs: int | None = None,
+    eval_pair_weight_min: float | None = None,
+    eval_kept_traffic_fraction: float | None = None,
+) -> tuple[pd.DataFrame, float | None]:
+    """Restrict `df` to the rows a real benchmark run's eval_observations.parquet
+    would actually contain, mirroring GenericCSVSource/GenericPresplitSource's
+    materialize-time eval-side filters (see sources/generic_csv.py's
+    `_apply_min_obs_filter` / `_apply_eval_weight_filter` /
+    `_derive_eval_weight_min_from_fraction`). Without this, the precheck
+    silently scores every row in the CSV even when `source_kwargs.min_obs` or
+    the top-level `eval_pair_weight_min` / `eval_kept_traffic_fraction` yaml
+    keys shrink what the benchmark actually evaluates.
+
+    `min_obs` drops targets with fewer than that many rows (raw CSV row
+    count, matching the source classes' per-target-id row count). Then, at
+    most one of `eval_pair_weight_min` / `eval_kept_traffic_fraction` narrows
+    to eval-surviving obs: a target survives iff >= 1 of its rows has
+    `weight >= threshold`, and only rows clearing the threshold are kept for
+    surviving targets — exactly what `iter_eval_targets` would emit.
+
+    Returns (filtered_df, resolved_eval_pair_weight_min) — the second value
+    is the threshold actually used (derived from `eval_kept_traffic_fraction`
+    when that's what was passed), so callers can record it for transparency.
+    """
+    if eval_pair_weight_min is not None and eval_kept_traffic_fraction is not None:
+        raise ValueError(
+            "pass only one of eval_pair_weight_min or eval_kept_traffic_fraction"
+        )
+    if eval_pair_weight_min is not None and eval_pair_weight_min < 0:
+        raise ValueError(f"eval_pair_weight_min must be >= 0, got {eval_pair_weight_min}")
+    if eval_kept_traffic_fraction is not None and not (0 < eval_kept_traffic_fraction <= 1):
+        raise ValueError(
+            f"eval_kept_traffic_fraction must be in (0, 1], got {eval_kept_traffic_fraction}"
+        )
+
+    if min_obs is not None:
+        counts = df.groupby("target_id")["target_id"].transform("count")
+        before = df["target_id"].nunique()
+        df = df[counts >= min_obs].reset_index(drop=True)
+        after = df["target_id"].nunique()
+        print(f"min_obs={min_obs}: {before} -> {after} targets")
+        if df.empty:
+            raise ValueError(f"min_obs={min_obs} left zero targets")
+
+    if eval_kept_traffic_fraction is not None:
+        eval_pair_weight_min = _derive_eval_pair_weight_min(
+            df, eval_kept_traffic_fraction
+        )
+
+    if eval_pair_weight_min is not None:
+        thr = eval_pair_weight_min
+        before = df["target_id"].nunique()
+        surviving_targets = set(df.loc[df["weight"] >= thr, "target_id"].astype(str))
+        df = df[
+            df["target_id"].astype(str).isin(surviving_targets)
+            & (df["weight"] >= thr)
+        ].reset_index(drop=True)
+        after = df["target_id"].nunique()
+        print(
+            f"eval_pair_weight_min={thr}: {before} -> {after} targets "
+            f"({len(df)} surviving obs)"
+        )
+        if df.empty:
+            raise ValueError(f"eval_pair_weight_min={thr} left zero eval obs")
+
+    return df, eval_pair_weight_min
+
+
+def _derive_eval_pair_weight_min(df: pd.DataFrame, frac: float) -> float:
+    """Same derivation as generic_csv.py's `_derive_eval_weight_min_from_fraction`:
+    dedupe at `(vp_id, target_city)` by per-pair max(weight), then descending
+    cumulative sum to the requested kept traffic fraction."""
+    if "target_city" not in df.columns:
+        raise ValueError("eval_kept_traffic_fraction requires a target_city column")
+    city = df["target_city"].astype(str).str.strip()
+    blank = ~df["target_city"].notna() | (city == "")
+    if blank.any():
+        raise ValueError(
+            "eval_kept_traffic_fraction requires non-blank target_city on every row"
+        )
+    per_pair = df.groupby(["vp_id", "target_city"], as_index=False).agg(
+        weight=("weight", "max")
+    )
+    weights = per_pair["weight"].to_numpy(dtype=float)
+    total = float(weights.sum())
+    if total <= 0:
+        print(
+            f"eval_kept_traffic_fraction={frac}: all pair weights are zero; "
+            "derived eval_pair_weight_min=0.0"
+        )
+        return 0.0
+    weights_sorted = np.sort(weights)[::-1]
+    target = frac * total
+    cum = np.cumsum(weights_sorted)
+    idx = int(np.searchsorted(cum, target, side="left"))
+    idx = min(idx, len(weights_sorted) - 1)
+    threshold = float(weights_sorted[idx])
+    print(
+        f"eval_kept_traffic_fraction={frac}: derived eval_pair_weight_min="
+        f"{threshold:.12g} from {len(per_pair)} (vp_id, target_city) pairs"
+    )
+    return threshold
 
 
 def build_pairs(df: pd.DataFrame) -> pd.DataFrame:
@@ -593,11 +730,33 @@ def eval_source(
     anycast_delta_ms: float = DEFAULT_ANYCAST_DELTA_MS,
     spearman_min_pairs: int = DEFAULT_SPEARMAN_MIN_PAIRS,
     mesh_max_n: int = DEFAULT_MESH_MAX_N,
+    min_obs: int | None = None,
+    eval_pair_weight_min: float | None = None,
+    eval_kept_traffic_fraction: float | None = None,
 ) -> dict[str, Any]:
     """Score one canonical CSV; write the per-target CSV, per-cluster CSV,
     distance meshes and stats JSON into out_dir (named after the CSV's stem)
-    and return the stats dict with output paths."""
+    and return the stats dict with output paths.
+
+    `min_obs` / `eval_pair_weight_min` / `eval_kept_traffic_fraction`, when
+    given, restrict scoring to the same eval-side subset a real benchmark
+    run's `source_kwargs` (or top-level yaml keys, for the two weight knobs)
+    would produce — see `apply_eval_target_filters`. Pass none of them to
+    score the whole CSV as-is (the original, filter-free precheck)."""
     df = load_canonical_csv(csv_path)
+    filters_applied = (
+        min_obs is not None
+        or eval_pair_weight_min is not None
+        or eval_kept_traffic_fraction is not None
+    )
+    resolved_eval_pair_weight_min = eval_pair_weight_min
+    if filters_applied:
+        df, resolved_eval_pair_weight_min = apply_eval_target_filters(
+            df,
+            min_obs=min_obs,
+            eval_pair_weight_min=eval_pair_weight_min,
+            eval_kept_traffic_fraction=eval_kept_traffic_fraction,
+        )
     pairs = build_pairs(df)
     per_target = per_target_metrics(pairs, spearman_min_pairs=spearman_min_pairs)
     clusters_dir = out_dir / f"{csv_path.stem}_clusters"
@@ -618,6 +777,12 @@ def eval_source(
         "proximity": proximity_summary(per_target),
         "rtt_quality": rtt_quality_summary(pairs, per_target),
     }
+    if filters_applied:
+        stats["eval_filters"] = {
+            "min_obs": min_obs,
+            "eval_pair_weight_min": resolved_eval_pair_weight_min,
+            "eval_kept_traffic_fraction": eval_kept_traffic_fraction,
+        }
 
     out_dir.mkdir(parents=True, exist_ok=True)
     per_target_path = out_dir / f"{csv_path.stem}_eval_per_target.csv"

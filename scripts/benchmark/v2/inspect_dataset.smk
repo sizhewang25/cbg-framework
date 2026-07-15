@@ -1,13 +1,20 @@
 # Dataset precheck: canonical CSV -> eval_source metrics -> inspect_source
 # visuals, driven by the same benchmark config yaml used by ./Snakefile
-# (only source_kwargs.csv_path and an optional `precheck:` block are read;
-# the combo/slice grid is ignored).
+# (only source_kwargs, and an optional `precheck:` block, are read; the
+# combo/slice grid is ignored).
 #
 # Run with:
 #   snakemake -s scripts/benchmark/v2/inspect_dataset.smk \
 #       --configfile scripts/benchmark/v2/config/as7018_us_test01.yaml -j 1
 #
-# Outputs land alongside the CSV, named after its stem (tasks/
+# Source-agnostic CSV resolution: `generic_csv` supplies
+# `source_kwargs.csv_path` directly; `generic_presplit` instead supplies
+# `source_kwargs.test_path` + `train_path` — this precheck scores `test_path`
+# only. Train rows never reach a benchmark eval target (LTD-leakage guard in
+# generic_presplit.py), so they carry no eval-side topology/RTT-quality
+# signal for this precheck to report; train_path is otherwise ignored here.
+#
+# Outputs land alongside the resolved CSV, named after its stem (tasks/
 # 20260714-dataset-precheck-workflow/plan.md's Phase-0 decision — matches
 # eval_source.py's and inspect_source.py's own out_dir defaults):
 #   <csv_dir>/<stem>_eval_per_target.csv, _eval_clusters.csv, _eval_stats.json
@@ -15,6 +22,14 @@
 #   <csv_dir>/<stem>_vp_mesh_km.csv, _cluster_mesh_km.csv  (skipped past mesh_max_n)
 #   <csv_dir>/<stem>_occurrence_cdf.png, _stats.json, _flow_map.html
 #   <csv_dir>/<stem>_cluster_map.png    (Voronoi underlay only if `precheck.landmass` set)
+#
+# Eval-side filters — mirrors the *actual* eval set a materialize-inputs run
+# would produce, so the precheck never silently scores a wider set than the
+# benchmark evaluates (see eval_source.py's `apply_eval_target_filters`):
+#   source_kwargs.min_obs           (same key the benchmark run already reads)
+#   top-level eval_pair_weight_min / eval_kept_traffic_fraction
+#     (same top-level yaml keys ./Snakefile's `materialize` rule reads —
+#     see its `eval_pair_weight_min_flag` / `eval_kept_traffic_fraction_flag`)
 #
 # Config keys (all under an optional top-level `precheck:` block; every key
 # defaults to eval_source.py's own DEFAULT_* constants, so an absent block
@@ -25,7 +40,17 @@
 
 from pathlib import Path
 
-CSV_PATH = Path(config["source_kwargs"]["csv_path"])
+SRC_KWARGS = config.get("source_kwargs", {}) or {}
+if "csv_path" in SRC_KWARGS:
+    CSV_PATH = Path(SRC_KWARGS["csv_path"])
+elif "test_path" in SRC_KWARGS:
+    CSV_PATH = Path(SRC_KWARGS["test_path"])
+else:
+    raise ValueError(
+        "inspect_dataset.smk needs source_kwargs.csv_path (generic_csv) or "
+        "source_kwargs.test_path (generic_presplit) in the config yaml"
+    )
+
 PRECHECK = config.get("precheck", {}) or {}
 
 CLUSTER_RADIUS_KM = float(PRECHECK.get("cluster_radius_km", 50.0))
@@ -34,6 +59,19 @@ ANYCAST_DELTA_MS = float(PRECHECK.get("anycast_delta_ms", 10.0))
 SPEARMAN_MIN_PAIRS = int(PRECHECK.get("spearman_min_pairs", 8))
 MESH_MAX_N = int(PRECHECK.get("mesh_max_n", 2000))
 LANDMASS = PRECHECK.get("landmass")
+
+# Eval-side filters, read from the same keys the real benchmark run uses
+# (not from `precheck:`) so the precheck can never drift from what
+# materialize-inputs would actually evaluate.
+MIN_OBS = SRC_KWARGS.get("min_obs")
+EVAL_PAIR_WEIGHT_MIN = config.get("eval_pair_weight_min")
+EVAL_KEPT_TRAFFIC_FRACTION = config.get("eval_kept_traffic_fraction")
+if EVAL_PAIR_WEIGHT_MIN is not None and EVAL_KEPT_TRAFFIC_FRACTION is not None:
+    raise ValueError(
+        "config has both eval_pair_weight_min and eval_kept_traffic_fraction "
+        "— the benchmark run itself only accepts one, so the precheck can't "
+        "pick a side"
+    )
 
 STEM = CSV_PATH.stem
 OUT_DIR = CSV_PATH.parent
@@ -68,6 +106,15 @@ rule eval_source:
         anycast_delta = ANYCAST_DELTA_MS,
         spearman_min = SPEARMAN_MIN_PAIRS,
         mesh_max_n = MESH_MAX_N,
+        min_obs_flag = f"--min-obs {MIN_OBS}" if MIN_OBS is not None else "",
+        eval_pair_weight_min_flag = (
+            f"--eval-pair-weight-min {EVAL_PAIR_WEIGHT_MIN}"
+            if EVAL_PAIR_WEIGHT_MIN is not None else ""
+        ),
+        eval_kept_traffic_fraction_flag = (
+            f"--eval-kept-traffic-fraction {EVAL_KEPT_TRAFFIC_FRACTION}"
+            if EVAL_KEPT_TRAFFIC_FRACTION is not None else ""
+        ),
     shell:
         EVAL_CLI + " eval-source"
         " --csv {input.csv}"
@@ -77,6 +124,9 @@ rule eval_source:
         " --anycast-delta-ms {params.anycast_delta}"
         " --spearman-min-pairs {params.spearman_min}"
         " --mesh-max-n {params.mesh_max_n}"
+        " {params.min_obs_flag}"
+        " {params.eval_pair_weight_min_flag}"
+        " {params.eval_kept_traffic_fraction_flag}"
 
 
 # ---- [2] inspect_source: CDFs + flow map + cluster/Voronoi map -------------
