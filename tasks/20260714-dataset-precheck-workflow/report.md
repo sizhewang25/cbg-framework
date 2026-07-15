@@ -64,7 +64,27 @@ Also closed Phase 0's last open item: `inspect_dataset.smk`'s output layout
 will be **alongside the CSV**, matching `eval_source.py`'s and
 `inspect_source.py`'s existing `out_dir` defaults (both already `csv.parent`,
 already realized on disk under `datasets/ripe_as7018/`). Phase 0 is now
-fully done; Phases 2–4 remain.
+fully done.
+
+Started Phase 2 (inspect_source.py visualization). Rather than build a new
+interactive cluster/Voronoi layer, reused the existing
+`scripts/visualization/cluster/plot_ground_truth_clusters.py` +
+`voronoi.py` (already implements landmass-clipped Voronoi over the
+`cluster_ground_truth` answer space via Natural Earth/cartopy — no new
+dependency). To feed it without recomputing anything, `eval_source.py`'s
+`cluster_targets` now also writes the canonical
+clusters.csv/assignments.csv/meta.json triplet to `<stem>_clusters/`;
+`inspect_source.py` gained `_build_cluster_map` (skips gracefully if that
+dir doesn't exist yet) and a `--landmass` flag, producing
+`<stem>_cluster_map.png`. Verified end-to-end on
+`datasets/ripe_as7018/as7018-us-test01.csv`: `eval-source` →
+`inspect-source --landmass US` produces a correctly US-clipped 17-region
+Voronoi partition with sane singleton/clustered-member coloring (see PNG
+rendered during this session). Not done: per-target proximity-label/margin
+coloring — this was descoped from the original "popups" plan (a static
+figure can't do interactive popups) to a plain color-by extension, which
+still needs a small opt-in addition to `plot_ground_truth_clusters`'s
+plotting functions.
 
 ## Conclusions
 

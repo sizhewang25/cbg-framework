@@ -23,16 +23,16 @@
 - [x] Post-review trim (2026-07-14): drop `best_radius_km` + the threshold `resolvability` table (+ `--thresholds` flag) — LTD-flavored, belongs to the LTD-specific study; `cbg_opportunity_share` finalized = NO_PROXIMITY + HAS_NOT_USED_PROXIMITY (baseline-beatable), lucky share over the combined opportunity population
 
 ## Phase 2: inspect_source.py visualization
-- [ ] Consume eval_source per-target/per-cluster CSVs (no metric recomputation)
-- [ ] Add cluster map layer: centroids, cluster membership, Voronoi cells clipped to geometry constraint (mainland US)
-- [ ] Color targets by proximity margin / rtt_regime; show per-target metrics in popups
-- [ ] Keep existing occurrence CDFs + flow map intact
+- [x] Consume eval_source per-target/per-cluster CSVs (no metric recomputation) — 2026-07-15: `eval_source.py`'s `cluster_targets` now also writes the canonical `cluster_ground_truth` triplet (clusters.csv/assignments.csv/meta.json) to `<stem>_clusters/`; inspect_source reads it, computes nothing
+- [x] Add cluster map layer: centroids, cluster membership, Voronoi cells clipped to geometry constraint (mainland US) — 2026-07-15: reused `scripts/visualization/cluster/plot_ground_truth_clusters.py` + `voronoi.py` wholesale (already had landmass-clipped Voronoi via Natural Earth/cartopy, no new dependency) instead of building a new interactive layer; `inspect_source.py` gained `_build_cluster_map` + `--landmass`, writes `<stem>_cluster_map.png`. Verified on as7018-us-test01 (17 regions, US-clipped cells render sanely — see report.md)
+- [ ] Color targets by proximity margin / rtt_regime; show per-target metrics in popups — **descoped to a static color-by (no popups)** per 2026-07-15 decision to reuse the static matplotlib/cartopy plotter rather than build a new interactive map; needs a small opt-in extension to `plot_ground_truth_clusters._plot_map`/`plot_clusters` (color-by `proximity_label` instead of only `cluster_id`) — not yet done
+- [x] Keep existing occurrence CDFs + flow map intact — additive change, both untouched and still produced
 
 ## Phase 3: inspect_dataset.smk orchestration
 - [ ] Create `inspect_dataset.smk` reading benchmark config yaml(s) for csv_path + precheck params (style: cluster_world_map.smk)
 - [ ] Rules: eval_source metrics → inspect_source visuals; document run command in header
 
 ## Phase 4: Verification
-- [ ] Run end-to-end on `datasets/ripe_as7018/as7018-us-test01.csv` with `as7018_us_test01.yaml`
+- [ ] Run end-to-end on `datasets/ripe_as7018/as7018-us-test01.csv` with `as7018_us_test01.yaml` (via the Phase-3 smk, once it exists — ad hoc CLI run already done, see below)
 - [ ] Sanity-check metrics against known findings (53 VPs × 78 targets; AS7018 US proximity profile)
-- [ ] Eyeball the Voronoi map layer; confirm clipped cells render sanely
+- [x] Eyeball the Voronoi map layer; confirm clipped cells render sanely — done ad hoc 2026-07-15 (`eval-source` → `inspect-source --landmass US` on as7018-us-test01.csv): 17 regions, US-clipped Voronoi cells, singleton/clustered coloring all render correctly; not yet run through the Phase-3 smk since that doesn't exist yet

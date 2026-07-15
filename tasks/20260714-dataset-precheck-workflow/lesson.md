@@ -21,6 +21,21 @@
   only when a smk fans out over *many* configs that might reuse resources —
   it's the fan-out shape that justifies the extra indirection, not a general
   preference for tidier output trees.
+- Before building a new visualization from scratch, check whether the
+  codebase already has one for the exact underlying data structure:
+  `plot_ground_truth_clusters.py` + `voronoi.py` already did landmass-clipped
+  Voronoi over a `cluster_ground_truth` answer space (Natural Earth via
+  cartopy, no new dependency), decoupled from clustering by design (reads
+  clusters.csv/assignments.csv, never recomputes). The only gap was that
+  `eval_source.py` didn't write that exact triplet — so the actual Phase 2
+  work was one line wiring `cluster_targets` to also call
+  `cluster_ground_truth`'s own `_write_outputs`, not a new map layer.
+- A "figure only" simplification isn't free — it silently drops any
+  requirement that depended on interactivity. Reusing a static
+  matplotlib/cartopy plotter to satisfy "cluster map + Voronoi" also meant
+  giving up "popups" (interactive-only), so the proximity-coloring todo item
+  had to be explicitly re-scoped to a plain color-by, not silently marked
+  done. Note what a scope-simplifying choice costs before checking boxes.
 
 ## 2026-07-14
 

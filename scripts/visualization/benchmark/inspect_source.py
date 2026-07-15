@@ -12,15 +12,24 @@ flows are distributed over the two endpoint populations:
     map (self-contained HTML): click a VP to isolate its flows, click a TG
     to isolate the flows reaching it, click a flow line for pair details
     (obs count, distance, RTT, pair weight); double-click resets the focus.
+  - when `scripts.benchmark.v2.eval_source` has already been run for this CSV
+    (i.e. a `<stem>_clusters/` dir with clusters.csv/assignments.csv sits
+    next to it), an answer-space cluster map: centroids, cluster membership,
+    region footprints, and (with `--landmass`) the nearest-centroid Voronoi
+    partition clipped to a landmass boundary. Rendered by
+    `scripts.visualization.cluster.plot_ground_truth_clusters` — no
+    clustering is recomputed here.
 
 CLI:
     python -m scripts.visualization.benchmark.inspect_source \\
-        --csv path/to/canonical.csv [--out-dir path/to/outputs]
+        --csv path/to/canonical.csv [--out-dir path/to/outputs] \\
+        [--landmass US]
 
 Outputs (default: alongside the CSV, named after its stem):
     <out-dir>/<stem>_occurrence_cdf.png
     <out-dir>/<stem>_stats.json
     <out-dir>/<stem>_flow_map.html
+    <out-dir>/<stem>_cluster_map.png  (only if <stem>_clusters/ exists)
 """
 
 from __future__ import annotations
@@ -167,7 +176,43 @@ def _build_flow_map(df: pd.DataFrame, csv_path: Path, out_path: Path) -> Path | 
     return out_path
 
 
-def inspect(csv_path: Path, out_dir: Path) -> dict[str, Any]:
+def _build_cluster_map(
+    clusters_dir: Path, out_path: Path, landmass: str | None
+) -> Path | None:
+    """Render the answer-space cluster/Voronoi map from an eval_source
+    `<stem>_clusters/` dir (clusters.csv + assignments.csv + meta.json).
+
+    Delegates entirely to `plot_ground_truth_clusters` — this consumes an
+    already-written clustering, it never recomputes one. Returns None (and
+    prints why) when the clusters dir isn't there yet, e.g. `eval-source`
+    hasn't been run for this CSV, or when the landmass name doesn't resolve."""
+    if not (clusters_dir / "clusters.csv").exists():
+        print(f"no {clusters_dir} (run eval-source first) — skipping the cluster map")
+        return None
+
+    from scripts.visualization.cluster.plot_ground_truth_clusters import (
+        load_clustering,
+        plot_clusters,
+    )
+    from scripts.visualization.cluster.voronoi import build_landmass_voronoi
+
+    df, res = load_clustering(clusters_dir)
+    voronoi = None
+    extent = None
+    if landmass:
+        clusters = pd.read_csv(clusters_dir / "clusters.csv")
+        try:
+            voronoi = build_landmass_voronoi(clusters, landmass)
+        except ValueError as exc:
+            print(f"{exc} — skipping the Voronoi underlay")
+        else:
+            extent = voronoi.focus_extent(pct=0)
+    return plot_clusters(df, res, out_path, extent=extent, voronoi=voronoi)
+
+
+def inspect(
+    csv_path: Path, out_dir: Path, *, landmass: str | None = None
+) -> dict[str, Any]:
     df = pd.read_csv(csv_path)
     df.columns = df.columns.str.strip().str.lower()
     missing = [c for c in _REQUIRED if c not in df.columns]
@@ -217,6 +262,14 @@ def inspect(csv_path: Path, out_dir: Path) -> dict[str, Any]:
             stats["flow_map"] = str(map_path)
     else:
         print("no vp/target lat-lon columns — skipping the flow map")
+
+    cluster_map_path = _build_cluster_map(
+        out_dir / f"{csv_path.stem}_clusters",
+        out_dir / f"{csv_path.stem}_cluster_map.png",
+        landmass,
+    )
+    if cluster_map_path is not None:
+        stats["cluster_map"] = str(cluster_map_path)
     return stats
 
 
@@ -226,10 +279,17 @@ def main() -> None:
                         help="canonical-schema CSV to inspect")
     parser.add_argument("--out-dir", type=Path, default=None,
                         help="output directory (default: the CSV's directory)")
+    parser.add_argument(
+        "--landmass", type=str, default=None,
+        help="Clip the cluster map's Voronoi partition to this landmass "
+             "(continent or country code/name, e.g. 'US', 'Europe'). Only "
+             "used when <stem>_clusters/ exists (i.e. eval-source has run); "
+             "omit to draw the cluster map without the Voronoi underlay.",
+    )
     args = parser.parse_args()
 
     out_dir = args.out_dir if args.out_dir is not None else args.csv.parent
-    stats = inspect(args.csv, out_dir)
+    stats = inspect(args.csv, out_dir, landmass=args.landmass)
     print(json.dumps(stats, indent=2))
 
 

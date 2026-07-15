@@ -127,7 +127,10 @@ import pandas as pd
 from scipy.stats import spearmanr
 from sklearn.neighbors import BallTree
 
-from scripts.benchmark.v2.sources.cluster_ground_truth import cluster_ground_truth
+from scripts.benchmark.v2.sources.cluster_ground_truth import (
+    _write_outputs,
+    cluster_ground_truth,
+)
 from scripts.libs.cbg.rtt_model import (
     EARTH_RADIUS_KM,
     THEORETICAL_SLOPE,
@@ -340,6 +343,7 @@ def cluster_targets(
     per_target: pd.DataFrame,
     radius_km: float,
     top_n_neighbors: int = DEFAULT_TOP_N_NEIGHBORS,
+    write_dir: Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     """Cluster the targets into R-coherent regions (answer-space sizing).
 
@@ -353,12 +357,20 @@ def cluster_targets(
         the strict within-R / loose same-cluster VP-proximity shares).
 
     A single-cluster answer space gets cell_gap_km = inf: with no competing
-    centroid every VP is discriminative and classification is trivial."""
+    centroid every VP is discriminative and classification is trivial.
+
+    ``write_dir``, if given, also writes the canonical
+    `cluster_ground_truth` triplet (clusters.csv/assignments.csv/meta.json)
+    there — lets `scripts.visualization.cluster.plot_ground_truth_clusters`
+    render the answer-space map layer straight from this clustering, no
+    recomputation."""
     res = cluster_ground_truth(
         per_target["target_lat"].to_numpy(),
         per_target["target_lon"].to_numpy(),
         radius_km=radius_km,
     )
+    if write_dir is not None:
+        _write_outputs(per_target, res, write_dir)
     labels = res.labels.astype(int)
     n_clusters = int(res.n_clusters)
 
@@ -588,8 +600,10 @@ def eval_source(
     df = load_canonical_csv(csv_path)
     pairs = build_pairs(df)
     per_target = per_target_metrics(pairs, spearman_min_pairs=spearman_min_pairs)
+    clusters_dir = out_dir / f"{csv_path.stem}_clusters"
     per_target, clusters, clustering = cluster_targets(
-        per_target, cluster_radius_km, top_n_neighbors=top_n_neighbors
+        per_target, cluster_radius_km, top_n_neighbors=top_n_neighbors,
+        write_dir=clusters_dir,
     )
     per_target = proximity_metrics(pairs, per_target)
     per_target = per_target.merge(anycast_metrics(pairs, anycast_delta_ms), on="target_id")
@@ -616,6 +630,7 @@ def eval_source(
     stats["per_target_csv"] = str(per_target_path)
     stats["clusters_csv"] = str(clusters_path)
     stats["stats_json"] = str(stats_path)
+    stats["clusters_dir"] = str(clusters_dir)
 
     vp_mesh = write_mesh(
         pairs, "vp_id", "vp_lat", "vp_lon",
