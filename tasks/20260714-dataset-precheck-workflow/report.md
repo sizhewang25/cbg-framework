@@ -1,8 +1,9 @@
 # Dataset Precheck Workflow — Report
 
-**Status**: In Progress (Phases 0, 1, 3, 4 done; Phase 2 — one item left)
+**Status**: Complete
 **Created**: 2026-07-14
 **Last Updated**: 2026-07-15
+**Completed**: 2026-07-15
 
 ## Summary
 
@@ -84,7 +85,7 @@ rendered during this session). Not done: per-target proximity-label/margin
 coloring — this was descoped from the original "popups" plan (a static
 figure can't do interactive popups) to a plain color-by extension, which
 still needs a small opt-in addition to `plot_ground_truth_clusters`'s
-plotting functions.
+plotting functions. Dropped for good at task close (see Conclusions).
 
 ## Phase 3 + 4 (2026-07-15)
 
@@ -115,4 +116,34 @@ thing left on this task.
 
 ## Conclusions
 
-<Final assessment when task completes.>
+The dataset precheck exists and works end-to-end, driven entirely by a
+benchmark config yaml: `snakemake -s scripts/benchmark/v2/inspect_dataset.smk
+--configfile <yaml> -j 1` takes a canonical CSV to per-target/per-cluster
+metrics (`eval_source.py`), a proximity ladder headline
+(`cbg_opportunity_share`), RTT-quality diagnostics, and a rendered
+cluster/Voronoi map (`inspect_source.py`), all without touching the
+benchmark's own combo/slice grid. Verified on
+`datasets/ripe_as7018/as7018-us-test01.csv`: metrics and map match
+hand-checked expectations exactly, and a second dry-run confirmed the
+pipeline is idempotent.
+
+Scope was deliberately kept to what the precheck actually needs: metric
+logic stayed in `eval_source.py` (never touching benchmark outputs),
+visualization reused two already-mature, already-tested modules
+(`plot_ground_truth_clusters.py` + `voronoi.py`) instead of building a new
+interactive map, and the smk reads the same yaml the benchmark run itself
+uses rather than inventing a parallel config path. One originally-planned
+item — coloring the cluster map by per-target `proximity_label`/margin,
+with interactive popups — was dropped: the popups half became infeasible
+once the static plotter was reused (a flat PNG can't be interactive), and
+the remaining color-by polish wasn't judged worth building once the core
+deliverable (metrics + map + orchestration) was already working. It's
+recorded as skipped, not silently absorbed, so it can be picked up later if
+a specific need for it arises (`plot_ground_truth_clusters._plot_map` would
+need a `color_by` option keyed off `<stem>_eval_per_target.csv`'s
+`proximity_label` column).
+
+A useful side effect of this task: fixing `cluster_ground_truth`'s O(n²)
+memory blowup (Phase 0) benefits every consumer of that function, not just
+this precheck — including the `cluster-eval` CLI command and
+`cluster.smk`'s answer-space materialization.

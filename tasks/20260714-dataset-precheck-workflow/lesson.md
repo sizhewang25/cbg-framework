@@ -48,6 +48,11 @@
   input/output binding) for free, before touching any files. Re-running with
   `-n` a second time *after* execution is a cheap idempotence check: "Nothing
   to be done" confirms the up-to-date detection matches the actual outputs.
+- Closing a task doesn't require closing every todo item — once the core
+  deliverable (metrics + map + orchestration, verified end-to-end) works,
+  a leftover polish item (proximity-label coloring) is fine to drop rather
+  than force through. The value was in recording it as explicitly skipped
+  with the reason, not in either doing it or pretending it was never planned.
 
 ## 2026-07-14
 
