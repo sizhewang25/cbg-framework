@@ -125,11 +125,20 @@ class ClusterResult:
 
 
 def _label_geometry(
-    lats: np.ndarray, lons: np.ndarray, labels: np.ndarray, dist_matrix: np.ndarray | None
+    lats: np.ndarray,
+    lons: np.ndarray,
+    labels: np.ndarray,
+    dist_matrix: np.ndarray | None,
+    point_to_row: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per-cluster spherical centroids, counts, centroid-radius and diameter, plus
     the per-input distance to its assigned centroid. Labels are remapped to a
-    dense ``0..k-1`` range."""
+    dense ``0..k-1`` range.
+
+    ``dist_matrix`` is only consulted for the diameter stat. It may be a
+    deduplicated (unique-coordinate) matrix rather than one row/col per input
+    point — pass ``point_to_row[i]`` = the row of ``dist_matrix`` holding
+    point ``i``'s coordinate (default: identity, i.e. one row per point)."""
     uniq = np.unique(labels)
     remap = {old: new for new, old in enumerate(uniq)}
     dense = np.array([remap[v] for v in labels])
@@ -151,7 +160,14 @@ def _label_geometry(
         radius[c] = float(d.max())
         dist[m] = d
         if len(idx) > 1 and dist_matrix is not None:
-            diameter[c] = float(dist_matrix[np.ix_(idx, idx)].max())
+            # Duplicate coordinates sit at distance 0, so the diameter over a
+            # cluster's full membership equals the diameter over just the
+            # unique coordinate rows that fall in it.
+            rows = idx if point_to_row is None else point_to_row[idx]
+            urows = np.unique(rows)
+            diameter[c] = (
+                float(dist_matrix[np.ix_(urows, urows)].max()) if len(urows) > 1 else 0.0
+            )
         else:
             diameter[c] = 0.0
     return dense, c_lat, c_lon, counts, radius, diameter, dist
@@ -193,7 +209,14 @@ def cluster_ground_truth(
 
     Deterministic: complete-linkage agglomerative (diameter ≤ ``2R``) builds the
     largest candidate regions, then `_split_to_radius` bisects any region that
-    exceeds the centroid-radius cap. Isolated points become singletons."""
+    exceeds the centroid-radius cap. Isolated points become singletons.
+
+    The O(n²) distance matrix that drives clustering is built over *unique*
+    coordinates only, then broadcast back to every input point — duplicate
+    coordinates (e.g. many targets sharing one data-center location) sit at
+    distance 0 from each other and can never change which side of a merge
+    they land on, so this doesn't affect the result, only peak memory (O(u²)
+    for u unique coordinates instead of O(n²))."""
     lats = np.asarray(lats, dtype=float)
     lons = np.asarray(lons, dtype=float)
     n = len(lats)
@@ -203,27 +226,41 @@ def cluster_ground_truth(
     if n == 1:
         labels = np.array([0])
         dist_matrix = None
+        point_to_row = None
     else:
-        from sklearn.cluster import AgglomerativeClustering
+        uniq_coords, point_to_row = np.unique(
+            np.stack([lats, lons], axis=1), axis=0, return_inverse=True
+        )
+        point_to_row = np.asarray(point_to_row).reshape(-1)
+        u_lat, u_lon = uniq_coords[:, 0], uniq_coords[:, 1]
+        u = len(uniq_coords)
 
-        dist_matrix = _haversine_matrix(lats, lons)
-        base = AgglomerativeClustering(
-            n_clusters=None,
-            metric="precomputed",
-            linkage="complete",
-            distance_threshold=2.0 * radius_km,
-        ).fit_predict(dist_matrix)
+        if u == 1:
+            labels_unique = np.zeros(1, dtype=int)
+            dist_matrix = None
+        else:
+            from sklearn.cluster import AgglomerativeClustering
 
-        labels = np.empty(n, dtype=int)
-        next_label = 0
-        for c in np.unique(base):
-            idx = np.where(base == c)[0]
-            for group in _split_to_radius(idx, lats, lons, dist_matrix, radius_km):
-                labels[group] = next_label
-                next_label += 1
+            dist_matrix = _haversine_matrix(u_lat, u_lon)
+            base = AgglomerativeClustering(
+                n_clusters=None,
+                metric="precomputed",
+                linkage="complete",
+                distance_threshold=2.0 * radius_km,
+            ).fit_predict(dist_matrix)
+
+            labels_unique = np.empty(u, dtype=int)
+            next_label = 0
+            for c in np.unique(base):
+                idx = np.where(base == c)[0]
+                for group in _split_to_radius(idx, u_lat, u_lon, dist_matrix, radius_km):
+                    labels_unique[group] = next_label
+                    next_label += 1
+
+        labels = labels_unique[point_to_row]
 
     dense, c_lat, c_lon, counts, radius, diameter, dist = _label_geometry(
-        lats, lons, labels, dist_matrix
+        lats, lons, labels, dist_matrix, point_to_row
     )
     return ClusterResult(
         labels=dense,

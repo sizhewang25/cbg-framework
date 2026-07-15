@@ -337,49 +337,65 @@ def cmd_eval_source(
     out_dir: Optional[Path] = typer.Option(
         None, help="Output directory (default: the CSV's directory)."
     ),
-    thresholds: str = typer.Option(
-        "40,100,500,1000",
-        help="Comma-separated km thresholds for the resolvability table.",
-    ),
     cluster_radius_km: float = typer.Option(
         50.0,
         help=(
             "Answer-space coherence radius R (km): targets are clustered into "
             "R-coherent regions (same construction as cluster-eval) and the "
             "summary reports n_clusters plus the share of targets whose "
-            "nearest available VP is within R."
+            "nearest available VP is within R. R=0 makes every target its "
+            "own singleton region (target-based distances)."
+        ),
+    ),
+    top_n_neighbors: int = typer.Option(
+        5, help="Neighbor centroids recorded per cluster in <stem>_eval_clusters.csv."
+    ),
+    anycast_delta_ms: float = typer.Option(
+        10.0,
+        help=(
+            "Low-RTT VP set for the anycast/infeasibility disk-disjointness "
+            "test: VPs with rtt <= min_rtt + delta."
+        ),
+    ),
+    spearman_min_pairs: int = typer.Option(
+        8, help="Minimum pairs per target for the distance-RTT Spearman rho (NaN below)."
+    ),
+    mesh_max_n: int = typer.Option(
+        2000,
+        help=(
+            "Skip the VP/cluster-centroid distance-mesh CSVs past this many "
+            "unique endpoints (matrices are O(n^2)). 0 disables the meshes."
         ),
     ),
 ) -> None:
     """Score a canonical CSV's CBG-friendliness (geographic topology + RTT quality).
 
-    Per target — over its *available* VPs only (a VP counts iff the CSV holds
-    >= 1 RTT observation for the pair) — reports the geography axis
-    (closest_vp_km), the RTT axis (min_rtt_ms / best_radius_km /
-    min_inflation), and the combined inverse-RTT-weighted mean VP distance
-    (rtt_weighted_dist_km), and sizes the answer space by clustering targets
-    at the coherence radius R. Writes <stem>_eval_per_target.csv +
-    <stem>_eval_stats.json and prints the summary.
+    The dataset precheck: per target — over its *available* VPs only (a VP
+    counts iff the CSV holds >= 1 RTT observation for the pair) — reports the
+    geography axis (closest_vp_km), the RTT axis (min_rtt_ms /
+    min_inflation), the combined inverse-RTT-weighted mean VP distance
+    (rtt_weighted_dist_km), the answer-space topology at coherence radius R
+    (cell gaps, top-N neighbor clusters, discriminative-set proximity ladder
+    with the cbg_opportunity_share headline), and RTT-quality diagnostics
+    (Spearman coherence, SOI violations, anycast disk-disjointness). Writes
+    <stem>_eval_per_target.csv, <stem>_eval_clusters.csv, the VP and
+    cluster-centroid distance meshes, and <stem>_eval_stats.json, then
+    prints the summary.
     """
     from scripts.benchmark.v2.eval_source import eval_source
 
     if not csv.exists():
         typer.echo(f"No such CSV: {csv}", err=True)
         raise typer.Exit(code=2)
-    try:
-        thr = tuple(float(t) for t in thresholds.split(",") if t.strip())
-    except ValueError:
-        typer.echo(
-            f"Invalid --thresholds {thresholds!r}; expected e.g. '40,100,500,1000'",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-    if not thr:
-        typer.echo("--thresholds must contain at least one value", err=True)
-        raise typer.Exit(code=2)
 
     stats = eval_source(
-        csv, out_dir or csv.parent, thr, cluster_radius_km=cluster_radius_km
+        csv,
+        out_dir or csv.parent,
+        cluster_radius_km=cluster_radius_km,
+        top_n_neighbors=top_n_neighbors,
+        anycast_delta_ms=anycast_delta_ms,
+        spearman_min_pairs=spearman_min_pairs,
+        mesh_max_n=mesh_max_n,
     )
     typer.echo(json.dumps(stats, indent=2))
 
