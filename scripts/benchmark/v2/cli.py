@@ -435,6 +435,78 @@ def cmd_eval_source(
     typer.echo(json.dumps(stats, indent=2))
 
 
+# ---- eval-bench-results (post-hoc CBG output scoring) -------------------------
+
+@app.command("eval-bench-results")
+def cmd_eval_bench_results(
+    run_id: str = typer.Option(..., help="Run id whose targets.parquet files to score."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root containing <run_id>/."),
+    inputs_root: Path = typer.Option(
+        DEFAULT_INPUTS_ROOT,
+        help=(
+            "Root containing materialized inputs — needed to reconstruct each "
+            "target's full LTDResult set (ltd_predictions has no VP coords/"
+            "latency; eval_observations.parquet supplies them)."
+        ),
+    ),
+    source: Optional[str] = typer.Option(None, help="Filter combo discovery to this source name."),
+    combos: Optional[str] = typer.Option(
+        None, help="Comma-separated combo_ids to restrict to (default: every combo found on disk)."
+    ),
+    out_dir: Optional[Path] = typer.Option(
+        None, help="Output directory (default: <run_dir>/bench_eval/)."
+    ),
+    skip_loo: bool = typer.Option(
+        True,
+        "--skip-loo",
+        help=(
+            "Skip leave-one-participant-out brittleness (the expensive metric "
+            "group: one extra MTL+CTR rerun per participant per eligible "
+            "target — costly with a Monte Carlo medoid CTR). Every other "
+            "metric group still runs; loo_* columns come back as their "
+            "not-computed defaults (loo_computed=False)."
+        ),
+    ),
+) -> None:
+    """Score a completed run's CBG *outputs* per (combo, target).
+
+    The output-side twin of `eval-source`: participant-VP stats, MTL region
+    area/truth-inclusion (with outer-vs-inner exclusion direction),
+    includer/excluder VP stats, the closest-VP/shortest-ping-VP bridge,
+    answer-space cell gap, and leave-one-participant-out brittleness (does
+    dropping any single deciding VP flip MTL/CTR to failure or blow up the
+    error — skip with `--skip-loo`). See
+    `scripts/benchmark/v2/eval_bench_results.py`'s module docstring for the
+    full metric list and the reconstruction approach. Writes
+    `<out_dir>/<combo_id>_bench_per_target.csv` per combo and
+    `<out_dir>/summary.parquet` (one row per combo).
+    """
+    from scripts.benchmark.v2.eval_bench_results import eval_bench_results
+
+    run_dir = outputs_root / run_id
+    if not run_dir.exists():
+        typer.echo(f"No such run dir: {run_dir}", err=True)
+        raise typer.Exit(code=2)
+
+    combos_list = [c.strip() for c in combos.split(",") if c.strip()] if combos else None
+    stats = eval_bench_results(
+        run_dir, inputs_root, out_dir=out_dir, source=source, combos=combos_list,
+        compute_loo=not skip_loo,
+    )
+    typer.echo(f"Wrote {len(stats['per_target_csvs'])} per-target CSVs + {stats['summary_parquet']}")
+    for combo_id in sorted(stats["per_target_csvs"]):
+        s = stats[combo_id]
+        loo_desc = (
+            f"loo_any_flip={s['loo_any_flip_share']} (n_eligible={s['loo_n_eligible']})"
+            if s["loo_computed"] else "loo=skipped"
+        )
+        typer.echo(
+            f"  [{combo_id}] n={s['n_targets']} success={s['n_success']} "
+            f"truth_in_region={s['truth_in_region_share']} {loo_desc} "
+            f"recompute_matches={s['recompute_matches_share']}"
+        )
+
+
 # ---- build-airports ----------------------------------------------------------
 
 @app.command("build-airports")
