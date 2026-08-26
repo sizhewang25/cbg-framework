@@ -45,7 +45,7 @@ The renderer expects:
 
 - benchmark `targets.parquet` files under `scripts/benchmark/v2/outputs/` or
   `scripts/benchmark/v2/outputs_partvp/`;
-- cluster-eval `clusters/clusters.csv` when available;
+- materialize-target-space `clusters/clusters.csv` when available;
 - failure attribution at
   `scripts/analysis/partvp/outputs/analysis_fail/per_target_failures.parquet`.
 

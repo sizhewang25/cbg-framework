@@ -70,7 +70,6 @@ CBG is therefore the natural latency-based framework for production-oriented geo
 
 **No controlled cross-variant evaluation exists.** Each CBG paper (Gueye 2004, Hu 2012, Wong 2007) evaluates only its own full pipeline on its own proprietary dataset. No paper isolates phase contributions, so practitioners cannot determine: Is it worth calibrating a per-VP spline, or does 2/3c suffice? Does `planar_annulus` multilateration justify its added complexity over `spherical_circle`? Does Monte Carlo sampled-medoid selection deliver meaningful accuracy gains over a geometric centroid? Does weighted-annulus geometry justify its pathological tail latency? Our first full-dataset run answers the latter two questions negatively, but a full phase-isolation grid is still required for the final paper.
 
-**Industrial CBG-family systems are still not phase benchmarks.** Alidade, an Akamai-affiliated system, is the clearest representative of CBG ideas moving into large-scale industrial geolocation: it fuses available latency/path measurements and non-measurement hints, precomputes answers for the full IP address space, and returns both a point estimate and a geographic region. But Alidade is an end-to-end database architecture, not a controlled comparison of RTT-distance models, multilateration geometry, and point estimators. Its existence strengthens the production motivation for CBG, while also underscoring why operators still need a modular benchmark.
 
 **Only one public CBG implementation exists.** The IMC 2023 replication codebase [[Darwich et al.](https://dl.acm.org/doi/10.1145/3618257.3624801)] covers only Million-Scale and Street-Level CBG. Original CBG and Octant have **no public code** — an operator who wants to evaluate Octant must reimplement it from scratch.
 
@@ -196,7 +195,6 @@ Replaces the linear DDR with a convex-hull spline model producing annular constr
 Simplifies to the 2/3c (two-thirds speed of light) model, eliminating the need for per-landmark calibration. Introduces greedy VP selection prioritizing proximity to the target. Scales to geolocate ~35% of the IPv4 address space. The source of our 2/3c Phase 1 baseline.
 
 **Chandrasekaran et al., "Alidade: IP Geolocation without Active Probing"** (Duke technical report, 2015) [[PDF](https://balakrishnanc.github.io/papers/chandrasekaran-techrep2015.pdf)]
-Representative industry-scale CBG-family system from Duke, Akamai Technologies, Cornell, and collaborators. Alidade combines available CDN RTTs, path measurements, registry/hostname hints, and aggregate constraints to precompute geolocation database answers for IP space without issuing active probes at query time. It reports both representative points and feasible geographic regions and evaluates against commercial geolocation databases, including Akamai EdgeScape. We cite Alidade as evidence that CBG-style constraints are relevant in big-tech/CDN geolocation practice, but treat it as an end-to-end deployment architecture rather than a separate modular phase variant.
 
 **Wang et al., "Towards Street-Level Client-Independent IP Geolocation"** (NSDI 2011) [[ACM](https://dl.acm.org/doi/10.5555/1972457.1972494)]
 Three-tier refinement from CBG to street-level using landmark discovery and traceroute path analysis. Implemented in this repo; out of scope for the current benchmark (unicast CBG focus).
@@ -226,7 +224,6 @@ Critical large-scale assessment of GeoFeed (RFC 8805/9092) accuracy and adoption
 Surveys GeoFeed adoption at RIR and AS level; finds ~7.76% of GeoFeed URLs inaccessible and RFC 9092 authentication lacking. Coverage gaps confirm CBG is needed as a fallback.
 
 **"IP Geolocation through Reverse DNS"** (ACM TOIT 2021) [[ACM](https://dl.acm.org/doi/10.1145/3457611)]
-Parses rDNS hostnames to extract location hints; places ~54% of hostnames within 20 km of ground truth. Open-source (Microsoft). Effective for named infrastructure but silent on cloud IPs with opaque hostnames.
 
 These papers motivate the multi-tier pipeline: GeoFeed and rDNS coverage failures make CBG necessary as an empirical fallback.
 

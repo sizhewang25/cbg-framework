@@ -130,6 +130,8 @@ def main() -> None:
                         help="Path to targets.csv (auto-resolved from run dir when omitted).")
     parser.add_argument("--out-dir", type=Path, default=None,
                         help="Output dir (default: scripts/analysis/outputs/<run_id>/cluster).")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="Explicit output CSV path (overrides default naming in --out-dir).")
     parser.add_argument("--radius-km", type=float, default=50.0,
                         help="Cluster radius for answer space (must match the classification table). Default 50.")
     parser.add_argument("--clusters-dir", type=Path, default=None,
@@ -256,8 +258,8 @@ def main() -> None:
         n = counts.get(cat, 0)
         logger.info("  %-12s %3d  (%.1f%%)", cat, n, 100 * n / len(result))
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{run_dir.name}_classification_analysis.csv"
+    out_path = args.out or (out_dir / f"{run_dir.name}_classification_analysis.csv")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(out_path)
     logger.info("Saved: %s", out_path)
 

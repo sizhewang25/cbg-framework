@@ -1,0 +1,20 @@
+# Cross-dataset evaluation configuration
+# Evaluates multiple datasets and generates comparison plots
+
+# List of dataset configs to evaluate (relative paths from config directory)
+datasets:
+  - ../clusters/ripe-as7018-textbook.yaml
+
+# Friendly labels for each dataset (replaces config stems in plots)
+labels:
+  - "RIPE"
+
+# Benchmark outputs and inputs roots (inherited by all datasets)
+v2_outputs_root: scripts/benchmark/v2/outputs
+v2_inputs_root: scripts/benchmark/v2/inputs
+
+# Output directory for cross-dataset comparison plots
+output_dir: scripts/analysis/outputs/example_01
+
+# Top-N ranking level for categorization (1 = exact match, 3 = top-3, etc.)
+top_n: [1, 3]

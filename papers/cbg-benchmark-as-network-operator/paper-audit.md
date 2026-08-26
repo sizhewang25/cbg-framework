@@ -40,7 +40,6 @@
 | AS7018→global (US fleet, 713 global targets) | Vanilla 3.9%, MS 6.6%, Octant 5.5%, Spotter 3.0% | ⚠ Unverified |
 | AS3209→global (EU fleet, 713 global targets) | Vanilla 2.7%, MS 6.0%, Octant 2.0%, Spotter 2.5% | ⚠ Unverified |
 
-The `north_america_as7018_final_na` run uses AT&T VPs against 122 NA anchors only (accuracy 36.9–47.5%), not the full 713 global target set. The extremely-limited cross-region numbers came from `plot_cluster_match_bars.py` on a separate pass without a corresponding feature parquet. No analysis config currently targets AT&T/Vodafone VPs against the full global target pool.
 
 ---
 

@@ -25,7 +25,7 @@ schemas are supported.
 Outputs:
   1) sanitized CSV (rows for kept targets)
   2) pair-level audit CSV (distance/implied/violation)
-  3) removed-targets CSV
+    3) outliers CSV (target removals and pair-only removals)
   4) summary JSON
 
 CLI:
@@ -182,6 +182,19 @@ def sanitize_targets(
     initial_violation_count = int(initial_pair_stats["violation"].sum()) if initial_pair_count else 0
 
     removed_steps: list[dict[str, float | int | str]] = []
+    removed_steps_columns = [
+        "iteration",
+        "action",
+        "removal_reason",
+        "target_id",
+        "n_pairs",
+        "n_violations",
+        "violation_fraction",
+        "not_violate_till",
+        "removed_violation_pairs",
+        "max_violation_ratio",
+        "pair_violations_before_removal",
+    ]
     pair_stats = _pair_min_rtt_and_distance(work, rtt_col=rtt_col, eps_km=eps_km)
     n_viol_before = int(pair_stats["violation"].sum()) if len(pair_stats) else 0
 
@@ -196,6 +209,7 @@ def sanitize_targets(
             {
                 "iteration": 1,
                 "action": "remove_target",
+                "removal_reason": "target_violation_fraction_above_threshold",
                 "target_id": target_id,
                 "n_pairs": int(top["n_pairs"]),
                 "n_violations": int(top["n_violations"]),
@@ -231,6 +245,7 @@ def sanitize_targets(
                 {
                     "iteration": 2,
                     "action": "remove_violating_pairs",
+                    "removal_reason": "target_violation_fraction_at_or_below_threshold_remove_violating_pairs_only",
                     "target_id": target_id,
                     "n_pairs": int(top["n_pairs"]),
                     "n_violations": int(top["n_violations"]),
@@ -253,7 +268,7 @@ def sanitize_targets(
         work = work[~mask_drop].copy()
 
     final_pair_stats = _pair_min_rtt_and_distance(work, rtt_col=rtt_col, eps_km=eps_km)
-    removed_targets = pd.DataFrame(removed_steps)
+    removed_targets = pd.DataFrame(removed_steps, columns=removed_steps_columns)
     iterations = int(removed_targets["iteration"].max()) if not removed_targets.empty else 0
     metadata: dict[str, float | int] = {
         "initial_pair_count": initial_pair_count,
@@ -365,7 +380,7 @@ def main() -> None:
     out_csv = args.output or _default_output(args.input)
     stem = out_csv.with_suffix("")
     pairs_csv = Path(str(stem) + ".pairs.csv")
-    removed_csv = Path(str(stem) + ".removed_targets.csv")
+    removed_csv = Path(str(stem) + ".outliers.csv")
     summary_json = Path(str(stem) + ".summary.json")
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)

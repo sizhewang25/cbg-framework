@@ -24,16 +24,18 @@ from pathlib import Path
 
 VIZ_OUT = Path("scripts/visualization/benchmark/v2/outputs_cluster")
 ATTRIBUTION = Path("scripts/analysis/partvp/outputs/analysis_fail/per_target_failures.parquet")
-TEXTBOOK = ["vanilla_cbg", "million_scale_cbg", "octant_cbg", "spotter_cbg"]
+TEXTBOOK = [
+    "vanilla_cbg",
+    "million_scale_cbg",
+    "octant_cbg_spl",
+    "octant_cbg_hull",
+    "spotter_cbg",
+]
 PYTHON = ".venv/bin/python"
 
 # config label -> config YAML that defines the four textbook combos for that run.
 CONFIG_PATHS = {
-    "global-global":  "scripts/benchmark/v2/config/global_as16509_final.yaml",
-    "europe-europe":  "scripts/analysis/partvp/cfg_textbook/europe_as3215_eu.yaml",
-    "europe-country": "scripts/analysis/partvp/cfg_textbook/europe_as3215_final_fr.yaml",
-    "na-na":          "scripts/analysis/partvp/cfg_textbook/north_america_as7018_final_na.yaml",
-    "na-us":          "scripts/analysis/partvp/cfg_textbook/north_america_as7018_final_us.yaml",
+    "ripe-as7018-textbook":          "scripts/benchmark/v2/config/ripe-as7018-textbook.yaml",
 }
 
 # Resolve each config to (run_id, source, setup, slices, combos, path).

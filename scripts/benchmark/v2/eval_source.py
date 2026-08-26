@@ -161,6 +161,9 @@ _REQUIRED = (
 # coercion, same reason as generic_csv.py's `_OPTIONAL_STR`.
 _OPTIONAL_FOR_FILTERS = ("weight", "target_city")
 
+# Optional metadata used for dataset characterization when available.
+_OPTIONAL_META = ("target_asn",)
+
 # Answer-space coherence radius R — matches cluster-eval's default cap.
 DEFAULT_CLUSTER_RADIUS_KM = 50.0
 
@@ -192,6 +195,14 @@ PER_TARGET_METRICS = (
     "shortest_ping_vp_to_centroid_km",
     "n_discriminative_vps",
     "best_discriminative_rtt_rank",
+    # k-NN answer-space metrics
+    "knn_neighbor_1_km",
+    "knn_neighbor_2_km",
+    "knn_neighbor_3_km",
+    "knn_mean_km",
+    "knn_std_km",
+    "knn_gap_ratio",
+    "n_competitors_1_5x",
     # RTT quality / regimes
     "rtt_dist_spearman",
     "closest_vp_rtt_rank",
@@ -221,7 +232,9 @@ def load_canonical_csv(csv_path: Path) -> pd.DataFrame:
         raise ValueError(
             f"{csv_path} is not a canonical CSV — missing columns: {missing}"
         )
-    keep = list(_REQUIRED) + [c for c in _OPTIONAL_FOR_FILTERS if c in df.columns]
+    keep = list(_REQUIRED)
+    keep += [c for c in _OPTIONAL_FOR_FILTERS if c in df.columns]
+    keep += [c for c in _OPTIONAL_META if c in df.columns]
     df = df[keep].copy()
     for col in ("vp_id", "target_id"):
         df[col] = df[col].astype(str)
@@ -475,6 +488,138 @@ def anycast_metrics(
     )
 
 
+def _knn_centroid_metrics(
+    lat: np.ndarray,
+    lon: np.ndarray,
+    k: int = 3,
+) -> pd.DataFrame:
+    """Per-centroid k-NN distances and derived metrics.
+
+    Returns DataFrame indexed by cluster_id with columns:
+      knn_neighbor_{1,2,3}_km — individual k-NN distances
+      knn_mean_km, knn_std_km — mean and std of k neighbors
+      knn_gap_ratio — ratio of 2nd to 1st neighbor (isolation indicator)
+      n_competitors_1_5x — count of neighbors within 1.5x nearest
+    """
+    n = len(lat)
+    if n < 2:
+        # Singleton answer space: all NaN
+        return pd.DataFrame({
+            "cluster_id": np.arange(n),
+            "knn_neighbor_1_km": np.nan,
+            "knn_neighbor_2_km": np.nan,
+            "knn_neighbor_3_km": np.nan,
+            "knn_mean_km": np.nan,
+            "knn_std_km": np.nan,
+            "knn_gap_ratio": np.nan,
+            "n_competitors_1_5x": 0,
+        })
+
+    # Build BallTree and query k+1 neighbors (self at column 0)
+    centroids_rad = np.radians(np.column_stack([lat, lon]))
+    tree = BallTree(centroids_rad, metric="haversine")
+    query_k = min(k + 1, n)
+    ndist, nidx = tree.query(centroids_rad, k=query_k)
+    ndist_km = ndist * EARTH_RADIUS_KM
+
+    # Extract k-NN distances (exclude self at column 0)
+    knn_dists = {}
+    for i in range(1, min(k + 1, query_k)):
+        knn_dists[f"knn_neighbor_{i}_km"] = ndist_km[:, i]
+
+    # Pad with NaN if fewer than k neighbors available
+    for i in range(query_k, k + 1):
+        knn_dists[f"knn_neighbor_{i}_km"] = np.full(n, np.nan)
+
+    # Compute mean and std over available neighbors
+    knn_array = np.column_stack([
+        knn_dists.get(f"knn_neighbor_{i}_km", np.full(n, np.nan))
+        for i in range(1, k + 1)
+    ])
+    knn_mean = np.nanmean(knn_array, axis=1)
+    knn_std = np.nanstd(knn_array, axis=1)
+
+    # Gap ratio: 2nd / 1st neighbor (>1.8 isolated, <1.2 crowded)
+    nearest = ndist_km[:, 1]
+    second = ndist_km[:, 2] if query_k > 2 else np.full(n, np.nan)
+    gap_ratio = np.divide(second, nearest, where=nearest > 0, out=np.full(n, np.nan))
+
+    # Competitive set size: count neighbors within 1.5x nearest
+    threshold = nearest * 1.5
+    n_competitors = np.sum(ndist_km[:, 1:] <= threshold[:, None], axis=1)
+
+    result = pd.DataFrame({
+        "cluster_id": np.arange(n),
+        **knn_dists,
+        "knn_mean_km": knn_mean,
+        "knn_std_km": knn_std,
+        "knn_gap_ratio": gap_ratio,
+        "n_competitors_1_5x": n_competitors,
+    })
+    return result.round(4)
+
+
+def _answer_space_graph_metrics(
+    centroids_lat: np.ndarray,
+    centroids_lon: np.ndarray,
+) -> dict[str, Any]:
+    """Dataset-level answer-space topology metrics.
+
+    Computes:
+      diameter_km — maximum pairwise centroid distance
+      avg_clustering_coeff — average local clustering coefficient
+      graph_density — fraction of edges within 2x mean k-NN distance
+    """
+    n = len(centroids_lat)
+    if n < 2:
+        return {
+            "diameter_km": np.nan,
+            "avg_clustering_coeff": np.nan,
+            "graph_density": np.nan,
+        }
+
+    # All-pairwise distances
+    centroids_rad = np.radians(np.column_stack([centroids_lat, centroids_lon]))
+    tree = BallTree(centroids_rad, metric="haversine")
+    ndist, nidx = tree.query(centroids_rad, k=n)
+    all_dists = ndist * EARTH_RADIUS_KM
+
+    # Diameter: max distance excluding self
+    diag = np.diag_indices(n)
+    all_dists[diag] = 0
+    diameter = float(np.max(all_dists))
+
+    # Neighborhood threshold: 2x mean k-NN distance
+    mean_knn_dist = np.mean(all_dists[:, 1:4])
+    threshold = 2.0 * mean_knn_dist
+
+    # Local clustering coefficient per centroid
+    clustering_coeffs = []
+    for i in range(n):
+        # Neighbors of i within threshold
+        neighbors = np.where((all_dists[i] > 0) & (all_dists[i] <= threshold))[0]
+        if len(neighbors) < 2:
+            continue
+        # Edges among neighbors
+        edges = np.sum((all_dists[np.ix_(neighbors, neighbors)] > 0) & 
+                      (all_dists[np.ix_(neighbors, neighbors)] <= threshold))
+        possible = len(neighbors) * (len(neighbors) - 1)
+        if possible > 0:
+            clustering_coeffs.append(edges / possible)
+    avg_clustering = float(np.mean(clustering_coeffs)) if clustering_coeffs else 0.0
+
+    # Graph density: edges / possible edges within threshold
+    edges = np.sum((all_dists > 0) & (all_dists <= threshold))
+    possible = n * (n - 1)
+    density = edges / possible if possible > 0 else 0.0
+
+    return {
+        "diameter_km": round(diameter, 3),
+        "avg_clustering_coeff": round(avg_clustering, 4),
+        "graph_density": round(density, 4),
+    }
+
+
 def cluster_targets(
     per_target: pd.DataFrame,
     radius_km: float,
@@ -552,6 +697,12 @@ def cluster_targets(
             _nearest_cell(per_target["shortest_ping_vp_lat"],
                           per_target["shortest_ping_vp_lon"]) == labels
         ),
+    )
+
+    # Compute k-NN metrics per centroid and merge into per_target
+    knn_metrics = _knn_centroid_metrics(res.centroid_lat, res.centroid_lon, k=3)
+    per_target = per_target.merge(
+        knn_metrics, left_on="cluster_id", right_on="cluster_id", how="left"
     )
     block = {
         "radius_km": float(radius_km),
@@ -639,11 +790,232 @@ def _stat_block(values: pd.Series) -> dict[str, Any]:
     }
 
 
-def summarize(per_target: pd.DataFrame) -> dict[str, Any]:
+def bipartite_coverage_summary(
+    pairs: pd.DataFrame,
+) -> dict[str, Any]:
+    """Dataset-level target/VP coverage summary over the observed bipartite graph.
+
+    The graph is defined by the deduped `(vp_id, target_id)` pairs that survive
+    eval-side filtering. Report target-centric quantities first, then the VP side,
+    plus edge geography and one cross-type degree-mixing scalar.
+    """
+    n_targets = int(pairs["target_id"].nunique())
+    n_vps = int(pairs["vp_id"].nunique())
+    n_edges = int(len(pairs))
+    density = (
+        float(n_edges / (n_targets * n_vps))
+        if n_targets > 0 and n_vps > 0
+        else float("nan")
+    )
+
+    target_degree = pairs.groupby("target_id", sort=True)["vp_id"].nunique()
+    vp_degree = pairs.groupby("vp_id", sort=True)["target_id"].nunique()
+
+    edge_frame = pairs.copy()
+    edge_frame["target_degree"] = edge_frame["target_id"].map(target_degree)
+    edge_frame["vp_degree"] = edge_frame["vp_id"].map(vp_degree)
+
+    target_neighbor_vp_degree = edge_frame.groupby("target_id", sort=True)["vp_degree"].mean()
+    vp_neighbor_target_degree = edge_frame.groupby("vp_id", sort=True)["target_degree"].mean()
+
+    distance_share_thresholds = (50.0, 100.0, 200.0, 500.0)
+    edge_distance_shares = {
+        f"share_le_{int(thr)}km": round(float((pairs["gc_km"] <= thr).mean()), 4)
+        for thr in distance_share_thresholds
+    }
+
+    inv_rtt = 1.0 / pairs["rtt_ms"].to_numpy(dtype=float)
+    gc_km = pairs["gc_km"].to_numpy(dtype=float)
+    rtt_weighted_edge_distance_mean = float(np.sum(gc_km * inv_rtt) / np.sum(inv_rtt))
+
+    vp_deg = edge_frame["vp_degree"].to_numpy(dtype=float)
+    target_deg = edge_frame["target_degree"].to_numpy(dtype=float)
+    if len(edge_frame) >= 2 and np.std(vp_deg) > 0 and np.std(target_deg) > 0:
+        cross_degree_corr = float(np.corrcoef(vp_deg, target_deg)[0, 1])
+    else:
+        cross_degree_corr = float("nan")
+
     return {
+        "n_targets": n_targets,
+        "n_vps": n_vps,
+        "n_edges": n_edges,
+        "realized_density": round(density, 6),
+        "target_degree": _stat_block(target_degree),
+        "vp_degree": _stat_block(vp_degree),
+        "target_neighbor_vp_degree": _stat_block(target_neighbor_vp_degree),
+        "vp_neighbor_target_degree": _stat_block(vp_neighbor_target_degree),
+        "edge_distance_km": {
+            **_stat_block(pairs["gc_km"]),
+            **edge_distance_shares,
+            "rtt_weighted_mean": round(rtt_weighted_edge_distance_mean, 3),
+        },
+        "cross_type_degree_corr": round(cross_degree_corr, 4)
+        if np.isfinite(cross_degree_corr)
+        else None,
+    }
+
+
+def _nearest_neighbor_stats(lat: np.ndarray, lon: np.ndarray, *, k: int = 3) -> dict[str, Any]:
+    """Return k-NN distance summary for a point set on the sphere."""
+    n = len(lat)
+    if n < 2:
+        return {
+            "k": k,
+            "n_nodes": n,
+            "neighbor_1_km": {"n": 0},
+            "knn_mean_km": {"n": 0},
+            "mean_shortest_gap_km": None,
+        }
+    coords = np.radians(np.column_stack([lat, lon]))
+    tree = BallTree(coords, metric="haversine")
+    query_k = min(k + 1, n)
+    ndist, _ = tree.query(coords, k=query_k)
+    ndist_km = ndist[:, 1:] * EARTH_RADIUS_KM
+    neighbor_1 = ndist_km[:, 0]
+    knn_mean = np.mean(ndist_km, axis=1)
+    return {
+        "k": int(min(k, n - 1)),
+        "n_nodes": n,
+        "neighbor_1_km": _stat_block(pd.Series(neighbor_1)),
+        "knn_mean_km": _stat_block(pd.Series(knn_mean)),
+        "mean_shortest_gap_km": round(float(np.mean(neighbor_1)), 3),
+    }
+
+
+def classification_easiness_summary(
+    df: pd.DataFrame,
+    pairs: pd.DataFrame,
+    per_target: pd.DataFrame,
+    clusters: pd.DataFrame,
+) -> dict[str, Any]:
+    """Target-centric dataset easiness summary grouped by vertex/edge props."""
+    cluster_members = clusters["n_members"].to_numpy(dtype=float)
+    cluster_cell_gap = clusters["cell_gap_km"].replace([np.inf, -np.inf], np.nan)
+
+    target_cluster_map = per_target[["target_id", "cluster_id"]]
+    pair_with_cluster = pairs.merge(target_cluster_map, on="target_id", how="left")
+    cluster_degree = pair_with_cluster.groupby("cluster_id", sort=True)["vp_id"].nunique()
+
+    vp_degree = pairs.groupby("vp_id", sort=True)["target_id"].nunique()
+
+    # Flatten recorded cluster-neighbor distances (top-N direct neighbors).
+    neighbor_km_cols = [c for c in clusters.columns if c.startswith("neighbor") and c.endswith("_km")]
+    if neighbor_km_cols:
+        cluster_neighbor_dists = clusters[neighbor_km_cols].to_numpy(dtype=float).ravel()
+        cluster_neighbor_dists = cluster_neighbor_dists[np.isfinite(cluster_neighbor_dists)]
+    else:
+        cluster_neighbor_dists = np.array([], dtype=float)
+
+    vp_unique = pairs[["vp_id", "vp_lat", "vp_lon"]].drop_duplicates("vp_id")
+
+    # Cluster-VP edge set and distances from VP to cluster centroid.
+    cluster_centroids = clusters[["cluster_id", "centroid_lat", "centroid_lon"]]
+    cluster_vp = (
+        pair_with_cluster[["cluster_id", "vp_id", "vp_lat", "vp_lon"]]
+        .drop_duplicates(["cluster_id", "vp_id"]) 
+        .merge(cluster_centroids, on="cluster_id", how="left")
+    )
+    if len(cluster_vp):
+        cluster_vp["vp_to_cluster_centroid_km"] = haversine_distance(
+            cluster_vp["vp_lat"].to_numpy(dtype=float),
+            cluster_vp["vp_lon"].to_numpy(dtype=float),
+            cluster_vp["centroid_lat"].to_numpy(dtype=float),
+            cluster_vp["centroid_lon"].to_numpy(dtype=float),
+        )
+
+    # VP proximity test per target cluster: nearest VP to truth centroid inside cell_gap/2.
+    cluster_prox = (
+        per_target.groupby("cluster_id", sort=True)
+        .agg(
+            nearest_vp_to_centroid_km=("closest_vp_to_centroid_km", "min"),
+            nearest_cell_gap_km=("cell_gap_km", "first"),
+        )
+        .reset_index()
+    )
+    cluster_prox["vp_proximity_ok"] = (
+        cluster_prox["nearest_vp_to_centroid_km"] < (cluster_prox["nearest_cell_gap_km"] / 2.0)
+    )
+
+    traffic_weights = pairs["weight"] if "weight" in pairs.columns else pd.Series(1.0, index=pairs.index)
+    tw = traffic_weights.to_numpy(dtype=float)
+    gc = pairs["gc_km"].to_numpy(dtype=float)
+    tw_sum = float(np.sum(tw))
+    traffic_weighted_edge_distance = float(np.sum(tw * gc) / tw_sum) if tw_sum > 0 else float("nan")
+
+    target_asn_count = None
+    if "target_asn" in df.columns:
+        target_asn_count = int(df["target_asn"].dropna().astype(str).nunique())
+
+    return {
+        "vertex_props": {
+            "targets": {
+                "n_unique_targets": int(df["target_id"].nunique()),
+                "n_unique_target_clusters": int(clusters["cluster_id"].nunique()),
+                "targets_per_cluster_distribution": _stat_block(pd.Series(cluster_members)),
+                "target_cluster_degree_wrt_vp_distribution": _stat_block(cluster_degree),
+                "n_unique_target_asns": target_asn_count,
+            },
+            "vps": {
+                "n_unique_vps": int(df["vp_id"].nunique()),
+                "vp_degree_wrt_target_distribution": _stat_block(vp_degree),
+            },
+        },
+        "edge_props": {
+            "target_target": {
+                "target_cell_gap_km_distribution": _stat_block(cluster_cell_gap),
+                "target_centroid_neighbor_km_distribution": (
+                    _stat_block(pd.Series(cluster_neighbor_dists))
+                    if cluster_neighbor_dists.size
+                    else {"n": 0}
+                ),
+                "mean_shortest_cluster_centroid_gap_km": (
+                    round(float(cluster_cell_gap.mean()), 3)
+                    if cluster_cell_gap.notna().any()
+                    else None
+                ),
+                "k_choice": "1-NN for cell gap; all recorded direct neighbors for neighbor-distance distribution",
+            },
+            "vp_vp": {
+                "vp_gap_knn": _nearest_neighbor_stats(
+                    vp_unique["vp_lat"].to_numpy(dtype=float),
+                    vp_unique["vp_lon"].to_numpy(dtype=float),
+                    k=3,
+                ),
+            },
+            "vp_target_clusters": {
+                "n_unique_edges": int(len(cluster_vp)),
+                "geography_edge_distance_km_distribution": _stat_block(pairs["gc_km"]),
+                "traffic_weighted_edge_distance_mean_km": (
+                    round(traffic_weighted_edge_distance, 3)
+                    if np.isfinite(traffic_weighted_edge_distance)
+                    else None
+                ),
+                "cluster_vp_knn_distance_km_distribution": (
+                    _stat_block(cluster_vp["vp_to_cluster_centroid_km"])
+                    if len(cluster_vp)
+                    else {"n": 0}
+                ),
+                "vp_proximity_per_cluster_share": round(float(cluster_prox["vp_proximity_ok"].mean()), 4),
+                "min_rtt_inflation_distribution": _stat_block(per_target["min_inflation"]),
+            },
+        },
+    }
+
+
+def summarize(
+    per_target: pd.DataFrame,
+    centroids_lat: np.ndarray | None = None,
+    centroids_lon: np.ndarray | None = None,
+) -> dict[str, Any]:
+    stats = {
         "n_targets": int(len(per_target)),
         "metrics": {m: _stat_block(per_target[m]) for m in PER_TARGET_METRICS},
     }
+    if centroids_lat is not None and centroids_lon is not None:
+        stats["answer_space_topology"] = _answer_space_graph_metrics(
+            centroids_lat, centroids_lon
+        )
+    return stats
 
 
 def proximity_summary(per_target: pd.DataFrame) -> dict[str, Any]:
@@ -768,8 +1140,16 @@ def eval_source(
         "n_obs": int(len(df)),
         "n_pairs": int(len(pairs)),
         "n_vps": int(pairs["vp_id"].nunique()),
-        **summarize(per_target),
+        **summarize(
+            per_target,
+            centroids_lat=clusters["centroid_lat"].to_numpy(),
+            centroids_lon=clusters["centroid_lon"].to_numpy(),
+        ),
         "target_clustering": clustering,
+        "bipartite_coverage": bipartite_coverage_summary(pairs),
+        "classification_easiness": classification_easiness_summary(
+            df, pairs, per_target, clusters
+        ),
         "proximity": proximity_summary(per_target),
         "rtt_quality": rtt_quality_summary(pairs, per_target),
     }

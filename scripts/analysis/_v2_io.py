@@ -49,7 +49,8 @@ def add_geo_filter_args(parser) -> None:
     g.add_argument(
         "--geo-level", choices=tuple(_GEO_LEVEL_COLUMN), default=None,
         help="Restrict every loaded target set to one geography. Requires the "
-             "geo-eval columns (run `cli geo-eval --run-id <id>` first). Pair "
+             "geo columns (run `cli label-geo-for-targets --run-id <id>` first). "
+             "Pair "
              "with --geo-value.",
     )
     g.add_argument(
@@ -240,7 +241,8 @@ def load_targets(combo_dir: Path) -> pa.Table:
         if col not in tbl.schema.names:
             raise KeyError(
                 f"{combo_dir / 'targets.parquet'} has no '{col}' column — run "
-                "`python -m scripts.benchmark.v2.cli geo-eval --run-id <id>` "
+                "`python -m scripts.benchmark.v2.cli label-geo-for-targets "
+                "--run-id <id>` "
                 "first to annotate the geo columns."
             )
         tbl = tbl.filter(pc.equal(tbl.column(col), value))

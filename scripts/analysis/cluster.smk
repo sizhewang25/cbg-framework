@@ -98,7 +98,7 @@ rule cluster_eval_global:
         outputs_root = str(V2_OUTPUTS_ROOT),
         inputs_root = str(V2_INPUTS_ROOT),
     shell:
-        CLI + ".benchmark.v2.cli cluster-eval"
+        CLI + ".benchmark.v2.cli materialize-target-space"
         " --run-id {params.run_id}"
         " --outputs-root {params.outputs_root}"
         " --inputs-root {params.inputs_root}"
@@ -119,7 +119,7 @@ rule cluster_score_global:
         clusters_dir = str(CLUSTERS_DIR),
         out_dir = str(SCORED_DIR),
     shell:
-        CLI + ".benchmark.v2.cli cluster-score"
+        CLI + ".analysis.cli cluster-score"
         " --run-id {params.run_id}"
         " --source {params.source}"
         " --outputs-root {params.outputs_root}"
@@ -224,7 +224,7 @@ if CLASSIFICATION_COMBOS:
         params:
             config_path = _ANALYSIS_CONFIG,
         shell:
-            CLI + ".analysis.plot_classification_match_bars"
+            CLI + ".analysis.classification.plot_classification_match_bars"
             " --config {params.config_path}"
 
 

@@ -76,8 +76,6 @@ test, per-tier box plots, and depth-3 decision-tree thresholds.
 
 | Regime | Runs | Targets | Status |
 | ------ | ---- | ------- | ------ |
-| In-distribution (global VP → global TG) | `global_as16509_final` (Amazon), `global_as31898_final` (Oracle) | 713 anchors, 257 centroids | **done** |
-| Matched-regional (regional VP → in-region TG) | `north_america_as7018_final_us` (AT&T/US), `north_america_as7922_final_us` (Comcast/US), `europe_as3215_final_fr` (Orange/FR) | US n=96 ×2, FR n=39 | **done** (textbook-4 side run) |
 | Matched-regional (confirmation) | `europe_as3209_final_de` (Vodafone/DE) | DE n=96 | **done** — confirms; `part_circ_var` AUC **0.82** (strongest angular signal) |
 
 > Regional runs were executed as **textbook-4-combo side runs** (`scripts/analysis/partvp/cfg_textbook/`,
@@ -175,7 +173,6 @@ operator setting, is barely doing latency geolocation.
 
 ## 4. Matched-regional findings
 
-Runs: `north_america_as7018_final_us` (AT&T/US, n=96), `north_america_as7922_final_us` (Comcast/US,
 n=96), `europe_as3215_final_fr` (Orange/FR, n=39), `europe_as3209_final_de` (Vodafone/DE, n=96).
 All four consistent.
 

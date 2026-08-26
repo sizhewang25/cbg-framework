@@ -4090,7 +4090,6 @@ wrapt = "*"
 [package.extras]
 all = ["smart_open[azure,gcs,http,s3,ssh,webhdfs,zst]"]
 azure = ["azure-common", "azure-core", "azure-storage-blob (>=12.7.0)"]
-gcs = ["google-api-core (<2.28) ; python_version < \"3.10\"", "google-cloud-storage (>=2.6.0)"]
 http = ["requests"]
 s3 = ["boto3 (>=1.9.17)"]
 ssh = ["paramiko"]

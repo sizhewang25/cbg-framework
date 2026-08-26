@@ -9,7 +9,7 @@ post-hoc forensic analysis.
 
 | File                           | Role                                                                                                                                                                                                                             |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [cli.py](cli.py)               | Typer commands: `materialize-inputs`, `run-combo`, `summarize`, `build-airports`, `airport-eval`, `geo-eval`                                                                                                                      |
+| [cli.py](cli.py)               | Typer commands: `materialize-inputs`, `run-combo`, `summarize`, `eval-source`, `build-airports`, `airport-eval`, `label-geo-for-targets`, `materialize-target-space`                                                                                                                      |
 | [Snakefile](Snakefile)         | Parameterizes the (source × slice × combo) grid                                                                                                                                                                                  |
 | [sources/](sources/)           | DataSource adapters — [generic_csv.py](sources/generic_csv.py), [generic_presplit.py](sources/generic_presplit.py), [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py). See [sources/README.md](sources/README.md) for the contract + how to add your own. |
 | [inputs.py](inputs.py)         | Materializes a DataSource into three parquets                                                                                                                                                                                    |
@@ -318,7 +318,7 @@ Design rationale: `notes/2026-06-18-closest-airport-eval-decisions.md`.
 ## Geographic slicing (continent / country)
 
 `error_km` is a single global distribution; it hides that a continent-bounded
-per-ASN VP corpus recovers well at home and degrades abroad. `geo-eval` is a
+per-ASN VP corpus recovers well at home and degrades abroad. `label-geo-for-targets` is a
 second decoupled postprocessing pass (same shape as `airport-eval`) that lets
 analysis slice the eval metrics by geography **without an external join**.
 
@@ -338,16 +338,16 @@ its administrative parent `FR` → Europe), which is exactly the mislabel the ol
 labels describe the target (always known), both columns are populated on every
 row regardless of prediction status.
 
-`geo-eval` also writes `geo_summary.parquet` — one row per
+`label-geo-for-targets` also writes `geo_summary.parquet` — one row per
 `(combo × group_level × group_value)` (an overall `all` row plus `continent`
 and `country` breakdowns) carrying success counts and `error_km` percentiles,
 so eval metrics are readable per subset.
 
 ```bash
-poetry run python -m scripts.benchmark.v2.cli geo-eval --run-id smoke-001
+poetry run python -m scripts.benchmark.v2.cli label-geo-for-targets --run-id smoke-001
 ```
 
-**Slicing any analysis script.** Once a run is geo-eval'd, every analysis script
+**Slicing any analysis script.** Once a run is geo-labeled, every analysis script
 under `scripts/analysis/` accepts a shared `--geo-level {continent,country}` +
 `--geo-value <V>` pair (wired through `_v2_io`: the filter is applied inside
 `load_targets`, so each script restricts its target set transparently). Output

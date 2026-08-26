@@ -17,8 +17,6 @@ Network operators in particular must geolocate millions of Internet hosts on a r
 The operator setting differs from general-purpose IP geolocation in three structural ways:
 
 - **Free vantage points.** Operators already collect *passive RTT* at core infrastructure across many physical sites — essentially a no-cost fleet of probes.
-- **Bounded answer space for high-value targets.** For hypergiants, CDNs, and peering partners, operators *already know the set of possible locations* — because that is where they built the interconnection. An Akamai IP observed at a mobile operator's core doesn't live somewhere arbitrary in continuous lat/long space; it lives at one of N known data-center sites.
-- **Evaluation as classification, not coordinate regression.** Because the answer space is finite, success is no longer absolute error distance from a continuous lat/long — it is *classification accuracy over the known candidate set*. A method emits a lat/long estimate; we snap it to the closest known site (e.g., the airport associated with an Akamai POP); the prediction is correct iff that site matches the ground-truth site. The task is *"can the method pick the right site from a known list?"*, not *"how close can it get?"* — easier (finite, tolerant of bounded error) and more useful (matches the operator's actual decision).
 
 ### 1.3 Challenges — why existing methods are not enough
 
@@ -234,7 +232,6 @@ The results section proceeds in four stages, each adding a layer of understandin
 §6.1 fixes the target set (713 global RIPE anchors) and varies the VP fleet across three ASNs to
 show VP proximity as the binding constraint in two degrees — fairly limited (global fleet, sparse
 but geographically matched) and extremely limited (country-scale fleet against global targets) —
-and that no CBG variant escapes either. §6.2 switches to proximity-sufficient setups — the same AS7018 (AT&T) and
 AS3209 (Vodafone) fleets now evaluated against their *home* target populations — and characterizes
 each CBG variant's accuracy and failure behavior when the proximity constraint is lifted. §6.3
 performs the per-feature success-and-failure analysis, introduces the failure taxonomy, and presents
@@ -252,7 +249,6 @@ fleet. This holds the evaluation criterion constant while degrading VP proximity
   sparse relative to 713 targets. Median `fleet_abs_km` = 348 km; 77% of targets miss a
   target-distinguishing VP.
 - **Extremely limited** — country-scale fleets evaluated against the same global target set:
-  AS7018 (AT&T, 122 US VPs → 713 global targets): median `fleet_abs_km` = 6,268 km; 92.4% missing.
   AS3209 (Vodafone, 164 EU VPs → 713 global targets): median `fleet_abs_km` = 972 km; 85.4% missing.
   In both cases the fleet's geographic span is narrower than the target population's span by orders
   of magnitude — the country fleet is simply the wrong instrument for a global target set.
@@ -350,12 +346,10 @@ and Octant within this `margin ≤ 0` population. The failure is driven by geome
 choice.
 This makes margin the right axis for characterizing the transition from the proximity-limited
 regime (§6.1: all three setups have strongly negative median margins, −313 to −6,226 km) to the
-proximity-sufficient regime (§6.2: median margins flip to +62 km and +38 km for the same AT&T
 and Vodafone fleets redirected to their home target populations).
 
 ### 6.2 Proximity-sufficient regime — per-variant characterization
 
-**Setup.** Same AS7018 (AT&T) and AS3209 (Vodafone) fleets from §6.1, now evaluated against their
 *home* target populations. This natural experiment — same fleet, different target set — isolates the
 regime effect from the fleet composition effect.
 

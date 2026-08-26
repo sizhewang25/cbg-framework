@@ -1,7 +1,6 @@
 """Heatmap of flow WEIGHT for (VP, target-city) pairs.
 
 Reads a weighted matched dataset (e.g.
-``datasets/test05-mainland.edr-final-weighted.csv``) and renders a
 heatmap where:
 
 - columns  = VP (``VP_ID``)
@@ -14,7 +13,6 @@ sits top-left.
 
 CLI:
     python -m scripts.analysis.pair_weight.plot_pair_weight_heatmap \\
-        --input datasets/test05-mainland.edr-final-weighted.csv \\
         --output datasets/test05-pair-weight-heatmap.png
 """
 
@@ -110,7 +108,6 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("datasets/test05-mainland.edr-final-weighted.csv"),
         help="Weighted matched CSV.",
     )
     parser.add_argument(

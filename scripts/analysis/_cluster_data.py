@@ -81,7 +81,8 @@ def _load_precomputed(clusters_dir: Path) -> tuple[_CentroidIndex, int, int]:
     cpath = cdir / "clusters.csv"
     if not cpath.exists():
         raise FileNotFoundError(
-            f"{cpath} not found — run `python -m scripts.benchmark.v2.cli cluster-eval` "
+            f"{cpath} not found — run `python -m scripts.benchmark.v2.cli "
+            "materialize-target-space` "
             "first (with matching --geo-level/--geo-value if a geo filter is active)."
         )
     clusters = pd.read_csv(cpath)

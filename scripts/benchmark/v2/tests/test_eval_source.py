@@ -170,6 +170,8 @@ class TestEvalSource(unittest.TestCase):
         self.assertEqual(stats["n_pairs"], 3)
         self.assertEqual(stats["n_vps"], 2)
         self.assertEqual(stats["metrics"]["rtt_weighted_dist_km"]["n"], 2)
+        self.assertIn("bipartite_coverage", stats)
+        self.assertEqual(stats["bipartite_coverage"]["n_edges"], 3)
         # Removed axes stay removed: no threshold table, no LTD-flavored
         # constraint radius (that analysis is LTD-specific, not a precheck).
         self.assertNotIn("resolvability", stats)

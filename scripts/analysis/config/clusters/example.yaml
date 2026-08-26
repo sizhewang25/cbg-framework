@@ -1,0 +1,35 @@
+run_id: example-01
+source: generic_csv
+setup: probes_to_anchors
+slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+merge_folds: true
+
+top_n_values: [1, 3]
+radius_km: 50
+cluster_geos: []
+v2_outputs_root: scripts/benchmark/v2/outputs
+v2_inputs_root:  scripts/benchmark/v2/inputs
+analysis_root:   scripts/analysis/outputs
+
+classification_combos:
+  - name: vanilla_cbg
+    label: Vanilla
+  - name: million_scale_cbg
+    label: SOI
+  - name: octant_cbg_hull
+    label: Octant (Hull)
+  - name: octant_cbg_spl
+    label: Octant (Spline)
+  - name: spotter_cbg
+    label: Spotter
+
+combos:
+  - vanilla_cbg
+  - million_scale_cbg
+  - octant_cbg_hull
+  - octant_cbg_spl
+  - spotter_cbg
+
+voronoi_params:
+  - level: country
+    value: US

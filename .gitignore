@@ -20,6 +20,10 @@ datasets/static_datasets/
 
 # snakemake sentinel touch files (DAG ordering for in-place rules)
 datasets/ripe_atlas/.flags/
+datasets/prod/
+datasets/final/
+papers/backup*
+cbg-framework-mergeable/
 
 measurements/results
 clickhouse_files/data/

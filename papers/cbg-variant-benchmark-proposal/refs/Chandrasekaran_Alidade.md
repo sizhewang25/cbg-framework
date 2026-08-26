@@ -1,6 +1,5 @@
 # Alidade: IP Geolocation without Active Probing
 
-Chandrasekaran et al., Duke / Akamai / Cornell / Waterloo. Tech Report CS-TR-2015.001, Jan 2015 (rev. Apr 2015).
 
 ## Overview
 
@@ -41,7 +40,6 @@ EuroGT evaluation samples 100,000 targets. Input data: ~700M HostParser answers 
 - On **GPS / NTP**: Alidade is competitive but not dominant; some commercial DBs do better, especially on the 7–8% of NTP targets where Alidade has measurements.
 - **Measurement-data ablation** (Figure 18, "WITH-MEAS" vs. "WITHOUT-MEAS" vs. "SKIPPED-AGG"): adding measurements improves accuracy beyond registry+HostParser alone, and aggregates further help targets *with* measurements by filtering inconsistent hints.
 - **Staleness matters**: 2014 input data (1+ quarter after GT collection) had ~20% fewer targets ≤10 km than 2013 input (Figure 17).
-- **Feasibility-area check**: Alidade's polygons can flag commercial-DB point answers that fall outside the feasible region (e.g., an Apple IP that registry-based DBs place in Cupertino but measurements place in Asia).
 
 ## Strengths
 
