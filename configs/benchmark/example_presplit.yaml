@@ -1,0 +1,50 @@
+# Pre-split benchmark: caller-provided train/test files (generic_presplit).
+#
+# The fit/eval partition comes from the two files themselves — train rows feed
+# LTD fitting, test rows feed evaluation, and the source hard-errors if a
+# target_id appears in both (LTD-leakage guard) or a shared vp_id carries
+# conflicting coordinates. Each path may independently be .csv or .parquet
+# (inferred from the extension); both must follow the canonical schema
+# (vp_id, vp_lat, vp_lon, target_id, target_lat, target_lon, rtt_ms, plus
+# optional asn/country/continent/region/city/weight columns — see
+# sources/generic_csv.py for the full contract).
+#
+# No fold_N / wsplit slices exist for this source: `all` runs every test
+# target, `head<k>` keeps the first k test targets by id (smoke slice; the
+# train side is untouched either way).
+#
+# Run with:
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile scripts/benchmark/v2/config/example_presplit.yaml -j 4
+
+run_id: example_presplit
+source: generic_presplit
+setup: vp_to_target           # fixed path label — the legacy role-swap axis
+                              # doesn't apply to this source (vp_*/target_*
+                              # columns already assign the roles); the source
+                              # ignores any other value, so this key only has
+                              # to match setup_id() for Snakemake's paths.
+slices: [all]                 # or e.g. [head5] for a quick smoke
+
+source_kwargs:
+  train_path: path/to/train.parquet   # fit corpus  (LTD training)
+  test_path: path/to/test.csv         # eval corpus (targets to geolocate)
+  # min_obs: 3                # optional — drop targets with fewer VP obs,
+                              # applied per file (train and test independently)
+
+# Optional materialize-time traffic mask on the TEST side (pick at most one;
+# fit samples stay untouched — see the README's weighted-eval section):
+# eval_pair_weight_min: 5.0
+# eval_kept_traffic_fraction: 0.8
+
+enable_fallback: true
+seed: 42
+
+combos:
+  - combo_id: vanilla_cbg
+    ltd: low_envelope
+    mtl: spherical_circle
+    ctr: boundary_vertex_mean
+    mtl_kwargs:
+      speed_ratio: 0.6667
+      enable_circle_filter: true
