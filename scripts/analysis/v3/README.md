@@ -19,6 +19,7 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/classify.py](modules/classify.py) | cmd · `classify` |
 | [modules/venn.py](modules/venn.py) | cmd · `plot-venn` |
 | [modules/map_answer_space.py](modules/map_answer_space.py) | cmd · `plot-answer-space` |
+| [modules/pareto.py](modules/pareto.py) | cmd · `plot-pareto` |
 
 [SCHEMA.md](SCHEMA.md) documents the v2 output schemas this layer reads.
 
@@ -37,6 +38,11 @@ python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 3
 
 # 4. Static map of the answer space
 python -m scripts.analysis.v3.cli plot-answer-space --all-runs --us-only
+
+# 5. Accuracy vs cost across datasets (colour = variant, symbol = dataset)
+python -m scripts.analysis.v3.cli plot-pareto \
+    --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802 \
+    --grid h3 -r 4 --cost runtime --top-n 1
 
 # The paper's original grid, or any other rung:
 python -m scripts.analysis.v3.cli build-answer-space --all-runs --grid healpix
@@ -195,12 +201,6 @@ unqualified name, for the same reason read the other way: a fallback row's
 coordinate is the Shortest-Ping VP's, so pooling its error would describe the
 baseline rather than the variant.
 
-Keeping the parquet policy-free is what makes the fallback cost *measurable*.
-On `as01`, all 106 of Vanilla CBG's fallbacks have `truth_seed_rank == 0` —
-they are not bad answers, they are the baseline's good answers. Vanilla scores
-164/399 = 0.411; credited it would score 270/399 = 0.677.
-
-**K-fold test sets must be disjoint.** `load_folds` pools every fold into one
 **Accuracy and error distance do not share an answer space.** The seeds and the
 grid exist to define the classes, so accuracy is measured against them; error
 distance has its own ground truth and is measured to the **raw target**
@@ -213,6 +213,12 @@ also keeps `error_to_truth_seed_km`, whose difference from
 accuracy but must leave `error_km_*` bit-identical, and it does across `h3-4`
 and `healpix-128` on all four runs.
 
+Keeping the parquet policy-free is what makes the fallback cost *measurable*.
+On `as01`, all 106 of Vanilla CBG's fallbacks have `truth_seed_rank == 0` —
+they are not bad answers, they are the baseline's good answers. Vanilla scores
+164/399 = 0.411; credited it would score 270/399 = 0.677.
+
+**K-fold test sets must be disjoint.** `load_folds` pools every fold into one
 frame labelled with `fold`, and raises if a `target_id` appears twice — a leak
 would double-count targets in every pooled figure downstream.
 
@@ -288,12 +294,6 @@ The caption states that occupied cell and class are in one-to-one
 correspondence, because there is no clustering algorithm involved and the
 benchmark also ships an older agglomerative `clusters/` space.
 
-Rendering both grids is the quickest way to see the previous section's point: the
-`as7018` map shows touching cell pairs at LA, Dallas, New York and DC on either
-one.
-
-## Tests
-
 ### The class-region overlay
 
 The red dashed boundaries are the **classifier's own top-1 decision
@@ -328,6 +328,131 @@ Geometry is reused from `scripts/visualization/cluster/voronoi.py`
 deliberately *not* used: this partition is defined over the whole sphere, and
 `build_landmass_voronoi` also drops seeds outside its boundary, which would move
 boundaries that are visible — an off-frame seed still shapes an on-frame line.
+
+Rendering both grids is the quickest way to see the previous section's point: the
+`as7018` map shows touching cell pairs at LA, Dallas, New York and DC on either
+one.
+
+## Accuracy vs cost
+
+`plot-pareto` joins `topn_accuracy.csv` to the per-target cost the benchmark
+already records in `targets.parquet`
+(`{ltd,mtl,ctr}_{ms,alloc_peak_bytes,rss_peak_bytes}`) and draws the two against
+each other. Artifacts land outside any single run's tree, because they are a
+function of the dataset *set*:
+
+```
+_cross/cost-accuracy/as01+as02+as03/
+  pareto_<cost>[-throughput].<grid>-<res>.top<N>[.amortized].{csv,png,json}
+```
+
+Every axis that parameterizes the numbers is in the path — dataset set, cost
+channel, x-presentation, quantization, top-N, fit policy — or a sweep overwrites
+its own output. A single-run figure landing on top of a three-dataset one is
+exactly the bug this prevents.
+
+### How to read the figure
+
+Three encodings, each carrying exactly one thing:
+
+* **Colour is the CBG variant.** Every variant sits at one x — its median cost
+  across the datasets — with a horizontal bar spanning the cost range it
+  actually occupied.
+* **Symbol (and linestyle) is the dataset.** One marker per dataset at that
+  variant's x, at the accuracy the variant scored *on that dataset*.
+* **One grey polyline per dataset** connects that dataset's markers in cost
+  order, giving each dataset its own cost/accuracy curve.
+
+**Top-left is the most cost-effective corner**, and the vertical spread inside
+one colour is that variant's cross-dataset stability. That spread is the reason
+the figure is cross-dataset at all: accuracy moves more between datasets than
+between some variants, and by very different amounts. Measured top-1 on `h3-4`
+over as01/02/03, `spotter_cbg` varies 6pp (0.386-0.448) while
+`million_scale_cbg` swings 30pp (0.367-0.662) and the baseline 27pp. A
+single-dataset number hides that completely, so `accuracy_range` is a
+first-class CSV column.
+
+A variant missing from one dataset is marked `partial_coverage` and **skipped in
+that dataset's polyline only** — interpolating across the gap would draw a
+measurement that does not exist.
+
+**Shortest-Ping costs exactly 0.** It runs no distance model, no
+multilateration and no centroid step — the method is an `argmin` over RTTs the
+measurement already produced. The x axis is `symlog` so that point is
+renderable at all. (On `--x throughput` it is unplottable, being infinitely
+fast, so it drops out with a note and keeps its exact `inf` in the CSV.)
+
+### The palette is validated, not chosen
+
+Colour carries identity, so the palette is a correctness question. Checked with
+the dataviz skill's `validate_palette.js` against the reference 8-hue
+categorical theme, `--pairs all` on white — the right check here, since every
+variant is visible at once:
+
+* Every 6/7/8-slot prefix of that theme **fails**: green vs orange is ΔE 3.2
+  under protanopia. Orange is the hue that had to go.
+* An exhaustive search over the theme's hues found exactly **two** passing
+  6-subsets; `_VARIANT_HUES` is the better one, worst ΔE 6.9 (deutan) /
+  7.6 (tritan).
+
+ΔE 6.9 sits in the 6-8 band that is legal *only* with secondary encoding, which
+is satisfied three times over: each variant owns its own x column, the legend
+names every one, and the CSV is the table view. Aqua, yellow and magenta are
+also below 3:1 on white — a contrast warning that obliges visible labels or a
+table view, again the legend and the CSV. No 6-subset of this theme clears 3:1
+for all six (only five hues do), so at six variants that is unavoidable rather
+than a shortcut.
+
+Two properties the tests pin, because both are silent when broken:
+
+* **Hues follow identity, never rank.** `method_colors` reads a table built once
+  from `venn.PREFERRED_ORDER`, so filtering with `--method` cannot repaint the
+  survivors and a variant is the same colour in every figure of a sweep.
+* **`octant_cbg_spl` and `octant_cbg` share a hue.** They are one paper variant
+  whose combo id differs per run, exactly as `venn.LABELS` already encodes.
+
+Past six variants a 9th series is never a generated hue: as7018's 11 ablation
+arms fold into one grey `other` series with a warning suggesting `--method`.
+Their identities stay in the CSV.
+### Four cost-model policies, each measured rather than assumed
+
+* **Cost is over every target** (`--cost-rows all`, default). `ctr_ms` is null
+  on exactly the FALLBACK rows, so a solved-only cost reads 22% higher on
+  `vanilla_cbg` (64.89 vs 53.11 ms, as02). `accuracy_topN`'s denominator is
+  every target, so the cost denominator has to be too.
+* **Memory reduces with `max`, not `sum`** (`--memory-reduce`).
+  `benchmark/v2/instrument.py` resets tracemalloc *inside* each stage and the
+  RSS sampler returns a delta, so the columns are per-stage peaks: `max` is the
+  pipeline high-water mark, `sum` the no-release upper bound. Summing also
+  triples the ~41.6 KB tracemalloc pedestal, which is bookkeeping rather than
+  work. Runtime genuinely sums. (`plot_accuracy_cost_box.py` sums memory; that
+  is deliberately not inherited.)
+* **`memory_alloc` is the default memory channel.** `*_rss_peak_bytes` is
+  floored at one 4096-byte page for every stage faster than the 5 ms sampler, so
+  it cannot rank methods at p50 — pass `--cost-stat p95` to use it.
+* **Fit cost is excluded** and reported separately (`fit_ms_mean`,
+  `fit_ms_per_target`). The fold size is an experimental artifact, not a
+  deployment denominator: at 82 targets/fold `vanilla_cbg`'s 2-3 s fit amortizes
+  to 38 ms/target, comparable to its own inference cost, while at a million
+  targets it vanishes. `--amortize-fit` folds it in and marks the filename.
+
+**On the memory axis, read the horizontal bar, not the ordering.** Memory is
+effectively bimodal (~0.06 MB for the cheap CTR, ~24.09 MB for
+`monte_carlo_medoid`) and the three heavy variants sit within **160 bytes** of
+each other, so their left-to-right order there is measurement noise, not a
+result. The cost bar is drawn precisely so that overlap is visible instead of
+being implied away by a single point.
+
+`million_scale_cbg`'s stages run in ~0.2-1 ms, the regime where
+`tracemalloc.start()`/`stop()` per stage inflates the very timing it measures.
+Treat its runtime as an upper bound.
+
+Runs spanning more than one `setup` are refused (`--allow-mixed-setups` to
+override): as01/02/03 are `anchors_to_probes` and `as7018_us_test01` is
+`probes_to_anchors`, which swap the VP and target roles ([SCHEMA.md](SCHEMA.md)
+§7).
+
+## Tests
 
 ```bash
 python -m pytest scripts/analysis/v3/tests/ -q

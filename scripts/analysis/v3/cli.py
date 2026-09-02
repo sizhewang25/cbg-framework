@@ -13,7 +13,13 @@ from __future__ import annotations
 
 import typer
 
-from scripts.analysis.v3.modules import answer_space, classify, map_answer_space, venn
+from scripts.analysis.v3.modules import (
+    answer_space,
+    classify,
+    map_answer_space,
+    pareto,
+    venn,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -22,7 +28,7 @@ app = typer.Typer(
 )
 
 #: Modules exposing `register(app)`. Order fixes `--help` listing order.
-_COMMAND_MODULES = (answer_space, classify, venn, map_answer_space)
+_COMMAND_MODULES = (answer_space, classify, venn, map_answer_space, pareto)
 
 for _module in _COMMAND_MODULES:
     _module.register(app)

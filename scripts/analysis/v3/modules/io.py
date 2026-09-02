@@ -155,7 +155,12 @@ def load_run_configs(run: RunPaths, combo_ids: list[str] | None = None) -> pd.Da
                     "n_fallback": counts.get("FALLBACK"),
                     "n_error": counts.get("ERROR"),
                     "fit_ms": d.get("fit_ms"),
+                    "fit_alloc_peak_bytes": d.get("fit_alloc_peak_bytes"),
                     "fit_rss_peak_bytes": d.get("fit_rss_peak_bytes"),
+                    # Both RSS numbers are absolute `getrusage` peaks, so only
+                    # their difference is attributable to the run — the baseline
+                    # is ~174 MB of interpreter and imports.
+                    "run_baseline_rss_bytes": d.get("run_baseline_rss_bytes"),
                     "run_peak_rss_bytes": d.get("run_peak_rss_bytes"),
                 }
             )

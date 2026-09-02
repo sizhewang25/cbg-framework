@@ -159,6 +159,14 @@ One row per `(run_id, source, setup, slice, combo_id)`; 87 columns.
 > stages. Trust the aggregated p50/p95 here, and use `run_peak_rss_bytes`
 > (psutil) for run-level memory.
 >
+> `modules/pareto.py` therefore defaults to the **`alloc`** channel aggregated to
+> a percentile rather than raw per-target values: `*_rss_peak_bytes` is floored
+> at one 4096-byte page for every stage faster than the 5 ms sampler, so it
+> cannot rank methods at p50. It also reduces memory across stages with
+> **`max`** — `instrument.py` resets tracemalloc inside each stage, so the
+> columns are per-stage peaks, making `max` the pipeline high-water mark and
+> `sum` the no-release upper bound. Runtime sums.
+>
 > `error_km_*` here pools FALLBACK rows (see §3 trap). For fallback-excluded
 > accuracy, recompute from `targets.parquet`.
 
