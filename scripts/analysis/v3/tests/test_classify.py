@@ -97,12 +97,12 @@ def test_fallback_rows_keep_distances_but_never_count_as_correct():
     # Both rows are geometrically perfect...
     assert (df["truth_seed_rank"] == 0).all()
     assert df["error_to_truth_seed_km"].to_numpy() == pytest.approx([0.0, 0.0], abs=1e-6)
-    # ...but the fallback must not be credited.
+    # ...but the fallback must not be credited: 1 of 2, not 2 of 2.
     s = topn_summary({"m": df}, ns=(1,)).iloc[0]
     assert s["accuracy_top1"] == pytest.approx(0.5)
-    assert s["accuracy_top1_success_only"] == pytest.approx(1.0)
     assert s["fallback_rate"] == pytest.approx(0.5)
     assert s["n_targets"] == 2
+    assert s["n_solved"] == 1
 
 
 def test_baseline_rows_are_all_treated_as_solved():
@@ -112,7 +112,33 @@ def test_baseline_rows_are_all_treated_as_solved():
     df = _frame(space, [CHI, NYC], ["BASELINE", "BASELINE"], [truth, truth])
     s = topn_summary({"m": df}, ns=(1,)).iloc[0]
     assert s["n_solved"] == 2
-    assert s["accuracy_top1"] == pytest.approx(s["accuracy_top1_success_only"])
+    assert s["n_fallback"] == 0
+    # One of the two predictions is exact, the other is a different metro.
+    assert s["accuracy_top1"] == pytest.approx(0.5)
+
+
+def test_summary_has_no_success_only_columns():
+    """The `_success_only` family was removed; `fallback_rate` carries the cost."""
+    space = _space()
+    truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
+    df = _frame(space, [CHI, CHI], ["SUCCESS", "FALLBACK"], [truth, truth])
+    cols = set(topn_summary({"m": df}, ns=(1, 3)).columns)
+    assert not any(c.endswith("_success_only") for c in cols)
+    assert {"error_km_p50", "error_km_p90"} <= cols
+
+
+def test_error_km_excludes_fallback_rows():
+    """`error_km_p*` drops the suffix but keeps the solved-only denominator.
+
+    A FALLBACK row's coordinate is the Shortest-Ping VP's, so its error is the
+    baseline's, not a CBG error. Here the fallback is wildly wrong and the
+    SUCCESS row is exact; the reported p50 must be the exact one.
+    """
+    space = _space()
+    truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
+    df = _frame(space, [CHI, SJC], ["SUCCESS", "FALLBACK"], [truth, truth])
+    s = topn_summary({"m": df}, ns=(1,)).iloc[0]
+    assert s["error_km_p50"] == pytest.approx(0.0, abs=1e-6)
 
 
 def test_missing_prediction_stays_in_the_denominator():
@@ -133,5 +159,6 @@ def test_unknown_truth_seed_is_rejected():
         _frame(space, [CHI], ["SUCCESS"], [999])
 
 
-def test_default_topn_starts_at_one():
-    assert DEFAULT_TOPN[0] == 1
+def test_default_topn_is_one_and_three():
+    """Only top-1 and top-3 are reported; the parquet still supports any N."""
+    assert DEFAULT_TOPN == (1, 3)

@@ -151,11 +151,27 @@ class RunPaths:
         base.mkdir(parents=True, exist_ok=True)
         return base
 
-    def answer_space_dir(self, root: Path | None = None) -> Path:
-        return self.analysis_dir("target-answer-space", root=root)
+    def answer_space_dir(self, root: Path | None = None, *, nside: int) -> Path:
+        return self.analysis_dir(
+            "target-answer-space", nside_slug(nside), root=root
+        )
 
-    def cls_accuracy_dir(self, root: Path | None = None) -> Path:
-        return self.analysis_dir("target-cls-accuracy", root=root)
+    def cls_accuracy_dir(self, root: Path | None = None, *, nside: int) -> Path:
+        return self.analysis_dir(
+            "target-cls-accuracy", nside_slug(nside), root=root
+        )
+
+
+def nside_slug(nside: int) -> str:
+    """`128` -> `"nside-128"`.
+
+    Both analysis outputs are grouped by quantization, because the answer space
+    is a *parameter* of every number downstream of it. Without this, sweeping
+    nside would overwrite one `topn_accuracy.csv` four times over and leave no
+    record of which grid produced the surviving one — the same bug class the
+    `.top<N>` filename suffix fixes for the top-N axis.
+    """
+    return f"nside-{int(nside)}"
 
 
 def discover_runs(root: Path | str = DEFAULT_OUTPUTS_ROOT) -> list[RunPaths]:

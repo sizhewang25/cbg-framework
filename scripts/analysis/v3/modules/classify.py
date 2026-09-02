@@ -34,6 +34,7 @@ import numpy as np
 import pandas as pd
 import typer
 
+from scripts.analysis.v3.modules import healpix as hx
 from scripts.analysis.v3.modules import io
 from scripts.analysis.v3.modules.answer_space import (
     AnswerSpace,
@@ -52,7 +53,7 @@ from scripts.analysis.v3.modules.paths import (
 SHORTEST_PING = "shortest_ping"
 
 #: Ns reported in the summary; the per-target artifact supports any N.
-DEFAULT_TOPN = (1, 2, 3, 5)
+DEFAULT_TOPN = (1, 3)
 
 _DIST_PREFIX = "dist_km__seed_"
 TOPN_CSV = "topn_accuracy.csv"
@@ -210,12 +211,17 @@ def score_shortest_ping(run: RunPaths, space: AnswerSpace) -> pd.DataFrame:
 def topn_summary(
     frames: dict[str, pd.DataFrame], *, ns: tuple[int, ...] = DEFAULT_TOPN
 ) -> pd.DataFrame:
-    """Top-N accuracy per method, with and without fallbacks counted.
+    """Top-N accuracy and error distance per method.
 
     `accuracy_topN` is over the full target set with non-SUCCESS rows counted as
-    wrong — the paper §7.2 rule. `accuracy_topN_success_only` restricts the
-    denominator to rows the pipeline actually solved, which is the number a
-    variant's own geometry earned; the gap between the two is the fallback cost.
+    wrong — the paper §7.2 rule. `fallback_rate` sits beside it, so the cost of
+    those failures is readable without a second accuracy column.
+
+    `error_km_p50` / `error_km_p90` are computed over **solved rows only**,
+    despite the unqualified name. A FALLBACK row's coordinate is the
+    Shortest-Ping VP's, so its error is the baseline's error rather than a CBG
+    one; pooling it would corrupt the error distribution the same way crediting
+    it would corrupt accuracy.
     """
     rows: list[dict] = []
     for method, df in frames.items():
@@ -243,13 +249,10 @@ def topn_summary(
             row[f"accuracy_top{n}"] = (
                 round(float((hit & solved).mean()), 4) if n_total else np.nan
             )
-            row[f"accuracy_top{n}_success_only"] = (
-                round(float(hit[solved].mean()), 4) if solved.any() else np.nan
-            )
         e_solved = err[solved]
         e_solved = e_solved[np.isfinite(e_solved)]
         for label, p in (("p50", 50), ("p90", 90)):
-            row[f"error_km_{label}_success_only"] = (
+            row[f"error_km_{label}"] = (
                 round(float(np.percentile(e_solved, p)), 3) if e_solved.size else np.nan
             )
         rows.append(row)
@@ -287,7 +290,18 @@ def register(app: typer.Typer) -> None:
         answer_space: Path = typer.Option(
             None,
             help="Answer-space dir (from build-answer-space). Defaults to this "
-                 "run's target-answer-space/ under --analysis-root.",
+                 "run's target-answer-space/nside-<nside>/ under --analysis-root.",
+        ),
+        nside: list[int] = typer.Option(
+            [hx.DEFAULT_NSIDE],
+            "--nside",
+            help="Which built answer space(s) to score against (repeatable). "
+                 "Ignored when --answer-space is given.",
+        ),
+        sweep: bool = typer.Option(
+            False,
+            "--sweep",
+            help=f"Shorthand for the full hierarchy {list(hx.NSIDE_HIERARCHY)}.",
         ),
         combo: list[str] = typer.Option(
             None, "--combo", help="Restrict to these combo ids (repeatable)."
@@ -310,7 +324,9 @@ def register(app: typer.Typer) -> None:
         """Score predictions against an answer space; emit distance-to-all-seeds.
 
         Writes <method>_seed_distances.parquet + topn_accuracy.csv to
-        <analysis_root>/<run_id>/target-cls-accuracy/.
+        <analysis_root>/<run_id>/target-cls-accuracy/nside-<x>/, where x is read
+        from the answer space itself rather than from --nside, so an explicit
+        --answer-space still lands in the directory matching its grid.
         """
         if all_runs == (run_id is not None):
             raise typer.BadParameter("pass exactly one of --run-id or --all-runs")
@@ -318,17 +334,27 @@ def register(app: typer.Typer) -> None:
             raise typer.BadParameter("--answer-space cannot be combined with --all-runs")
         ns = tuple(int(x) for x in topn.split(",") if x.strip())
 
+        nsides = list(hx.NSIDE_HIERARCHY) if sweep else list(dict.fromkeys(nside))
+
         runs = discover_runs(outputs_root) if all_runs else [resolve_run(run_id, outputs_root)]
-        for run in runs:
-            space_dir = answer_space or run.answer_space_dir(root=analysis_root)
+        jobs = (
+            [(r, None) for r in runs]
+            if answer_space is not None
+            else [(r, n) for r in runs for n in nsides]
+        )
+        for run, want_nside in jobs:
+            space_dir = answer_space or run.answer_space_dir(
+                root=analysis_root, nside=want_nside
+            )
             space = load_answer_space(space_dir)
+            space_nside = int(space.seeds["healpix_nside"].iloc[0])
             frames = score_run(
                 run,
                 space,
                 combo_ids=list(combo) if combo else None,
                 include_baseline=not no_baseline,
             )
-            out_dir = run.cls_accuracy_dir(root=analysis_root)
+            out_dir = run.cls_accuracy_dir(root=analysis_root, nside=space_nside)
             for method, df in frames.items():
                 df.to_parquet(out_dir / f"{method}_seed_distances.parquet", index=False)
             summary = topn_summary(frames, ns=ns)
@@ -339,14 +365,14 @@ def register(app: typer.Typer) -> None:
                         "run_id": run.run_id,
                         "answer_space": str(space_dir),
                         "n_seeds": space.n_seeds,
-                        "nside": space.meta.get("grid", {}).get("nside"),
+                        "nside": space_nside,
                         "methods": sorted(frames),
                         "topn_reported": list(ns),
                         "fallback_policy": (
                             "per-target parquet is neutral (FALLBACK rows carry "
                             "distances); topn_accuracy.csv counts fallbacks as "
-                            "failures in accuracy_topN and excludes them in "
-                            "accuracy_topN_success_only"
+                            "failures in accuracy_topN, and excludes them from "
+                            "error_km_p50/p90"
                         ),
                     },
                     indent=2,
@@ -355,6 +381,7 @@ def register(app: typer.Typer) -> None:
             )
             best = summary.sort_values("accuracy_top1", ascending=False).iloc[0]
             typer.echo(
-                f"{run.run_id}: K={space.n_seeds} · {len(frames)} methods · "
-                f"best top1={best['accuracy_top1']:.3f} ({best['method']}) -> {out_dir}"
+                f"{run.run_id}: nside={space_nside} · K={space.n_seeds} · "
+                f"{len(frames)} methods · best top1="
+                f"{best['accuracy_top1']:.3f} ({best['method']}) -> {out_dir}"
             )

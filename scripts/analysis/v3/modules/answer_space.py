@@ -42,6 +42,7 @@ from scripts.analysis.v3.modules.paths import (
 )
 from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM
 
+SWEEP_CSV = "nside_sweep.csv"
 SEEDS_CSV = "seeds.csv"
 ASSIGNMENTS_CSV = "assignments.csv"
 SEED_MESH_CSV = "seed_mesh_km.csv"
@@ -352,6 +353,34 @@ def load_answer_space(path: Path) -> AnswerSpace:
     )
 
 
+def sweep_row(space: "AnswerSpace") -> dict:
+    """One line of `nside_sweep.csv`: how the partition changes with the grid.
+
+    The point of the sweep is the trade-off, so each row pairs what coarsening
+    buys (fewer classes, fewer straddle candidates) against what it costs
+    (targets pulled further from their own seed, which floors error distance).
+    """
+    m = space.meta
+    spread = m["intra_seed_spread_km"]
+    return {
+        "nside": m["grid"]["nside"],
+        "cell_km": round(m["grid"]["nominal_cell_km"], 1),
+        "cell_area_km2": m["grid"]["pixel_area_km2"],
+        "n_targets": m["n_targets"],
+        "n_classes": m["n_seeds"],
+        "n_singleton_classes": m["n_singleton_seeds"],
+        "straddle_pairs_within_one_pitch": m["straddle_diagnostic"][
+            "n_seed_pairs_within_one_cell_pitch"
+        ],
+        "n_cell_seed_not_nearest": m["straddle_diagnostic"][
+            "n_targets_whose_cell_seed_is_not_nearest"
+        ],
+        "intra_seed_spread_km_mean": spread["mean"],
+        "intra_seed_spread_km_max": spread["max"],
+        "nearest_seed_km_p50": m["nearest_seed_km"]["percentiles"]["p50"],
+    }
+
+
 # ---- CLI --------------------------------------------------------------------
 
 
@@ -364,9 +393,16 @@ def register(app: typer.Typer) -> None:
         all_runs: bool = typer.Option(
             False, "--all-runs", help="Build for every run under --outputs-root."
         ),
-        nside: int = typer.Option(
-            hx.DEFAULT_NSIDE,
-            help="HEALPix nside (power of two). 128 = ~51 km, the paper §7.3 setting.",
+        nside: list[int] = typer.Option(
+            [hx.DEFAULT_NSIDE],
+            "--nside",
+            help="HEALPix nside (power of two, repeatable). 128 = ~51 km, the "
+                 "paper §7.3 setting; 64 = ~102 km (metro); 32 = ~204 km (region).",
+        ),
+        sweep: bool = typer.Option(
+            False,
+            "--sweep",
+            help=f"Shorthand for the full hierarchy {list(hx.NSIDE_HIERARCHY)}.",
         ),
         outputs_root: Path = typer.Option(
             DEFAULT_OUTPUTS_ROOT, help="Root holding <run_id>/ benchmark outputs."
@@ -378,18 +414,28 @@ def register(app: typer.Typer) -> None:
         """Quantize a run's targets onto HEALPix and emit the seed answer space.
 
         Writes seeds.csv, assignments.csv, seed_mesh_km.csv and meta.json to
-        <analysis_root>/<run_id>/target-answer-space/.
+        <analysis_root>/<run_id>/target-answer-space/nside-<x>/, one directory
+        per requested nside. Building more than one also writes
+        nside_sweep.csv one level up, comparing the partitions side by side.
         """
         if all_runs == (run_id is not None):
             raise typer.BadParameter("pass exactly one of --run-id or --all-runs")
+        nsides = list(hx.NSIDE_HIERARCHY) if sweep else list(dict.fromkeys(nside))
 
         runs = discover_runs(outputs_root) if all_runs else [resolve_run(run_id, outputs_root)]
         for run in runs:
-            space = build_for_run(run, nside=nside)
-            out = space.write(run.answer_space_dir(root=analysis_root))
-            m = space.meta
-            typer.echo(
-                f"{run.run_id}: {m['n_targets']} targets -> K={m['n_seeds']} seeds "
-                f"({m['n_singleton_seeds']} singleton) at nside={nside} "
-                f"[{m['grid']['nominal_cell_km']:.1f} km] -> {out}"
-            )
+            rows = []
+            for ns in nsides:
+                space = build_for_run(run, nside=ns)
+                out = space.write(run.answer_space_dir(root=analysis_root, nside=ns))
+                rows.append(sweep_row(space))
+                m = space.meta
+                typer.echo(
+                    f"{run.run_id}: {m['n_targets']} targets -> K={m['n_seeds']} seeds "
+                    f"({m['n_singleton_seeds']} singleton) at nside={ns} "
+                    f"[{m['grid']['nominal_cell_km']:.1f} km] -> {out}"
+                )
+            if len(rows) > 1:
+                sweep_dir = run.analysis_dir("target-answer-space", root=analysis_root)
+                pd.DataFrame(rows).to_csv(sweep_dir / SWEEP_CSV, index=False)
+                typer.echo(f"{run.run_id}: sweep -> {sweep_dir / SWEEP_CSV}")
