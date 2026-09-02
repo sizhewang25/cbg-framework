@@ -193,29 +193,40 @@ def test_collapse_requires_at_least_one_cbg():
         venn.collapse_to_sp_vs_cbg(m)
 
 
-# ---- nside grouping of outputs ----------------------------------------------
+# ---- grid/resolution grouping of outputs ------------------------------------
 
 
-def test_output_dirs_are_grouped_by_nside(tmp_path):
+def test_output_dirs_are_grouped_by_grid_and_resolution(tmp_path):
     """The answer space parameterizes every number downstream of it.
 
     Without this grouping a sweep would overwrite one `topn_accuracy.csv` per
-    nside and leave no record of which grid produced the survivor.
+    rung and leave no record of which grid produced the survivor.
     """
     run = RunPaths(run_id="r", root=tmp_path, source="src", setup="setup")
-    a128 = run.answer_space_dir(root=tmp_path, nside=128)
-    a64 = run.answer_space_dir(root=tmp_path, nside=64)
-    c128 = run.cls_accuracy_dir(root=tmp_path, nside=128)
-    assert a128 != a64
-    assert a128.name == "nside-128" and a64.name == "nside-64"
-    assert a128.parent.name == "target-answer-space"
-    assert c128.parent.name == "target-cls-accuracy"
+    h3_4 = run.answer_space_dir(root=tmp_path, grid="h3", resolution=4)
+    h3_3 = run.answer_space_dir(root=tmp_path, grid="h3", resolution=3)
+    hp128 = run.answer_space_dir(root=tmp_path, grid="healpix", resolution=128)
+    cls = run.cls_accuracy_dir(root=tmp_path, grid="h3", resolution=4)
+    assert h3_4 != h3_3
+    assert h3_4.name == "h3-4" and h3_3.name == "h3-3" and hp128.name == "healpix-128"
+    assert h3_4.parent.name == "target-answer-space"
+    assert cls.parent.name == "target-cls-accuracy"
 
 
-def test_nside_is_required_so_it_cannot_silently_drift():
+def test_the_two_grids_cannot_collide_on_one_directory(tmp_path):
+    """`h3` res 4 and HEALPix nside 4 are different grids, not one number."""
+    run = RunPaths(run_id="r", root=tmp_path, source="src", setup="setup")
+    assert run.answer_space_dir(
+        root=tmp_path, grid="h3", resolution=4
+    ) != run.answer_space_dir(root=tmp_path, grid="healpix", resolution=4)
+
+
+def test_grid_and_resolution_are_required_so_they_cannot_silently_drift():
     run = RunPaths(run_id="r", root=Path("/x"), source="s", setup="t")
     with pytest.raises(TypeError):
         run.answer_space_dir()  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        run.answer_space_dir(grid="h3")  # type: ignore[call-arg]
 
 
 # ---- upset annotation semantics ---------------------------------------------

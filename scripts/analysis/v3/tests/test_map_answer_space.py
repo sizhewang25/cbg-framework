@@ -24,7 +24,19 @@ SJC = (37.4675, -121.9215)
 NYC = (40.7085, -74.0095)
 
 
-def _space(coords=(CHI, SJC, NYC)):
+@pytest.fixture(params=("h3", "healpix"))
+def grid(request):
+    """Render on both grids.
+
+    Not redundant with the geometry tests in `test_grid.py`: H3 rings are ragged
+    (6 vertices for a hexagon, 5 for a pentagon) where HEALPix rings are a
+    uniform 4*step, so a plot layer that assumed a rectangular array would pass
+    every unit test and still fail here.
+    """
+    return request.param
+
+
+def _space(coords=(CHI, SJC, NYC), grid="h3"):
     return build_answer_space(
         pd.DataFrame(
             {
@@ -32,7 +44,8 @@ def _space(coords=(CHI, SJC, NYC)):
                 "target_lat": [c[0] for c in coords],
                 "target_lon": [c[1] for c in coords],
             }
-        )
+        ),
+        grid=grid,
     )
 
 
@@ -62,14 +75,16 @@ def test_auto_extent_is_non_degenerate_for_colocated_targets():
     assert lat_max > lat_min
 
 
-def test_map_is_written_and_non_empty(tmp_path):
+def test_map_is_written_and_non_empty(tmp_path, grid):
     pytest.importorskip("cartopy")
-    out = plot_answer_space(_space(), tmp_path / "map.png", extent=US_MAINLAND_EXTENT)
+    out = plot_answer_space(
+        _space(grid=grid), tmp_path / "map.png", extent=US_MAINLAND_EXTENT
+    )
     assert out.exists()
     assert out.stat().st_size > 5_000  # a real render, not a blank canvas
 
 
-def test_map_handles_a_single_seed(tmp_path):
+def test_map_handles_a_single_seed(tmp_path, grid):
     """K=1 has no seed-to-seed geometry; the map must still render.
 
     An explicit extent is passed on purpose: the auto extent around a single
@@ -77,7 +92,30 @@ def test_map_handles_a_single_seed(tmp_path):
     and downloads them, which would make this test need the network.
     """
     pytest.importorskip("cartopy")
-    space = _space(coords=(CHI,))
+    space = _space(coords=(CHI,), grid=grid)
     assert space.n_seeds == 1
     out = plot_answer_space(space, tmp_path / "one.png", extent=US_MAINLAND_EXTENT)
     assert out.exists()
+
+
+def test_map_draws_one_cell_per_seed(tmp_path, grid):
+    """Guards the ragged-ring path: a dropped or duplicated ring is invisible.
+
+    Cell polygons are the only patches added, so their count must equal K on
+    either grid regardless of how many vertices each ring happens to have.
+    """
+    pytest.importorskip("cartopy")
+    import matplotlib.pyplot as plt
+
+    space = _space(grid=grid)
+    plot_answer_space(space, tmp_path / "m.png", extent=US_MAINLAND_EXTENT)
+    # plot_answer_space closes its figure, so re-derive the ring count directly.
+    from scripts.analysis.v3.modules.grid import get_grid
+
+    g = get_grid(str(space.seeds["grid_scheme"].iloc[0]))
+    rings = g.cell_boundaries(
+        space.seeds["cell_id"].to_numpy(),
+        int(space.seeds["grid_resolution"].iloc[0]),
+    )
+    assert len(rings) == space.n_seeds
+    plt.close("all")

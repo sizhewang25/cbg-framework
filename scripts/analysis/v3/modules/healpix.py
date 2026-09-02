@@ -1,5 +1,10 @@
 """HEALPix quantizer for the target answer space (paper §7.3).
 
+One of two grids behind the `grid.Grid` interface (`h3grid.H3Grid` is the other,
+and the default). This was the paper's original choice and stays fully
+supported; `HealpixGrid` at the bottom of this file is the adapter, and the
+functions above it remain usable on their own.
+
 The grid is a *quantizer*, not the answer space: its only job is to merge target
 points that sit close enough to count as one place. Each occupied cell then
 yields one class, seeded at the centroid of the targets it merged (§7.4).
@@ -17,9 +22,15 @@ compared in aggregate.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, ClassVar
+
 import numpy as np
 
+from scripts.analysis.v3.modules.grid import Grid, ring_lonlat
 from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 #: Paper §7.3 setting.
 DEFAULT_NSIDE = 128
@@ -104,25 +115,68 @@ def occupied_cell_hierarchy(
     return {n: int(np.unique(degrade(pix, finest, n)).size) for n in ordered}
 
 
-def spherical_centroid(lat_deg, lon_deg) -> tuple[float, float]:
-    """Centroid of points on the sphere: normalized mean of unit vectors.
+class HealpixGrid(Grid):
+    """HEALPix as an answer-space quantizer.
 
-    Averaging lat/lon directly is wrong near the dateline and at high latitude;
-    this is the projection-free form, matching §7.4's "centroid of the targets
-    inside the cell".
+    Thin adapter over the functions above, which stay usable on their own — the
+    module-level `degrade` in particular is HEALPix-only and deliberately *not*
+    on the `Grid` interface, because no other tessellation can offer it.
     """
-    lat = np.radians(np.asarray(lat_deg, dtype=float))
-    lon = np.radians(np.asarray(lon_deg, dtype=float))
-    x = np.cos(lat) * np.cos(lon)
-    y = np.cos(lat) * np.sin(lon)
-    z = np.sin(lat)
-    vx, vy, vz = float(x.mean()), float(y.mean()), float(z.mean())
-    norm = np.sqrt(vx * vx + vy * vy + vz * vz)
-    if norm == 0.0:
-        # Antipodal cancellation — impossible within a 51 km cell, but a mean
-        # of zero has no direction so there is no centroid to return.
-        raise ValueError("degenerate point set: unit vectors cancel to zero")
-    return (
-        float(np.degrees(np.arcsin(vz / norm))),
-        float(np.degrees(np.arctan2(vy, vx))),
-    )
+
+    name: ClassVar[str] = "healpix"
+    resolution_arg: ClassVar[str] = "nside"
+    DEFAULT_RESOLUTION: ClassVar[int] = DEFAULT_NSIDE
+    HIERARCHY: ClassVar[tuple[int, ...]] = NSIDE_HIERARCHY
+
+    def validate_resolution(self, resolution: int) -> int:
+        return validate_nside(resolution)
+
+    def cell_ids(self, lat_deg, lon_deg, resolution: int) -> np.ndarray:
+        return ang2pix(lat_deg, lon_deg, self.validate_resolution(resolution))
+
+    def coerce_cell_ids(self, values) -> "pd.Series":
+        import pandas as pd
+
+        return pd.Series(values).astype("int64")
+
+    def cell_area_km2(self, resolution: int) -> float:
+        return pixel_area_km2(resolution)
+
+    def nominal_cell_km(self, resolution: int) -> float:
+        return nominal_cell_km(resolution)
+
+    def n_cells(self, resolution: int) -> int:
+        return npix(resolution)
+
+    def cell_boundaries(
+        self, cell_ids, resolution: int, *, step: int = 8
+    ) -> list[np.ndarray]:
+        """Cell rings, `step` points per edge so curvature on the sphere shows.
+
+        `resolution` is required rather than inferred: HEALPix ids are not
+        self-describing (cell 5 exists at every nside), so the same id array means
+        a different set of cells at each one.
+
+        `boundaries_lonlat` returns a rectangular `(K, 4*step)` pair of astropy
+        `Quantity` arrays; unwrapping the units and splitting into per-cell rings
+        happens here so no plotting code has to import astropy.
+        """
+        pix = np.asarray(cell_ids, dtype=np.int64).ravel()
+        if pix.size == 0:
+            return []
+        nside = self.validate_resolution(resolution)
+        lon, lat = _healpix(nside).boundaries_lonlat(pix, step=step)
+        lon = np.asarray(lon.to_value("deg"))
+        lat = np.asarray(lat.to_value("deg"))
+        return [ring_lonlat(lon[i], lat[i]) for i in range(pix.size)]
+
+    def describe(self, resolution: int) -> dict:
+        meta = super().describe(resolution)
+        # The ordering is load-bearing, not decorative: RING ids would not
+        # coarsen by bit shift, so an answer space built under it could not be
+        # read back with `degrade`.
+        meta["order"] = _ORDER
+        meta["nominal_cell_km_note"] = (
+            "sqrt(area); HEALPix cells are exactly equal-area"
+        )
+        return meta

@@ -49,6 +49,7 @@ dependencies = [
     "reverse-geocoder (>=1.5.1,<2.0.0)",
     "scikit-learn (>=1.9.0,<2.0.0)",
     "astropy-healpix (>=1.0.0)",
+    "h3 (>=4.5.0,<5.0.0)",                # Uber H3 hexagonal grid — v4 API (renamed from v3)
     "matplotlib-venn (>=1.1.0)",
     "upsetplot (>=0.9.0)",
 ]

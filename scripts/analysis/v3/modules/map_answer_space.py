@@ -16,9 +16,9 @@ grid falls, not where targets are sparse, so a facility group spanning one is
 quantized into two adjacent cells and two classes. That reads instantly as two
 touching filled cells and is hard to believe from a scalar.
 
-Only *occupied* cells are drawn. At `nside=128` a cell is ~51 km (~0.5°), so
-the full 196,608-cell grid would be both unreadable and pointless at
-continental scale.
+Only *occupied* cells are drawn. At the default h3 `res=4` a cell is ~45 km, so
+the full 288,122-cell grid (196,608 at HEALPix `nside=128`) would be both
+unreadable and pointless at continental scale.
 
 Reuses the repo's cartopy conventions from
 `scripts/visualization/cluster/plot_ground_truth_clusters.py` and
@@ -38,7 +38,14 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import typer  # noqa: E402
 
-from scripts.analysis.v3.modules import healpix as hx  # noqa: E402
+from scripts.analysis.v3.modules.grid import (  # noqa: E402
+    DEFAULT_GRID,
+    GRID_HELP,
+    RESOLUTION_HELP,
+    SWEEP_HELP,
+    get_grid,
+    resolve_cli_grid,
+)
 from scripts.analysis.v3.modules.answer_space import (  # noqa: E402
     AnswerSpace,
     load_answer_space,
@@ -102,12 +109,12 @@ def plot_answer_space(
     """
     import cartopy.crs as ccrs
     import cartopy.feature as cfeature
-    from astropy_healpix import HEALPix
     from matplotlib.patches import Polygon
 
     seeds = space.seeds
     assignments = space.assignments
-    nside = int(seeds["healpix_nside"].iloc[0])
+    grid = get_grid(str(seeds["grid_scheme"].iloc[0]))
+    resolution = int(seeds["grid_resolution"].iloc[0])
 
     if extent is None:
         extent = _auto_extent(
@@ -123,18 +130,16 @@ def plot_answer_space(
     ax.add_feature(cfeature.BORDERS, linewidth=0.25, edgecolor="#cccccc")
 
     # --- layer 1: occupied cells -------------------------------------------
-    hp = HEALPix(nside=nside, order="nested")
-    lon_deg, lat_deg = hp.boundaries_lonlat(
-        seeds["healpix_pix"].to_numpy(), step=cell_step
+    # Rings come back ragged (4-sided x cell_step for HEALPix, 6 for an H3
+    # hexagon, 5 for one of its 12 pentagons), already in (lon, lat) degrees and
+    # already made contiguous across the antimeridian — so nothing here may
+    # assume a rectangular array or re-wrap longitudes.
+    rings = grid.cell_boundaries(
+        seeds["cell_id"].to_numpy(), resolution, step=cell_step
     )
-    lon_deg = np.asarray(lon_deg.to_value("deg"))
-    lat_deg = np.asarray(lat_deg.to_value("deg"))
-    # boundaries_lonlat returns lon in [0, 360); the map works in [-180, 180].
-    lon_deg = np.where(lon_deg > 180.0, lon_deg - 360.0, lon_deg)
 
     colors = _seed_colors(len(seeds))
-    for i in range(len(seeds)):
-        ring = np.column_stack([lon_deg[i], lat_deg[i]])
+    for i, ring in enumerate(rings):
         ax.add_patch(
             Polygon(
                 ring,
@@ -182,11 +187,12 @@ def plot_answer_space(
 
     ax.legend(loc="lower left", fontsize=8, framealpha=0.9)
 
-    pitch = hx.nominal_cell_km(nside)
+    pitch = grid.nominal_cell_km(resolution)
     n_singleton = int((seeds["n_targets"] == 1).sum())
     ax.set_title(title or "Target answer space", fontsize=12)
     ax.annotate(
-        f"HEALPix nside={nside} (~{pitch:.0f} km cells) · K={len(seeds)} occupied "
+        f"{grid.name} {grid.resolution_arg}={resolution} (~{pitch:.0f} km cells) · "
+        f"K={len(seeds)} occupied "
         f"cells = {len(seeds)} classes ({n_singleton} singleton) · "
         f"{len(assignments):,} targets\n"
         f"One occupied cell is exactly one class: targets share a class iff they "
@@ -220,20 +226,14 @@ def register(app: typer.Typer) -> None:
         answer_space: Path = typer.Option(
             None,
             help="Answer-space dir (from build-answer-space). Defaults to this "
-                 "run's target-answer-space/nside-<nside>/ under --analysis-root.",
+                 "run's target-answer-space/<grid>-<resolution>/ under "
+                 "--analysis-root.",
         ),
-        nside: list[int] = typer.Option(
-            [hx.DEFAULT_NSIDE],
-            "--nside",
-            help="Which built answer space(s) to draw (repeatable). Pass several "
-                 "to see how coarsening changes the partition. Ignored when "
-                 "--answer-space is given.",
+        grid: str = typer.Option(DEFAULT_GRID, "--grid", help=GRID_HELP),
+        resolution: list[int] = typer.Option(
+            [], "--resolution", "-r", help=RESOLUTION_HELP
         ),
-        sweep: bool = typer.Option(
-            False,
-            "--sweep",
-            help=f"Shorthand for the full hierarchy {list(hx.NSIDE_HIERARCHY)}.",
-        ),
+        sweep: bool = typer.Option(False, "--sweep", help=SWEEP_HELP),
         us_only: bool = typer.Option(
             False, "--us-only", help="Clamp the view to the continental US."
         ),
@@ -265,28 +265,30 @@ def register(app: typer.Typer) -> None:
         elif us_only:
             chosen_extent = US_MAINLAND_EXTENT
 
-        nsides = list(hx.NSIDE_HIERARCHY) if sweep else list(dict.fromkeys(nside))
+        g, resolutions = resolve_cli_grid(grid, resolution, sweep=sweep)
 
         runs = discover_runs(outputs_root) if all_runs else [resolve_run(run_id, outputs_root)]
         jobs = (
             [(r, None) for r in runs]
             if answer_space is not None
-            else [(r, n) for r in runs for n in nsides]
+            else [(r, x) for r in runs for x in resolutions]
         )
-        for run, want_nside in jobs:
+        for run, want_res in jobs:
             space_dir = answer_space or run.answer_space_dir(
-                root=analysis_root, nside=want_nside
+                root=analysis_root, grid=g.name, resolution=want_res
             )
             space = load_answer_space(space_dir)
-            space_nside = int(space.seeds["healpix_nside"].iloc[0])
+            space_grid = str(space.seeds["grid_scheme"].iloc[0])
+            space_res = int(space.seeds["grid_resolution"].iloc[0])
+            label = f"{space_grid} {get_grid(space_grid).resolution_arg}={space_res}"
             out = plot_answer_space(
                 space,
                 space_dir / MAP_PNG,
                 extent=chosen_extent,
-                title=f"{run.run_id} — target answer space (nside={space_nside})",
+                title=f"{run.run_id} — target answer space ({label})",
                 target_size=target_size,
             )
             typer.echo(
-                f"{run.run_id}: nside={space_nside} · K={space.n_seeds} classes "
+                f"{run.run_id}: {label} · K={space.n_seeds} classes "
                 f"over {len(space.assignments):,} targets -> {out}"
             )

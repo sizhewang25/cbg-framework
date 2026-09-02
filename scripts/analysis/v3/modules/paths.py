@@ -151,27 +151,38 @@ class RunPaths:
         base.mkdir(parents=True, exist_ok=True)
         return base
 
-    def answer_space_dir(self, root: Path | None = None, *, nside: int) -> Path:
+    def answer_space_dir(
+        self, root: Path | None = None, *, grid: str, resolution: int
+    ) -> Path:
         return self.analysis_dir(
-            "target-answer-space", nside_slug(nside), root=root
+            "target-answer-space", grid_slug(grid, resolution), root=root
         )
 
-    def cls_accuracy_dir(self, root: Path | None = None, *, nside: int) -> Path:
+    def cls_accuracy_dir(
+        self, root: Path | None = None, *, grid: str, resolution: int
+    ) -> Path:
         return self.analysis_dir(
-            "target-cls-accuracy", nside_slug(nside), root=root
+            "target-cls-accuracy", grid_slug(grid, resolution), root=root
         )
 
 
-def nside_slug(nside: int) -> str:
-    """`128` -> `"nside-128"`.
+def grid_slug(grid: str, resolution: int) -> str:
+    """`("h3", 4)` -> `"h3-4"`; `("healpix", 128)` -> `"healpix-128"`.
 
     Both analysis outputs are grouped by quantization, because the answer space
-    is a *parameter* of every number downstream of it. Without this, sweeping
-    nside would overwrite one `topn_accuracy.csv` four times over and leave no
-    record of which grid produced the surviving one — the same bug class the
-    `.top<N>` filename suffix fixes for the top-N axis.
+    is a *parameter* of every number downstream of it. Without this, a sweep
+    would overwrite one `topn_accuracy.csv` once per rung and leave no record of
+    which grid produced the surviving one — the same bug class the `.top<N>`
+    filename suffix fixes for the top-N axis.
+
+    The scheme name is in the slug, not just the number: `h3` res 4 and HEALPix
+    nside 4 are different grids that would otherwise collide on one directory,
+    and a bare number cannot say which tessellation produced it.
+
+    `grid` and `resolution` are **required keyword arguments** on both callers
+    above, so neither can be defaulted away and silently drift.
     """
-    return f"nside-{int(nside)}"
+    return f"{grid}-{int(resolution)}"
 
 
 def discover_runs(root: Path | str = DEFAULT_OUTPUTS_ROOT) -> list[RunPaths]:

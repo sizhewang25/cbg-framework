@@ -1,10 +1,12 @@
-"""Build the target answer space: HEALPix quantizer -> seeds -> Voronoi (§7.3/§7.4).
+"""Build the target answer space: grid quantizer -> seeds -> Voronoi (§7.3/§7.4).
 
 Three steps, exactly as the paper states them:
 
-1. Quantize every ground-truth target onto an equal-area HEALPix grid
-   (`nside=128`, ~51 km). Cell membership is an equivalence relation whose only
-   job is to merge points close enough to count as one place.
+1. Quantize every ground-truth target onto a grid — H3 `res=4` (~45 km) by
+   default, HEALPix `nside=128` (~51 km) for the paper's original setting; see
+   `grid.py`. Cell membership is an equivalence relation whose only job is to
+   merge points close enough to count as one place. Which tessellation does the
+   merging is a *parameter*: steps 2 and 3 are pure spherical geometry.
 2. Each occupied cell contributes one **seed**, the spherical centroid of the
    targets inside it — so the answer space is K *real locations*, not K grid
    squares.
@@ -30,8 +32,16 @@ import numpy as np
 import pandas as pd
 import typer
 
-from scripts.analysis.v3.modules import healpix as hx
 from scripts.analysis.v3.modules import io
+from scripts.analysis.v3.modules.grid import (
+    DEFAULT_GRID,
+    GRID_HELP,
+    RESOLUTION_HELP,
+    SWEEP_HELP,
+    Grid,
+    get_grid,
+    resolve_cli_grid,
+)
 from scripts.analysis.v3.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
     DEFAULT_OUTPUTS_ROOT,
@@ -42,7 +52,7 @@ from scripts.analysis.v3.modules.paths import (
 )
 from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM
 
-SWEEP_CSV = "nside_sweep.csv"
+SWEEP_CSV_TEMPLATE = "grid_sweep.{grid}.csv"
 SEEDS_CSV = "seeds.csv"
 ASSIGNMENTS_CSV = "assignments.csv"
 SEED_MESH_CSV = "seed_mesh_km.csv"
@@ -57,6 +67,30 @@ def _unit_vectors(lat_deg: np.ndarray, lon_deg: np.ndarray) -> np.ndarray:
     lon = np.radians(np.asarray(lon_deg, dtype=float))
     return np.column_stack(
         [np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)]
+    )
+
+
+def spherical_centroid(lat_deg, lon_deg) -> tuple[float, float]:
+    """Centroid of points on the sphere: normalized mean of unit vectors.
+
+    Averaging lat/lon directly is wrong near the dateline and at high latitude;
+    this is the projection-free form, matching §7.4's "centroid of the targets
+    inside the cell".
+
+    Lives here rather than in a grid module because it is not grid math — it is
+    the same unit-vector mean as `_unit_vectors` above, and both grids need it
+    identically.
+    """
+    v = _unit_vectors(np.atleast_1d(lat_deg), np.atleast_1d(lon_deg)).mean(axis=0)
+    norm = float(np.sqrt(v @ v))
+    if norm == 0.0:
+        # Antipodal cancellation — impossible within one cell, but a mean of
+        # zero has no direction so there is no centroid to return.
+        raise ValueError("degenerate point set: unit vectors cancel to zero")
+    vx, vy, vz = v
+    return (
+        float(np.degrees(np.arcsin(vz / norm))),
+        float(np.degrees(np.arctan2(vy, vx))),
     )
 
 
@@ -147,7 +181,8 @@ class AnswerSpace:
 def build_answer_space(
     targets: pd.DataFrame,
     *,
-    nside: int = hx.DEFAULT_NSIDE,
+    grid: Grid | str = DEFAULT_GRID,
+    resolution: int | None = None,
     source_label: str | None = None,
 ) -> AnswerSpace:
     """Quantize `targets` and derive the seed set plus its geometry.
@@ -155,8 +190,15 @@ def build_answer_space(
     `targets` needs `target_id`, `target_lat`, `target_lon`. Duplicate
     `target_id` is an error; duplicate *coordinates* are fine and expected
     (distinct IPs at one facility), and they collapse into one seed.
+
+    `grid` takes either a `Grid` or a name; `resolution` defaults to whatever
+    that grid considers its own default, so callers never have to pair a grid
+    with a number that belongs to a different one.
     """
-    nside = hx.validate_nside(nside)
+    grid = get_grid(grid) if isinstance(grid, str) else grid
+    resolution = grid.validate_resolution(
+        grid.DEFAULT_RESOLUTION if resolution is None else resolution
+    )
     required = {"target_id", "target_lat", "target_lon"}
     missing = required - set(targets.columns)
     if missing:
@@ -168,25 +210,26 @@ def build_answer_space(
         raise ValueError("targets is empty; there is no answer space to build")
 
     t = targets.loc[:, ["target_id", "target_lat", "target_lon"]].copy()
-    t["healpix_pix"] = hx.ang2pix(t["target_lat"], t["target_lon"], nside)
+    t["cell_id"] = grid.cell_ids(t["target_lat"], t["target_lon"], resolution)
 
     # Seed per occupied cell, ordered by cell id so seed_id is deterministic
-    # and independent of input row order.
+    # and independent of input row order. Sorting is lexicographic for H3's
+    # string ids and numeric for HEALPix's ints; either way it is a total order
+    # on the ids, which is all determinism needs.
     seed_rows: list[dict] = []
-    spread_by_pix: dict[int, float] = {}
-    for rank, (pix, grp) in enumerate(t.groupby("healpix_pix", sort=True)):
-        clat, clon = hx.spherical_centroid(grp["target_lat"], grp["target_lon"])
+    for rank, (cell, grp) in enumerate(t.groupby("cell_id", sort=True)):
+        clat, clon = spherical_centroid(grp["target_lat"], grp["target_lon"])
         if len(grp) > 1:
             d = pairwise_km(grp["target_lat"].to_numpy(), grp["target_lon"].to_numpy())
             spread = float(d.max())
         else:
             spread = 0.0
-        spread_by_pix[int(pix)] = spread
         seed_rows.append(
             {
                 "seed_id": rank,
-                "healpix_nside": nside,
-                "healpix_pix": int(pix),
+                "grid_scheme": grid.name,
+                "grid_resolution": resolution,
+                "cell_id": cell,
                 "centroid_lat": clat,
                 "centroid_lon": clon,
                 "n_targets": int(len(grp)),
@@ -200,8 +243,8 @@ def build_answer_space(
     # is that the *cell* defines a target's class while nearest-seed labels
     # arbitrary coordinates (predictions). Both are recorded so the gap is
     # visible rather than assumed to be empty.
-    pix_to_seed = dict(zip(seeds["healpix_pix"], seeds["seed_id"]))
-    t["seed_id"] = t["healpix_pix"].map(pix_to_seed).astype(int)
+    cell_to_seed = dict(zip(seeds["cell_id"], seeds["seed_id"]))
+    t["seed_id"] = t["cell_id"].map(cell_to_seed).astype(int)
 
     seed_lat = seeds["centroid_lat"].to_numpy()
     seed_lon = seeds["centroid_lon"].to_numpy()
@@ -250,30 +293,33 @@ def build_answer_space(
     )
     mesh_df.index.name = "seed_id"
 
-    pitch = hx.nominal_cell_km(nside)
+    pitch = grid.nominal_cell_km(resolution)
     n_close_pairs = (
         int(((mesh < pitch) & (mesh > 0)).sum() // 2) if K > 1 else 0
     )
     meta = {
         "source": source_label,
-        "grid": {
-            "scheme": "healpix",
-            "order": "nested",
-            "nside": nside,
-            "npix": hx.npix(nside),
-            "pixel_area_km2": round(hx.pixel_area_km2(nside), 3),
-            "nominal_cell_km": round(pitch, 3),
-        },
+        "grid": grid.describe(resolution),
+        "grid_diagnostics": grid.occupancy_diagnostics(
+            t["cell_id"].to_numpy(),
+            t["target_lat"].to_numpy(),
+            t["target_lon"].to_numpy(),
+            resolution,
+        ),
         "n_targets": int(len(t)),
         "n_unique_target_coords": int(
             t.loc[:, ["target_lat", "target_lon"]].drop_duplicates().shape[0]
         ),
         "n_seeds": K,
         "n_singleton_seeds": int((seeds["n_targets"] == 1).sum()),
-        "occupied_cells_by_nside": {
+        # Rungs at or *coarser* than the grid actually built. Walking a fixed
+        # hierarchy regardless of the resolution in use, as an earlier version
+        # did, reported occupancy for grids that were never built — at the
+        # coarsest rung, every count came from finer grids than the answer space.
+        "occupied_cells_by_resolution": {
             str(n): c
-            for n, c in hx.occupied_cell_hierarchy(
-                t["target_lat"], t["target_lon"]
+            for n, c in grid.occupied_cell_hierarchy(
+                t["target_lat"], t["target_lon"], grid.coarsening_ladder(resolution)
             ).items()
         },
         "targets_per_seed": _describe(seeds["n_targets"].to_numpy()),
@@ -303,7 +349,7 @@ def build_answer_space(
             "target_id",
             "target_lat",
             "target_lon",
-            "healpix_pix",
+            "cell_id",
             "seed_id",
             "dist_to_seed_km",
             "nearest_seed_id",
@@ -316,7 +362,9 @@ def build_answer_space(
     )
 
 
-def build_for_run(run: RunPaths, *, nside: int = hx.DEFAULT_NSIDE) -> AnswerSpace:
+def build_for_run(
+    run: RunPaths, *, grid: Grid | str = DEFAULT_GRID, resolution: int | None = None
+) -> AnswerSpace:
     """Answer space over a run's full ground-truth target set.
 
     Reads `targets.csv`, which is fold-independent: K-fold splits targets, so
@@ -325,7 +373,10 @@ def build_for_run(run: RunPaths, *, nside: int = hx.DEFAULT_NSIDE) -> AnswerSpac
     """
     targets = io.load_targets(run)
     return build_answer_space(
-        targets, nside=nside, source_label=f"{run.run_id}/{run.source}/{run.setup}"
+        targets,
+        grid=grid,
+        resolution=resolution,
+        source_label=f"{run.run_id}/{run.source}/{run.setup}",
     )
 
 
@@ -345,16 +396,27 @@ def load_answer_space(path: Path) -> AnswerSpace:
         else pd.DataFrame()
     )
     meta = json.loads(meta_p.read_text()) if meta_p.exists() else {}
+    seeds = pd.read_csv(seeds_p)
+    assignments = pd.read_csv(assign_p)
+    # `cell_id` is grid-specific in dtype (HEALPix int64, H3 hex string) and CSV
+    # is untyped, so pandas' inference has to be corrected by the scheme that
+    # wrote it. Without this a HEALPix id could come back as a string and stop
+    # matching `assignments`.
+    if "grid_scheme" in seeds.columns and not seeds.empty:
+        grid = get_grid(str(seeds["grid_scheme"].iloc[0]))
+        seeds["cell_id"] = grid.coerce_cell_ids(seeds["cell_id"])
+        if "cell_id" in assignments.columns:
+            assignments["cell_id"] = grid.coerce_cell_ids(assignments["cell_id"])
     return AnswerSpace(
-        seeds=pd.read_csv(seeds_p),
-        assignments=pd.read_csv(assign_p),
+        seeds=seeds,
+        assignments=assignments,
         seed_mesh_km=mesh,
         meta=meta,
     )
 
 
 def sweep_row(space: "AnswerSpace") -> dict:
-    """One line of `nside_sweep.csv`: how the partition changes with the grid.
+    """One line of `grid_sweep.<grid>.csv`: how the partition changes with scale.
 
     The point of the sweep is the trade-off, so each row pairs what coarsening
     buys (fewer classes, fewer straddle candidates) against what it costs
@@ -363,9 +425,10 @@ def sweep_row(space: "AnswerSpace") -> dict:
     m = space.meta
     spread = m["intra_seed_spread_km"]
     return {
-        "nside": m["grid"]["nside"],
+        "grid": m["grid"]["scheme"],
+        "resolution": m["grid"]["resolution"],
         "cell_km": round(m["grid"]["nominal_cell_km"], 1),
-        "cell_area_km2": m["grid"]["pixel_area_km2"],
+        "cell_area_km2": m["grid"]["cell_area_km2"],
         "n_targets": m["n_targets"],
         "n_classes": m["n_seeds"],
         "n_singleton_classes": m["n_singleton_seeds"],
@@ -393,17 +456,11 @@ def register(app: typer.Typer) -> None:
         all_runs: bool = typer.Option(
             False, "--all-runs", help="Build for every run under --outputs-root."
         ),
-        nside: list[int] = typer.Option(
-            [hx.DEFAULT_NSIDE],
-            "--nside",
-            help="HEALPix nside (power of two, repeatable). 128 = ~51 km, the "
-                 "paper §7.3 setting; 64 = ~102 km (metro); 32 = ~204 km (region).",
+        grid: str = typer.Option(DEFAULT_GRID, "--grid", help=GRID_HELP),
+        resolution: list[int] = typer.Option(
+            [], "--resolution", "-r", help=RESOLUTION_HELP
         ),
-        sweep: bool = typer.Option(
-            False,
-            "--sweep",
-            help=f"Shorthand for the full hierarchy {list(hx.NSIDE_HIERARCHY)}.",
-        ),
+        sweep: bool = typer.Option(False, "--sweep", help=SWEEP_HELP),
         outputs_root: Path = typer.Option(
             DEFAULT_OUTPUTS_ROOT, help="Root holding <run_id>/ benchmark outputs."
         ),
@@ -411,31 +468,39 @@ def register(app: typer.Typer) -> None:
             DEFAULT_ANALYSIS_ROOT, help="Root for v3 analysis outputs."
         ),
     ) -> None:
-        """Quantize a run's targets onto HEALPix and emit the seed answer space.
+        """Quantize a run's targets onto a grid and emit the seed answer space.
 
         Writes seeds.csv, assignments.csv, seed_mesh_km.csv and meta.json to
-        <analysis_root>/<run_id>/target-answer-space/nside-<x>/, one directory
-        per requested nside. Building more than one also writes
-        nside_sweep.csv one level up, comparing the partitions side by side.
+        <analysis_root>/<run_id>/target-answer-space/<grid>-<resolution>/, one
+        directory per requested resolution. Building more than one also writes
+        grid_sweep.<grid>.csv one level up, comparing the partitions side by
+        side.
         """
         if all_runs == (run_id is not None):
             raise typer.BadParameter("pass exactly one of --run-id or --all-runs")
-        nsides = list(hx.NSIDE_HIERARCHY) if sweep else list(dict.fromkeys(nside))
+        g, resolutions = resolve_cli_grid(grid, resolution, sweep=sweep)
 
         runs = discover_runs(outputs_root) if all_runs else [resolve_run(run_id, outputs_root)]
         for run in runs:
             rows = []
-            for ns in nsides:
-                space = build_for_run(run, nside=ns)
-                out = space.write(run.answer_space_dir(root=analysis_root, nside=ns))
+            for res in resolutions:
+                space = build_for_run(run, grid=g, resolution=res)
+                out = space.write(
+                    run.answer_space_dir(root=analysis_root, grid=g.name, resolution=res)
+                )
                 rows.append(sweep_row(space))
                 m = space.meta
                 typer.echo(
                     f"{run.run_id}: {m['n_targets']} targets -> K={m['n_seeds']} seeds "
-                    f"({m['n_singleton_seeds']} singleton) at nside={ns} "
+                    f"({m['n_singleton_seeds']} singleton) at "
+                    f"{g.name} {g.resolution_arg}={res} "
                     f"[{m['grid']['nominal_cell_km']:.1f} km] -> {out}"
                 )
             if len(rows) > 1:
                 sweep_dir = run.analysis_dir("target-answer-space", root=analysis_root)
-                pd.DataFrame(rows).to_csv(sweep_dir / SWEEP_CSV, index=False)
-                typer.echo(f"{run.run_id}: sweep -> {sweep_dir / SWEEP_CSV}")
+                # Named per grid: with the flat <grid>-<res>/ layout both grids'
+                # sweeps land in this one directory, so a fixed filename would let
+                # an h3 sweep silently clobber a healpix one.
+                sweep_csv = sweep_dir / SWEEP_CSV_TEMPLATE.format(grid=g.name)
+                pd.DataFrame(rows).to_csv(sweep_csv, index=False)
+                typer.echo(f"{run.run_id}: sweep -> {sweep_csv}")

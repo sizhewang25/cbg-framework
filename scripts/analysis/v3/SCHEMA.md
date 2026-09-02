@@ -119,9 +119,18 @@ Phases 2c and 3 — these are RQ3 phase-attribution arms, not published variants
   `n_unique_target_locations`
 
 Note this is the **complete-linkage / centroid-radius-capped** answer space, not
-the HEALPix grid the paper draft §7.3 describes. Same role (finite metro-granular
-class set seeded at target centroids); different construction. Flag when writing
-paper numbers.
+the grid the paper draft §7.3 describes. Same role (finite metro-granular class
+set seeded at target centroids); different construction. Flag when writing paper
+numbers.
+
+The v3 layer builds the grid version instead, over either of two tessellations
+(H3 `res=4` by default, HEALPix `nside=128` for the paper's original setting) —
+see [README.md](README.md#choosing-a-grid). Its `seeds.csv` is grid-neutral:
+`grid_scheme`, `grid_resolution`, `cell_id`. The distinction that matters when
+mixing numbers is that a grid has **boundaries** and this radius-capped space
+does not: a facility group straddling a grid line is split into two classes at
+any resolution, whereas the linkage space can guarantee grouping within its
+radius.
 
 ### `cluster_scored/` + classification tables — *as01-03 only*
 

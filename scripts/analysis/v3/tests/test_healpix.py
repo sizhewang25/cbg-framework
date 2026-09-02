@@ -1,4 +1,11 @@
-"""HEALPix quantizer invariants (paper §7.3)."""
+"""HEALPix quantizer invariants (paper 7.3).
+
+HEALPix-*specific* facts only -- the parts no other tessellation can offer,
+chiefly exact equal area and exact nesting via bit shift. The grid-agnostic
+contract both grids must satisfy lives in `test_grid.py`, and
+`spherical_centroid` moved to `test_answer_space.py` along with the function
+itself, which was never grid math.
+"""
 
 from __future__ import annotations
 
@@ -56,16 +63,3 @@ def test_occupied_cells_is_monotone_non_increasing():
     counts = hx.occupied_cell_hierarchy(lat, lon)
     ordered = [counts[n] for n in sorted(counts, reverse=True)]
     assert all(a >= b for a, b in zip(ordered, ordered[1:]))
-
-
-def test_spherical_centroid_handles_dateline():
-    """Averaging lon directly would land at 0°; the unit-vector mean must not."""
-    lat, lon = hx.spherical_centroid([0.0, 0.0], [179.0, -179.0])
-    assert lat == pytest.approx(0.0, abs=1e-9)
-    assert abs(lon) == pytest.approx(180.0, abs=1e-9)
-
-
-def test_spherical_centroid_of_identical_points_is_that_point():
-    lat, lon = hx.spherical_centroid([41.9742] * 3, [-87.9073] * 3)
-    assert lat == pytest.approx(41.9742)
-    assert lon == pytest.approx(-87.9073)

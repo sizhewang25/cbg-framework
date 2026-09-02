@@ -12,7 +12,9 @@ module and one name to `_COMMAND_MODULES`.
 | --- | --- |
 | [modules/paths.py](modules/paths.py) | lib · run discovery + layout resolution |
 | [modules/io.py](modules/io.py) | lib · K-fold merge loader and benchmark IO |
-| [modules/healpix.py](modules/healpix.py) | lib · equal-area quantizer, nesting |
+| [modules/grid.py](modules/grid.py) | lib · grid interface + registry |
+| [modules/h3grid.py](modules/h3grid.py) | lib · H3 hexagons (**default**) |
+| [modules/healpix.py](modules/healpix.py) | lib · HEALPix equal-area quads, nesting |
 | [modules/answer_space.py](modules/answer_space.py) | cmd · `build-answer-space` |
 | [modules/classify.py](modules/classify.py) | cmd · `classify` |
 | [modules/venn.py](modules/venn.py) | cmd · `plot-venn` |
@@ -23,84 +25,143 @@ module and one name to `_COMMAND_MODULES`.
 ## Pipeline
 
 ```bash
-# 1. Quantize targets -> seeds (answer space). --sweep does nside 128/64/32/16.
-python -m scripts.analysis.v3.cli build-answer-space --all-runs --sweep
+# 1. Quantize targets -> seeds (answer space). Defaults to h3 res 4.
+python -m scripts.analysis.v3.cli build-answer-space --all-runs
 
 # 2. Score every method against it (distance to ALL seeds)
-python -m scripts.analysis.v3.cli classify --all-runs --sweep
+python -m scripts.analysis.v3.cli classify --all-runs
 
 # 3. Set overlap of correct classifications (repeat per top-N)
-python -m scripts.analysis.v3.cli plot-venn --all-runs --sweep --top-n 1
-python -m scripts.analysis.v3.cli plot-venn --all-runs --sweep --top-n 3
+python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
+python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 3
 
 # 4. Static map of the answer space
-python -m scripts.analysis.v3.cli plot-answer-space --all-runs --sweep --us-only
+python -m scripts.analysis.v3.cli plot-answer-space --all-runs --us-only
+
+# The paper's original grid, or any other rung:
+python -m scripts.analysis.v3.cli build-answer-space --all-runs --grid healpix
+python -m scripts.analysis.v3.cli build-answer-space --all-runs -r 3 -r 5
 ```
 
-Every command takes `--nside` (repeatable) or `--sweep`; omitted, they act on
-`nside=128` alone. Outputs land under `outputs/analysis/v3/<run_id>/`:
+Every command takes `--grid [h3|healpix]` (default `h3`), `--resolution`/`-r`
+(repeatable) and `--sweep`. Omit the resolution and each grid uses **its own**
+default — `h3 res=4`, `healpix nside=128` — so a resolution can never be paired
+with the wrong grid. Outputs land under `outputs/analysis/v3/<run_id>/`:
 
 ```
-target-answer-space/   nside_sweep.csv
-  nside-<x>/           seeds.csv  assignments.csv  seed_mesh_km.csv  meta.json
-                       answer_space_map.png
+target-answer-space/       grid_sweep.<grid>.csv
+  <grid>-<resolution>/     seeds.csv  assignments.csv  seed_mesh_km.csv  meta.json
+                           answer_space_map.png
 target-cls-accuracy/
-  nside-<x>/           <method>_seed_distances.parquet  topn_accuracy.csv  manifest.json
-                       overlap_{membership,intersections,pairwise}.top<N>.csv
-                       overlap_venn.top<N>.png  overlap_upset.top<N>.png
+  <grid>-<resolution>/     <method>_seed_distances.parquet  topn_accuracy.csv  manifest.json
+                           overlap_{membership,intersections,pairwise}.top<N>.csv
+                           overlap_venn.top<N>.png  overlap_upset.top<N>.png
 ```
+
+e.g. `h3-4/`, `h3-3/`, `healpix-128/` side by side.
 
 **Two axes, two filename mechanisms.** The answer space parameterizes every
-number downstream of it, so both output trees are grouped by `nside-<x>`; and
-every overlap artifact carries its top-N in the filename. Without either, a
-sweep would overwrite one `topn_accuracy.csv` four times and leave no record of
-which grid produced the survivor. `classify` reads the nside from the answer
-space itself rather than from `--nside`, so an explicit `--answer-space` still
-lands in the directory matching its grid.
+number downstream of it, so both output trees are grouped by
+`<grid>-<resolution>`; and every overlap artifact carries its top-N in the
+filename. Without either, a sweep would overwrite one `topn_accuracy.csv` once
+per rung and leave no record of which grid produced the survivor. The scheme
+name is in the slug rather than just the number because `h3` res 4 and HEALPix
+nside 4 are different grids that would otherwise collide. `grid_sweep` is
+per-grid for the same reason. `classify` reads the grid *and* resolution from
+the answer space itself rather than from the CLI, so an explicit
+`--answer-space` still lands in the directory matching the grid it was built on.
+
+**Schema is grid-neutral.** `seeds.csv` carries `grid_scheme`,
+`grid_resolution` and `cell_id`, so `classify`, `plot-venn` and
+`plot-answer-space` never branch on which tessellation was used. `cell_id` is
+the only column whose *dtype* is grid-specific — int64 for HEALPix, canonical
+hex string for H3 — and `Grid.coerce_cell_ids` is the single place that knows,
+applied on load.
 
 ## The answer space (§7.3 / §7.4)
 
-An equal-area HEALPix grid at `nside=128` (196,608 cells of 2,594 km², ~51 km)
-quantizes the run's ground-truth targets. The grid is a **quantizer, not the
-answer space**: its only job is to merge points close enough to count as one
+A grid quantizes the run's ground-truth targets. The grid is a **quantizer, not
+the answer space**: its only job is to merge points close enough to count as one
 place. Each occupied cell then contributes one **seed** at the spherical
 centroid of the targets inside it, so the answer space is K *real locations*
 rather than K grid squares. A coordinate is labelled by its nearest seed.
 
-NESTED ordering makes coarsening a bit shift (`pix >> 2k`), so `meta.json`
-carries the occupied-cell count at nside 128 / 64 / 32 / 16 in one pass — the
-multi-scale concentration diagnostic §7.3 asks for.
+Steps 2 and 3 are pure spherical geometry, which is why the grid is swappable at
+all: [modules/grid.py](modules/grid.py) defines the contract and the two
+implementations supply only point→cell, scale, and cell boundaries.
+`meta.json` carries the occupied-cell count down the grid's coarsening ladder —
+the multi-scale concentration diagnostic §7.3 asks for.
 
-### Choosing nside
+### Choosing a grid
 
-| nside | cell | pitch | reading |
+**H3 (`res=4`, default).** Hexagons: uniform neighbour distance, no ambiguous
+edge/corner adjacency, the working grid in telecom RF analytics, and native in
+ClickHouse, Postgres, BigQuery, Snowflake and Spark. `res=4` is the closest rung
+to the paper's `nside=128`, so switching grids does not move the merge scale.
+
+**HEALPix (`nside=128`).** The paper's original setting. Exactly equal-area and
+exactly nested, which H3 is neither of.
+
+| grid | cell | pitch | reading |
 | --- | --- | --- | --- |
-| 128 | 2,594 km² | 50.9 km | paper §7.3 setting |
-| 64 | 10,377 km² | 101.9 km | metro |
-| 32 | 41,509 km² | 203.7 km | region |
-| 16 | 166,037 km² | 407.5 km | macro-region |
+| `h3-5` | 253 km² avg | 17.1 km | Starlink service cell |
+| `h3-4` | 1,770 km² avg | 45.2 km | **default** |
+| `h3-3` | 12,393 km² avg | 119.5 km | metro |
+| `h3-2` | 86,802 km² avg | 316.1 km | macro-region |
+| `healpix-128` | 2,594 km² | 50.9 km | paper §7.3 setting |
+| `healpix-64` | 10,377 km² | 101.9 km | metro |
+| `healpix-32` | 41,509 km² | 203.7 km | region |
+| `healpix-16` | 166,037 km² | 407.5 km | macro-region |
 
-`--sweep` builds all four and writes `nside_sweep.csv` beside them, pairing what
-coarsening buys (fewer classes, fewer straddle candidates) against what it costs
-(`intra_seed_spread_km`, the floor under every error-distance figure).
+Pitch is defined differently per grid, on purpose: HEALPix uses `sqrt(area)`
+because its cells are exactly equal-area, H3 uses hexagon centre-to-centre
+(`edge × √3`) because `sqrt(area)` understates a hexagon's spacing by ~7%. Both
+are the distance the straddle diagnostic compares seed pairs against, so both
+have to be real distances.
 
-**Coarsening is not a fix for straddling.** NESTED cells nest, so a boundary at
-nside 16 is also a boundary at 32, 64 and 128: coarsening removes only the
-*finer* lines. Two targets separated at a coarse level can therefore never be
-merged by any nside in the hierarchy. Measured on `as7018_us_test01`: the NY
-metro's 10 targets fall in 3 classes at nside 128 and 2 at nside 64 — and still
-2 at nside 16, where the cell is 407 km wide. The Bay Area goes 4 → 2 and stops
-there too. If grouping co-located facilities is a *requirement* rather than a
-tendency, a grid is the wrong instrument and a radius-capped linkage (the
-benchmark's existing `clusters/`) is the right one. What the grid buys instead is
-alignment-independence: no clustering run, no ordering sensitivity, and the same
-cell ids for any target set.
+`--sweep` builds a grid's whole ladder and writes `grid_sweep.<grid>.csv` beside
+it, pairing what coarsening buys (fewer classes, fewer straddle candidates)
+against what it costs (`intra_seed_spread_km`, the floor under every
+error-distance figure).
 
-`meta.json` also records the grid's **cost** rather than arguing it away: grid
-lines fall where the grid falls, so a facility group straddling one yields two
-seeds and two classes, and the Voronoi step cannot undo a split the grid already
-made. `straddle_diagnostic` counts seed pairs closer than one cell pitch, and
-targets whose own cell seed is not their nearest seed.
+### What each grid costs, measured
+
+`meta.json` records both grids' costs rather than arguing them away.
+`straddle_diagnostic` (both grids) counts seed pairs closer than one cell pitch
+and targets whose own cell seed is not their nearest seed.
+`grid_diagnostics` is grid-specific and **empty for HEALPix**, which has nothing
+to disclose. For H3 it reports:
+
+- `cell_area_km2_min` / `_max` / `_max_over_min` over the *occupied* cells. H3
+  is not equal-area; measured on as01 at res 4 the ratio is **1.33**.
+- `n_occupied_pentagons`. H3 has 12 pentagons per resolution, which break both
+  equal area and the uniform-neighbour claim. They sit over ocean, so this reads
+  0 for land targets — reporting it is how we know.
+- `parent_lineage_disagreements`, per coarser rung. H3 is aperture-7 and
+  hexagons cannot tile hexagons, so a parent's outer children straddle its
+  boundary: `cell_to_parent` is exact on the *index* but is not a geometric
+  container. Measured on as01, **20 of 399 targets** land in a different cell at
+  res 3 by lineage than by re-binning, and 39 at res 2. This is why
+  `occupied_cell_hierarchy` re-bins from coordinates on both grids instead of
+  coarsening ids, even though HEALPix makes the shift exact and free.
+
+**Neither grid fixes straddling, and resolution is not the lever.** Grid lines
+fall where the grid falls, so a facility group spanning one yields two seeds and
+two classes, and the Voronoi step cannot undo a split the grid already made.
+Coarsening does not help on HEALPix because NESTED cells nest — a boundary at
+nside 16 is also a boundary at 128 — so a pair separated at a coarse level can
+never be merged by any nside. Measured on `as7018_us_test01`, the NY metro's 10
+targets occupy 3 classes at nside 128, 2 at nside 64, and still 2 at nside 16,
+where the cell is 407 km wide.
+
+Switching grids does not help either, and the direction is instructive: `h3-4`
+is *finer* than `healpix-128` (45 vs 51 km) yet yields **fewer** classes on
+as7018 (K=22 vs 27, 6 singletons vs 11). Boundary **alignment**, not resolution,
+decides whether a metro is split. If grouping co-located facilities is a
+*requirement* rather than a tendency, no grid delivers it at any resolution and
+a radius-capped linkage (the benchmark's existing `clusters/`) is the right
+instrument. What a grid buys instead is alignment-independence: no clustering
+run, no ordering sensitivity, and the same cell ids for any target set.
 
 > This answer space is **not** the same as the benchmark's existing
 > `clusters/` directory (radius-capped agglomerative). Numbers from the two are
@@ -203,16 +264,21 @@ targets, and their seed centroids on one cartopy panel. It exists to make the
 §7.3 straddle cost visible: a facility group spanning a grid line is quantized
 into two adjacent cells and two classes, which reads instantly as two touching
 filled cells and is hard to believe from a scalar. Only occupied cells are
-drawn — at `nside=128` the full 196,608-cell grid is unreadable at continental
-scale.
+drawn — the full grid (288,122 cells at `h3-4`, 196,608 at `healpix-128`) is
+unreadable at continental scale.
+
+Cell rings come from `Grid.cell_boundaries` and are **ragged**: 4 sides × `step`
+for a HEALPix quad, 6 for an H3 hexagon, 5 for one of its 12 pentagons. They
+arrive already in `(lon, lat)` degrees and already made contiguous across the
+antimeridian, so the plot layer neither re-wraps longitudes nor imports astropy.
 
 The caption states that occupied cell and class are in one-to-one
 correspondence, because there is no clustering algorithm involved and the
 benchmark also ships an older agglomerative `clusters/` space.
 
-Rendering the sweep is the quickest way to see the previous section's point: at
-nside 64 the `as7018` map still shows touching cell pairs at LA, Dallas, New
-York and DC.
+Rendering both grids is the quickest way to see the previous section's point: the
+`as7018` map shows touching cell pairs at LA, Dallas, New York and DC on either
+one.
 
 ## Tests
 

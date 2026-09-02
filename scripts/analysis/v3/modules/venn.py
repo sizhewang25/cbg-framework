@@ -41,7 +41,14 @@ import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 import typer  # noqa: E402
 
-from scripts.analysis.v3.modules import healpix as hx  # noqa: E402
+from scripts.analysis.v3.modules.grid import (  # noqa: E402
+    DEFAULT_GRID,
+    GRID_HELP,
+    RESOLUTION_HELP,
+    SWEEP_HELP,
+    get_grid,
+    resolve_cli_grid,
+)
 from scripts.analysis.v3.modules import io  # noqa: E402
 from scripts.analysis.v3.modules.classify import SHORTEST_PING  # noqa: E402
 from scripts.analysis.v3.modules.paths import (  # noqa: E402
@@ -495,17 +502,11 @@ def register(app: typer.Typer) -> None:
         top_n: int = typer.Option(
             1, help="Correct means the true seed ranks below this N."
         ),
-        nside: list[int] = typer.Option(
-            [hx.DEFAULT_NSIDE],
-            "--nside",
-            help="Which scored answer space(s) to read (repeatable), matching "
-                 "target-cls-accuracy/nside-<x>/ written by `classify`.",
+        grid: str = typer.Option(DEFAULT_GRID, "--grid", help=GRID_HELP),
+        resolution: list[int] = typer.Option(
+            [], "--resolution", "-r", help=RESOLUTION_HELP
         ),
-        sweep: bool = typer.Option(
-            False,
-            "--sweep",
-            help=f"Shorthand for the full hierarchy {list(hx.NSIDE_HIERARCHY)}.",
-        ),
+        sweep: bool = typer.Option(False, "--sweep", help=SWEEP_HELP),
         outputs_root: Path = typer.Option(
             DEFAULT_OUTPUTS_ROOT, help="Root holding <run_id>/ benchmark outputs."
         ),
@@ -522,12 +523,17 @@ def register(app: typer.Typer) -> None:
             raise typer.BadParameter("pass exactly one of --run-id or --all-runs")
         if venn_method and len(venn_method) not in (2, 3):
             raise typer.BadParameter("--venn-method takes 2 or 3 methods")
-
-        nsides = list(hx.NSIDE_HIERARCHY) if sweep else list(dict.fromkeys(nside))
+        g, resolutions = resolve_cli_grid(grid, resolution, sweep=sweep)
 
         runs = discover_runs(outputs_root) if all_runs else [resolve_run(run_id, outputs_root)]
-        for run, ns in [(r, n) for r in runs for n in nsides]:
-            cls_dir = run.cls_accuracy_dir(root=analysis_root, nside=ns)
+        # Unlike `classify`, this command has no answer space to read the grid
+        # from — it consumes target-cls-accuracy/, so it has to reconstruct the
+        # directory name from the CLI. Passing a --grid/--resolution that was
+        # never scored is therefore a missing-directory error, not silent.
+        for run, res in [(r, x) for r in runs for x in resolutions]:
+            cls_dir = run.cls_accuracy_dir(
+                root=analysis_root, grid=g.name, resolution=res
+            )
             written = render_overlap(
                 run,
                 cls_dir,
@@ -536,4 +542,7 @@ def register(app: typer.Typer) -> None:
                 top_n=top_n,
             )
             kinds = ", ".join(f"{k}={v.name}" for k, v in written.items())
-            typer.echo(f"{run.run_id}: nside={ns} · {kinds} -> {cls_dir}")
+            typer.echo(
+                f"{run.run_id}: {g.name} {g.resolution_arg}={res} · "
+                f"{kinds} -> {cls_dir}"
+            )
