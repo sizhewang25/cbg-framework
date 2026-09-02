@@ -18,9 +18,13 @@ cartopy):
   * a country    — ISO_A2 ("US"), ISO_A3 ("USA"), or admin/name ("France").
 
 No new dependency: cells come from ``shapely.ops.voronoi_diagram`` (shapely 2)
-and are intersected with the boundary. Cells are computed in lon/lat
-(PlateCarree) to match the cluster map — a visualization-grade approximation,
-not an equal-area construction.
+and are intersected with the boundary. The landmass path computes cells in
+lon/lat (PlateCarree) to match the cluster map — a visualization-grade
+approximation, not an equal-area construction.
+
+`clipped_voronoi_cells` itself is CRS-agnostic and is reused by
+`scripts.analysis.v3.modules.map_answer_space`, which feeds it projected
+coordinates (and no landmass) so its bisectors approximate great-circle ones.
 """
 
 from __future__ import annotations
@@ -131,17 +135,34 @@ def resolve_landmass(name: str) -> tuple[BaseGeometry, str]:
 
 
 def clipped_voronoi_cells(
-    lons: np.ndarray, lats: np.ndarray, boundary: BaseGeometry
+    x: np.ndarray,
+    y: np.ndarray,
+    boundary: BaseGeometry,
+    *,
+    crs: str | None = "EPSG:4326",
 ) -> gpd.GeoDataFrame:
     """Voronoi cells of the given seed points, clipped to ``boundary``.
 
-    Returns a GeoDataFrame (EPSG:4326) with a ``seed_index`` column (position in
-    the input arrays) and the clipped cell ``geometry``. Cells whose clipped
-    geometry is empty (seed outside the boundary's reach) are dropped. Each cell
-    is matched to its seed by point-in-cell containment, so the result is robust
-    to GEOS cell ordering.
+    Returns a GeoDataFrame with a ``seed_index`` column (position in the input
+    arrays) and the clipped cell ``geometry``. Cells whose clipped geometry is
+    empty (seed outside the boundary's reach) are dropped. Each cell is matched
+    to its seed by point-in-cell containment, so the result is robust to GEOS
+    cell ordering.
+
+    **CRS-agnostic.** The body is pure planar geometry — ``voronoi_diagram``,
+    ``intersection`` and an STRtree lookup — so ``x``/``y`` may be lon/lat
+    degrees (the landmass callers) or projected coordinates (the answer-space
+    map, which computes the diagram in an azimuthal-equidistant projection so the
+    bisectors approximate great-circle ones). ``crs`` only labels the output;
+    pass the projection's CRS, or ``None`` when it has no EPSG code.
+
+    Note ``boundary`` does double duty: it is the clip geometry *and* the
+    ``envelope=`` hint. The hint alone is not enough — GEOS treats it as a
+    lower bound on the diagram's extent and expands past it, and ignores it
+    entirely when it is smaller than the input hull — so the explicit
+    ``intersection`` below is what actually bounds the cells.
     """
-    seeds = [Point(float(x), float(y)) for x, y in zip(lons, lats)]
+    seeds = [Point(float(px), float(py)) for px, py in zip(x, y)]
     if len(seeds) < 2:
         raise ValueError(f"need >=2 seed centroids for a Voronoi diagram, got {len(seeds)}")
 
@@ -161,7 +182,7 @@ def clipped_voronoi_cells(
             seed_index = int(contained[0])
         records.append({"seed_index": seed_index, "geometry": clipped})
 
-    return gpd.GeoDataFrame(records, geometry="geometry", crs="EPSG:4326")
+    return gpd.GeoDataFrame(records, geometry="geometry", crs=crs)
 
 
 def build_landmass_voronoi(

@@ -108,6 +108,19 @@ def pairwise_km(
     return EARTH_RADIUS_KM * np.arccos(cos)
 
 
+def elementwise_km(lat_a, lon_a, lat_b, lon_b) -> np.ndarray:
+    """Great-circle distance for *paired* coordinates: `out[i] = d(a[i], b[i])`.
+
+    The row-wise companion to `pairwise_km`, which builds the full matrix. Used
+    where only the diagonal is wanted — e.g. prediction-to-its-own-target error
+    — so the cost stays O(n) instead of O(n^2).
+    """
+    a = _unit_vectors(lat_a, lon_a)
+    b = _unit_vectors(lat_b, lon_b)
+    cos = np.clip(np.einsum("ij,ij->i", a, b), -1.0, 1.0)
+    return EARTH_RADIUS_KM * np.arccos(cos)
+
+
 def _describe(values: np.ndarray) -> dict:
     """Compact distribution summary; `None` when there is nothing to describe."""
     v = np.asarray(values, dtype=float)

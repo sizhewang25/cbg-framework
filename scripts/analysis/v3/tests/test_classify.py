@@ -30,12 +30,20 @@ def _space():
     )
 
 
-def _frame(space, preds, statuses, truth_seed_ids):
+def _frame(space, preds, statuses, truth_seed_ids, target_ids=None):
+    """Score `preds` against `space`.
+
+    `target_ids` default to real ids from the answer space: `error_to_target_km`
+    is measured against the target's own coordinate, so a synthetic id has no
+    ground truth to measure against and `_seed_distance_frame` rejects it.
+    """
     n = len(preds)
+    if target_ids is None:
+        target_ids = list(space.assignments["target_id"])[:n]
     return _seed_distance_frame(
         space,
         method="m",
-        target_id=pd.Series([f"t{i}" for i in range(n)]),
+        target_id=pd.Series(list(target_ids)),
         fold=pd.Series([0] * n),
         status=pd.Series(statuses),
         pred_lat=pd.Series([p[0] for p in preds]),
@@ -136,7 +144,16 @@ def test_error_km_excludes_fallback_rows():
     """
     space = _space()
     truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
-    df = _frame(space, [CHI, SJC], ["SUCCESS", "FALLBACK"], [truth, truth])
+    # Both rows predict Chicago, but the FALLBACK row's target is San Jose, so
+    # its error is ~2,800 km. Only the exact SUCCESS row may reach the summary.
+    df = _frame(
+        space,
+        [CHI, CHI],
+        ["SUCCESS", "FALLBACK"],
+        [truth, truth],
+        target_ids=["tg-chi", "tg-sjc"],
+    )
+    assert df.loc[1, "error_to_target_km"] > 2_000.0
     s = topn_summary({"m": df}, ns=(1,)).iloc[0]
     assert s["error_km_p50"] == pytest.approx(0.0, abs=1e-6)
 
@@ -162,3 +179,69 @@ def test_unknown_truth_seed_is_rejected():
 def test_default_topn_is_one_and_three():
     """Only top-1 and top-3 are reported; the parquet still supports any N."""
     assert DEFAULT_TOPN == (1, 3)
+
+
+def test_error_to_target_is_measured_from_the_raw_target():
+    """The error metric must not route through the seed.
+
+    Chicago and Chicago-plus-a-nudge share a cell, so their seed is the centroid
+    *between* them and sits on neither. A prediction landing exactly on one
+    target therefore has zero error but a non-zero distance to its own seed —
+    which is precisely the quantization offset that must stay out of the error
+    figure.
+    """
+    # 0.05 deg keeps both Chicago targets inside one h3 res-4 cell (0.10 splits
+    # them), so their seed is the midpoint and lies on neither target.
+    nudge = (CHI[0] + 0.05, CHI[1] + 0.05)
+    space = build_answer_space(
+        pd.DataFrame(
+            {
+                "target_id": ["tg-chi", "tg-chi2", "tg-sjc"],
+                "target_lat": [CHI[0], nudge[0], SJC[0]],
+                "target_lon": [CHI[1], nudge[1], SJC[1]],
+            }
+        )
+    )
+    truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
+    assert int((space.assignments["seed_id"] == truth).sum()) == 2, "need a shared cell"
+
+    df = _frame(space, [CHI], ["SUCCESS"], [truth], target_ids=["tg-chi"])
+    assert df.loc[0, "error_to_target_km"] == pytest.approx(0.0, abs=1e-6)
+    assert df.loc[0, "error_to_truth_seed_km"] > 1.0
+
+
+def test_error_to_target_ignores_the_seed_position_entirely():
+    """Re-quantizing must move accuracy's geometry but not the error distance.
+
+    The same prediction scored against a coarse and a fine grid gets different
+    seeds, hence a different `error_to_truth_seed_km` — but `error_to_target_km`
+    is a property of the prediction and the target alone and must be identical.
+    """
+    # At this offset res 4 keeps the two Chicago targets in separate cells (so
+    # tg-chi's seed sits exactly on it) while res 3 merges them (so the seed
+    # moves to their midpoint). Same prediction, two different seeds.
+    targets = pd.DataFrame(
+        {
+            "target_id": ["tg-chi", "tg-chi2", "tg-sjc"],
+            "target_lat": [CHI[0], CHI[0] + 0.10, SJC[0]],
+            "target_lon": [CHI[1], CHI[1] + 0.10, SJC[1]],
+        }
+    )
+    pred = (CHI[0] + 0.4, CHI[1] - 0.3)
+    errs, seed_errs = [], []
+    for res in (4, 3):
+        space = build_answer_space(targets, grid="h3", resolution=res)
+        truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
+        df = _frame(space, [pred], ["SUCCESS"], [truth], target_ids=["tg-chi"])
+        errs.append(df.loc[0, "error_to_target_km"])
+        seed_errs.append(df.loc[0, "error_to_truth_seed_km"])
+    assert errs[0] == pytest.approx(errs[1], abs=1e-6)
+    assert seed_errs[0] != pytest.approx(seed_errs[1], abs=1e-6)
+
+
+def test_scoring_a_target_outside_the_answer_space_is_rejected():
+    """Silently emitting NaN error for an unknown target would hide a mismatch."""
+    space = _space()
+    truth = space.assignments.iloc[0]["seed_id"]
+    with pytest.raises(ValueError, match="absent from the answer space"):
+        _frame(space, [CHI], ["SUCCESS"], [truth], target_ids=["not-a-target"])

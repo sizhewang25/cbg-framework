@@ -201,6 +201,18 @@ they are not bad answers, they are the baseline's good answers. Vanilla scores
 164/399 = 0.411; credited it would score 270/399 = 0.677.
 
 **K-fold test sets must be disjoint.** `load_folds` pools every fold into one
+**Accuracy and error distance do not share an answer space.** The seeds and the
+grid exist to define the classes, so accuracy is measured against them; error
+distance has its own ground truth and is measured to the **raw target**
+(`error_to_target_km`). Routing it through the seed would import the grid's
+quantization into a number that needs none — with cell-centre seeds that would
+have been a systematic ~17-20 km added to every *correct* answer. The parquet
+also keeps `error_to_truth_seed_km`, whose difference from
+`error_to_target_km` is exactly that offset per row, i.e. the per-row form of
+`intra_seed_spread_km`. One consequence is a useful check: re-quantizing changes
+accuracy but must leave `error_km_*` bit-identical, and it does across `h3-4`
+and `healpix-128` on all four runs.
+
 frame labelled with `fold`, and raises if a `target_id` appears twice — a leak
 would double-count targets in every pooled figure downstream.
 
@@ -259,9 +271,9 @@ checkable without reading a figure.
 
 ## Answer-space map
 
-`plot-answer-space` draws occupied cells (filled, one colour per seed), their
-targets, and their seed centroids on one cartopy panel. It exists to make the
-§7.3 straddle cost visible: a facility group spanning a grid line is quantized
+`plot-answer-space` draws the occupied cells (filled, one colour per seed), the
+nearest-seed class boundaries, their targets, and their seed centroids on one
+cartopy panel. It exists to make the §7.3 straddle cost visible: a facility group spanning a grid line is quantized
 into two adjacent cells and two classes, which reads instantly as two touching
 filled cells and is hard to believe from a scalar. Only occupied cells are
 drawn — the full grid (288,122 cells at `h3-4`, 196,608 at `healpix-128`) is
@@ -281,6 +293,41 @@ Rendering both grids is the quickest way to see the previous section's point: th
 one.
 
 ## Tests
+
+### The class-region overlay
+
+The red dashed boundaries are the **classifier's own top-1 decision
+boundary**, not an illustration: `classify` labels a prediction by
+`argmin` over great-circle distance to the K seeds, so top-1 classification is
+nearest-seed labelling and its boundary is the Voronoi diagram of the seeds.
+`margin_km` in `seeds.csv` is the scalar summary of the same geometry. Pass
+`--no-voronoi` to drop the layer.
+
+Note the two layers sit at wildly different scales, which is the point: a grid
+cell is ~45 km while a class region is hundreds of km across. The answer space
+is a coarse nearest-seed partition whose *seeds* are placed by a fine quantizer.
+
+Three implementation facts are load-bearing, each measured rather than assumed:
+
+* **The diagram is computed in an azimuthal-equidistant projection**, not in
+  lon/lat. A degree is not a distance — at 38 N one degree of longitude is
+  87.6 km against 111.2 km of latitude, a 1.27x anisotropy rising to 1.49x at
+  48 N — so a lon/lat Voronoi tilts every bisector and misassigns ~10.5% of the
+  frame's area, displacing the drawn line by up to ~210 km. The projection
+  brings that to 0.35-0.38%.
+* **Edges are pre-split at 200 km** before cartopy reprojects them. Cartopy
+  only densifies a long straight edge ~1.2x, which left the inked line up to
+  54.8 km (21 px) off the true bisector; pre-splitting brings it to 8.2 km
+  (3 px), the projection's own floor. 100 km and 25 km buy nothing more.
+* **The clip box is padded 25% beyond the frame.** Clipping exactly at the
+  frame makes the outermost cells' outlines ink a line along the map border
+  that is an artifact of the crop, not of the classifier.
+
+Geometry is reused from `scripts/visualization/cluster/voronoi.py`
+(`clipped_voronoi_cells`), which is CRS-agnostic. The landmass helpers there are
+deliberately *not* used: this partition is defined over the whole sphere, and
+`build_landmass_voronoi` also drops seeds outside its boundary, which would move
+boundaries that are visible — an off-frame seed still shapes an on-frame line.
 
 ```bash
 python -m pytest scripts/analysis/v3/tests/ -q

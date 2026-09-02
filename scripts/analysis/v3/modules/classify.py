@@ -45,6 +45,7 @@ from scripts.analysis.v3.modules.grid import (
 from scripts.analysis.v3.modules import io
 from scripts.analysis.v3.modules.answer_space import (
     AnswerSpace,
+    elementwise_km,
     load_answer_space,
     pairwise_km,
 )
@@ -83,6 +84,16 @@ def _seed_distance_frame(
     Rows whose prediction is missing (no coordinate at all) keep NaN distances
     and a null `pred_seed_id`; they are still emitted so the target set stays
     the complete denominator.
+
+    Emits two error columns, which answer different questions and must not be
+    used interchangeably:
+
+    * `error_to_target_km` — to the raw ground-truth coordinate. **This is the
+      error distance.** It owes nothing to the grid or the seeds.
+    * `error_to_truth_seed_km` — to the true seed centroid. A diagnostic of the
+      *classification* geometry, not an error metric: their difference is
+      exactly the quantization offset for that row, which is the per-row form of
+      `intra_seed_spread_km` (§7.4).
     """
     seeds = space.seeds
     seed_ids = seeds["seed_id"].to_numpy()
@@ -97,6 +108,35 @@ def _seed_distance_frame(
         pred_lon.to_numpy(dtype=float)
     )
     d = np.where(has_pred[:, None], d, np.nan)
+
+    # Error distance is measured to the **raw target**, never to its seed. The
+    # seed and the grid exist to form the tessellation, which serves
+    # classification; error distance has a perfectly good ground truth of its
+    # own, and routing it through the seed would import the quantization offset
+    # into a measurement that does not need one. The two metrics look at the
+    # same prediction from different angles and do not share an answer space.
+    #
+    # Computed here from `space.assignments` rather than taken from the
+    # upstream `error_km` for two reasons: `score_shortest_ping` synthesizes
+    # predictions from a VP coordinate and has no such column, and `error_km`
+    # carries the FALLBACK trap documented in SCHEMA.md §3.
+    tgt = space.assignments.set_index("target_id")
+    unknown = ~target_id.isin(tgt.index)
+    if unknown.any():
+        missing = target_id[unknown].unique()[:5].tolist()
+        raise ValueError(
+            f"{int(unknown.sum())} target_id(s) are absent from the answer space "
+            f"(e.g. {missing}); cannot measure error to their true coordinate"
+        )
+    t_lat = target_id.map(tgt["target_lat"]).to_numpy(dtype=float)
+    t_lon = target_id.map(tgt["target_lon"]).to_numpy(dtype=float)
+    err_to_target = np.where(
+        has_pred,
+        elementwise_km(
+            pred_lat.to_numpy(dtype=float), pred_lon.to_numpy(dtype=float), t_lat, t_lon
+        ),
+        np.nan,
+    )
 
     truth = truth_seed_id.to_numpy()
     # Column position of each target's true seed (seed_id is 0..K-1 by
@@ -137,6 +177,7 @@ def _seed_distance_frame(
             "truth_seed_id": truth,
             "pred_seed_id": np.where(pred_pos >= 0, seed_ids[pred_pos], -1),
             "truth_seed_rank": rank,
+            "error_to_target_km": np.round(err_to_target, 3),
             "error_to_truth_seed_km": np.round(err_to_truth, 3),
             "error_to_pred_seed_km": np.round(
                 np.where(pred_pos >= 0, d[rows, np.clip(pred_pos, 0, None)], np.nan), 3
@@ -224,11 +265,16 @@ def topn_summary(
     wrong — the paper §7.2 rule. `fallback_rate` sits beside it, so the cost of
     those failures is readable without a second accuracy column.
 
-    `error_km_p50` / `error_km_p90` are computed over **solved rows only**,
-    despite the unqualified name. A FALLBACK row's coordinate is the
-    Shortest-Ping VP's, so its error is the baseline's error rather than a CBG
-    one; pooling it would corrupt the error distribution the same way crediting
-    it would corrupt accuracy.
+    `error_km_p50` / `error_km_p90` are the distance to the **raw target**, not
+    to its seed. Accuracy and error look at the same prediction from different
+    angles and do not share an answer space: the seed exists to define the
+    classes, while error distance has its own ground truth and would only
+    inherit the grid's quantization by going through the seed.
+
+    They are computed over **solved rows only**, despite the unqualified name. A
+    FALLBACK row's coordinate is the Shortest-Ping VP's, so its error is the
+    baseline's error rather than a CBG one; pooling it would corrupt the error
+    distribution the same way crediting it would corrupt accuracy.
     """
     rows: list[dict] = []
     for method, df in frames.items():
@@ -240,7 +286,7 @@ def topn_summary(
             else df["status"].isin(io.CBG_SUCCESS_STATUSES).to_numpy()
         )
         rank = df["truth_seed_rank"].to_numpy()
-        err = df["error_to_truth_seed_km"].to_numpy(dtype=float)
+        err = df["error_to_target_km"].to_numpy(dtype=float)
         row = {
             "method": method,
             "n_targets": n_total,
@@ -379,6 +425,11 @@ def register(app: typer.Typer) -> None:
                             "distances); topn_accuracy.csv counts fallbacks as "
                             "failures in accuracy_topN, and excludes them from "
                             "error_km_p50/p90"
+                        ),
+                        "error_metric": (
+                            "error_km_p50/p90 measure distance to the raw target "
+                            "(error_to_target_km), not to its seed: accuracy is "
+                            "defined by the seeds, error distance is not"
                         ),
                     },
                     indent=2,
