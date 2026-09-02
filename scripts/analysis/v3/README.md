@@ -12,6 +12,7 @@ module and one name to `_COMMAND_MODULES`.
 | --- | --- |
 | [modules/paths.py](modules/paths.py) | lib · run discovery + layout resolution |
 | [modules/io.py](modules/io.py) | lib · K-fold merge loader and benchmark IO |
+| [modules/config.py](modules/config.py) | lib · unified run config → per-command defaults |
 | [modules/grid.py](modules/grid.py) | lib · grid interface + registry |
 | [modules/h3grid.py](modules/h3grid.py) | lib · H3 hexagons (**default**) |
 | [modules/healpix.py](modules/healpix.py) | lib · HEALPix equal-area quads, nesting |
@@ -83,6 +84,95 @@ the answer space itself rather than from the CLI, so an explicit
 the only column whose *dtype* is grid-specific — int64 for HEALPix, canonical
 hex string for H3 — and `Grid.coerce_cell_ids` is the single place that knows,
 applied on load.
+
+## One config per run
+
+The pipeline above repeats `--grid`, `-r` and the top-N on five commands, and
+they have to agree or the artifacts land in mismatched directories. A unified
+config declares them once, `configs/<run_id>.yaml`:
+
+```yaml
+run_id: as7018_us_test01
+benchmark: {}                  # reserved; see below
+analysis:
+  common:            {grid: h3, resolution: [4]}
+  build-answer-space: {}
+  classify:          {topn: "1,3"}
+  plot-venn:         {top_n: 1}
+  plot-answer-space: {us_only: true}
+  plot-pareto:       {top_n: 1, cost: runtime, cost_stat: p50}
+```
+
+```bash
+python -m scripts.analysis.v3.cli --config configs/as7018_us_test01.yaml classify
+#                                 ^^^^^^^^ before the command, not after
+```
+
+`--config` belongs to the *group*, unlike `scripts/analysis/cli.py`'s
+per-command `--config`. That is what buys the per-command sub-blocks: the
+callback in [cli.py](cli.py) parses the file into click's own
+`ctx.default_map`, which is keyed by subcommand name, so **no command signature
+knows a config exists** and precedence is click's rather than hand-rolled:
+
+    explicit flag  >  config  >  CLI default
+
+It is a defaults mechanism and nothing more — `topn_accuracy.csv` is
+byte-identical between `--config <cfg> classify` and the equivalent explicit
+flags.
+
+### Four rules, all enforced
+
+Everything is checked against the *live* CLI:
+[config.py](modules/config.py) introspects the registered click commands, so
+block names, key names, `run_id` arity and which params are paths are read off
+the real signatures and cannot drift from them.
+
+1. **Sub-block names are command names verbatim**, as `--help` prints them
+   (`plot-answer-space`, not `plot_answer_space`).
+2. **Keys are parameter names verbatim** — the long flag minus `--`, dashes as
+   underscores. Including the negative-sense ones (`no_baseline`,
+   `no_voronoi`) and the `topn` / `top_n` inconsistency between `classify` and
+   `plot-venn`. One mechanical rule, no inversion layer, so the validator is
+   exact.
+3. **`common:` applies a key only where the param exists.** `grid`,
+   `resolution`, `sweep` and the two roots are on all five commands; `top_n`
+   and `method` on two. A `common:` key matching *no* command is an error.
+4. **Relative paths resolve against the repo root**, matching this layer's own
+   `DEFAULT_OUTPUTS_ROOT` / `DEFAULT_ANALYSIS_ROOT`. The wider repo resolves
+   config paths against three different bases (cwd, the config's own directory,
+   repo root), so v3 picks one.
+
+Rule 2 is the load-bearing one, because **click silently ignores a
+`default_map` key it does not recognize**. A typo'd `topN:` would be a no-op
+rather than an error, which is the failure mode this module exists to prevent;
+`test_config.py` pins it, and also validates every checked-in `configs/*.yaml`
+on each run.
+
+### Two couplings the config has to preserve
+
+Both come from the group callback running *before* the subcommand's arguments
+are parsed — `ctx.args` is empty there — so both are read from `sys.argv`:
+
+- **`--all-runs` drops the config's `run_id`.** Every command enforces
+  `--run-id` XOR `--all-runs`, so without this the documented `--all-runs`
+  pipeline would collide with any config naming a run and be rejected.
+- **`--grid` alone drops the config's `resolution`.** A resolution is
+  meaningful only against its own grid — h3 res 4 is 45 km, HEALPix nside 4 is
+  1630 km — which is why the CLI defaults it per grid. Inheriting the other
+  grid's number would silently build an answer space nobody asked for. Pass
+  `-r` too for a specific rung.
+
+`run_id` may be a list. `plot-pareto` takes `--run-id` repeatably because it
+pools datasets, so `configs/cross-as01-as03.yaml` names three runs; the per-run
+commands say so by name rather than failing on a type.
+
+### `benchmark:` is reserved and empty
+
+Nothing reads it yet. `scripts/benchmark/v2/Snakefile` takes flat top-level keys
+(`config["source"]`, `config["combos"]`), so nesting them under a section would
+break it — the benchmark run is still driven by
+`configs/benchmark/<run_id>.yaml`. The section is declared so the file has one
+obvious home for it when that is repointed.
 
 ## The answer space (§7.3 / §7.4)
 

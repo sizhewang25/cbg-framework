@@ -1,0 +1,93 @@
+# Template unified run config — one file per benchmark run.
+#
+# Two sections: `benchmark:` (reserved) and `analysis:`, which carries one
+# sub-block per v3 CLI command. Pass it to the group, before the command name:
+#
+#   python -m scripts.analysis.v3.cli --config configs/<run_id>.yaml classify
+#
+# Four rules, all enforced by scripts/analysis/v3/modules/config.py against the
+# live CLI (a typo is an error, not a silently ignored key):
+#
+#   1. Sub-block names are command names verbatim, as `--help` prints them
+#      (`plot-answer-space`, not `plot_answer_space`).
+#   2. Keys inside a block are the command's parameter names verbatim -- the
+#      long flag minus `--`, dashes as underscores. That includes the
+#      negative-sense flags (`no_baseline`, `no_voronoi`) and the `topn` /
+#      `top_n` inconsistency between `classify` and `plot-venn`.
+#   3. `common:` keys apply to every command that declares them, and only
+#      those. `grid` / `resolution` / `sweep` / `outputs_root` /
+#      `analysis_root` exist on all five; `top_n` on two; `method` on two.
+#   4. Relative paths resolve against the repo root, not the cwd.
+#
+# Precedence is click's own: explicit flag > this config > CLI default. So
+# `--grid healpix` overrides `grid: h3` below, and every value here is optional.
+#
+# One coupling is handled for you: `resolution` is meaningful only against its
+# own grid (h3 res 4 is 45 km, HEALPix nside 4 is 1630 km), so overriding just
+# `--grid` on the command line discards a `resolution` pinned here and falls
+# back to the new grid's own default. Pass `-r` too if you want a specific rung.
+
+# ---- identity ---------------------------------------------------------------
+# The only identity key v3 reads. `source`, `setup`, `slices` and `combos` are
+# deliberately absent: paths.discover_runs reads (source, setup) off the output
+# tree and fold/combo ids off the run directory, so declaring them here would
+# create a second source of truth that can silently disagree with the tree.
+#
+# A list pools several runs. `plot-pareto` takes it as-is (that command exists
+# to compare datasets); the other four score one run at a time and will say so
+# rather than fail on a type.
+run_id: TEMPLATE_RUN_ID
+
+# ---- benchmark --------------------------------------------------------------
+# Reserved, and deliberately empty: nothing reads it yet. The benchmark
+# workflow takes flat top-level keys (`config["source"]`, `config["combos"]` in
+# scripts/benchmark/v2/Snakefile), so nesting them under a section would break
+# it. Until that is repointed, the run itself is still driven by
+# configs/benchmark/<run_id>.yaml.
+benchmark: {}
+
+# ---- analysis ---------------------------------------------------------------
+analysis:
+
+  # Shared by every command that has the parameter.
+  common:
+    grid: h3                          # h3 | healpix
+    resolution: [4]                   # [] uses each grid's own default (h3 res=4, healpix nside=128)
+    # sweep: false                    # true walks the grid's whole hierarchy
+    # all_runs: false                 # true does every run under outputs_root; drops run_id
+    # outputs_root: outputs/benchmark/v2
+    # analysis_root: outputs/analysis/v3
+
+  build-answer-space: {}
+    # no parameters beyond `common:`
+
+  classify:
+    topn: "1,3"                       # comma-separated string, not a list
+    # combo: []                       # restrict to these combo ids
+    # no_baseline: false              # true skips the Shortest-Ping baseline
+    # answer_space: null              # explicit dir; overrides grid/resolution
+
+  plot-venn:
+    top_n: 1                          # correct means the true seed ranks below N
+    # method: []                      # default: baseline + every scored combo
+    # venn_method: []                 # exactly 2 or 3, for an extra per-method Venn
+
+  plot-answer-space:
+    # us_only: false                  # clamp to the continental US
+    # extent: [-125.0, -66.0, 24.0, 50.0]   # LON_MIN LON_MAX LAT_MIN LAT_MAX; overrides us_only
+    target_size: 7.0
+    # no_voronoi: false               # true drops the decision-boundary overlay
+
+  plot-pareto:
+    top_n: 1
+    cost: runtime                     # runtime | memory_alloc | memory_rss
+    cost_stat: p50                    # p50 | p75 | p90 | p95 | mean (use p95 for memory_rss)
+    cost_rows: all                    # all | solved
+    # memory_reduce: max              # max | sum (ignored for runtime)
+    # x: cost                         # cost | throughput (runtime only)
+    # method: []                      # restrict the method pool
+    # amortize_fit: false             # add fit_ms/n_targets_per_fold per target
+    # allow_mixed_setups: false       # permit pooling runs whose setup differs
+    # strict_membership: false        # raise instead of warn on a missing method
+    # accuracy_csv: []                # one per run_id, same order
+    # out_dir: null                   # override the artifact directory

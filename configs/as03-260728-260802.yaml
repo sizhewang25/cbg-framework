@@ -1,0 +1,33 @@
+# Unified config for the as03-260728-260802 operator run.
+#
+#   python -m scripts.analysis.v3.cli --config configs/as03-260728-260802.yaml classify
+#
+# No `benchmark:` content: this run has no benchmark config in the repo. Its
+# canonical CSV was reconstructed from the run outputs, and the folds are pinned
+# by the materialized stratification rather than by a config. See
+# configs/template.yaml for the schema.
+
+run_id: as03-260728-260802
+
+benchmark: {}
+
+analysis:
+  common:
+    grid: h3
+    resolution: [4]
+
+  build-answer-space: {}
+
+  classify:
+    topn: "1,3"
+
+  plot-venn:
+    top_n: 1
+
+  plot-answer-space:
+    us_only: true                     # mainland-US target set
+
+  plot-pareto:
+    top_n: 1
+    cost: runtime
+    cost_stat: p50

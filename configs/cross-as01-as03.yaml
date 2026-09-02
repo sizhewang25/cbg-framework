@@ -1,0 +1,27 @@
+# Cross-run config: the three operator datasets pooled for the accuracy-vs-cost
+# figure. The only unified config naming several runs.
+#
+#   python -m scripts.analysis.v3.cli --config configs/cross-as01-as03.yaml plot-pareto
+#
+# `plot-pareto` takes `--run-id` repeatably and consumes the list as-is; the
+# per-run commands score one run at a time and will reject this file by name
+# rather than fail on a type. Use the per-run configs, or `--all-runs`, for
+# those.
+
+run_id:
+  - as01-260728-260802
+  - as02-260728-260802
+  - as03-260728-260802
+
+benchmark: {}
+
+analysis:
+  common:
+    grid: h3
+    resolution: [4]
+
+  plot-pareto:
+    top_n: 1
+    cost: runtime
+    cost_stat: p50
+    cost_rows: all

@@ -1,0 +1,32 @@
+# Unified config for the as7018_us_test01 run.
+# 53 AS7018 RIPE probes x 78 US anchors (reciprocal set), 16 LTD x MTL x CTR combos.
+#
+#   python -m scripts.analysis.v3.cli --config configs/as7018_us_test01.yaml classify
+#
+# See configs/template.yaml for the schema and the four key-naming rules.
+
+run_id: as7018_us_test01
+
+# Reserved; the run itself is still driven by configs/benchmark/as7018_us_test01.yaml.
+benchmark: {}
+
+analysis:
+  common:
+    grid: h3
+    resolution: [4]
+
+  build-answer-space: {}
+
+  classify:
+    topn: "1,3"
+
+  plot-venn:
+    top_n: 1
+
+  plot-answer-space:
+    us_only: true                     # every target is a US anchor
+
+  plot-pareto:
+    top_n: 1
+    cost: runtime
+    cost_stat: p50

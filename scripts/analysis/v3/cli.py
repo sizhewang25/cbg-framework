@@ -7,15 +7,25 @@ registers them, so adding a command means adding a module and one name to
     python -m scripts.analysis.v3.cli build-answer-space --run-id as01-260728-260802
     python -m scripts.analysis.v3.cli classify --run-id as01-260728-260802
     python -m scripts.analysis.v3.cli plot-venn --run-id as01-260728-260802
+
+A unified config can supply the parameters instead, one sub-block per command
+(see `modules/config.py`). `--config` belongs to the *group*, so it goes before
+the command name:
+
+    python -m scripts.analysis.v3.cli --config configs/as7018_us_test01.yaml classify
 """
 
 from __future__ import annotations
+
+import sys
+from pathlib import Path
 
 import typer
 
 from scripts.analysis.v3.modules import (
     answer_space,
     classify,
+    config as config_mod,
     map_answer_space,
     pareto,
     venn,
@@ -32,6 +42,35 @@ _COMMAND_MODULES = (answer_space, classify, venn, map_answer_space, pareto)
 
 for _module in _COMMAND_MODULES:
     _module.register(app)
+
+
+@app.callback()
+def main(
+    ctx: typer.Context,
+    config: Path = typer.Option(
+        None,
+        "--config",
+        help="Unified run config (configs/<run_id>.yaml). Supplies each command's "
+             "parameters from its `analysis.<command>` sub-block. Explicit flags "
+             "still win. Must come before the command name.",
+    ),
+) -> None:
+    """Load a unified config, if given, as click's per-command defaults.
+
+    Setting `ctx.default_map` is the whole mechanism: click applies it beneath
+    anything passed on the command line, so no command signature has to know a
+    config exists. `--all-runs` is read from `sys.argv` because the group
+    callback runs before the subcommand's own arguments are parsed — see
+    `config.default_map`.
+    """
+    if config is not None:
+        ctx.default_map = config_mod.default_map(
+            config_mod.load(config),
+            app,
+            all_runs_on_cli="--all-runs" in sys.argv,
+            grid_on_cli=config_mod.grid_on_argv(sys.argv),
+            command=ctx.invoked_subcommand,
+        )
 
 
 if __name__ == "__main__":
