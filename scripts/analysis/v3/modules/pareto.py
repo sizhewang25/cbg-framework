@@ -68,7 +68,7 @@ from scripts.analysis.v3.modules.paths import (
     RunPaths,
     grid_slug,
 )
-from scripts.analysis.v3.modules.venn import (
+from scripts.analysis.v3.modules.diagram.common import (
     PREFERRED_ORDER,
     label_for,
     method_colors,
@@ -76,9 +76,10 @@ from scripts.analysis.v3.modules.venn import (
 
 #: Re-exported so this module keeps one import surface for its own figure code
 #: and for `test_pareto.py`, which owns the palette's colour-blindness contract.
-#: The definitions live in `venn.py` because they are keyed on `label_for`, and
-#: `venn.py` cannot import this module back.
-from scripts.analysis.v3.modules.venn import (  # noqa: E402  (grouped with the above)
+#: The definitions live under `diagram/common/` because they are keyed on
+#: `label_for`, and because every module that draws a variant needs them; that
+#: package cannot import this one back.
+from scripts.analysis.v3.modules.diagram.common.palette import (  # noqa: E402
     _C_OTHER,
     _LABEL_HUES,
     _VARIANT_HUES,

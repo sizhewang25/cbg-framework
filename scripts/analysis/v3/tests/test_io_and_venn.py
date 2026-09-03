@@ -14,6 +14,12 @@ import pyarrow.parquet as pq
 import pytest
 
 from scripts.analysis.v3.modules import io, venn
+
+# `venn` re-exports the public surface, so almost every test below reads it
+# off there. These two helpers are private to the modules that own them, and
+# a test that pins their contract should say which module it is pinning.
+from scripts.analysis.v3.modules.diagram.common.draw import _draw_circles
+from scripts.analysis.v3.modules.diagram.euler.plot import _euler_label_points
 from pathlib import Path
 
 from scripts.analysis.v3.modules.paths import RunPaths
@@ -696,7 +702,7 @@ def test_a_method_that_is_never_right_is_refused_rather_than_drawn_empty():
 
 def _label_dist(layout, i) -> float:
     """How far set `i`'s label sits from set `i`'s own centre."""
-    lx, ly = venn._euler_label_points(layout)[i]
+    lx, ly = _euler_label_points(layout)[i]
     return float(np.hypot(lx - layout.centres[i][0], ly - layout.centres[i][1]))
 
 
@@ -711,7 +717,7 @@ def test_every_label_sits_on_the_circle_it_names():
     layout = venn.fit_euler_layout(
         m, list(m.columns), restarts=1, grid=140, fit_grid=200
     )
-    points = venn._euler_label_points(layout)
+    points = _euler_label_points(layout)
     assert len(points) == len(layout.order)
     for i in range(len(layout.order)):
         assert _label_dist(layout, i) <= layout.radii[i] + 1e-9
@@ -723,7 +729,7 @@ def test_label_points_carry_no_leader_lines():
     layout = venn.fit_euler_layout(
         m, list(m.columns), restarts=1, grid=140, fit_grid=200
     )
-    for point in venn._euler_label_points(layout):
+    for point in _euler_label_points(layout):
         assert len(point) == 2
         assert all(isinstance(v, float) for v in point)
 
@@ -754,7 +760,7 @@ def test_near_coincident_circles_still_get_separated_labels():
     layout = venn.fit_euler_layout(
         m, list(m.columns), restarts=1, grid=140, fit_grid=300
     )
-    a, b = venn._euler_label_points(layout)
+    a, b = _euler_label_points(layout)
     assert math.hypot(a[0] - b[0], a[1] - b[1]) >= venn.LABEL_MIN_GAP * 0.9
     for i in range(2):
         assert _label_dist(layout, i) <= layout.radii[i] + 1e-9
@@ -805,7 +811,7 @@ def test_circles_are_stacked_largest_first_so_small_sets_stay_visible():
     radii = np.array([0.2, 0.9, 0.5])
     centres = np.zeros((3, 2))
     fig, ax = plt.subplots()
-    venn._draw_circles(ax, order, {m: "#000000" for m in order}, centres, radii)
+    _draw_circles(ax, order, {m: "#000000" for m in order}, centres, radii)
     drawn = [p.get_radius() for p in ax.patches if isinstance(p, Circle)]
     plt.close(fig)
     # Two passes (fills then outlines), each descending by radius.
@@ -820,7 +826,7 @@ def test_equal_radii_leave_the_callers_order_untouched():
     order = ["a", "b", "c"]
     centres = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
     fig, ax = plt.subplots()
-    venn._draw_circles(
+    _draw_circles(
         ax, order, {m: "#000000" for m in order}, centres, np.array([0.5, 0.5, 0.5])
     )
     xs = [p.center[0] for p in ax.patches if isinstance(p, Circle)]

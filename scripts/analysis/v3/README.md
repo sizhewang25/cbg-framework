@@ -19,8 +19,31 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/answer_space.py](modules/answer_space.py) | cmd · `build-answer-space` |
 | [modules/classify.py](modules/classify.py) | cmd · `classify` |
 | [modules/venn.py](modules/venn.py) | cmd · `plot-venn` |
+| [modules/diagram/](modules/diagram/) | lib · the overlap figures `plot-venn` assembles |
 | [modules/map_answer_space.py](modules/map_answer_space.py) | cmd · `plot-answer-space` |
 | [modules/pareto.py](modules/pareto.py) | cmd · `plot-pareto` |
+
+[modules/diagram/](modules/diagram/) is the one package here, split from
+`venn.py` when that module passed 2,000 lines. The split follows the bargain
+each figure makes rather than the file it grew in:
+
+| module | role |
+| --- | --- |
+| [diagram/common/labels.py](modules/diagram/common/labels.py) | method names, artifact filenames, region letters |
+| [diagram/common/palette.py](modules/diagram/common/palette.py) | the validated variant → hue map |
+| [diagram/common/membership.py](modules/diagram/common/membership.py) | the boolean matrix every figure is computed from, and the pooling rules |
+| [diagram/common/tables.py](modules/diagram/common/tables.py) | exact intersection counts + the generic Venn-tool spec |
+| [diagram/common/draw.py](modules/diagram/common/draw.py) | shared matplotlib primitives; selects the Agg backend |
+| [diagram/venn/classic.py](modules/diagram/venn/classic.py) | 2-/3-set Venn + the Shortest-Ping vs ≥1-CBG collapse |
+| [diagram/venn/ring.py](modules/diagram/venn/ring.py) | the `n`-way ring template and its coverage table |
+| [diagram/venn/upset.py](modules/diagram/venn/upset.py) | the UpSet plot |
+| [diagram/euler/layout.py](modules/diagram/euler/layout.py) | area-proportional fitting + its fit table |
+| [diagram/euler/plot.py](modules/diagram/euler/plot.py) | drawing a fitted layout, and label placement |
+
+`venn.py` keeps the two `render_*` functions and the CLI, and **re-exports the
+whole surface** (`__all__`) so `pareto.py`, the tests and any future caller
+still have one name to import. The split is pure code motion: every artifact
+`plot-venn` writes, PNGs included, is byte-identical across it.
 
 [SCHEMA.md](SCHEMA.md) documents the v2 output schemas this layer reads.
 
