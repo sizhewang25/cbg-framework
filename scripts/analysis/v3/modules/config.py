@@ -125,11 +125,11 @@ def grid_on_argv(argv: list[str]) -> str | None:
 def _run_id_for(value: Any, param: click.Parameter) -> Any:
     """Fit a top-level `run_id` to one command's arity, or return `_UNFIT`.
 
-    `plot-pareto` takes `--run-id` repeatably (it pools datasets); the other four
-    score one run at a time. So a cross-run config fits pareto and does not fit
-    them — reported as a named error only for the command actually invoked, since
-    a config that lists three runs is perfectly valid for the command it was
-    written for.
+    `plot-pareto` and `plot-venn` take `--run-id` repeatably (both pool
+    datasets); the rest score one run at a time. So a cross-run config fits those
+    two and does not fit the others — reported as a named error only for the
+    command actually invoked, since a config that lists three runs is perfectly
+    valid for the command it was written for.
     """
     ids = list(value) if isinstance(value, (list, tuple)) else [value]
     if param.multiple:

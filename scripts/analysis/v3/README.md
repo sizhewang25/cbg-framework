@@ -36,6 +36,9 @@ python -m scripts.analysis.v3.cli classify --all-runs
 # 3. Set overlap of correct classifications (repeat per top-N)
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 3
+# pooled across the three operator datasets -> _cross/venn-diagram/
+python -m scripts.analysis.v3.cli plot-venn \
+  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
 
 # 4. Static map of the answer space
 python -m scripts.analysis.v3.cli plot-answer-space --all-runs --us-only
@@ -62,6 +65,7 @@ target-answer-space/       grid_sweep.<grid>.csv
 target-cls-accuracy/
   <grid>-<resolution>/     <method>_seed_distances.parquet  topn_accuracy.csv  manifest.json
                            overlap_{membership,intersections,pairwise}.top<N>.csv
+                           overlap_venn_spec.top<N>.json
                            overlap_venn.top<N>.png  overlap_upset.top<N>.png
 ```
 
@@ -162,9 +166,10 @@ are parsed — `ctx.args` is empty there — so both are read from `sys.argv`:
   grid's number would silently build an answer space nobody asked for. Pass
   `-r` too for a specific rung.
 
-`run_id` may be a list. `plot-pareto` takes `--run-id` repeatably because it
-pools datasets, so `configs/cross-as01-as03.yaml` names three runs; the per-run
-commands say so by name rather than failing on a type.
+`run_id` may be a list. `plot-pareto` and `plot-venn` take `--run-id` repeatably
+because both pool datasets, so `configs/cross-as01-as03.yaml` names three runs
+and serves them both; the per-run commands say so by name rather than failing on
+a type.
 
 ### `benchmark:` is reserved and empty
 
@@ -356,7 +361,7 @@ combo ids.
 `--venn-method` adds an explicit per-method Venn on request.
 
 Venns are drawn **unweighted** — fixed-size circles with counts and percentages
-written into the regions. The correctness sets are routinely nested
+written into the regions. The *collapsed* sets are nested
 (`all-CBG ⊆ Shortest-Ping ⊆ ≥1-CBG` on every run we have), and no
 area-proportional layout can render nesting; area-proportional drawing warned on
 every run for exactly that reason. Since a Venn cannot show the outside region,
@@ -364,6 +369,180 @@ the "none correct" count is annotated below the figure.
 
 Everything is backed by `overlap_membership.top<N>.csv`, so every count is
 checkable without reading a figure.
+
+`overlap_venn_spec.top<N>.json` is the same numbers in the shape a generic Venn
+drawing tool asks for — a set count, one entry per set with a letter id, a name
+and a size, and one entry per combination of two or more sets:
+
+```json
+{
+  "number_of_sets": 6,
+  "n_targets": 1269,
+  "n_none": 189,
+  "relation_convention": "cumulative",
+  "sets": [{"id": "A", "name": "Shortest-Ping", "method": "shortest_ping", "size": 604}],
+  "relations": {"A ^ B": 603, "A ^ B ^ C": 129}
+}
+```
+
+Relations are **cumulative** — `A ^ B` is the full `|A ∩ B|` and counts targets
+that are also in `C`. That is what makes `size` and `relations` satisfy
+inclusion-exclusion, so a tool can solve for the regions itself (a test checks
+the 63 terms sum back to the 1,080 union). `venn_spec(membership,
+exclusive=True)` switches to the disjoint reading `intersection_table` and the
+ring figure use, where `A ^ B` means "A and B and nothing else"; the convention
+is recorded in the document rather than left to be inferred. Empty combinations
+are present with a zero, so a missing key never has to be told apart from an
+empty region. Written for up to 8 sets — past that (as7018's 17 methods) it is
+skipped, since 131,054 relations describe a figure no tool draws.
+
+### Pooling several runs
+
+Passing `--run-id` more than once pools the runs into one population and writes
+to a `_cross/` directory instead of back into any run:
+
+```
+_cross/venn-diagram/as01+as02+as03/
+  overlap_ring_venn.<grid>-<res>.top<N>.png
+  overlap_ring_coverage.<grid>-<res>.top<N>.csv
+  overlap_euler.<grid>-<res>.top<N>.png
+  overlap_euler_fit.<grid>-<res>.top<N>.csv
+  overlap_{venn,upset}.<grid>-<res>.top<N>.png
+  overlap_{membership,intersections,pairwise}.<grid>-<res>.top<N>.csv
+  overlap_venn_spec.<grid>-<res>.top<N>.json
+  manifest.<grid>-<res>.top<N>.json
+```
+
+Cross-run filenames carry the grid slug; per-run ones do not, because the per-run
+directory is already `target-cls-accuracy/<grid>-<res>/` while this one is keyed
+by dataset set alone.
+
+Pooling **stacks** the runs — as01/02/03 have disjoint target sets (all three
+pairwise intersections are empty), so a target belongs to exactly one run and
+1,269 pooled targets is 399 + 412 + 458. Rows are keyed `<run_id>::<target_id>`
+anyway, since disjointness is a property of these datasets rather than of the
+schema. Every run must have scored **exactly** the same methods; equality rather
+than a subset test, or the result would depend on which run was named first —
+as01 + as7018 would either error or silently drop as7018's 10 ablation arms
+depending on the order. `--method` pins a shared subset explicitly.
+
+`overlap_ring_venn` is the conventional presentation "6-way Venn": six equal
+circles on a ring, one per method, with the **exact target count printed in every
+region**. The circles are a **fixed template** — same centres, same radii, every
+run — so nothing about a region's size or position carries data and every
+quantity on the figure is a label. That is deliberate: three area-encoding forms
+were tried first and each either lost the higher-order regions or implied a
+containment the sets do not have (a least-squares Euler fit matched the 15
+pairwise overlaps to a stress of 0.0034 but still misplaced ~41% of targets
+across all regions). Drawn only for 3-8 methods; below that `plot_venn` renders
+the sets exactly.
+
+**Not every observed intersection has a region.** `n` circles on a ring realize
+`n*(n-1)+1` of the `2**n - 1` combinations — 31 of 63 at six methods, and they
+are exactly the subsets contiguous around the ring. A mathematical 6-set Venn
+needs all 63 and cannot be drawn with circles at all, so this is a property of
+the layout, not of the implementation. On as01+as02+as03 that leaves 9
+combinations (195 targets, 18.1% of the 1,080 solved) with nowhere to go. Both
+the figure's footnote and `overlap_ring_coverage.csv` name them; the CSV lists
+every non-empty intersection with a `drawn` flag, and its drawn rows sum to what
+the figure's labels sum to. Targets no method solved are not in it — they sit
+outside the union rather than in an undrawable region — and are reported as
+`n_targets_none_correct` in the manifest.
+
+### The Euler diagram
+
+`overlap_euler` is the ring's opposite. The ring fixes the geometry and prints
+every number; this fits the geometry **to** the numbers and prints none of them:
+
+* a circle's **area** is the share of targets that method gets right;
+* the **area two circles share** is the share both get right;
+* two methods that are never right about the same target are drawn **apart**;
+* a method whose correct set falls inside another's is drawn **inside** it.
+
+Nothing is written in a region, and no number appears anywhere. At six sets
+there are thirty-one regions, and a combination is legible from the arcs that
+bound it — the relationships are read rather than looked up.
+
+Each method's **name alone** labels its circle, in that method's colour, placed
+inside the circle: in the set's own exclusive lobe when the lobe is at least
+`LOBE_LABEL_SHARE` of it, otherwise just inside its boundary on the bearing
+away from the layout's centre, which is the arc least covered by the others.
+Because every label sits on the circle it names, the figure needs no leader
+lines. Near-coincident circles — Shortest-Ping and SoI CBG differ by one target
+— leave on almost the same bearing, so the angles are spread until the labels
+clear `LABEL_MIN_GAP`, each staying on its own circle.
+
+The letters that key `overlap_euler_fit.csv`'s `region` column are **not** drawn
+here; that table names the methods in full alongside them, and the ring's own
+region key (`overlap_ring_regions.png`) is where the letter legend lives.
+
+Each set's label carries its **share of the population** under its name. The
+number is `pi * r**2` — literally the circle's drawn area, not a second
+derivation of it — so the printed value and the ink cannot drift apart.
+**Intersections are not labelled**: a set's area is exact, but an intersection's
+is fitted and disagrees with its observed share by up to the figure's error, so a
+number inside one would contradict the area holding it. The caption reports that
+error in aggregate instead.
+
+Circles are drawn **largest first**, so the biggest set sits at the bottom of the
+stack and the smallest on top. At equal `zorder` matplotlib draws in insertion
+order, so this is the whole mechanism; without it Octant-Hull at 60.4% is laid
+over Vanilla at 34.0% and buries its outline.
+
+The space outside every circle is labelled **None**, with its share — the targets
+no method placed correctly, 14.9% here, the complement of the union's 85.1%. It
+is named because blank space otherwise reads as "nothing here". The label sits
+centred just below the lowest circle, in data units so it tracks the layout;
+`EULER_MARGIN` guarantees that band is clear of every circle whatever the fit
+produced. **Its area alone is not to scale** — the space outside the union is
+leftover frame rather than a fitted share, making it the one label here whose
+number and ink are unrelated, which is why it is drawn muted and outside.
+
+The two figures are complements and neither replaces the other. The ring can
+state that the six-way region holds exactly 12.7% and cannot show that
+Shortest-Ping's correct set sits inside SoI CBG's; the Euler layout shows that
+containment at a glance and cannot quantify anything.
+
+**How faithful it is, measured.** `n` circles have `2n` free parameters — the
+radii are spoken for by the set sizes — against `2**n - 1` regions, so past two
+sets the system is overdetermined and some combination is always misdrawn. The
+figure prints the size of its own error, as the share of targets sitting in a
+region the picture assigns to a different combination:
+
+| methods | placed correctly | largest pair error |
+|---|---|---|
+| 3 (Shortest-Ping, Vanilla, Spotter) | 98.0% | 0.5% |
+| 6 (all) | 84.0% | 5.4% |
+
+Three circles are essentially exact; six are a blob, because on this data every
+one of the fifteen pairs overlaps and four of the six sets cover more than 40%
+of the population each. Use `--method` to cut to the sets a question actually
+needs — that is the lever that makes this figure sharp. `overlap_euler_fit.csv`
+lists every combination with its observed and drawn share and the difference,
+including the regions the layout invents: rows with `n_targets == 0` and a
+positive `delta` are area the picture asserts and the data denies (all under
+0.25% of the population here).
+
+The caption under the figure states the area encoding and the fit's measured
+error. `plot_euler(..., caption=False)` drops it for slide use; it defaults on
+because a layout that misplaces 16% of targets and says nothing about it asserts
+an exactness it does not have.
+
+The fit is deterministic — the starting layout is classical MDS on the ideal
+pairwise separations, the restarts are seeded, and the search is bounded — so
+the same membership matrix always produces the same figure. Empty combinations
+are weighted `EULER_EMPTY_WEIGHT` times a non-empty one in the objective,
+which is what buys the "0% means no overlap" rule at the cost of a little area
+accuracy elsewhere.
+
+`--ring-order` sets the clockwise order from 12 o'clock and must be a
+*permutation* of the scored methods, never a subset: a method left off the ring
+would still be in the membership matrix, so its targets would vanish from the
+figure without being counted as undrawn either. The default is display order, so
+the figure means the same thing in every run — the rule the UpSet column order
+already follows. Which combinations land on a region *does* depend on this order
+(display order draws 885 of the 1,080 solved targets; reordering to maximise
+coverage reaches 959), which is why it is recorded in the manifest.
 
 ## Answer-space map
 

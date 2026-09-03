@@ -1,12 +1,16 @@
-# Cross-run config: the three operator datasets pooled for the accuracy-vs-cost
-# figure. The only unified config naming several runs.
+# Cross-run config: the three operator datasets pooled. The only unified config
+# naming several runs.
 #
 #   python -m scripts.analysis.v3.cli --config configs/cross-as01-as03.yaml plot-pareto
+#   python -m scripts.analysis.v3.cli --config configs/cross-as01-as03.yaml plot-venn
 #
-# `plot-pareto` takes `--run-id` repeatably and consumes the list as-is; the
-# per-run commands score one run at a time and will reject this file by name
-# rather than fail on a type. Use the per-run configs, or `--all-runs`, for
-# those.
+# `plot-pareto` and `plot-venn` both take `--run-id` repeatably and consume the
+# list as-is. The remaining commands score one run at a time and will reject this
+# file by name rather than fail on a type — use the per-run configs, or
+# `--all-runs`, for those.
+#
+# The two commands pool the same three runs into sibling directories:
+# `_cross/cost-accuracy/as01+as02+as03/` and `_cross/venn-diagram/as01+as02+as03/`.
 
 run_id:
   - as01-260728-260802
@@ -25,3 +29,11 @@ analysis:
     cost: runtime
     cost_stat: p50
     cost_rows: all
+
+  # Pooled set overlap. The three runs have disjoint target sets and the same six
+  # methods, so their targets stack into one 1,269-target population. The ring
+  # Venn's clockwise order defaults to display order, which is what makes the
+  # figure comparable across runs; `ring_order` overrides it with a permutation
+  # of the six (worth +74 drawn targets here, at the cost of that comparability).
+  plot-venn:
+    top_n: 1

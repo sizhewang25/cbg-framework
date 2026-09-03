@@ -50,15 +50,45 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.analysis.v3.modules import io
+from scripts.analysis.v3.modules import cross, io
 from scripts.analysis.v3.modules.classify import SHORTEST_PING, TOPN_CSV
+from scripts.analysis.v3.modules.cost import (
+    COST_ROWS,
+    COST_SPECS,
+    COST_STATS,
+    REDUCERS,
+    CostSpec,
+    combo_cost,
+    cost_stats,
+    per_target_cost,
+)
 from scripts.analysis.v3.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
     MissingArtifactError,
     RunPaths,
     grid_slug,
 )
-from scripts.analysis.v3.modules.venn import PREFERRED_ORDER, label_for
+from scripts.analysis.v3.modules.venn import (
+    PREFERRED_ORDER,
+    label_for,
+    method_colors,
+)
+
+#: Re-exported so this module keeps one import surface for its own figure code
+#: and for `test_pareto.py`, which owns the palette's colour-blindness contract.
+#: The definitions live in `venn.py` because they are keyed on `label_for`, and
+#: `venn.py` cannot import this module back.
+from scripts.analysis.v3.modules.venn import (  # noqa: E402  (grouped with the above)
+    _C_OTHER,
+    _LABEL_HUES,
+    _VARIANT_HUES,
+)
+
+#: Extracted to `cross.py` once `plot-venn` grew a cross-run mode too. Bound
+#: here so existing call sites and tests keep one name for them.
+dataset_set_slug = cross.dataset_set_slug
+_short_dataset = cross.short_dataset
+_guard_one_setup = cross.guard_one_setup
 
 
 def short_label(method: str) -> str:
@@ -71,156 +101,16 @@ def short_label(method: str) -> str:
     return label[: -len(" CBG")] if label.endswith(" CBG") else label
 
 # ---------------------------------------------------------------------------
-# § cost model
+# § cost model -- moved to modules/cost.py
 # ---------------------------------------------------------------------------
-
-_BYTES_PER_MB = 1024 * 1024
-
-
-@dataclass(frozen=True)
-class CostSpec:
-    """One cost axis: which columns, how to reduce them, and in what unit."""
-
-    key: str
-    stage_cols: tuple[str, str, str]
-    reduce: str  # "sum" (runtime) | "max" (memory)
-    scale: float
-    unit: str
-    axis_label: str
-    supports_throughput: bool
-    #: Prose name for the figure title; `key` is the CLI flag value and reads
-    #: as an identifier rather than a quantity.
-    title_noun: str
-
-
-#: `reduce` is the field `plot_accuracy_cost_box._COST_SPECS` lacks — it sums
-#: memory across stages, which double-counts the per-stage tracemalloc pedestal
-#: and assumes nothing is released between stages.
-COST_SPECS: dict[str, CostSpec] = {
-    "runtime": CostSpec(
-        key="runtime",
-        stage_cols=("ltd_ms", "mtl_ms", "ctr_ms"),
-        reduce="sum",
-        scale=1.0,
-        unit="ms",
-        axis_label="Per-target runtime (ms)",
-        supports_throughput=True,
-        title_noun="per-target runtime",
-    ),
-    "memory_alloc": CostSpec(
-        key="memory_alloc",
-        stage_cols=(
-            "ltd_alloc_peak_bytes",
-            "mtl_alloc_peak_bytes",
-            "ctr_alloc_peak_bytes",
-        ),
-        reduce="max",
-        scale=1.0 / _BYTES_PER_MB,
-        unit="MB",
-        axis_label="Per-target peak tracemalloc (MB)",
-        supports_throughput=False,
-        title_noun="peak memory (tracemalloc)",
-    ),
-    "memory_rss": CostSpec(
-        key="memory_rss",
-        stage_cols=("ltd_rss_peak_bytes", "mtl_rss_peak_bytes", "ctr_rss_peak_bytes"),
-        reduce="max",
-        scale=1.0 / _BYTES_PER_MB,
-        unit="MB",
-        axis_label="Per-target peak sampled RSS (MB)",
-        supports_throughput=False,
-        title_noun="peak memory (sampled RSS)",
-    ),
-}
+# `CostSpec`, `COST_SPECS`, the null policy and the reduce-then-percentile
+# discipline now live in `cost.py`: three commands depend on them, so they no
+# longer belong beside this one figure. Policies 2 and 3 of this module's
+# docstring moved with them. These two are `plot-pareto`'s own CLI defaults and
+# stay here -- the phase commands default differently.
 
 DEFAULT_COST = "runtime"
 DEFAULT_COST_STAT = "p50"
-COST_STATS: tuple[str, ...] = ("p50", "p75", "p90", "p95", "mean")
-COST_ROWS: tuple[str, ...] = ("all", "solved")
-MEMORY_REDUCERS: tuple[str, ...] = ("max", "sum")
-
-_STAT_QUANTILE = {"p50": 50.0, "p75": 75.0, "p90": 90.0, "p95": 95.0}
-
-
-def per_target_cost(
-    df: pd.DataFrame, spec: CostSpec, *, reduce: str | None = None
-) -> np.ndarray:
-    """One cost per target, in `spec.unit`.
-
-    Order matters and is the one thing this function exists to pin: null-fill
-    each stage, reduce **across stages per target**, and only then let the
-    caller percentile the result. `plot_phase_runtime._total_runtime_stat`
-    documents why for sums (a median does not distribute over a sum); the same
-    holds for `max`.
-
-    Nulls fill to 0 because a null stage never ran — a skipped CTR on a FALLBACK
-    row cost nothing. The one exception is the LTD column, which
-    `TARGETS_SCHEMA` declares non-nullable precisely because LTD always runs: if
-    *it* is entirely null the run was not instrumented, which is absence of
-    measurement rather than absence of work. That returns all-NaN so the caller
-    can refuse to plot it; filling it to 0 would manufacture a free method that
-    then dominates the entire frontier.
-    """
-    reduce = reduce or spec.reduce
-    if reduce not in MEMORY_REDUCERS:
-        raise ValueError(f"reduce must be one of {list(MEMORY_REDUCERS)}; got {reduce!r}")
-    missing = [c for c in spec.stage_cols if c not in df.columns]
-    if missing:
-        raise MissingArtifactError(
-            f"cost columns {missing} absent. The pre-{'c7ee30a'} schema named these "
-            f"`{{ltd,mtl,ctr}}_peak_bytes`; re-run the benchmark to get the "
-            f"dual-channel columns this analysis needs."
-        )
-
-    stages: list[np.ndarray] = []
-    for idx, col in enumerate(spec.stage_cols):
-        s = pd.to_numeric(df[col], errors="coerce")
-        if idx == 0 and s.isna().all():
-            return np.full(len(df), np.nan)
-        stages.append(s.fillna(0.0).to_numpy(dtype=float))
-
-    stack = np.vstack(stages) if stages else np.zeros((1, len(df)))
-    total = stack.sum(axis=0) if reduce == "sum" else stack.max(axis=0)
-    return total * spec.scale
-
-
-def cost_stats(values: np.ndarray) -> dict[str, float]:
-    """p50/p75/p90/p95/mean/min/max/n over the finite values; NaN in -> NaN out."""
-    arr = np.asarray(values, dtype=float)
-    arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        out = {k: float("nan") for k in ("p50", "p75", "p90", "p95", "mean", "min", "max")}
-        out["n"] = 0
-        return out
-    out = {k: float(np.percentile(arr, q)) for k, q in _STAT_QUANTILE.items()}
-    out["mean"] = float(arr.mean())
-    out["min"] = float(arr.min())
-    out["max"] = float(arr.max())
-    out["n"] = int(arr.size)
-    return out
-
-
-def combo_cost(
-    run: RunPaths,
-    combo_id: str,
-    spec: CostSpec,
-    *,
-    rows: str = "all",
-    reduce: str | None = None,
-) -> tuple[dict[str, float], int]:
-    """Cost stats for one combo, pooled over folds. Returns (stats, n_rows_used).
-
-    `columns` is passed explicitly so the nested `ltd_predictions` /
-    `mtl_participants` columns are never read (they dominate the file size) while
-    `load_folds`' K-fold disjointness check still runs.
-    """
-    if rows not in COST_ROWS:
-        raise ValueError(f"rows must be one of {list(COST_ROWS)}; got {rows!r}")
-    cols = ["target_id", "status", *spec.stage_cols]
-    df = io.load_folds(run, combo_id, columns=cols)
-    if rows == "solved":
-        df = df[df["status"].isin(io.CBG_SUCCESS_STATUSES)]
-    return cost_stats(per_target_cost(df, spec, reduce=reduce)), len(df)
 
 
 # ---------------------------------------------------------------------------
@@ -496,38 +386,6 @@ import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-#: Fixed variant -> hue, assigned by **identity** (`venn.PREFERRED_ORDER`) and
-#: never by cost rank, so `--method` cannot repaint the survivors.
-#:
-#: Validated with the dataviz skill's `validate_palette.js` against the
-#: reference 8-hue categorical theme, `--pairs all` on white — the right check
-#: here, since every variant is visible at once. Every 6/7/8-slot prefix of that
-#: theme FAILS (green vs orange is dE 3.2 under protanopia), and an exhaustive
-#: search over its hues found exactly two passing 6-subsets; this is the better
-#: one, worst dE 6.9 (deutan) / 7.6 (tritan). Orange is the hue that had to go.
-#:
-#: dE 6.9 sits in the 6-8 band that is legal *only* with secondary encoding.
-#: That is satisfied three times over: each variant owns its own x column (they
-#: never interleave spatially), the legend names every one, and the CSV is the
-#: table view. Aqua/yellow/magenta are also below 3:1 on white (2.82/2.17/2.69),
-#: a contrast WARN that obliges visible labels or a table view — the legend and
-#: CSV again. No 6-subset of this theme clears 3:1 for all six (only five hues
-#: do), so at six variants that is unavoidable rather than a shortcut; the 2 px
-#: cost line and ringed >=8 px markers give each variant more ink than a dot.
-_VARIANT_HUES: tuple[str, ...] = (
-    "#2a78d6",  # blue
-    "#1baf7a",  # aqua
-    "#eda100",  # yellow
-    "#008300",  # green
-    "#4a3aa7",  # violet
-    "#e34948",  # red
-)
-
-#: Past the palette's capacity a 9th series is never a generated hue — it folds
-#: into one "other" bucket. as7018 carries 11 ablation arms on top of the five
-#: published variants, and they belong in that bucket.
-_C_OTHER = "#898781"
-
 _C_LINE = "#898781"  # the per-dataset polylines: neutral, because hue is taken
 _C_GRID = "#e1e0d9"
 _C_AXIS = "#c3c2b7"
@@ -541,61 +399,6 @@ _SURFACE = "#ffffff"
 #: so a dataset keeps its symbol across every figure in a sweep.
 _DATASET_MARKERS = ("o", "s", "^", "D", "v", "P", "X")
 _DATASET_LINESTYLES = ("-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 2)), (0, (1, 1)))
-
-
-def _short_dataset(run_id: str) -> str:
-    """`as01-260728-260802` -> `as01`; anything else unchanged.
-
-    The date range is identical across the runs being compared (it is what
-    makes them comparable), so printing it three times in a legend costs width
-    and carries no information. Only a trailing all-numeric tail is stripped,
-    so `as7018_us_test01` survives intact.
-    """
-    parts = run_id.split("-")
-    if len(parts) > 1 and all(p.isdigit() for p in parts[1:]):
-        return parts[0]
-    return run_id
-
-
-def _build_label_hues() -> dict[str, str]:
-    """Display label -> hue, fixed once from `venn.PREFERRED_ORDER`.
-
-    Keyed on the *label* rather than the combo id so `octant_cbg_spl` and
-    `octant_cbg` land on one hue: they are one paper variant whose id differs
-    per run, which is why `venn.LABELS` already maps both onto
-    "Octant-Spline CBG". Two hues would invent a distinction the runs do not
-    contain. That aliasing is also what makes the six published variants fit the
-    six validated hues exactly.
-    """
-    hues: dict[str, str] = {}
-    for method in PREFERRED_ORDER:
-        label = label_for(method)
-        if label in hues:
-            continue
-        if len(hues) < len(_VARIANT_HUES):
-            hues[label] = _VARIANT_HUES[len(hues)]
-    return hues
-
-
-#: Computed once, at import, from a constant order — never from the methods
-#: present in a given call. This is what makes colour stable under `--method`.
-_LABEL_HUES: dict[str, str] = _build_label_hues()
-
-
-def method_colors(methods) -> dict[str, str]:
-    """Variant -> hue, stable under filtering.
-
-    Each hue is pinned to a variant's *identity* via `_LABEL_HUES`, which is
-    built from a fixed order at import time. Filtering the method pool with
-    `--method` therefore cannot repaint the survivors — colour follows the
-    entity, never its rank in the current selection, and the same variant is
-    the same colour in every figure of a sweep.
-
-    Anything `venn.PREFERRED_ORDER` does not name — as7018's 11 ablation arms —
-    folds into the single `_C_OTHER` bucket rather than being handed a generated
-    hue, because no palette distinguishes 17 series.
-    """
-    return {m: _LABEL_HUES.get(label_for(m), _C_OTHER) for m in methods}
 
 
 def dataset_lines(
@@ -791,38 +594,14 @@ def plot_pareto(
 # § output naming
 # ---------------------------------------------------------------------------
 
-#: Cross-dataset artifacts have no per-run home (`RunPaths.analysis_dir` is
-#: run-scoped), so they get a sibling directory. The leading underscore means it
-#: can never collide with a `run_id`.
-CROSS_DIRNAME = "_cross"
-
-
-def dataset_set_slug(run_ids) -> str:
-    """A stable directory name for one *set* of datasets.
-
-    The dataset set is a parameter of every number in these artifacts, so it
-    has to appear in the path — the cost channel, grid, top-N and fit policy are
-    all in the filename, but without this a run over `as7018_us_test01` writes
-    the same `pareto_runtime.healpix-128.top1.csv` as a run over as01+as02+as03
-    and silently replaces it. Long sets are truncated and hashed so the name
-    stays a usable directory while still being unique.
-    """
-    import hashlib
-
-    short = sorted(_short_dataset(r) for r in run_ids)
-    slug = "+".join(short)
-    if len(slug) <= 60:
-        return slug
-    digest = hashlib.sha1("+".join(sorted(run_ids)).encode()).hexdigest()[:8]
-    return f"{len(short)}sets-{digest}"
+#: This module's artifact kind under `_cross/`. Bound here rather than passed
+#: at the call site so every `plot-pareto` artifact lands in one directory.
+CROSS_KIND = "cost-accuracy"
 
 
 def cross_dir(analysis_root: Path | None = None, run_ids=None) -> Path:
-    base = (analysis_root or DEFAULT_ANALYSIS_ROOT) / CROSS_DIRNAME / "cost-accuracy"
-    if run_ids is not None:
-        base = base / dataset_set_slug(run_ids)
-    base.mkdir(parents=True, exist_ok=True)
-    return base
+    """`<analysis_root>/_cross/cost-accuracy/<dataset-set-slug>/`."""
+    return cross.cross_dir(analysis_root, run_ids, kind=CROSS_KIND)
 
 
 def artifact_name(
@@ -900,30 +679,6 @@ def order_columns(wide: pd.DataFrame, *, top_n: int) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # § CLI
 # ---------------------------------------------------------------------------
-
-def _guard_one_setup(runs: dict[str, RunPaths], *, allow_mixed: bool) -> None:
-    """Refuse to pool `anchors_to_probes` with `probes_to_anchors`.
-
-    SCHEMA.md §7: the two run families swap the VP and target roles, so their
-    costs and accuracies describe different experiments. Pooling them onto one
-    frontier would compare a 134-VP fleet against a 53-VP one as though the
-    difference were the variant's.
-    """
-    setups = sorted({r.setup for r in runs.values()})
-    if len(setups) > 1 and not allow_mixed:
-        import typer
-
-        by_setup = {
-            s: sorted(rid for rid, r in runs.items() if r.setup == s) for s in setups
-        }
-        raise typer.BadParameter(
-            f"selected runs span {len(setups)} setups: "
-            + "; ".join(f"{s} = {v}" for s, v in by_setup.items())
-            + ". These swap the VP/target roles (SCHEMA.md §7), so one frontier over "
-            "both would not be a like-for-like comparison. Pass --allow-mixed-setups "
-            "to override, or select runs from one setup."
-        )
-
 
 def register(app) -> None:
     import typer
@@ -1036,8 +791,8 @@ def register(app) -> None:
             raise typer.BadParameter(f"--cost-stat must be one of {list(COST_STATS)}")
         if cost_rows not in COST_ROWS:
             raise typer.BadParameter(f"--cost-rows must be one of {list(COST_ROWS)}")
-        if memory_reduce not in MEMORY_REDUCERS:
-            raise typer.BadParameter(f"--memory-reduce must be one of {list(MEMORY_REDUCERS)}")
+        if memory_reduce not in REDUCERS:
+            raise typer.BadParameter(f"--memory-reduce must be one of {list(REDUCERS)}")
         if x not in ("cost", "throughput"):
             raise typer.BadParameter("--x must be 'cost' or 'throughput'")
 

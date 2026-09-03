@@ -1,8 +1,7 @@
 """Cost model, encoding, and artifact naming for `plot-pareto`.
 
-The cost-model tests exist because three of its policies are counter-intuitive
-and were each chosen against a measured alternative: reduce-then-percentile,
-max-not-sum for memory, and an all-rows cost denominator.
+The cost-model tests live in `test_cost.py` -- `cost.py` owns those policies
+now, since three commands depend on them.
 
 The encoding tests exist because colour now carries variant identity, which
 makes colour assignment a correctness question rather than a styling one: a
@@ -19,108 +18,9 @@ import pyarrow.parquet as pq
 import pytest
 
 from scripts.analysis.v3.modules import pareto as P
+from scripts.analysis.v3.modules.cost import COST_SPECS
 from scripts.analysis.v3.modules.classify import SHORTEST_PING
 from scripts.analysis.v3.modules.paths import MissingArtifactError, RunPaths
-
-# ---------------------------------------------------------------------------
-# cost model
-# ---------------------------------------------------------------------------
-
-
-def _cost_frame(ltd, mtl, ctr, status=None):
-    n = len(ltd)
-    return pd.DataFrame(
-        {
-            "target_id": [f"t{i}" for i in range(n)],
-            "status": status or ["SUCCESS"] * n,
-            "ltd_ms": ltd,
-            "mtl_ms": mtl,
-            "ctr_ms": ctr,
-        }
-    )
-
-
-def test_reduce_happens_per_target_before_the_percentile():
-    """The regression this pins: a median does not distribute over a sum.
-
-    Per-stage medians are 1, 10, 100 -> 111, but no single target costs 111.
-    """
-    df = _cost_frame([1.0, 1.0, 5.0], [10.0, 50.0, 10.0], [100.0, 1.0, 1.0])
-    got = P.per_target_cost(df, P.COST_SPECS["runtime"])
-    assert sorted(got) == [16.0, 52.0, 111.0]
-    assert float(np.median(got)) == 52.0
-    naive = sum(float(np.median(df[c])) for c in ("ltd_ms", "mtl_ms", "ctr_ms"))
-    assert naive != float(np.median(got))
-
-
-def test_memory_max_reduce_is_at_most_the_sum_and_usually_less():
-    spec = P.COST_SPECS["runtime"]  # reuse the ms columns as a stand-in
-    df = _cost_frame([3.0, 1.0], [7.0, 1.0], [2.0, 1.0])
-    mx = P.per_target_cost(df, spec, reduce="max")
-    sm = P.per_target_cost(df, spec, reduce="sum")
-    assert mx.tolist() == [7.0, 1.0]
-    assert sm.tolist() == [12.0, 3.0]
-    assert np.all(mx <= sm)
-
-
-def test_a_null_stage_on_one_row_costs_nothing_but_keeps_the_row():
-    """A skipped CTR on a FALLBACK row did no work; the target still exists."""
-    df = _cost_frame([1.0, 2.0], [3.0, 4.0], [5.0, None])
-    got = P.per_target_cost(df, P.COST_SPECS["runtime"])
-    assert got.tolist() == [9.0, 6.0]
-
-
-def test_an_uninstrumented_ltd_column_is_nan_not_zero():
-    """The regression this guards: fillna(0) manufacturing a free method that
-    then dominates the entire frontier."""
-    df = _cost_frame([None, None], [3.0, 4.0], [5.0, 6.0])
-    got = P.per_target_cost(df, P.COST_SPECS["runtime"])
-    assert np.isnan(got).all()
-
-
-def test_legacy_single_channel_schema_fails_loudly():
-    df = pd.DataFrame({"target_id": ["t0"], "status": ["SUCCESS"], "ltd_peak_bytes": [1]})
-    with pytest.raises(MissingArtifactError, match="cost columns"):
-        P.per_target_cost(df, P.COST_SPECS["memory_alloc"])
-
-
-def test_all_rows_and_solved_only_costs_differ_on_fallback_rows():
-    """The as02 `vanilla_cbg` shape: `ctr_ms` null on exactly the FALLBACK rows.
-
-    Solved-only reads higher, which is why the default denominator is `all` —
-    it has to match `accuracy_topN`'s.
-    """
-    df = _cost_frame(
-        [1.0, 1.0, 1.0, 1.0],
-        [5.0, 5.0, 5.0, 5.0],
-        [20.0, 20.0, None, None],
-        status=["SUCCESS", "SUCCESS", "FALLBACK", "FALLBACK"],
-    )
-    spec = P.COST_SPECS["runtime"]
-    all_rows = P.cost_stats(P.per_target_cost(df, spec))["p50"]
-    solved = P.cost_stats(
-        P.per_target_cost(df[df["status"] == "SUCCESS"], spec)
-    )["p50"]
-    assert all_rows == 16.0 and solved == 26.0
-
-
-def test_bytes_scale_to_mb():
-    spec = P.COST_SPECS["memory_alloc"]
-    df = pd.DataFrame(
-        {
-            "target_id": ["t0"],
-            "status": ["SUCCESS"],
-            "ltd_alloc_peak_bytes": [2 * 1024 * 1024],
-            "mtl_alloc_peak_bytes": [1024 * 1024],
-            "ctr_alloc_peak_bytes": [0],
-        }
-    )
-    assert P.per_target_cost(df, spec).tolist() == [2.0]  # max-reduced
-
-
-def test_cost_stats_on_an_all_nan_input_is_nan_not_zero():
-    st = P.cost_stats(np.array([np.nan, np.nan]))
-    assert st["n"] == 0 and np.isnan(st["p50"])
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +118,7 @@ def test_short_label_drops_the_redundant_cbg_suffix():
 def test_shortest_ping_is_charged_exactly_zero_on_both_axes():
     row = pd.Series({"accuracy": 0.37, "n_targets": 412})
     for key in ("runtime", "memory_alloc", "memory_rss"):
-        got = P.shortest_ping_row("as02", row, P.COST_SPECS[key])
+        got = P.shortest_ping_row("as02", row, COST_SPECS[key])
         assert got["cost"] == 0.0 and got["cost_basis"] == "analytical"
         assert bool(got["is_baseline"])
 
@@ -257,7 +157,7 @@ def test_end_to_end_emits_a_csv_and_a_readable_figure(tmp_path):
     run = _make_run(tmp_path, combos=("vanilla_cbg",))
     csv = _acc_csv(tmp_path, methods=("shortest_ping", "vanilla_cbg"))
     long, notes = P.load_cost_accuracy(
-        {"r": csv}, {"r": run}, top_n=1, spec=P.COST_SPECS["runtime"]
+        {"r": csv}, {"r": run}, top_n=1, spec=COST_SPECS["runtime"]
     )
     assert set(long["method"]) == {SHORTEST_PING, "vanilla_cbg"}
     wide = P.aggregate_methods(long, top_n=1)
@@ -270,7 +170,7 @@ def test_end_to_end_emits_a_csv_and_a_readable_figure(tmp_path):
 
     png = P.plot_pareto(
         wide, long, tmp_path / "f.png",
-        spec=P.COST_SPECS["runtime"], top_n=1, subtitle="test",
+        spec=COST_SPECS["runtime"], top_n=1, subtitle="test",
     )
     assert png.exists() and png.stat().st_size > 5_000
 
@@ -281,13 +181,13 @@ def test_a_zero_cost_method_survives_the_log_axis(tmp_path):
     run = _make_run(tmp_path)
     csv = _acc_csv(tmp_path, methods=("shortest_ping", "vanilla_cbg"))
     long, _ = P.load_cost_accuracy(
-        {"r": csv}, {"r": run}, top_n=1, spec=P.COST_SPECS["runtime"]
+        {"r": csv}, {"r": run}, top_n=1, spec=COST_SPECS["runtime"]
     )
     wide = P.aggregate_methods(long, top_n=1)
     assert (wide.loc[wide["method"] == SHORTEST_PING, "cost"] == 0.0).all()
     png = P.plot_pareto(
         wide, long, tmp_path / "z.png",
-        spec=P.COST_SPECS["runtime"], top_n=1, subtitle="test",
+        spec=COST_SPECS["runtime"], top_n=1, subtitle="test",
     )
     assert png.stat().st_size > 5_000
 
@@ -302,7 +202,7 @@ def test_a_method_missing_from_one_dataset_is_flagged(tmp_path):
     with pytest.warns(UserWarning, match="no combo dir on disk"):
         long, notes = P.load_cost_accuracy(
             {"r1": c1, "r2": c2}, {"r1": r1, "r2": r2},
-            top_n=1, spec=P.COST_SPECS["runtime"],
+            top_n=1, spec=COST_SPECS["runtime"],
         )
     wide = P.aggregate_methods(long, top_n=1).set_index("method")
     assert bool(wide.loc["spotter_cbg", "partial_coverage"])
@@ -318,7 +218,7 @@ def test_strict_membership_turns_the_warning_into_a_failure(tmp_path):
     with pytest.raises(MissingArtifactError, match="no combo dir on disk"):
         P.load_cost_accuracy(
             {"r1": c1}, {"r1": r1}, top_n=1,
-            spec=P.COST_SPECS["runtime"], strict_membership=True,
+            spec=COST_SPECS["runtime"], strict_membership=True,
         )
 
 
@@ -329,7 +229,7 @@ def test_amortizing_fit_into_peak_memory_is_refused(tmp_path):
     with pytest.raises(ValueError, match="runtime only"):
         P.load_cost_accuracy(
             {"r": csv}, {"r": run}, top_n=1,
-            spec=P.COST_SPECS["memory_alloc"], amortize_fit=True,
+            spec=COST_SPECS["memory_alloc"], amortize_fit=True,
         )
 
 
@@ -347,7 +247,7 @@ def test_accuracy_range_is_the_cross_dataset_spread(tmp_path):
         ).to_csv(p, index=False)
     long, _ = P.load_cost_accuracy(
         {"r1": c1, "r2": c2}, {"r1": r1, "r2": r2},
-        top_n=1, spec=P.COST_SPECS["runtime"],
+        top_n=1, spec=COST_SPECS["runtime"],
     )
     wide = P.aggregate_methods(long, top_n=1)
     assert wide["accuracy_range"].iloc[0] == pytest.approx(0.25)
@@ -499,13 +399,13 @@ def test_figure_renders_with_one_dataset_so_the_cost_bar_is_degenerate(tmp_path)
     run = _make_run(tmp_path, combos=("vanilla_cbg",))
     csv = _acc_csv(tmp_path, methods=("shortest_ping", "vanilla_cbg"))
     long, _ = P.load_cost_accuracy(
-        {"r": csv}, {"r": run}, top_n=1, spec=P.COST_SPECS["runtime"]
+        {"r": csv}, {"r": run}, top_n=1, spec=COST_SPECS["runtime"]
     )
     wide = P.aggregate_methods(long, top_n=1)
     assert (wide["cost_min"] == wide["cost_max"]).all()  # nothing to span
     out = P.plot_pareto(
         wide, long, tmp_path / "one.png",
-        spec=P.COST_SPECS["runtime"], top_n=1, subtitle="one dataset",
+        spec=COST_SPECS["runtime"], top_n=1, subtitle="one dataset",
     )
     assert out.stat().st_size > 5_000
 
@@ -515,14 +415,14 @@ def test_figure_renders_with_the_other_bucket_populated(tmp_path):
     run = _make_run(tmp_path, combos=combos)
     csv = _acc_csv(tmp_path, methods=("shortest_ping",) + combos)
     long, _ = P.load_cost_accuracy(
-        {"r": csv}, {"r": run}, top_n=1, spec=P.COST_SPECS["runtime"]
+        {"r": csv}, {"r": run}, top_n=1, spec=COST_SPECS["runtime"]
     )
     wide = P.aggregate_methods(long, top_n=1)
     colors = P.method_colors(list(wide["method"]))
     assert sum(1 for v in colors.values() if v == P._C_OTHER) == 2
     out = P.plot_pareto(
         wide, long, tmp_path / "many.png",
-        spec=P.COST_SPECS["runtime"], top_n=1, subtitle="overflow",
+        spec=COST_SPECS["runtime"], top_n=1, subtitle="overflow",
     )
     assert out.stat().st_size > 5_000
 
@@ -538,7 +438,7 @@ def test_throughput_maps_a_zero_cost_to_nan_not_inf(tmp_path):
     run = _make_run(tmp_path, combos=("vanilla_cbg",))
     csv = _acc_csv(tmp_path, methods=("shortest_ping", "vanilla_cbg"))
     long, _ = P.load_cost_accuracy(
-        {"r": csv}, {"r": run}, top_n=1, spec=P.COST_SPECS["runtime"]
+        {"r": csv}, {"r": run}, top_n=1, spec=COST_SPECS["runtime"]
     )
     wide = P.aggregate_methods(long, top_n=1)
     tw, tl = P.to_throughput(wide, long)
@@ -546,6 +446,6 @@ def test_throughput_maps_a_zero_cost_to_nan_not_inf(tmp_path):
     assert sp.isna().all() and not np.isinf(tw["cost"]).any()
     out = P.plot_pareto(
         tw, tl, tmp_path / "thru.png",
-        spec=P.COST_SPECS["runtime"], top_n=1, subtitle="throughput",
+        spec=COST_SPECS["runtime"], top_n=1, subtitle="throughput",
     )
     assert out.stat().st_size > 5_000
