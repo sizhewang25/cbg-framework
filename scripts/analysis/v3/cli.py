@@ -5,6 +5,7 @@ registers them, so adding a command means adding a module and one name to
 `_COMMAND_MODULES`.
 
     python -m scripts.analysis.v3.cli build-answer-space --run-id as01-260728-260802
+    python -m scripts.analysis.v3.cli build-bipartite-graph --run-id as01-260728-260802
     python -m scripts.analysis.v3.cli classify --run-id as01-260728-260802
     python -m scripts.analysis.v3.cli plot-venn --run-id as01-260728-260802
 
@@ -24,9 +25,11 @@ import typer
 
 from scripts.analysis.v3.modules import (
     answer_space,
+    bipartite,
     classify,
     config as config_mod,
     map_answer_space,
+    map_bipartite,
     pareto,
     venn,
 )
@@ -38,7 +41,15 @@ app = typer.Typer(
 )
 
 #: Modules exposing `register(app)`. Order fixes `--help` listing order.
-_COMMAND_MODULES = (answer_space, classify, venn, map_answer_space, pareto)
+_COMMAND_MODULES = (
+    answer_space,
+    bipartite,
+    classify,
+    venn,
+    map_answer_space,
+    map_bipartite,
+    pareto,
+)
 
 for _module in _COMMAND_MODULES:
     _module.register(app)

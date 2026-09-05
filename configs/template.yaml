@@ -16,7 +16,7 @@
 #      `top_n` inconsistency between `classify` and `plot-venn`.
 #   3. `common:` keys apply to every command that declares them, and only
 #      those. `grid` / `resolution` / `sweep` / `outputs_root` /
-#      `analysis_root` exist on all five; `top_n` on two; `method` on two.
+#      `analysis_root` exist on all seven; `top_n` on two; `method` on two.
 #   4. Relative paths resolve against the repo root, not the cwd.
 #
 # Precedence is click's own: explicit flag > this config > CLI default. So
@@ -34,7 +34,7 @@
 # create a second source of truth that can silently disagree with the tree.
 #
 # A list pools several runs. `plot-pareto` takes it as-is (that command exists
-# to compare datasets); the other four score one run at a time and will say so
+# to compare datasets); the other five score one run at a time and will say so
 # rather than fail on a type.
 run_id: TEMPLATE_RUN_ID
 
@@ -60,6 +60,22 @@ analysis:
 
   build-answer-space: {}
     # no parameters beyond `common:`
+
+  build-bipartite-graph: {}
+    # no parameters beyond `common:`. Two escape hatches exist:
+    # answer_space: null              # explicit dir; overrides grid/resolution
+    # source_csv: null                # the canonical (vp,target,rtt) CSV.
+    #                                 # Defaults to the path the run's
+    #                                 # eval_source/*_eval_stats.json records,
+    #                                 # which is why `benchmark: {}` is enough.
+
+  plot-bipartite-graph:
+    # us_only: false                  # clamp to the continental US
+    # extent: [-125.0, -66.0, 24.0, 50.0]   # overrides us_only
+    # no_voronoi: false               # true drops the decision-boundary overlay
+    # no_vp_cells: false              # true drops the VP-occupied-cell outlines
+    # max_segments: null              # cap the flow map's distinct lines
+    # bipartite_dir: null             # explicit dir; overrides grid/resolution
 
   classify:
     topn: "1,3"                       # comma-separated string, not a list

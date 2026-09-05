@@ -16,11 +16,14 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/grid.py](modules/grid.py) | lib · grid interface + registry |
 | [modules/h3grid.py](modules/h3grid.py) | lib · H3 hexagons (**default**) |
 | [modules/healpix.py](modules/healpix.py) | lib · HEALPix equal-area quads, nesting |
+| [modules/mapping.py](modules/mapping.py) | lib · shared cartopy layers, the seed Voronoi, great-circle polylines |
 | [modules/answer_space.py](modules/answer_space.py) | cmd · `build-answer-space` |
+| [modules/bipartite.py](modules/bipartite.py) | cmd · `build-bipartite-graph` |
 | [modules/classify.py](modules/classify.py) | cmd · `classify` |
 | [modules/venn.py](modules/venn.py) | cmd · `plot-venn` |
 | [modules/diagram/](modules/diagram/) | lib · the overlap figures `plot-venn` assembles |
 | [modules/map_answer_space.py](modules/map_answer_space.py) | cmd · `plot-answer-space` |
+| [modules/map_bipartite.py](modules/map_bipartite.py) | cmd · `plot-bipartite-graph` |
 | [modules/pareto.py](modules/pareto.py) | cmd · `plot-pareto` |
 
 [modules/diagram/](modules/diagram/) is the one package here, split from
@@ -53,20 +56,24 @@ still have one name to import. The split is pure code motion: every artifact
 # 1. Quantize targets -> seeds (answer space). Defaults to h3 res 4.
 python -m scripts.analysis.v3.cli build-answer-space --all-runs
 
-# 2. Score every method against it (distance to ALL seeds)
+# 2. Read the VP side and the measured edges -> the §7.3 dataset geometry
+python -m scripts.analysis.v3.cli build-bipartite-graph --all-runs
+python -m scripts.analysis.v3.cli plot-bipartite-graph --all-runs --us-only
+
+# 3. Score every method against the answer space (distance to ALL seeds)
 python -m scripts.analysis.v3.cli classify --all-runs
 
-# 3. Set overlap of correct classifications (repeat per top-N)
+# 4. Set overlap of correct classifications (repeat per top-N)
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 3
 # pooled across the three operator datasets -> _cross/venn-diagram/
 python -m scripts.analysis.v3.cli plot-venn \
   --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
 
-# 4. Static map of the answer space
+# 5. Static map of the answer space
 python -m scripts.analysis.v3.cli plot-answer-space --all-runs --us-only
 
-# 5. Accuracy vs cost across datasets (colour = variant, symbol = dataset)
+# 6. Accuracy vs cost across datasets (colour = variant, symbol = dataset)
 python -m scripts.analysis.v3.cli plot-pareto \
     --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802 \
     --grid h3 -r 4 --cost runtime --top-n 1
@@ -85,6 +92,11 @@ with the wrong grid. Outputs land under `outputs/analysis/v3/<run_id>/`:
 target-answer-space/       grid_sweep.<grid>.csv
   <grid>-<resolution>/     seeds.csv  assignments.csv  seed_mesh_km.csv  meta.json
                            answer_space_map.png
+bipartite-graph/
+  <grid>-<resolution>/     vp_nodes.csv  target_nodes.csv  edge_segments.csv
+                           edge_length_cdf.csv  pairwise_distance_cdf.csv  meta.json
+                           bipartite_nodes_map.png  bipartite_flows_map.png
+                           distance_cdf.png
 target-cls-accuracy/
   <grid>-<resolution>/     <method>_seed_distances.parquet  topn_accuracy.csv  manifest.json
                            overlap_{membership,intersections,pairwise}.top<N>.csv
@@ -114,7 +126,7 @@ applied on load.
 
 ## One config per run
 
-The pipeline above repeats `--grid`, `-r` and the top-N on five commands, and
+The pipeline above repeats `--grid`, `-r` and the top-N on seven commands, and
 they have to agree or the artifacts land in mismatched directories. A unified
 config declares them once, `configs/<run_id>.yaml`:
 
@@ -122,9 +134,11 @@ config declares them once, `configs/<run_id>.yaml`:
 run_id: as7018_us_test01
 benchmark: {}                  # reserved; see below
 analysis:
-  common:            {grid: h3, resolution: [4]}
-  build-answer-space: {}
-  classify:          {topn: "1,3"}
+  common:               {grid: h3, resolution: [4]}
+  build-answer-space:    {}
+  build-bipartite-graph: {}
+  plot-bipartite-graph:  {us_only: true}
+  classify:             {topn: "1,3"}
   plot-venn:         {top_n: 1}
   plot-answer-space: {us_only: true}
   plot-pareto:       {top_n: 1, cost: runtime, cost_stat: p50}
@@ -162,7 +176,7 @@ the real signatures and cannot drift from them.
    `plot-venn`. One mechanical rule, no inversion layer, so the validator is
    exact.
 3. **`common:` applies a key only where the param exists.** `grid`,
-   `resolution`, `sweep` and the two roots are on all five commands; `top_n`
+   `resolution`, `sweep` and the two roots are on all seven commands; `top_n`
    and `method` on two. A `common:` key matching *no* command is an error.
 4. **Relative paths resolve against the repo root**, matching this layer's own
    `DEFAULT_OUTPUTS_ROOT` / `DEFAULT_ANALYSIS_ROOT`. The wider repo resolves
@@ -290,6 +304,264 @@ run, no ordering sensitivity, and the same cell ids for any target set.
 > This answer space is **not** the same as the benchmark's existing
 > `clusters/` directory (radius-capped agglomerative). Numbers from the two are
 > not comparable — don't mix them.
+
+## The bipartite graph (§7.3)
+
+`build-bipartite-graph` is the second step. `build-answer-space` read only the
+target side; this reads the **VPs** and the **measured (VP, target) edges**, and
+describes both against the grid answer space every accuracy number is scored on.
+
+**No RTT enters and no variant runs.** RTT is used for one thing — the canonical
+CSV's own `rtt_ms > 0` row filter, i.e. "was this pair measured" — and is then
+dropped. That is what makes these numbers the fixed reference the RTT-dependent
+§8.2 and §8.3 material is read *against* rather than another result competing
+with it.
+
+### Latent and observed, reported as a pair
+
+§7.3 asks for every VP-to-target distance twice: the **latent** value over all
+VP x target pairs, which describes where the infrastructure sits, and the
+**observed** value over measured edges, which describes what the dataset can
+actually deliver. An edge set is an artifact of the campaign rather than a
+property of the deployment, so reporting one half without the other is what
+lets sampling bias be misread as an algorithmic result.
+
+The two are therefore **nested** in `meta.json` rather than sitting as siblings
+with different names:
+
+```json
+"edges": {
+  "length_km":     {"observed": {...}, "latent": {...}, "n_latent_pairs": 53466, "note": "..."},
+  "nearest_vp_km": {"observed": {...}, "latent": {...}, "note": "..."},
+  "measurement_efficiency": {...},
+  "n_targets_measuring_their_nearest_vp": 399
+}
+```
+
+Nesting is the point: neither half can be read with the other out of view. The
+pairing applies to distances and **not to degree** — a target's latent degree is
+the VP count for every target, so it carries nothing, and `meta.json` says so
+instead of emitting a constant column. **Angular geometry stays observed-only**,
+matching §7.3's own scoping of it to measured neighbours: the arrangement term
+describes the constraints a variant actually receives, and a bearing set no
+method ever sees would not be that.
+
+`measurement_efficiency` is what the pair exists to support: nearest-measured-VP
+over nearest-VP, per target, `>= 1` by construction. It is the number that
+separates **"the VP set is badly placed"** (a large latent nearest-VP distance)
+from **"the VP set is fine but the campaign allocated probes badly"** (a ratio
+above 1), and only the second is fixable by reallocating measurement.
+
+**Measured on all four runs, it is exactly 1.00.** Every target measured its
+nearest VP: 399/399, 412/412, 458/458 and 78/78. The campaigns do miss pairs
+(204, 218, 79 and 5 of them), but never a target's closest VP.
+
+That is expected, and the reason is worth stating rather than discovering twice:
+**every dataset in the repo today is an active mesh ping**, so the edge set is
+close to the full cross product by construction (density 0.996-0.999) and the
+campaign has no allocation policy to be biased. The latent and observed
+distributions coincide for the same reason — observed edge-length p25 differs
+from latent by 3 km on as01 and by nothing at all on as02/as03. The pair is
+uninformative on these campaigns *because* of how they were collected, which is
+a fact about the collection and not about the metric.
+
+The metric is here for the datasets that are not yet in the repo. §7.3's
+proprietary operator setting includes RTT **passively observed at the user
+planes on production traffic**, where the measured pairs are whatever traffic
+happened to traverse and the edge set is emphatically not the cross product; the
+same goes for any traffic-weighted set (`has_weight` is `false` on all four runs
+today, so §8.1's weighted views cannot be produced from them at all). On those,
+efficiency above 1 is the expected reading and the latent half is what makes it
+interpretable. Until then it is a control: reported, flat, and cited once to
+rule campaign bias out of §8 rather than argued about.
+
+> Two ways this went wrong before it went right, both recorded because both were
+> silent. Edge lengths were rounded to 3 dp before the division while the latent
+> denominator was not, which put 160 of as01's 399 targets a few 1e-4 *below*
+> 1.0 — a value the ratio cannot take. And `nearest_vp_is_measured` compared VP
+> **ids**: co-located VPs are the normal case (as01's VP nearest-neighbour p50
+> is 0.0 km), so `argmin` and `eval_source`'s BallTree break ties differently
+> and agreed on only 259 of 399 targets while their distances agreed to
+> 4e-4 km. The test is on distance now, and `measurement_efficiency` snaps a
+> residue measured at 1.24e-9 relative so that `== 1.0` is usable downstream
+> with no tolerance repeated.
+
+Out of scope, per the run decision: §7.3's optional appendix (Clark-Evans,
+anisotropy, nearest-neighbour CV, degree assortativity) and §8.2's VP coverage
+ceiling.
+
+### Scale: the latent half is |VP| x |targets|
+
+Which is not materializable at the paper's deployment setting. The split is
+therefore deliberate:
+
+* **Per-target latent nearest-VP distance is exact at any target count.**
+  `nearest_across_km` chunks the cross matrix and reduces with a per-chunk
+  `min`, so only `|VP| x chunk` floats are ever resident. This is the quantity
+  `measurement_efficiency` needs, so the headline metric never degrades.
+* **Only the latent *distribution* falls back**, since a distribution needs the
+  values rather than their minima. Past `_MAX_CROSS_PAIRS` the target side is
+  subsampled deterministically and `meta.json` records that it was, so a
+  percentile is never read as exact when it is not. At 134 VPs that fires around
+  37k targets; the four runs here are 4k-61k pairs.
+
+### The node sets are the run's, not the edge list's
+
+VPs are `vps.csv`'s roster and targets are the answer space's `assignments`.
+Edges naming anything outside those are dropped **and counted**
+(`n_edges_dropped_*` in `meta.json`). That is what makes `density` read
+`|E| / (|VP roster| x |answer-space targets|)` — the denominator the benchmark
+actually spent measurement against — instead of against whatever the CSV
+happened to contain, which would report every campaign as complete. It also
+means an unmeasured VP lowers density and moves no observed distance, which is
+the observed-only contract in its testable form.
+
+`eval_dataset/<basename>_dataset_stats.json` precomputes much of this, and
+SCHEMA.md says to check there first. Its answer-space half is keyed to the
+benchmark's older radius-capped `clusters/` space rather than to the grid, so it
+is used as a **cross-check** and not as an input: on as01-03 our `n_vps`,
+`n_targets`, `n_edges`, `density`, both degree p50s, edge-length p50/max and the
+VP nearest-neighbour p50 all reproduce `eval_stats.json` exactly. (as7018 ships
+the thinner `eval_stats.json` without `bipartite_coverage`, so only the counts
+are checkable there — SCHEMA.md §7.)
+
+### What the four runs measure, and where the differences are
+
+| | as01 | as02 | as03 | as7018 |
+| --- | --- | --- | --- | --- |
+| VPs / occupied cells at `h3-4` | 134 / 81 | 134 / 81 | 134 / 81 | 53 / 41 |
+| targets / occupied cells = K | 399 / 18 | 412 / 22 | 458 / 22 | 78 / 22 |
+| edges / latent pairs | 53,262 / 53,466 | 54,990 / 55,208 | 61,293 / 61,372 | 4,129 / 4,134 |
+| density | 0.996 | 0.996 | 0.999 | 0.999 |
+| distinct flow lines | 1,738 | 1,913 | 2,001 | 4,076 |
+| nearest VP p50, observed / latent km | 13.3 / 13.3 | 19.7 / 19.7 | 8.8 / 8.8 | 35.7 / 35.7 |
+| nearest VP p90, observed / latent km | 48.2 / 48.2 | 154.2 / 154.2 | 30.4 / 30.4 | 481.9 / 481.9 |
+| **measurement efficiency** (max) | 1.00 | 1.00 | 1.00 | 1.00 |
+| targets that measured their nearest VP | 399/399 | 412/412 | 458/458 | 78/78 |
+| VP to its nearest target, p50 km (latent) | 102.9 | 166.6 | 69.0 | 45.5 |
+| max angular gap, p50 / p90 deg | 113 / 200 | 85 / 176 | 115 / 176 | 140 / 265 |
+
+Five things read straight off that table.
+
+**The latent/observed pair is flat, and that is the result.** Every
+observed/latent column above agrees to the decimal, and measurement efficiency
+is exactly 1.00 on all four runs — as it should be for an active mesh ping. The
+edge set is not a biased sample of the deployment, so no §8 finding can be
+blamed on probe allocation. Reporting the pair is still what licenses that
+sentence: it is a measured absence of bias rather than an assumed one, which is
+the distinction §7.3 asks for, and it is the same instrument that will read
+non-trivially on a passively-collected set.
+
+**The three operator runs share one VP fleet.** as01, as02 and as03 carry the
+same 134 `vp_id`s at the same coordinates, which is why every VP-side row above
+is identical across their three columns; they differ only in targets, and even
+there the *coordinates* overlap (12 of as01's 20 distinct target locations also
+appear in as03). Their target *ids* are disjoint, so pooling them in
+`plot-venn` / `plot-pareto` is sound as a target population — but it is one
+deployment measured against three overlapping target sets, not three
+deployments, and a cross-dataset claim should say which of the two it needs.
+
+**Density does not discriminate, and neither does degree.** All four campaigns
+are essentially complete bipartite graphs (0.996-0.999) in one connected
+component, and target degree has a single-valued IQR on every run (134/134/134,
+53). So neither measurement completeness nor constraint count is an axis on
+which these datasets differ, and §8.3's regression cannot identify a degree term
+from them — mesh ping is why. The axes that do differ are proximity and
+arrangement, which is what makes those two the usable covariates.
+
+**The flow-line ratio is the operator/public structural difference in one
+number.** The operator runs collapse ~30x (53,262 edges to 1,738 lines: 399
+target IPs sit at 20 distinct coordinates), as7018 collapses 1.01x (its targets
+are distinct anchors). §3.2's claim that the two settings cannot be substituted
+shows up here as an artifact of the data rather than as an argument.
+
+**VP concentration is real but shallow.** 134 VPs occupy 81 cells at 45 km, and
+coarsening the grid barely helps: 81 at res 4, 73 at res 3 (120 km), 50 at res 2
+(316 km). §7.3 reads that curve as a multi-scale concentration diagnostic, and a
+flat curve means genuinely distinct metros rather than a fleet that only
+separates at intra-metro scale. as7018's 53 VPs behave the same way (41 / 32 /
+21).
+
+**VP proximity is the operator's advantage, and arrangement is not.** The
+operator fleets put a measured VP a median 9-20 km from each target against
+as7018's 36 km, and the p90 separates far harder (30-154 km against 482 km) —
+consistent with as7018 having 37% of targets with no discriminative VP at all
+while as01 has none (SCHEMA.md §5). Arrangement does not follow: a max angular
+gap above 180 deg means the target lies **outside** the VP convex hull and is
+constrained from one side only, and that is the p90 case on as01 (200 deg) as
+well as on as7018 (265 deg). Better proximity does not buy better bracketing.
+
+Grid choice moves the VP side almost not at all (81 cells on `h3-4` against 80
+on `healpix-128`) while moving the target side on as7018 (22 against 27) — the
+same boundary-alignment effect the answer-space section reports, now measured on
+a second node set.
+
+### The three figures
+
+`plot-bipartite-graph` writes all three, because none of them can carry another
+one's job.
+
+* **`bipartite_nodes_map.png`** — topology. VPs, targets, both node sets'
+  occupied cells, and the class regions, with no edges to occlude them. The
+  VP-cell outlines are the point: "134 VPs in 81 occupied cells" is the
+  denominator behind any independent-observation claim, and a scalar does not
+  show that two dozen of them sit in one metro.
+* **`bipartite_flows_map.png`** — every measured edge, so coverage reads
+  directly. Lines are the **distinct** `(VP coord, target coord)` pairs with
+  width carrying multiplicity, never one line per row: on as01 that would draw
+  53,262 lines of which 51,524 are exact overplots, and alpha would report
+  duplicate IPs at one facility as heavier traffic. Paths are great circles,
+  interpolated by slerp in `mapping.great_circle_segments` rather than handed to
+  `ccrs.Geodetic()` (too slow at this count) or drawn as lon/lat chords (a
+  Chicago-Seattle chord sits 146 km south of the real path).
+* **`distance_cdf.png`** — two panels. **Left**, the curve §7.3 asks for behind
+  the diameter and p95 scalars: VP pairwise, target pairwise, and the
+  VP-to-target distribution drawn **twice**, over measured edges (solid) and over
+  all pairs (dotted). Four curves on three hues, deliberately: latent and
+  observed are two samplings of one entity rather than two entities, so they
+  share a slot and separate by dash. Giving latent its own hue would assert a
+  distinction the data does not have *and* force a 4-hue palette whose best
+  red/green pair only reaches dE 7.2 under protanopia. **Right**, measurement
+  efficiency on its own panel, because it is a ratio and not a distance —
+  sharing the left x axis would be the two-scales error. The y axis is shared,
+  both panels being cumulative shares. On all four runs the right panel is
+  degenerate (a vertical line at 1.0), so it prints the sentence instead: a
+  curve there would imply a distribution the data does not have. It switches to
+  a log x axis above 4x, since a ratio is bounded below by 1 and unbounded above.
+
+  The three hues come from the same categorical theme as
+  [diagram/common/palette.py](modules/diagram/common/palette.py) but are **not**
+  that tuple, since colour there is bound to a CBG variant's identity and a
+  VP-pairwise curve is not a variant. Validated as their own palette with the
+  dataviz skill's `validate_palette.js --pairs all`: all five checks pass, worst
+  dE 13.0 (deutan) / 7.6 (tritan). The tritan figure is in the 6-8 band that is
+  legal only with secondary encoding, so each curve also carries its own dash
+  pattern and is direct-labelled — at its own quantile rather than all four at
+  p50, where the medians sit within 200 km of each other and the labels
+  overprint, with a white stroke behind the text since four near-coincident
+  curves leave nowhere clear of all of them.
+
+Both maps call `mapping.seed_voronoi`, so the boundary they draw is byte-for-byte
+the geometry `plot-answer-space` draws and is the classifier's own top-1 decision
+boundary. [modules/mapping.py](modules/mapping.py) was extracted from
+`map_answer_space.py` for that reason; the extraction is pure code motion, pinned
+by `answer_space_map.png` being byte-identical across it on all four runs, both
+grids and both extents.
+
+### Finding the edge CSV
+
+The v3 configs deliberately do not name it — `benchmark: {}` on every operator
+run, whose canonical CSV was reconstructed from the run outputs. The run itself
+records it, in `eval_source/<basename>_eval_stats.json`'s `csv` key relative to
+the repo root, so that is read rather than reconstructed from `run_id` (which
+does not track the CSV stem). Falls back to globbing
+`datasets/**/<eval_basename>.csv`, then to naming `--source-csv`.
+
+Reading goes through `benchmark.v2.eval_source.load_canonical_csv`, which owns
+the schema and applies the same NaN and non-positive-RTT filter
+`GenericCSVSource` applies at materialize time — so the graph described here is
+the graph the benchmark ran on. Deliberately **not** `eval_source.build_pairs`:
+its `gc_km` / `inflation` / `rtt_rank_norm` are RTT-derived and belong to §8.
 
 ## Distance to all seeds, and top-N for free
 

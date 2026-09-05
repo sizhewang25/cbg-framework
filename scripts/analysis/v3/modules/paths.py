@@ -25,7 +25,12 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+#: Repo root. Public because it is this layer's single source of truth for
+#: resolving a relative path — `config.py` imports it rather than recomputing
+#: the same `parents[4]`, and `bipartite.py` needs it to resolve the canonical
+#: edge CSV path a run records relative to it.
+REPO_ROOT = Path(__file__).resolve().parents[4]
+_REPO_ROOT = REPO_ROOT
 
 #: Default root holding `<run_id>/` benchmark output directories.
 DEFAULT_OUTPUTS_ROOT = _REPO_ROOT / "outputs" / "benchmark" / "v2"
@@ -163,6 +168,13 @@ class RunPaths:
     ) -> Path:
         return self.analysis_dir(
             "target-cls-accuracy", grid_slug(grid, resolution), root=root
+        )
+
+    def bipartite_dir(
+        self, root: Path | None = None, *, grid: str, resolution: int
+    ) -> Path:
+        return self.analysis_dir(
+            "bipartite-graph", grid_slug(grid, resolution), root=root
         )
 
 

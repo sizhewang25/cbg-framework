@@ -43,9 +43,7 @@ import typer
 import yaml
 
 from scripts.analysis.v3.modules.grid import DEFAULT_GRID
-
-#: Repo root, for resolving relative paths (this file: scripts/analysis/v3/modules/).
-REPO_ROOT = Path(__file__).resolve().parents[4]
+from scripts.analysis.v3.modules.paths import REPO_ROOT
 
 #: The sub-block whose keys apply to every command that declares them.
 COMMON_BLOCK = "common"

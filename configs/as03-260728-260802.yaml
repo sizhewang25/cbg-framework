@@ -18,6 +18,11 @@ analysis:
 
   build-answer-space: {}
 
+  build-bipartite-graph: {}
+
+  plot-bipartite-graph:
+    us_only: true
+
   classify:
     topn: "1,3"
 

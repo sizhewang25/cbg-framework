@@ -217,6 +217,39 @@ per-target/cluster geometry from `eval_source`, dataset rollup from
 - `rtt_quality`: `pair_soi_violation_share`, `anycast_suspect_share`,
   `closest_is_shortest_ping_share`
 
+> **`csv` is how v3 finds the raw edge list.** It holds the canonical
+> `(vp_id, target_id, rtt_ms)` CSV path, relative to the repo root, and it
+> resolves on all four runs (`datasets/final/as0N-*.csv`,
+> `datasets/ripe_as7018/as7018-us-test01.csv`). The v3 unified configs carry
+> `benchmark: {}` and do not name it, so
+> `analysis/v3/modules/bipartite.py::resolve_source_csv` reads it here rather
+> than reconstructing it — `run_id` does not track the CSV stem.
+>
+> **Not all four runs ship the same blocks.** as01-03 add
+> `answer_space_topology`, `bipartite_coverage` and `classification_easiness`;
+> as7018's file stops at `metrics` / `target_clustering` / `proximity` /
+> `rtt_quality`. So `bipartite_coverage` cross-checks the operator runs and is
+> absent on the RIPE one — one more row for §7's asymmetry table.
+>
+> **`bipartite_coverage` is keyed to `clusters/`, not to the grid.** Its
+> grid-free parts (counts, density, both degree distributions, edge lengths) are
+> comparable with `outputs/analysis/v3/<run_id>/bipartite-graph/`'s `meta.json`
+> and agree exactly; anything touching the answer space is not, for the same
+> reason the `clusters/` note above gives.
+
+`<basename>_eval_per_target.csv`'s **`closest_vp_km` is the same quantity** as
+that `meta.json`'s `edges.nearest_vp_km.latent` and `target_nodes.csv`'s
+`nearest_vp_km`: distance to the nearest VP over the whole roster, edge set
+ignored. They agree to 4e-4 km on as01.
+
+> **`closest_vp_id` does not agree, and neither side is wrong.** Co-located VPs
+> are the normal case (as01's VP nearest-neighbour distance has a p50 of 0.0 km),
+> so `eval_source`'s BallTree and v3's `argmin` break ties differently — 259 of
+> as01's 399 targets get the same id, while every distance matches. **Never join
+> on a nearest-VP id across the two layers**; compare distances, or ask the
+> question that is actually well-posed ("was a VP *as close as* the closest one
+> measured?", which is `measurement_efficiency == 1`).
+
 Observed contrast worth carrying into the paper: as7018 `no_proximity_share`
 0.372 / `cbg_opportunity_share` 0.513 vs as01 0.0 / 0.363 — the operator VP
 fleet is dense enough that *every* target has a discriminative VP.
@@ -286,6 +319,7 @@ brittleness (the `finding_spherical_circle_brittle` mechanism).
 | `cluster_scored/` + classification tables | ✅ | ❌ |
 | shortest-ping baseline (`baseline.csv`) | ✅ | ❌ (derive from `eval_*`) |
 | kNN answer-space columns | ✅ | ❌ |
+| `eval_stats.json` `bipartite_coverage` (§5) | ✅ | ❌ |
 | combos | 5 (published variants) | 16 (+11 ablations) |
 | setup | `anchors_to_probes` | `probes_to_anchors` |
 
