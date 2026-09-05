@@ -23,8 +23,9 @@ lon/lat (PlateCarree) to match the cluster map — a visualization-grade
 approximation, not an equal-area construction.
 
 `clipped_voronoi_cells` itself is CRS-agnostic and is reused by
-`scripts.analysis.v3.modules.map_answer_space`, which feeds it projected
-coordinates (and no landmass) so its bisectors approximate great-circle ones.
+`scripts.analysis.v3.modules.mapping.seed_voronoi` (which both v3 map commands
+call), feeding it projected coordinates and no landmass so its bisectors
+approximate great-circle ones.
 """
 
 from __future__ import annotations
