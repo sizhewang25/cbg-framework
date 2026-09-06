@@ -236,10 +236,47 @@ per-target/cluster geometry from `eval_source`, dataset rollup from
 
 `proximity_label` ∈ `NO_PROXIMITY` | `HAS_NOT_USED_PROXIMITY` |
 `HAS_USED_PROXIMITY`. This **is** paper §8.2's failure taxonomy, precomputed:
-- `NO_PROXIMITY` → structural failure (no discriminative VP exists; MTL required)
-- `HAS_NOT_USED_PROXIMITY` → selection failure (reachable but unreached = the
-  CBG opportunity)
+- `NO_PROXIMITY` → no discriminative VP exists
+- `HAS_NOT_USED_PROXIMITY` → reachable but unreached = the CBG opportunity
 - `HAS_USED_PROXIMITY` → baseline already correct (regression risk for variants)
+
+> v3 names its own three terms `geometry_only` / `selection_miss` /
+> `selection_hit` and deliberately does **not** reuse the spellings above: the
+> two are keyed to different answer spaces and different endpoints, and a
+> near-identical name would invite mixing their numbers. `NO_PROXIMITY` is also
+> glossed here and elsewhere as "MTL required", which the v3 measurement
+> contradicts — on as02, Octant-Hull answers 39 of the 40 targets in that
+> stratum. It is a ceiling on Shortest-Ping, not on CBG.
+
+> **v3 renames these on the way across, and does not carry `proximity_label`.**
+> v3's `build-proximity` recomputes the whole decomposition against the *grid*
+> answer space, measuring every distance **VP → seed** rather than VP → target,
+> and replaces the 3-level label with four independent booleans (the ladder is a
+> diamond, not a chain — see [README.md](README.md#column-naming)). Columns that
+> are genuinely carried through are renamed to name both endpoints:
+>
+> | v2 `eval_per_target.csv` | v3 `target_labels.csv` | carried, or recomputed? |
+> | --- | --- | --- |
+> | `min_inflation` | `min_inflation` | **carried** — v2 owns the theoretical-slope constant |
+> | `shortest_ping_vp_id` / `_lat` / `_lon` | `sping_vp_id` (+ the right chain's distances) | **carried** via `io.load_sping_vp`, the one reader `classify` shares — re-deriving it would break ties differently |
+> | `shortest_ping_vp_km` | `sping_vp_to_tg_km` | **carried**; context only |
+> | `closest_vp_km` (**latent**) | `closest_vp_to_tg_km` (**observed**) | **recomputed** — different quantity, same-looking name; the latent one lives in `bipartite-graph/target_nodes.csv` as `nearest_vp_km` |
+> | `n_avail_vps` | `n_measured_vps` | **recomputed** — measured edges, not the roster |
+> | `target_distinguishable_vp_dist_km` | `tg_seed_margin_km` | **recomputed** from `seeds.csv`'s `margin_km` |
+> | `has_vp_proximity` | `has_discriminative_vp` | **recomputed** VP→seed, which is what makes the guarantee hold |
+> | `shortest_ping_vp_is_discriminative` | `has_discriminative_sping_vp` | as above |
+> | — | `has_proximate_vp`, `has_proximate_sping_vp` | new: the argmin axis |
+> | `proximity_label` | — | dropped; derive from the four flags |
+>
+> The two `*_to_tg_km` columns are kept for audit and for the RTT-vs-geography
+> story, and are deliberately **not** the quantities the flags threshold: a min
+> over VP→target distance selects a different VP than a min over VP→seed
+> distance, and only the latter implies "this VP's argmin seed is the target's".
+>
+> `closest_vp_to_tg_km` agrees exactly with `bipartite-graph/target_nodes.csv`'s
+> `nearest_measured_vp_km`, and `n_measured_vps` with its `degree_to_vp`, on all
+> four runs at both grids — the two modules compute the observed half the same
+> way. It does **not** agree with v2's `closest_vp_km`, which is latent.
 
 ### `<basename>_eval_stats.json`
 

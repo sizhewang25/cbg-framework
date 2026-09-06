@@ -7,6 +7,7 @@ registers them, so adding a command means adding a module and one name to
     python -m scripts.analysis.v3.cli build-answer-space --run-id as01-260728-260802
     python -m scripts.analysis.v3.cli build-bipartite-graph --run-id as01-260728-260802
     python -m scripts.analysis.v3.cli classify --run-id as01-260728-260802
+    python -m scripts.analysis.v3.cli build-proximity --run-id as01-260728-260802
     python -m scripts.analysis.v3.cli plot-venn --run-id as01-260728-260802
 
 A unified config can supply the parameters instead, one sub-block per command
@@ -24,13 +25,17 @@ from pathlib import Path
 import typer
 
 from scripts.analysis.v3.modules import (
+    accuracy_table,
     answer_space,
     bipartite,
+    breakdown,
     classify,
     config as config_mod,
+    confusion,
     map_answer_space,
     map_bipartite,
     pareto,
+    proximity,
     venn,
 )
 
@@ -45,6 +50,10 @@ _COMMAND_MODULES = (
     answer_space,
     bipartite,
     classify,
+    proximity,
+    breakdown,
+    confusion,
+    accuracy_table,
     venn,
     map_answer_space,
     map_bipartite,

@@ -177,6 +177,22 @@ class RunPaths:
             "bipartite-graph", grid_slug(grid, resolution), root=root
         )
 
+    def proximity_dir(
+        self, root: Path | None = None, *, grid: str, resolution: int
+    ) -> Path:
+        """Per-target VP proximity labels — its own tree, not the answer space's.
+
+        `target-answer-space/` is a pure function of (target coordinates, grid),
+        which is what lets `classify --answer-space` re-score under a different
+        quantization. These labels also depend on the VP roster **and on RTT**,
+        so writing them there would make the answer space campaign-dependent and
+        leave stale labels behind a re-score. `bipartite-graph/` is likewise out:
+        that module's contract is explicitly RTT-free.
+        """
+        return self.analysis_dir(
+            "target-proximity", grid_slug(grid, resolution), root=root
+        )
+
 
 def grid_slug(grid: str, resolution: int) -> str:
     """`("h3", 4)` -> `"h3-4"`; `("healpix", 128)` -> `"healpix-128"`.

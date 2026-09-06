@@ -19,8 +19,16 @@ analysis:
 
   build-bipartite-graph: {}
 
+  build-proximity: {}
+
   plot-bipartite-graph:
     us_only: true
+
+  breakdown-accuracy:
+    topn: "1,3"
+
+  confusion-density:
+    topn: "1,3"
 
   classify:
     topn: "1,3"

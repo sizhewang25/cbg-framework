@@ -69,6 +69,13 @@ analysis:
     #                                 # eval_source/*_eval_stats.json records,
     #                                 # which is why `benchmark: {}` is enough.
 
+  build-proximity: {}
+    # same two escape hatches as build-bipartite-graph, and for the same
+    # reason: this command reads the answer space and the canonical CSV too.
+    # Unlike that one it also reads RTT, to identify the shortest-ping VP.
+    # answer_space: null
+    # source_csv: null
+
   plot-bipartite-graph:
     # us_only: false                  # clamp to the continental US
     # extent: [-125.0, -66.0, 24.0, 50.0]   # overrides us_only
@@ -76,6 +83,18 @@ analysis:
     # no_vp_cells: false              # true drops the VP-occupied-cell outlines
     # max_segments: null              # cap the flow map's distinct lines
     # bipartite_dir: null             # explicit dir; overrides grid/resolution
+
+  breakdown-accuracy:
+    topn: "1,3"                       # comma-separated string, not a list
+    # method: []                      # restrict to these method ids
+    # Proximity flags stay top-1 whatever this says: they describe the dataset's
+    # geometry, while top-N is a property of the scoring. Crossing the two is the
+    # point of the table, not an inconsistency.
+
+  confusion-density:
+    topn: "1,3"
+    # method: []
+    # n_bins: 3                       # density quantile bins, over targets
 
   classify:
     topn: "1,3"                       # comma-separated string, not a list

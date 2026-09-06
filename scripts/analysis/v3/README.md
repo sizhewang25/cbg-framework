@@ -11,7 +11,7 @@ module and one name to `_COMMAND_MODULES`.
 | module | role |
 | --- | --- |
 | [modules/paths.py](modules/paths.py) | lib · run discovery + layout resolution |
-| [modules/io.py](modules/io.py) | lib · K-fold merge loader and benchmark IO |
+| [modules/io.py](modules/io.py) | lib · K-fold merge loader, benchmark IO, the shared shortest-ping-VP reader |
 | [modules/config.py](modules/config.py) | lib · unified run config → per-command defaults |
 | [modules/grid.py](modules/grid.py) | lib · grid interface + registry |
 | [modules/h3grid.py](modules/h3grid.py) | lib · H3 hexagons (**default**) |
@@ -20,6 +20,10 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/answer_space.py](modules/answer_space.py) | cmd · `build-answer-space` |
 | [modules/bipartite.py](modules/bipartite.py) | cmd · `build-bipartite-graph` |
 | [modules/classify.py](modules/classify.py) | cmd · `classify` |
+| [modules/proximity.py](modules/proximity.py) | cmd · `build-proximity` |
+| [modules/breakdown.py](modules/breakdown.py) | cmd · `breakdown-accuracy` |
+| [modules/confusion.py](modules/confusion.py) | cmd · `confusion-density` |
+| [modules/accuracy_table.py](modules/accuracy_table.py) | cmd · `table-accuracy` |
 | [modules/venn.py](modules/venn.py) | cmd · `plot-venn` |
 | [modules/diagram/](modules/diagram/) | lib · the overlap figures `plot-venn` assembles |
 | [modules/map_answer_space.py](modules/map_answer_space.py) | cmd · `plot-answer-space` |
@@ -50,6 +54,35 @@ still have one name to import. The split is pure code motion: every artifact
 
 [SCHEMA.md](SCHEMA.md) documents the v2 output schemas this layer reads.
 
+## Column naming
+
+Three conventions, applied to every column this layer emits. They exist because
+the layer routinely holds two distances that differ only in *which endpoint*
+they measure to, and a name that omits the endpoint is a bug waiting to be
+introduced by autocomplete.
+
+**1. A distance names both endpoints: `<from>_to_<to>_km`.** `closest_vp_km` is
+ambiguous — closest to the target, or to its seed? — and the two answers select
+different VPs. Columns carried in from v2's `eval_source` are renamed on the way
+across (`closest_vp_km` → `closest_vp_to_tg_km`) with their source names
+recorded in [SCHEMA.md](SCHEMA.md). Exempt: quantities that are not
+point-to-point, such as `tg_seed_margin_km` (half a gap, matching `seeds.csv`'s
+`margin_km`).
+
+**2. The prefix names the axis, not the aggregation.** `tg_seed_*` for
+quantities that are a property of the target's seed, `sping_vp_*` for
+quantities that are a property of the selected shortest-ping VP. A `min_vp_*`
+prefix was rejected: two different minimizations (over seed distance, over seed
+rank) select two different VPs in general, so "min" names the operation while
+saying nothing about which question was asked.
+
+**3. `tg` for the target, `sping` for the shortest-ping baseline.** The seed a
+target falls in is `tg_seed`, not `truth_seed` — "truth" is already spoken for
+by the raw ground-truth coordinate, and the seed is a quantization of it rather
+than the thing itself. v2's `truth_centroid_*` and `shortest_ping_*` spellings
+are legacy and are **not** a compatibility constraint on v3; the rename stops at
+this layer's boundary.
+
 ## Pipeline
 
 ```bash
@@ -62,6 +95,18 @@ python -m scripts.analysis.v3.cli plot-bipartite-graph --all-runs --us-only
 
 # 3. Score every method against the answer space (distance to ALL seeds)
 python -m scripts.analysis.v3.cli classify --all-runs
+
+# 3b. Label each target with the VP proximity diamond -> the §8.1 strata
+python -m scripts.analysis.v3.cli build-proximity --all-runs
+
+# 3c. Cross correctness with the strata, and look at what the mistakes are
+python -m scripts.analysis.v3.cli breakdown-accuracy --all-runs
+python -m scripts.analysis.v3.cli confusion-density --all-runs
+
+# 3d. The §8.1 headline. Operator and public runs get separate tables (§7.3)
+python -m scripts.analysis.v3.cli table-accuracy \
+  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
+python -m scripts.analysis.v3.cli table-accuracy --run-id as7018_us_test01
 
 # 4. Set overlap of correct classifications (repeat per top-N)
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
@@ -97,8 +142,12 @@ bipartite-graph/
                            edge_length_cdf.csv  pairwise_distance_cdf.csv  meta.json
                            bipartite_nodes_map.png  bipartite_flows_map.png
                            distance_cdf.png
+target-proximity/
+  <grid>-<resolution>/     target_labels.csv  meta.json
 target-cls-accuracy/
   <grid>-<resolution>/     <method>_seed_distances.parquet  topn_accuracy.csv  manifest.json
+                           accuracy_by_flag.csv  accuracy_by_taxonomy.csv
+                           confusion_by_density.csv  confusion_pairs.csv
                            overlap_{membership,intersections,pairwise}.top<N>.csv
                            overlap_venn_spec.top<N>.json
                            overlap_venn.top<N>.png  overlap_upset.top<N>.png
@@ -632,14 +681,206 @@ its `gc_km` / `inflation` / `rtt_rank_norm` are RTT-derived and belong to §8.
 ## Distance to all seeds, and top-N for free
 
 `classify` emits, per (method, target), the distance to **every** seed. That is
-deliberately more than a label: `truth_seed_rank` (how many seeds are strictly
+deliberately more than a label: `tg_seed_rank` (how many seeds are strictly
 closer than the true one) falls out of the full vector, so top-N accuracy for
-*any* N is `(truth_seed_rank < N).mean()` with no recomputation. Rank 0 is
+*any* N is `(tg_seed_rank < N).mean()` with no recomputation. Rank 0 is
 top-1.
 
 The answer space is an **explicit input** (`--answer-space`), so predictions can
 be re-scored under a different quantization without re-running anything
 upstream.
+
+## The proximity diamond (§8.1's strata)
+
+`classify` says *whether* a method got a target right. `build-proximity` says
+**whether the target was answerable at all**, and by whom — the covariate every
+§8.1 table stratifies on.
+
+### Every distance is VP → seed, never VP → target
+
+The single decision the module turns on. Classification labels a coordinate by
+its nearest seed, so the guarantee worth having is about the *class*:
+
+    d(VP, S) < margin(S)  ⟹  S is that VP's nearest seed
+
+One line of triangle inequality proves it: for any other seed `S′`,
+`d(VP, S′) ≥ d(S, S′) − d(VP, S) > 2·margin − margin = margin > d(VP, S)`.
+
+Measure to the **target** instead and the implication fails by exactly that
+target's `cell_offset_km` — p50 16-20 km at `h3-4`, the same order as `margin`
+itself. v2's `eval_source` measures to the target, so its `closest_vp_km` and
+`has_vp_proximity` are *not* what is recomputed here; [SCHEMA.md](SCHEMA.md)
+carries the column-by-column mapping. The VP→target distances that *are* kept
+(`closest_vp_to_tg_km`, `sping_vp_to_tg_km`) are context, and are deliberately
+not what any flag thresholds.
+
+### Four flags, on two axes
+
+```
+                 has_proximate_vp
+                /                \
+ has_discriminative_vp        has_proximate_sping_vp
+                \                /
+             has_discriminative_sping_vp
+```
+
+The **argmin axis** (`has_proximate_*`) applies the classifier's own rule —
+`tg_seed` is this VP's nearest seed. The **half-gap axis**
+(`has_discriminative_*`) applies the strict guarantee above, and is tighter: it
+implies rank 0 without being implied by it. The **left column** is an existence
+claim over every measured VP; the **right column** is about the one VP the
+baseline designated.
+
+`4 ⟹ 2 ⟹ 1` and `4 ⟹ 3 ⟹ 1`, but 2 and 3 are **incomparable** — geography-
+strength and routing-strength are separate axes meeting at the top. That is why
+v2's 3-level `proximity_label` is dropped rather than carried: a total order
+cannot express an incomparable pair. `meta.json` re-checks all four implications
+on every write and reports violations rather than raising, since a violation
+would be a real geometric statement about the answer space. It is empty on all
+four runs at both grids.
+
+§8.2's taxonomy is the diamond's argmin chain, cut twice, and gets no column of
+its own:
+
+| term | flags | what the target requires |
+| --- | --- | --- |
+| `geometry_only` | `¬has_proximate_vp` | no measured VP resolves the class; only multilateration can |
+| `selection_miss` | `has_proximate_vp ∧ ¬has_proximate_sping_vp` | a VP resolves it, the baseline picked another — the CBG opportunity |
+| `selection_hit` | `has_proximate_sping_vp` | the baseline's own VP resolves it |
+
+**`geometry_only` is a ceiling on Shortest-Ping, not on CBG**, and the name says
+so deliberately. On `as02` its 40 targets are exactly two seeds — every member
+of both — whose nearest measured VP sits 92 km and 153 km out, with
+`tg_seed_best_rank == 1` throughout: the true seed is always the runner-up.
+Shortest-Ping and Vanilla answer 0 of 40; Octant-Hull answers 39. An earlier
+name for this stratum, `structural_failure` (inherited from v2's
+`NO_PROXIMITY`), filed the case that most favours CBG under a heading saying CBG
+cannot win it.
+
+v2's vocabulary is not reused for the other two terms either. `HAS_USED_PROXIMITY`
+and `selection_hit` measure related but different things — cluster-keyed
+VP→target versus grid-keyed VP→seed — and a near-identical spelling would invite
+mixing the two layers' numbers in one table.
+
+### The tautology is the point
+
+`has_proximate_sping_vp` **is** Shortest-Ping's top-1 correctness, by
+construction: the baseline predicts its VP's coordinate and classification is
+argmin-over-seeds, so the flag and the score are one computation on one input.
+It is kept as the *self-check* — if the two ever disagree, the rank rule here
+and `classify`'s have drifted. It holds exactly on all four runs at both grids,
+and `sping_vp_to_tg_seed_km` is bit-identical to `shortest_ping`'s
+`error_to_tg_seed_km`. Consumers must annotate that cell rather than report it;
+at top-3 the same cell is informative, because the flag stays top-1.
+
+Getting that for free required one choice, and then one refactor.
+
+The choice: the shortest-ping VP's identity and **coordinate come from
+`eval_source`**, not from re-minimizing RTT. That is the VP `classify` scores,
+and a second derivation would break ties differently. Deriving it inside v3 would
+*look* like less coupling while being worse — `classify` reads `eval_source`
+regardless, so v3's two halves would disagree with each other instead of agreeing
+with v2.
+
+The refactor: both sides now go through **`io.load_sping_vp`**, one reader with
+the missing-column check in one place, translating v2's `shortest_ping_*`
+spelling to v3's `sping_*` on the way across. Two independent readers agreed
+today and were free to drift tomorrow; `test_proximity.py` pins that
+`score_shortest_ping` still routes through the helper, because a regression that
+reintroduced a local read would pass every numeric test and only fail there.
+
+### Constant is not the same as inert
+
+`has_proximate_vp` and `has_discriminative_vp` are **True for all 399 targets on
+as01** and all 458 on as03 — the operator VP fleet is dense enough that every
+target has a VP inside its seed's half-gap. That is a fact about the deployment,
+not an absence of effect, and a bare share of `1.0` reads as the latter. So
+`meta.json` ships `n_true`/`n_false` beside every share and names the constant
+flags in `zero_variance`, and the CLI prints the warning inline.
+
+as02 and as7018 do vary (`372/412` and `49/78` proximate), so the left column is
+not dead — it separates on exactly the runs where VP placement is the binding
+constraint.
+
+## Crossing accuracy with the strata
+
+`breakdown-accuracy` multiplies `classify`'s correctness by `build-proximity`'s
+labels, which is what turns an aggregate accuracy number into a claim about
+*where* a variant earns its result. A variant three points ahead overall may be
+ahead only on targets a VP was already sitting on — being credited for the
+dataset's geometry — or ahead on `geometry_only` targets, where nothing but its
+multilateration could have produced the answer. `topn_accuracy.csv` cannot tell
+those apart.
+
+Two files, because the four flags and the three terms are different shapes.
+`accuracy_by_flag.csv` gives each flag its own 2×2 (rate difference **and** φ,
+since a 40-point gap over six targets is a large difference and a weak
+correlation); the diamond is not a chain, so the four may disagree.
+`accuracy_by_taxonomy.csv` uses the three terms, which *do* partition the
+targets, and its `n_targets` sums to the run's target count for every (method,
+N) — the check that makes it readable as a decomposition of the headline rather
+than three unrelated rates.
+
+**What it already shows: SoI CBG is the baseline in disguise.** Crossed with
+`has_proximate_sping_vp` at top-1, `million_scale_cbg` scores 1.000 / 0.993 /
+1.000 where the flag holds and 0.069 / 0.000 / 0.012 where it does not, on
+as01 / as02 / as03 — φ of 0.947, 0.995, 0.987 against a *baseline correctness
+indicator*. Its aggregate accuracy is within three points of Shortest-Ping's on
+all three runs, and this says why: it is not arriving at those answers
+independently. The tautological cell sits one row above in the same file, which
+is exactly why it is marked `is_tautological` — the reader needs to see that
+Shortest-Ping's own 1.000/0.000 is arithmetic while SoI's 0.993/0.000 is a
+finding.
+
+## What the mistakes look like
+
+`confusion-density` asks the operator's question rather than the scoreboard's:
+"wrong by one cell" and "wrong by a continent" are the same zero in an accuracy
+column.
+
+`confusion_pairs.csv` carries **`boundary_margin_km`** — `error_to_tg_seed_km −
+error_to_pred_seed_km` on each wrong row. Near zero, the estimate sat almost
+equidistant from both classes and the flip was a tie-break; large, it was
+confidently inside the wrong cell. The medians separate the variants cleanly:
+Vanilla CBG's wrong answers sit at 31 / 70 / 87 km on as01 / as02 / as03 while
+Shortest-Ping's sit at 670 / 606 / 281 km. Vanilla misses narrowly and often;
+the baseline, when it misses, misses by a region. `pred_seed_neighbour_rank`
+says the same thing from the answer space's side — 42% / 27% / 55% of all
+top-1 mistakes land on the true seed's *nearest* neighbour.
+
+`confusion_by_density.csv` bins targets by their true seed's `nearest_seed_km`.
+Crowding does cost accuracy on as01 (0.33 → 0.71 → 0.82 for Shortest-Ping across
+tertiles) and as02 (0.16 → 0.42 → 0.51), **but not on as03** (0.67 → 0.25 →
+0.44). So local density is a real effect and not a universal one, and the
+non-monotone run is the one to explain rather than the one to drop. Bins are
+quantiles over targets, not fixed widths: seed spacing at `h3-4` is dominated by
+the grid pitch, so fixed bins would put most of a run in one bucket. On a run
+where every seed shares one `nearest_seed_km` the bins collapse to one, which is
+reported rather than raised.
+
+## The §8.1 table
+
+`table-accuracy` assembles the paper's headline from what `classify` and
+`build-proximity` already wrote — nothing is recomputed — and emits CSV plus a
+markdown render, so no number is hand-transcribed between the re-analysis
+artifact and the paper.
+
+**It offers no pooling switch.** `as01`, `as02` and `as03` are one VP fleet
+under different peering and routing conditions, and that difference *is* the
+comparison §8.1's "clean network topology matters" subsection rests on;
+averaging them would delete the finding to produce a tidier number. One row per
+(run, method), and the operator/public split is the caller's — invoke it twice.
+
+`plot-pareto`'s mixed-setup refusal is deliberately **not** inherited. That
+guard exists because one cost frontier over both setups would compare a 134-VP
+fleet against a 53-VP one; here each run keeps its own row and no such average
+can form. On as01–03 `setup` is a placeholder with no meaning anyway. Mixed
+setups are noted in the manifest instead of refused.
+
+The three §8.2 shares go in a separate `dataset_context.csv` rather than being
+repeated down every method row, where they would read as a property of the
+variant. The accuracy column means something different when 37% of a run's
+targets have no proximate VP (as7018) than when none do (as01, as03).
 
 ## Two policies the code enforces
 
@@ -663,13 +904,13 @@ distance has its own ground truth and is measured to the **raw target**
 (`error_to_target_km`). Routing it through the seed would import the grid's
 quantization into a number that needs none — since seeds are cell centres, that
 would add a systematic ~17-20 km (`h3-4`) to every *correct* answer. The parquet
-also keeps `error_to_truth_seed_km`, whose difference from `error_to_target_km`
+also keeps `error_to_tg_seed_km`, whose difference from `error_to_target_km`
 is exactly that offset per row, i.e. the row's `cell_offset_km`. One consequence is a useful check: re-quantizing changes
 accuracy but must leave `error_km_*` bit-identical, and it does across `h3-4`
 and `healpix-128` on all four runs.
 
 Keeping the parquet policy-free is what makes the fallback cost *measurable*.
-On `as01`, all 106 of Vanilla CBG's fallbacks have `truth_seed_rank == 0` —
+On `as01`, all 106 of Vanilla CBG's fallbacks have `tg_seed_rank == 0` —
 they are not bad answers, they are the baseline's good answers. Vanilla scores
 164/399 = 0.411; credited it would score 270/399 = 0.677.
 
