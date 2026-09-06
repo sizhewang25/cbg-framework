@@ -123,14 +123,49 @@ the grid the paper draft §7.3 describes. Same role (finite metro-granular class
 set); different construction — and `clusters/` seeds at target centroids where
 the grid space seeds at cell centres. Flag when writing paper numbers.
 
-The v3 layer builds the grid version instead, over either of two tessellations
-(H3 `res=4` by default, HEALPix `nside=128` for the paper's original setting) —
-see [README.md](README.md#choosing-a-grid). Its `seeds.csv` is grid-neutral:
-`grid_scheme`, `grid_resolution`, `cell_id`. The distinction that matters when
-mixing numbers is that a grid has **boundaries** and this radius-capped space
-does not: a facility group straddling a grid line is split into two classes at
-any resolution, whereas the linkage space can guarantee grouping within its
-radius.
+The v3 layer builds the grid version instead — see
+`target-answer-space/` below. The distinction that matters when mixing numbers
+is that a grid has **boundaries** and this radius-capped space does not: a
+facility group straddling a grid line is split into two classes at any
+resolution, whereas the linkage space can guarantee grouping within its radius.
+
+### `target-answer-space/<grid>-<resolution>/` — the grid answer space
+
+Built by `build-answer-space` over either of two tessellations (H3 `res=4` by
+default, HEALPix `nside=128` for the paper's original setting) — see
+[README.md](README.md#choosing-a-grid). One seed per occupied cell, **at the
+cell's own centre**, so a seed depends on the grid alone and not on which
+targets landed in the cell.
+
+- `seeds.csv`: `seed_id`, `grid_scheme`, `grid_resolution`, `cell_id`,
+  `seed_lat`, `seed_lon`, `n_targets`, `nearest_seed_km`, `margin_km`,
+  `delaunay_degree`
+- `assignments.csv`: `target_id`, `target_lat`, `target_lon`, `cell_id`,
+  `seed_id`, `cell_offset_km`
+- `seed_mesh_km.csv`: the full K×K seed-to-seed distance matrix, indexed by
+  `seed_id`
+- `meta.json`: `source`, `grid`, `grid_diagnostics`, `n_targets`,
+  `n_unique_target_coords`, `n_seeds`, `n_singleton_seeds`,
+  `occupied_cells_by_resolution`, `targets_per_seed`, `cell_offset_km`,
+  `nearest_seed_km`, `margin_km`, `seed_pairwise_km`, `delaunay_degree`
+
+Three columns carry the load and are easy to confuse:
+
+- **`cell_offset_km`** (per target) — distance from a target to its seed, i.e.
+  the quantization the grid choice buys. Measured: p50 ≈ 16-20 km, max ≈ 26 km
+  at `h3-4`; p50 ≈ 19-25 km, max ≈ 41 km at `healpix-128`. It is *not* an error
+  metric and must never be pooled with `error_km_*`.
+- **`nearest_seed_km` / `margin_km`** (per seed) — distance to the closest other
+  seed, and half of it. Since seeds sit on the grid, these now describe the
+  tessellation and the occupancy pattern rather than where targets happened to
+  fall, which is what makes them usable for "how close was the mistaken class to
+  the true one".
+
+`seeds.csv` is grid-neutral apart from `cell_id`, whose dtype is grid-specific
+(int64 for HEALPix, canonical hex string for H3); `Grid.coerce_cell_ids` is the
+single place that knows, applied on load. `load_answer_space` rejects any
+`seeds.csv` carrying a `centroid_lat` column — those predate cell-centre seeding
+and every class boundary in them differs.
 
 ### `cluster_scored/` + classification tables — *as01-03 only*
 
