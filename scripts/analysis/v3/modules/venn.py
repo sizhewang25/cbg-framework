@@ -7,7 +7,7 @@ loses, and which does it lose that Shortest-Ping already had. That trade is the
 point: "CBG beats the baseline" can be true in aggregate while a variant
 regresses on targets the baseline solved.
 
-Correctness uses the same rule as the accuracy table: `truth_seed_rank < N`
+Correctness uses the same rule as the accuracy table: `tg_seed_rank < N`
 (N=1 by default), with non-SUCCESS rows counted as failures per §7.2 — so a
 fallback never enters a set even though it carries a coordinate.
 

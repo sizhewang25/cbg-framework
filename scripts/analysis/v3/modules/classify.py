@@ -7,7 +7,7 @@ re-running anything upstream.
 For each (method, target) this emits the distance from the estimated coordinate
 to all K seeds. That is deliberately more than a label: because the full
 distance vector is kept, the rank of the true seed falls out of it, and top-N
-classification accuracy for *any* N is then `(truth_seed_rank < N).mean()` with
+classification accuracy for *any* N is then `(tg_seed_rank < N).mean()` with
 no recomputation. Rank 0 is the ordinary top-1 answer.
 
 **Policy separation.** The per-target artifact is neutral: it carries a distance
@@ -77,7 +77,7 @@ def _seed_distance_frame(
     status: pd.Series,
     pred_lat: pd.Series,
     pred_lon: pd.Series,
-    truth_seed_id: pd.Series,
+    tg_seed_id: pd.Series,
 ) -> pd.DataFrame:
     """Distances from each prediction to all K seeds, plus the derived ranks.
 
@@ -90,7 +90,7 @@ def _seed_distance_frame(
 
     * `error_to_target_km` — to the raw ground-truth coordinate. **This is the
       error distance.** It owes nothing to the grid or the seeds.
-    * `error_to_truth_seed_km` — to the true seed, i.e. to the centre of the
+    * `error_to_tg_seed_km` — to the true seed, i.e. to the centre of the
       cell the target falls in. A diagnostic of the *classification* geometry,
       not an error metric: it has a floor equal to that target's
       `cell_offset_km`, so a perfect prediction reports ~17 km on `h3-4` rather
@@ -139,20 +139,20 @@ def _seed_distance_frame(
         np.nan,
     )
 
-    truth = truth_seed_id.to_numpy()
+    tg_seed = tg_seed_id.to_numpy()
     # Column position of each target's true seed (seed_id is 0..K-1 by
     # construction, but map explicitly so a filtered answer space still works).
     pos_of_seed = {int(s): i for i, s in enumerate(seed_ids)}
-    truth_pos = np.array([pos_of_seed.get(int(s), -1) for s in truth])
-    if (truth_pos < 0).any():
-        bad = np.unique(truth[truth_pos < 0])[:5]
+    tg_pos = np.array([pos_of_seed.get(int(s), -1) for s in tg_seed])
+    if (tg_pos < 0).any():
+        bad = np.unique(tg_seed[tg_pos < 0])[:5]
         raise ValueError(
-            f"truth seed id(s) {bad.tolist()} are absent from the answer space; "
+            f"tg seed id(s) {bad.tolist()} are absent from the answer space; "
             f"predictions and answer space disagree on the seed set"
         )
 
     rows = np.arange(len(d))
-    err_to_truth = d[rows, truth_pos]
+    err_to_tg_seed = d[rows, tg_pos]
 
     pred_pos = np.full(len(d), -1, dtype=int)
     rank = np.full(len(d), -1, dtype=int)
@@ -164,7 +164,7 @@ def _seed_distance_frame(
         # the true seed's favour, which matches "the estimate is consistent with
         # this class".
         rank[has_pred] = (
-            sub < err_to_truth[has_pred][:, None] - 1e-9
+            sub < err_to_tg_seed[has_pred][:, None] - 1e-9
         ).sum(axis=1)
 
     out = pd.DataFrame(
@@ -175,11 +175,11 @@ def _seed_distance_frame(
             "status": status.to_numpy(),
             "pred_lat": pred_lat.to_numpy(dtype=float),
             "pred_lon": pred_lon.to_numpy(dtype=float),
-            "truth_seed_id": truth,
+            "tg_seed_id": tg_seed,
             "pred_seed_id": np.where(pred_pos >= 0, seed_ids[pred_pos], -1),
-            "truth_seed_rank": rank,
+            "tg_seed_rank": rank,
             "error_to_target_km": np.round(err_to_target, 3),
-            "error_to_truth_seed_km": np.round(err_to_truth, 3),
+            "error_to_tg_seed_km": np.round(err_to_tg_seed, 3),
             "error_to_pred_seed_km": np.round(
                 np.where(pred_pos >= 0, d[rows, np.clip(pred_pos, 0, None)], np.nan), 3
             ),
@@ -194,8 +194,8 @@ def _seed_distance_frame(
 def score_combo(run: RunPaths, space: AnswerSpace, combo_id: str) -> pd.DataFrame:
     """Seed distances for one CBG combo, pooled over folds."""
     df = io.load_folds(run, combo_id)
-    truth = space.assignments.set_index("target_id")["seed_id"]
-    unknown = ~df["target_id"].isin(truth.index)
+    tg_seed = space.assignments.set_index("target_id")["seed_id"]
+    unknown = ~df["target_id"].isin(tg_seed.index)
     if unknown.any():
         missing = df.loc[unknown, "target_id"].unique()[:5].tolist()
         raise ValueError(
@@ -211,31 +211,26 @@ def score_combo(run: RunPaths, space: AnswerSpace, combo_id: str) -> pd.DataFram
         status=df["status"],
         pred_lat=df["pred_lat"],
         pred_lon=df["pred_lon"],
-        truth_seed_id=df["target_id"].map(truth),
+        tg_seed_id=df["target_id"].map(tg_seed),
     )
 
 
 def score_shortest_ping(run: RunPaths, space: AnswerSpace) -> pd.DataFrame:
     """Seed distances for the Shortest-Ping baseline.
 
-    The estimate is the lowest-RTT VP's own coordinate. `eval_source` already
-    resolves that VP per target, and the choice is fold-independent because
-    every VP is available in every fold — only targets are folded.
+    The estimate is the lowest-RTT VP's own coordinate, resolved by
+    `io.load_sping_vp` — the single reader `proximity` shares, so this score and
+    that module's `has_proximate_sping_vp` cannot drift apart. The choice is
+    fold-independent because every VP is available in every fold; only targets
+    are folded.
 
     `fold` is taken from any CBG combo's fold assignment so the baseline sits on
     the same fold partition as the variants; it is left as -1 if no combo exists.
     """
-    ev = io.load_eval_per_target(run)
-    need = {"target_id", "shortest_ping_vp_lat", "shortest_ping_vp_lon"}
-    missing = need - set(ev.columns)
-    if missing:
-        raise ValueError(
-            f"{run.eval_file('eval_per_target.csv')} lacks {sorted(missing)}; "
-            f"cannot score the Shortest-Ping baseline"
-        )
+    ev = io.load_sping_vp(run)
 
-    truth = space.assignments.set_index("target_id")["seed_id"]
-    ev = ev[ev["target_id"].isin(truth.index)].reset_index(drop=True)
+    tg_seed = space.assignments.set_index("target_id")["seed_id"]
+    ev = ev[ev["target_id"].isin(tg_seed.index)].reset_index(drop=True)
 
     fold = pd.Series(-1, index=ev.index, dtype=int)
     combos = run.combo_ids
@@ -251,9 +246,9 @@ def score_shortest_ping(run: RunPaths, space: AnswerSpace) -> pd.DataFrame:
         target_id=ev["target_id"],
         fold=fold,
         status=pd.Series("BASELINE", index=ev.index),
-        pred_lat=ev["shortest_ping_vp_lat"],
-        pred_lon=ev["shortest_ping_vp_lon"],
-        truth_seed_id=ev["target_id"].map(truth),
+        pred_lat=ev["sping_vp_lat"],
+        pred_lon=ev["sping_vp_lon"],
+        tg_seed_id=ev["target_id"].map(tg_seed),
     )
 
 
@@ -286,7 +281,7 @@ def topn_summary(
             if is_baseline
             else df["status"].isin(io.CBG_SUCCESS_STATUSES).to_numpy()
         )
-        rank = df["truth_seed_rank"].to_numpy()
+        rank = df["tg_seed_rank"].to_numpy()
         err = df["error_to_target_km"].to_numpy(dtype=float)
         row = {
             "method": method,

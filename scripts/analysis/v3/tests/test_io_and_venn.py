@@ -325,7 +325,7 @@ def _make_cls_dir(
             {
                 "target_id": targets,
                 "status": [status] * len(targets),
-                "truth_seed_rank": [0 if f else 5 for f in flags],
+                "tg_seed_rank": [0 if f else 5 for f in flags],
             }
         ).to_parquet(cls_dir / f"{method}_seed_distances.parquet", index=False)
     return run

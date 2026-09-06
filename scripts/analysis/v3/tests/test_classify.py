@@ -30,7 +30,7 @@ def _space():
     )
 
 
-def _frame(space, preds, statuses, truth_seed_ids, target_ids=None):
+def _frame(space, preds, statuses, tg_seed_ids, target_ids=None):
     """Score `preds` against `space`.
 
     `target_ids` default to real ids from the answer space: `error_to_target_km`
@@ -48,7 +48,7 @@ def _frame(space, preds, statuses, truth_seed_ids, target_ids=None):
         status=pd.Series(statuses),
         pred_lat=pd.Series([p[0] for p in preds]),
         pred_lon=pd.Series([p[1] for p in preds]),
-        truth_seed_id=pd.Series(truth_seed_ids),
+        tg_seed_id=pd.Series(tg_seed_ids),
     )
 
 
@@ -69,10 +69,10 @@ def test_exact_hit_ranks_the_true_seed_first():
     space = _space()
     truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
     df = _frame(space, [CHI], ["SUCCESS"], [truth])
-    assert df.loc[0, "truth_seed_rank"] == 0
+    assert df.loc[0, "tg_seed_rank"] == 0
     assert df.loc[0, "pred_seed_id"] == truth
     offset = space.assignments.set_index("target_id").loc["tg-chi", "cell_offset_km"]
-    assert df.loc[0, "error_to_truth_seed_km"] == pytest.approx(offset, abs=1e-3)
+    assert df.loc[0, "error_to_tg_seed_km"] == pytest.approx(offset, abs=1e-3)
 
 
 def test_rank_counts_strictly_closer_seeds():
@@ -80,7 +80,7 @@ def test_rank_counts_strictly_closer_seeds():
     space = _space()
     truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
     df = _frame(space, [NYC], ["SUCCESS"], [truth])
-    assert df.loc[0, "truth_seed_rank"] >= 1
+    assert df.loc[0, "tg_seed_rank"] >= 1
     assert df.loc[0, "pred_seed_id"] != truth
 
 
@@ -111,9 +111,9 @@ def test_fallback_rows_keep_distances_but_never_count_as_correct():
     df = _frame(space, [CHI, CHI], ["SUCCESS", "FALLBACK"], [truth, truth])
     # Both rows are geometrically perfect — both land on the true seed's cell,
     # each at that cell's own quantization offset from the centre.
-    assert (df["truth_seed_rank"] == 0).all()
+    assert (df["tg_seed_rank"] == 0).all()
     offset = space.assignments.set_index("target_id").loc["tg-chi", "cell_offset_km"]
-    assert df["error_to_truth_seed_km"].to_numpy() == pytest.approx(
+    assert df["error_to_tg_seed_km"].to_numpy() == pytest.approx(
         [offset, offset], abs=1e-3
     )
     # ...but the fallback must not be credited: 1 of 2, not 2 of 2.
@@ -173,14 +173,14 @@ def test_missing_prediction_stays_in_the_denominator():
     space = _space()
     truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
     df = _frame(space, [(np.nan, np.nan)], ["ERROR"], [truth])
-    assert df.loc[0, "truth_seed_rank"] == -1
+    assert df.loc[0, "tg_seed_rank"] == -1
     assert df.loc[0, "pred_seed_id"] == -1
     s = topn_summary({"m": df}, ns=(1,)).iloc[0]
     assert s["n_targets"] == 1
     assert s["accuracy_top1"] == pytest.approx(0.0)
 
 
-def test_unknown_truth_seed_is_rejected():
+def test_unknown_tg_seed_is_rejected():
     """Predictions and answer space must agree on the seed set."""
     space = _space()
     with pytest.raises(ValueError, match="absent from the answer space"):
@@ -218,14 +218,14 @@ def test_error_to_target_is_measured_from_the_raw_target():
 
     df = _frame(space, [CHI], ["SUCCESS"], [truth], target_ids=["tg-chi"])
     assert df.loc[0, "error_to_target_km"] == pytest.approx(0.0, abs=1e-6)
-    assert df.loc[0, "error_to_truth_seed_km"] > 1.0
+    assert df.loc[0, "error_to_tg_seed_km"] > 1.0
 
 
 def test_error_to_target_ignores_the_seed_position_entirely():
     """Re-quantizing must move accuracy's geometry but not the error distance.
 
     The same prediction scored against a coarse and a fine grid gets different
-    seeds, hence a different `error_to_truth_seed_km` — but `error_to_target_km`
+    seeds, hence a different `error_to_tg_seed_km` — but `error_to_target_km`
     is a property of the prediction and the target alone and must be identical.
     """
     # At this offset res 4 keeps the two Chicago targets in separate cells (so
@@ -245,7 +245,7 @@ def test_error_to_target_ignores_the_seed_position_entirely():
         truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
         df = _frame(space, [pred], ["SUCCESS"], [truth], target_ids=["tg-chi"])
         errs.append(df.loc[0, "error_to_target_km"])
-        seed_errs.append(df.loc[0, "error_to_truth_seed_km"])
+        seed_errs.append(df.loc[0, "error_to_tg_seed_km"])
     assert errs[0] == pytest.approx(errs[1], abs=1e-6)
     assert seed_errs[0] != pytest.approx(seed_errs[1], abs=1e-6)
 

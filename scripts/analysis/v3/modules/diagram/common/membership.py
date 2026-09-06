@@ -42,12 +42,12 @@ def build_membership(
         if not path.exists():
             raise MissingArtifactError(f"{path} missing; run `classify` first")
         df = pd.read_parquet(
-            path, columns=["target_id", "status", "truth_seed_rank"]
+            path, columns=["target_id", "status", "tg_seed_rank"]
         ).set_index("target_id")
         solved = (df["status"] == "BASELINE") | df["status"].isin(
             io.CBG_SUCCESS_STATUSES
         )
-        rank = df["truth_seed_rank"]
+        rank = df["tg_seed_rank"]
         cols[method] = (rank >= 0) & (rank < top_n) & solved
 
     membership = pd.DataFrame(cols)

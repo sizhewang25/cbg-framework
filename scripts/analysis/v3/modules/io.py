@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
@@ -211,6 +212,71 @@ def load_eval_per_target(run: RunPaths) -> pd.DataFrame:
     shortest-ping VP does not depend on which fold held it out.
     """
     return pd.read_csv(run.eval_file("eval_per_target.csv"))
+
+
+#: Columns `load_sping_vp` needs. A run missing any of these cannot be scored
+#: against the baseline at all, so the check belongs here rather than at each
+#: call site.
+SPING_VP_COLUMNS = ("target_id", "shortest_ping_vp_lat", "shortest_ping_vp_lon")
+
+#: v2 spells it `shortest_ping_*`; v3 spells it `sping_*` (README, "Column
+#: naming"). The translation happens once, here, on the way across.
+_SPING_RENAME = {
+    "shortest_ping_vp_id": "sping_vp_id",
+    "shortest_ping_vp_lat": "sping_vp_lat",
+    "shortest_ping_vp_lon": "sping_vp_lon",
+    "shortest_ping_vp_km": "sping_vp_to_tg_km",
+}
+
+
+def load_sping_vp(run: RunPaths) -> pd.DataFrame:
+    """The shortest-ping VP per target: `target_id`, `sping_vp_id`, lat/lon, distance.
+
+    **One resolution of the baseline's VP, read by everyone who needs it.**
+    `classify` scores the Shortest-Ping baseline on this coordinate and
+    `proximity` labels the diamond's right chain with it, and the two must agree
+    exactly — `has_proximate_sping_vp` *is* Shortest-Ping's top-1 correctness by
+    construction, which is only a usable self-check while both sides read the
+    same row. Two independent readers would agree today and be free to drift
+    tomorrow, so there is one.
+
+    Read from `eval_source` rather than re-minimized over the canonical CSV's
+    RTT here. That is deliberate and is the *lesser* coupling: `eval_source`
+    already resolved the VP, and a second minimization would break ties
+    differently on any target whose two lowest RTTs are equal. Deriving it in v3
+    would not remove the dependency — it would leave v3's two halves disagreeing
+    with each other instead of agreeing with v2.
+
+    Fold-independent: K-fold splits targets, not VPs, so every VP is available
+    in every fold and a target's shortest-ping VP does not depend on which fold
+    held it out.
+
+    `sping_vp_id` and `sping_vp_to_tg_km` are optional and come back as NaN when
+    the run does not carry them; the three in `SPING_VP_COLUMNS` are required.
+    """
+    ev = load_eval_per_target(run)
+    missing = [c for c in SPING_VP_COLUMNS if c not in ev.columns]
+    if missing:
+        raise ValueError(
+            f"{run.eval_file('eval_per_target.csv')} lacks {sorted(missing)}; "
+            f"cannot resolve the shortest-ping VP, which both the Shortest-Ping "
+            f"baseline and the proximity diamond's right chain are defined by"
+        )
+    keep = [c for c in _SPING_RENAME if c in ev.columns]
+    out = ev[["target_id", *[c for c in keep if c != "target_id"]]].rename(
+        columns=_SPING_RENAME
+    )
+    for optional in ("sping_vp_id", "sping_vp_to_tg_km"):
+        if optional not in out.columns:
+            out[optional] = np.nan
+    dupes = out["target_id"].duplicated()
+    if dupes.any():
+        raise ValueError(
+            f"{run.eval_file('eval_per_target.csv')} names "
+            f"{int(dupes.sum())} target_id(s) more than once; the shortest-ping "
+            f"VP would be ambiguous for them"
+        )
+    return out.reset_index(drop=True)
 
 
 def load_eval_stats(run: RunPaths) -> dict:
