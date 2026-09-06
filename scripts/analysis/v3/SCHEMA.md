@@ -131,11 +131,15 @@ resolution, whereas the linkage space can guarantee grouping within its radius.
 
 ### `target-answer-space/<grid>-<resolution>/` — the grid answer space
 
-Built by `build-answer-space` over either of two tessellations (H3 `res=4` by
-default, HEALPix `nside=128` for the paper's original setting) — see
-[README.md](README.md#choosing-a-grid). One seed per occupied cell, **at the
-cell's own centre**, so a seed depends on the grid alone and not on which
-targets landed in the cell.
+Built by `build-answer-space`. One seed per occupied cell, **at the cell's own
+centre**, so a seed depends on the grid alone and not on which targets landed in
+the cell.
+
+**`h3-4` is the grid we run.** `HealpixGrid` (`nside=128`, the paper's original
+setting) stays supported and tested — the `Grid` contract is held against both —
+but it is not run and its numbers are not reported. Treat any `healpix-128`
+figure below as historical. See [README.md](README.md#choosing-a-grid) for why
+the two exist.
 
 - `seeds.csv`: `seed_id`, `grid_scheme`, `grid_resolution`, `cell_id`,
   `seed_lat`, `seed_lon`, `n_targets`, `nearest_seed_km`, `margin_km`,
@@ -152,9 +156,9 @@ targets landed in the cell.
 Three columns carry the load and are easy to confuse:
 
 - **`cell_offset_km`** (per target) — distance from a target to its seed, i.e.
-  the quantization the grid choice buys. Measured: p50 ≈ 16-20 km, max ≈ 26 km
-  at `h3-4`; p50 ≈ 19-25 km, max ≈ 41 km at `healpix-128`. It is *not* an error
-  metric and must never be pooled with `error_km_*`.
+  the quantization the grid choice buys. Measured at `h3-4`: p50 ≈ 16-20 km,
+  max ≈ 26 km. It is *not* an error metric and must never be pooled with
+  `error_km_*`.
 - **`nearest_seed_km` / `margin_km`** (per seed) — distance to the closest other
   seed, and half of it. Since seeds sit on the grid, these now describe the
   tessellation and the occupancy pattern rather than where targets happened to
