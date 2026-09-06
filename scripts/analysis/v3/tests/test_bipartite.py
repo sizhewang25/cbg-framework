@@ -414,22 +414,63 @@ def test_occupied_cells_never_exceed_the_node_count(grid):
     """Co-located VPs collapse -- the reason the count is the honest denominator."""
     _, _, graph = _graph([CHI, CHI, SJC], [DFW], [(0, 0), (1, 0), (2, 0)], grid)
     disp = graph.meta["nodes"]["vps"]["dispersion"]
-    res = str(graph.meta["grid"]["resolution"])
-    assert disp[res]["effective_count"] == 2 < 3
+    assert disp["effective_count"] == 2 < 3
     # occupancy_ratio is effective_count / count, which is what makes it read as
     # "spread" vs "stacked" independently of set size.
-    assert disp[res]["occupancy_ratio"] == pytest.approx(2 / 3, abs=1e-4)
-    # And the ladder coarsens monotonically, since re-binning can only merge.
-    rungs = sorted((k for k in disp if k != "note"), key=int, reverse=True)
-    counts = [disp[k]["effective_count"] for k in rungs]
-    assert counts == sorted(counts, reverse=True)
+    assert disp["occupancy_ratio"] == pytest.approx(2 / 3, abs=1e-4)
+
+
+def test_dispersion_is_reported_only_at_this_files_own_resolution(grid):
+    """One rung per directory; `--sweep` is how the ladder is obtained.
+
+    Coarser rungs inside a finer rung's file would appear in several
+    directories at once and could disagree between them.
+    """
+    _, _, graph = _graph([CHI, SJC], [DFW, NYC], [(0, 0), (1, 1)], grid)
+    disp = graph.meta["nodes"]["vps"]["dispersion"]
+    assert set(disp) == {"effective_count", "occupancy_ratio", "note"}
+
+
+def test_a_coarser_build_reports_its_own_dispersion(grid):
+    """The ladder still exists -- it is one build per rung, not one file.
+
+    Asserted over a scatter rather than a hand-picked city pair, because
+    coarsening merges by *boundary alignment* and not by distance: Kansas City
+    and Omaha are 268 km apart and still land in two different h3 cells at
+    res 2, whose pitch is 316 km. Over 40 points the merge is reliable, which is
+    the property worth pinning -- coarsening can only merge, never split.
+    """
+    from scripts.analysis.v3.modules.grid import get_grid
+
+    g = get_grid(grid)
+    fine, coarse = (4, 2) if grid == "h3" else (128, 16)
+    rng = np.random.default_rng(11)
+    coords = list(zip(rng.uniform(30.0, 47.0, 40), rng.uniform(-120.0, -75.0, 40)))
+
+    counts = {}
+    for res in (fine, coarse):
+        space = build_answer_space(
+            pd.DataFrame(
+                {"target_id": ["tg-0"], "target_lat": [DFW[0]], "target_lon": [DFW[1]]}
+            ),
+            grid=g,
+            resolution=res,
+        )
+        vps = _vps(coords)
+        graph = bp.build_bipartite(
+            space, vps, _edges([(i, 0) for i in range(len(coords))], vps, space)
+        )
+        d = graph.meta["nodes"]["vps"]["dispersion"]
+        assert d["occupancy_ratio"] == pytest.approx(d["effective_count"] / 40, abs=1e-4)
+        counts[res] = d["effective_count"]
+    assert counts[coarse] < counts[fine] <= 40
 
 
 def test_target_occupied_cells_equal_the_seed_count(grid):
     """One occupied target cell is exactly one class, by construction."""
     space, _, graph = _graph([CHI], [DFW, NYC, SJC], [(0, 0), (0, 1), (0, 2)], grid)
     res = str(graph.meta["grid"]["resolution"])
-    assert graph.meta["nodes"]["targets"]["dispersion"][res]["effective_count"] == space.n_seeds
+    assert graph.meta["nodes"]["targets"]["dispersion"]["effective_count"] == space.n_seeds
 
 
 def test_diameter_is_reported_with_its_p95(grid):

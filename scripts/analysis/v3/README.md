@@ -409,7 +409,7 @@ ceiling.
 
 Diameter and p95 say how far the set reaches; they cannot say whether it is
 spread or stacked inside that reach. The `dispersion` block on each node side
-answers that per grid rung:
+answers that, **at this directory's own resolution and no other**:
 
 * **`effective_count`** — the number of distinct places the set resolves to at
   that scale, i.e. §7.3's occupied-cell count. 134 VPs are 81 *places* at 45 km,
@@ -419,28 +419,37 @@ answers that per grid rung:
   own place; low means many share one. Dividing out the set size is what lets a
   134-VP fleet and a 53-VP fleet be compared directly.
 
-| occupancy ratio | h3-5 (17 km) | h3-4 (45 km) | h3-3 (120 km) | h3-2 (316 km) |
+At the default `h3-4`:
+
+| | VPs | occupancy | targets | occupancy |
 | --- | --- | --- | --- | --- |
-| as01/02/03 VPs (134) | 0.64 | 0.60 | 0.54 | 0.37 |
-| as7018 VPs (53) | 0.94 | 0.77 | 0.60 | 0.40 |
-| as01 targets (399) | 0.05 | 0.05 | 0.05 | 0.04 |
-| as7018 targets (78) | 0.44 | 0.28 | 0.26 | 0.21 |
+| as01 | 134 → 81 | 0.60 | 399 → 18 | 0.05 |
+| as02 | 134 → 81 | 0.60 | 412 → 22 | 0.05 |
+| as03 | 134 → 81 | 0.60 | 458 → 22 | 0.05 |
+| as7018 | 53 → 41 | 0.77 | 78 → 22 | 0.28 |
 
-Two readings. **Both VP fleets are dispersed**, and the curve is shallow — the
-operator's 134 VPs are still 50 places at 316 km, so they are genuinely distinct
-metros rather than a fleet that only separates intra-metro. as7018's probes are
-more dispersed still at fine scale (0.94 at 17 km: almost every probe is its own
-place) but converge on the operator fleet by 316 km.
+Both VP fleets are **dispersed** — most VPs are their own place. Both target
+sides are **stacked**, and the operator far more so: 399 IPs at 18 places is a
+ratio of 0.05, against as7018's 0.28. That is the same fact the flow-line
+collapse ratio reports downstream, and it is why 81 rather than 134 is the
+denominator behind any independent-observation claim.
 
-**The target sides are opposite.** as01's ratio is 0.05 *at every rung* — 399
-IPs at 19 places, and coarsening changes nothing, because they were never spread
-in the first place. as7018 starts at 0.44 and falls, the signature of
-individually-sited anchors merging as the cell grows. That flat-versus-falling
-contrast is the operator/public difference stated as a curve, and it is the same
-fact the flow-line collapse ratio reports downstream.
+**One rung per directory.** §7.3 also asks for the curve up the hierarchy, and
+that is what `--sweep` is for: each rung builds its own directory carrying its
+own dispersion. Reporting coarser rungs *inside* a finer rung's file would put
+the same number in several directories at once and let two copies disagree, so
+the file states only its own scale. Each build re-bins the coordinates rather
+than coarsening cell ids, since H3 is aperture-7 and a parent id is an exact
+index but not a geometric container.
 
-Each rung **re-bins the coordinates** rather than coarsening cell ids, since H3
-is aperture-7 and a parent id is an exact index but not a geometric container.
+Read the curve as a concentration diagnostic when you have it: flat means
+genuinely distinct metros, a steep climb toward fine cells means the set only
+separates intra-metro. Measured across the ladder, the operator VP fleet is
+shallow (0.64 / 0.60 / 0.54 / 0.37 at 17/45/120/316 km — still 50 places at
+316 km) while as01's targets sit at ~0.05 *at every rung*: coarsening changes
+nothing because they were never spread. Note that merging is decided by boundary
+**alignment**, not distance — Kansas City and Omaha are 268 km apart and still
+occupy two different h3 cells at res 2, whose pitch is 316 km.
 
 `nearest_other_node_km` used to sit here and was removed: it is identically zero
 on every operator target side (399 targets at 20 coordinates means every target

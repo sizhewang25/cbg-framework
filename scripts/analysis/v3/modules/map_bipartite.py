@@ -274,9 +274,8 @@ def plot_bipartite_nodes(
     ax.legend(loc="lower left", fontsize=8, framealpha=0.9)
 
     m = graph.meta
-    res_key = str(m["grid"]["resolution"])
-    n_tg_cells = m["nodes"]["targets"]["dispersion"][res_key]["effective_count"]
-    vp_occ = m["nodes"]["vps"]["dispersion"][res_key]["occupancy_ratio"]
+    n_tg_cells = m["nodes"]["targets"]["dispersion"]["effective_count"]
+    vp_occ = m["nodes"]["vps"]["dispersion"]["occupancy_ratio"]
     e = m["edges"]
     ax.set_title(title or "Bipartite graph — topology", fontsize=12)
     _caption(

@@ -168,15 +168,14 @@ _MEASUREMENT_EFFICIENCY_NOTE = (
 
 DISPERSION_NOTE = (
     "Extent says how far apart the set reaches; this says whether it is spread "
-    "or stacked inside that reach. Per grid rung: effective_count is the number "
-    "of distinct places the set resolves to at that scale (the occupied-cell "
-    "count of §7.3), and occupancy_ratio is effective_count / count -- 1.0 means "
-    "every node is its own place, and low means many nodes share one. The shape "
-    "of the curve across rungs is §7.3's multi-scale concentration diagnostic: "
-    "flat means genuinely distinct metros, a steep climb toward fine cells means "
-    "the set only separates intra-metro. Each rung re-bins the coordinates "
-    "rather than coarsening cell ids, since H3 is aperture-7 and a parent id is "
-    "not a geometric container."
+    "or stacked inside that reach, at this file's own resolution. "
+    "effective_count is the number of distinct places the set resolves to (the "
+    "occupied-cell count of §7.3) and occupancy_ratio is effective_count / "
+    "count -- 1.0 means every node is its own place, low means many share one. "
+    "For §7.3's multi-scale concentration curve, build the whole ladder with "
+    "--sweep and read one rung per directory: reporting coarser rungs inside a "
+    "finer rung's file would duplicate them across directories and let two "
+    "copies disagree."
 )
 
 _LATENT_OBSERVED_NOTE = (
@@ -442,9 +441,7 @@ def _node_block(
     """
     pw, pw_note = pairwise, pairwise_note
     n = int(lat.size)
-    cells = grid.occupied_cell_hierarchy(
-        lat, lon, grid.coarsening_ladder(resolution)
-    )
+    n_cells = int(np.unique(grid.cell_ids(lat, lon, resolution)).size)
     block: dict = {
         "count": n,
         "asn_count": None if asns is None else int(asns.dropna().nunique()),
@@ -454,14 +451,9 @@ def _node_block(
         "pairwise_p95_km": round(float(np.percentile(pw, 95)), 3) if pw.size else None,
         "pairwise_km": _describe(pw),
         "dispersion": {
+            "effective_count": n_cells,
+            "occupancy_ratio": round(n_cells / n, 4) if n else None,
             "note": DISPERSION_NOTE,
-            **{
-                str(r): {
-                    "effective_count": c,
-                    "occupancy_ratio": round(c / n, 4) if n else None,
-                }
-                for r, c in cells.items()
-            },
         },
     }
     block.update(pw_note)
@@ -1057,8 +1049,7 @@ def register(app: typer.Typer) -> None:
             )
             graph.write(out_dir)
             e = graph.meta["edges"]
-            res = str(graph.meta["grid"]["resolution"])
-            vp_disp = graph.meta["nodes"]["vps"]["dispersion"][res]
+            vp_disp = graph.meta["nodes"]["vps"]["dispersion"]
             typer.echo(
                 f"{run.run_id}: {graph.n_vps} VPs in "
                 f"{vp_disp['effective_count']} places "
