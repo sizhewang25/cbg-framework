@@ -152,7 +152,7 @@ def test_density_is_over_the_roster_not_over_the_edges(grid):
     """
     _, _, graph = _graph([CHI, SJC, NYC], [DFW, NYC], [(0, 0), (0, 1), (1, 0)], grid)
     assert graph.meta["edges"]["n_edges"] == 3
-    assert graph.meta["edges"]["density"] == pytest.approx(3 / 6)
+    assert graph.meta["edges"]["edge_density"] == pytest.approx(3 / 6)
     assert graph.meta["nodes"]["vps"]["n_with_no_edge"] == 1
 
 
@@ -171,7 +171,7 @@ def test_an_unmeasured_vp_never_moves_an_observed_distance(grid):
     assert a.to_dict() == b.to_dict()
     assert b["tg-0"] > 100.0            # CHI->DFW, not the co-located VP
     # ... but the denominator did move, because the roster grew.
-    assert with_extra.meta["edges"]["density"] < without.meta["edges"]["density"]
+    assert with_extra.meta["edges"]["edge_density"] < without.meta["edges"]["edge_density"]
 
 
 # ---- the latent half and measurement efficiency -----------------------------
@@ -188,9 +188,12 @@ def test_distances_are_reported_as_a_nested_pair(grid):
     for key in ("length_km", "nearest_vp_km"):
         assert set(e[key]) >= {"observed", "latent", "note"}, key
         assert e[key]["observed"]["n"] > 0 and e[key]["latent"]["n"] > 0
-    # Degree gets no latent half, and says why rather than emitting a constant.
-    assert "degree_latent_note" in e
-    assert "latent" not in graph.meta["nodes"]["targets"]["degree"]
+    # Degree gets no latent half, and each side says why in its own block
+    # rather than in a stray sibling key.
+    for side, key in (("vps", "degree_to_target"), ("targets", "degree_to_vp")):
+        block = graph.meta["nodes"][side][key]
+        assert "latent" not in block
+        assert "carries nothing" in block["note"]
 
 
 def test_the_latent_pair_count_is_the_full_cross_product(grid):
@@ -206,9 +209,8 @@ def test_efficiency_is_one_when_the_nearest_vp_was_measured(grid):
     """The whole population of the four real runs, so it must be exact."""
     _, _, graph = _graph([CHI, SJC], [DFW], [(0, 0), (1, 0)], grid)
     e = graph.meta["edges"]
-    assert graph.target_nodes["measurement_efficiency"].tolist() == [1.0]
-    assert e["measurement_efficiency"]["max"] == 1.0
-    assert e["n_targets_measuring_their_nearest_vp"] == 1
+    assert graph.target_nodes["measured_nearest_vp_ratio"].tolist() == [1.0]
+    assert e["measured_nearest_vp_ratio_per_target"]["max"] == 1.0
     assert bool(graph.target_nodes["nearest_vp_is_measured"].iloc[0])
 
 
@@ -227,13 +229,12 @@ def test_efficiency_exceeds_one_when_the_campaign_missed_the_nearest_vp(grid):
     # Only the far VP measured this target.
     graph = bp.build_bipartite(space, vps, _edges([(1, 0)], vps, space))
 
-    eff = float(graph.target_nodes["measurement_efficiency"].iloc[0])
+    eff = float(graph.target_nodes["measured_nearest_vp_ratio"].iloc[0])
     latent = float(graph.target_nodes["nearest_vp_km"].iloc[0])
     measured = float(graph.target_nodes["nearest_measured_vp_km"].iloc[0])
     assert latent < 10.0 and measured > 2_000.0
     assert eff == pytest.approx(measured / latent, rel=1e-4)
     assert eff > 200.0
-    assert graph.meta["edges"]["n_targets_measuring_their_nearest_vp"] == 0
     assert not bool(graph.target_nodes["nearest_vp_is_measured"].iloc[0])
 
 
@@ -251,7 +252,7 @@ def test_efficiency_is_never_below_one(grid):
     tg = [(32.95, -97.10), (40.75, -74.05), (39.10, -94.60), (25.79, -80.29)]
     pairs = [(v, t) for v in range(len(vp)) for t in range(len(tg)) if (v + t) % 3]
     _, _, graph = _graph(vp, tg, pairs, grid)
-    eff = graph.target_nodes["measurement_efficiency"].to_numpy(dtype=float)
+    eff = graph.target_nodes["measured_nearest_vp_ratio"].to_numpy(dtype=float)
     assert np.isfinite(eff).all(), eff
     assert (eff >= 1.0).all(), eff
     # The fixture drops every third pair, so some target must actually miss.
@@ -263,17 +264,20 @@ def test_a_coincident_but_unmeasured_vp_is_counted_not_coerced(grid):
     space = _space([CHI], grid=grid)
     vps = _vps([CHI, SJC])                       # vp-0 sits exactly on the target
     graph = bp.build_bipartite(space, vps, _edges([(1, 0)], vps, space))
-    assert graph.meta["edges"]["n_targets_efficiency_undefined"] == 1
-    assert np.isnan(graph.target_nodes["measurement_efficiency"].iloc[0])
-    assert graph.meta["edges"]["measurement_efficiency"]["n"] == 0
+    assert np.isnan(graph.target_nodes["measured_nearest_vp_ratio"].iloc[0])
+    # The undefined target is excluded from the block, so `n` falls below the
+    # target count by exactly that many -- which is how the count survives its
+    # own removal from `meta.json`.
+    assert graph.meta["edges"]["measured_nearest_vp_ratio_per_target"]["n"] == 0
+    assert graph.meta["nodes"]["targets"]["count"] == 1
 
 
 def test_a_coincident_and_measured_vp_is_exactly_one_not_zero_over_zero(grid):
     space = _space([CHI], grid=grid)
     vps = _vps([CHI])
     graph = bp.build_bipartite(space, vps, _edges([(0, 0)], vps, space))
-    assert graph.target_nodes["measurement_efficiency"].tolist() == [1.0]
-    assert graph.meta["edges"]["n_targets_efficiency_undefined"] == 0
+    assert graph.target_nodes["measured_nearest_vp_ratio"].tolist() == [1.0]
+    assert graph.meta["edges"]["measured_nearest_vp_ratio_per_target"]["n"] == 1
 
 
 def test_efficiency_snaps_the_two_reductions_residue():
@@ -298,7 +302,9 @@ def test_the_latent_nearest_vp_ignores_the_edge_set(grid):
     row = graph.target_nodes.set_index("target_id").loc["tg-0"]
     assert row["nearest_vp_km"] == pytest.approx(0.0)        # the DFW VP
     assert row["nearest_measured_vp_km"] > 100.0             # only CHI measured
-    assert graph.meta["edges"]["n_targets_efficiency_undefined"] == 1
+    # tg-0's ratio is infinite (latent 0 km, measured 100+), so it drops out of
+    # the block: 2 targets in, 1 described.
+    assert graph.meta["edges"]["measured_nearest_vp_ratio_per_target"]["n"] == 1
 
 
 def test_nearest_across_is_exact_under_chunking():
@@ -342,6 +348,24 @@ def test_describe_p90_agrees_with_the_shared_describe_at_three_digits():
         assert mine["percentiles"][k] == want, k
 
 
+def test_dropped_keys_stay_dropped(grid):
+    """Removed as redundant or unread; a re-add should be deliberate.
+
+    `nearest_other_node_km` was all zeros on every operator run (399 targets at
+    20 coordinates, so every target has a coincident twin) and `dispersion`
+    answers the same question at a stated scale. `nearest_target_km_latent`
+    answered a VP-siting question no §7.3 metric asks.
+    """
+    _, _, graph = _graph([CHI, SJC], [DFW, NYC], [(0, 0), (1, 1)], grid)
+    for side in ("vps", "targets"):
+        assert "nearest_other_node_km" not in graph.meta["nodes"][side]
+        assert "occupied_cells_by_resolution" not in graph.meta["nodes"][side]
+    assert "nearest_target_km_latent" not in graph.meta["edges"]
+    assert "nearest_other_vp_km" not in graph.vp_nodes.columns
+    assert "nearest_other_target_km" not in graph.target_nodes.columns
+    assert "nearest_target_km" not in graph.vp_nodes.columns
+
+
 def test_a_ratio_block_carries_more_decimals_than_a_distance_block(grid):
     """3 dp hid as03's misses entirely; ratios live just above 1."""
     _, _, graph = _graph([CHI, SJC], [DFW], [(0, 0), (1, 0)], grid)
@@ -382,18 +406,22 @@ def test_degree_counts_distinct_targets_not_observations(grid):
     vps = _vps([CHI])
     dup = pd.concat([_edges([(0, 0), (0, 1)], vps, space)] * 3, ignore_index=True)
     graph = bp.build_bipartite(space, vps, dup.drop_duplicates(["vp_id", "target_id"]))
-    assert graph.vp_nodes["degree"].tolist() == [2]
+    assert graph.vp_nodes["degree_to_target"].tolist() == [2]
     assert graph.meta["edges"]["n_edges"] == 2
 
 
 def test_occupied_cells_never_exceed_the_node_count(grid):
     """Co-located VPs collapse -- the reason the count is the honest denominator."""
     _, _, graph = _graph([CHI, CHI, SJC], [DFW], [(0, 0), (1, 0), (2, 0)], grid)
-    cells = graph.meta["nodes"]["vps"]["occupied_cells_by_resolution"]
+    disp = graph.meta["nodes"]["vps"]["dispersion"]
     res = str(graph.meta["grid"]["resolution"])
-    assert cells[res] == 2 < 3
-    # And the hierarchy coarsens monotonically, since re-binning can only merge.
-    counts = [cells[k] for k in sorted(cells, key=int, reverse=True)]
+    assert disp[res]["effective_count"] == 2 < 3
+    # occupancy_ratio is effective_count / count, which is what makes it read as
+    # "spread" vs "stacked" independently of set size.
+    assert disp[res]["occupancy_ratio"] == pytest.approx(2 / 3, abs=1e-4)
+    # And the ladder coarsens monotonically, since re-binning can only merge.
+    rungs = sorted((k for k in disp if k != "note"), key=int, reverse=True)
+    counts = [disp[k]["effective_count"] for k in rungs]
     assert counts == sorted(counts, reverse=True)
 
 
@@ -401,7 +429,7 @@ def test_target_occupied_cells_equal_the_seed_count(grid):
     """One occupied target cell is exactly one class, by construction."""
     space, _, graph = _graph([CHI], [DFW, NYC, SJC], [(0, 0), (0, 1), (0, 2)], grid)
     res = str(graph.meta["grid"]["resolution"])
-    assert graph.meta["nodes"]["targets"]["occupied_cells_by_resolution"][res] == space.n_seeds
+    assert graph.meta["nodes"]["targets"]["dispersion"][res]["effective_count"] == space.n_seeds
 
 
 def test_diameter_is_reported_with_its_p95(grid):
@@ -452,13 +480,13 @@ def test_coincident_edges_collapse_into_one_segment(grid):
     vps = _vps([SJC])
     graph = bp.build_bipartite(space, vps, _edges([(0, 0), (0, 1), (0, 2)], vps, space))
     assert graph.meta["edges"]["n_edges"] == 3
-    assert graph.meta["edges"]["n_distinct_segments"] == 1
+    assert graph.meta["edges"]["n_distinct_geometry_edge"] == 1
     assert graph.edge_segments["n_edges"].tolist() == [3]
 
 
 def test_distinct_targets_do_not_collapse(grid):
     _, _, graph = _graph([SJC], [CHI, NYC], [(0, 0), (0, 1)], grid)
-    assert graph.meta["edges"]["n_distinct_segments"] == 2
+    assert graph.meta["edges"]["n_distinct_geometry_edge"] == 2
 
 
 # ---- joins and guards -------------------------------------------------------

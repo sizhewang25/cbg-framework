@@ -335,26 +335,37 @@ with different names:
 
 ```json
 "edges": {
+  "edge_density":  0.996184,
   "length_km":     {"observed": {...}, "latent": {...}, "n_latent_pairs": 53466, "note": "..."},
   "nearest_vp_km": {"observed": {...}, "latent": {...}, "note": "..."},
-  "measurement_efficiency": {...},
-  "n_targets_measuring_their_nearest_vp": 399
+  "measured_nearest_vp_ratio_per_target": {"n": 399, "max": 1.0, ..., "note": "..."}
 }
 ```
 
 Nesting is the point: neither half can be read with the other out of view. The
 pairing applies to distances and **not to degree** — a target's latent degree is
-the VP count for every target, so it carries nothing, and `meta.json` says so
-instead of emitting a constant column. **Angular geometry stays observed-only**,
+the VP count for every target, so it carries nothing, and each degree block says
+so in its own `note` instead of emitting a constant. Degree is named for the
+side it points at, `degree_to_target` on VPs and `degree_to_vp` on targets,
+because there is no VP-to-VP or target-to-target edge and a bare "degree" in a
+node block invites reading it as one. **Angular geometry stays observed-only**,
 matching §7.3's own scoping of it to measured neighbours: the arrangement term
 describes the constraints a variant actually receives, and a bearing set no
 method ever sees would not be that.
 
-`measurement_efficiency` is what the pair exists to support: nearest-measured-VP
-over nearest-VP, per target, `>= 1` by construction. It is the number that
-separates **"the VP set is badly placed"** (a large latent nearest-VP distance)
-from **"the VP set is fine but the campaign allocated probes badly"** (a ratio
-above 1), and only the second is fixable by reallocating measurement.
+`measured_nearest_vp_ratio_per_target` is what the pair exists to support:
+nearest-measured-VP over nearest-VP, one value per target, `>= 1` by
+construction. §7.3 calls it *measurement efficiency* and the code keeps that as
+the function name, but it is emitted under a name that says what is divided by
+what. It separates **"the VP set is badly placed"** (a large latent nearest-VP
+distance) from **"the VP set is fine but the campaign allocated probes badly"**
+(a ratio above 1), and only the second is fixable by reallocating measurement.
+
+It is **not** `edge_density`. Density is a *count* ratio over all pairs; this is
+a *distance* ratio at the minimum only. A campaign at 50% density still scores
+1.0 if it always includes each target's closest VP, and one at 99% density
+scores badly if the missing 1% is exactly those. Both are reported because only
+the second bounds accuracy.
 
 **Measured on all four runs, it is exactly 1.00.** Every target measured its
 nearest VP: 399/399, 412/412, 458/458 and 78/78. The campaigns do miss pairs
@@ -386,13 +397,55 @@ rule campaign bias out of §8 rather than argued about.
 > **ids**: co-located VPs are the normal case (as01's VP nearest-neighbour p50
 > is 0.0 km), so `argmin` and `eval_source`'s BallTree break ties differently
 > and agreed on only 259 of 399 targets while their distances agreed to
-> 4e-4 km. The test is on distance now, and `measurement_efficiency` snaps a
+> 4e-4 km. The test is on distance now, and the ratio snaps a
 > residue measured at 1.24e-9 relative so that `== 1.0` is usable downstream
 > with no tolerance repeated.
 
 Out of scope, per the run decision: §7.3's optional appendix (Clark-Evans,
 anisotropy, nearest-neighbour CV, degree assortativity) and §8.2's VP coverage
 ceiling.
+
+### Extent, then dispersion
+
+Diameter and p95 say how far the set reaches; they cannot say whether it is
+spread or stacked inside that reach. The `dispersion` block on each node side
+answers that per grid rung:
+
+* **`effective_count`** — the number of distinct places the set resolves to at
+  that scale, i.e. §7.3's occupied-cell count. 134 VPs are 81 *places* at 45 km,
+  and that 81 is the honest denominator for any claim resting on independent
+  observations.
+* **`occupancy_ratio`** = `effective_count / count`. 1.0 means every node is its
+  own place; low means many share one. Dividing out the set size is what lets a
+  134-VP fleet and a 53-VP fleet be compared directly.
+
+| occupancy ratio | h3-5 (17 km) | h3-4 (45 km) | h3-3 (120 km) | h3-2 (316 km) |
+| --- | --- | --- | --- | --- |
+| as01/02/03 VPs (134) | 0.64 | 0.60 | 0.54 | 0.37 |
+| as7018 VPs (53) | 0.94 | 0.77 | 0.60 | 0.40 |
+| as01 targets (399) | 0.05 | 0.05 | 0.05 | 0.04 |
+| as7018 targets (78) | 0.44 | 0.28 | 0.26 | 0.21 |
+
+Two readings. **Both VP fleets are dispersed**, and the curve is shallow — the
+operator's 134 VPs are still 50 places at 316 km, so they are genuinely distinct
+metros rather than a fleet that only separates intra-metro. as7018's probes are
+more dispersed still at fine scale (0.94 at 17 km: almost every probe is its own
+place) but converge on the operator fleet by 316 km.
+
+**The target sides are opposite.** as01's ratio is 0.05 *at every rung* — 399
+IPs at 19 places, and coarsening changes nothing, because they were never spread
+in the first place. as7018 starts at 0.44 and falls, the signature of
+individually-sited anchors merging as the cell grows. That flat-versus-falling
+contrast is the operator/public difference stated as a curve, and it is the same
+fact the flow-line collapse ratio reports downstream.
+
+Each rung **re-bins the coordinates** rather than coarsening cell ids, since H3
+is aperture-7 and a parent id is an exact index but not a geometric container.
+
+`nearest_other_node_km` used to sit here and was removed: it is identically zero
+on every operator target side (399 targets at 20 coordinates means every target
+has a coincident twin), so it answered nothing `dispersion` does not answer
+better and at a stated scale.
 
 ### Scale: the latent half is |VP| x |targets|
 
@@ -402,7 +455,7 @@ therefore deliberate:
 * **Per-target latent nearest-VP distance is exact at any target count.**
   `nearest_across_km` chunks the cross matrix and reduces with a per-chunk
   `min`, so only `|VP| x chunk` floats are ever resident. This is the quantity
-  `measurement_efficiency` needs, so the headline metric never degrades.
+  `measured_nearest_vp_ratio_per_target` needs, so it never degrades.
 * **Only the latent *distribution* falls back**, since a distribution needs the
   values rather than their minima. Past `_MAX_CROSS_PAIRS` the target side is
   subsampled deterministically and `meta.json` records that it was, so a
@@ -440,7 +493,7 @@ are checkable there — SCHEMA.md §7.)
 | distinct flow lines | 1,738 | 1,913 | 2,001 | 4,076 |
 | nearest VP p50, observed / latent km | 13.3 / 13.3 | 19.7 / 19.7 | 8.8 / 8.8 | 35.7 / 35.7 |
 | nearest VP p90, observed / latent km | 48.2 / 48.2 | 154.2 / 154.2 | 30.4 / 30.4 | 481.9 / 481.9 |
-| **measurement efficiency** (max) | 1.00 | 1.00 | 1.00 | 1.00 |
+| **measured nearest-VP ratio** (max) | 1.00 | 1.00 | 1.00 | 1.00 |
 | targets that measured their nearest VP | 399/399 | 412/412 | 458/458 | 78/78 |
 | VP to its nearest target, p50 km (latent) | 102.9 | 166.6 | 69.0 | 45.5 |
 | max angular gap, p50 / p90 deg | 113 / 200 | 85 / 176 | 115 / 176 | 140 / 265 |
@@ -448,8 +501,8 @@ are checkable there — SCHEMA.md §7.)
 Five things read straight off that table.
 
 **The latent/observed pair is flat, and that is the result.** Every
-observed/latent column above agrees to the decimal, and measurement efficiency
-is exactly 1.00 on all four runs — as it should be for an active mesh ping. The
+observed/latent column above agrees to the decimal, and the measured
+nearest-VP ratio is exactly 1.00 on all four runs — as it should be for an active mesh ping. The
 edge set is not a biased sample of the deployment, so no §8 finding can be
 blamed on probe allocation. Reporting the pair is still what licenses that
 sentence: it is a measured absence of bias rather than an assumed one, which is
@@ -525,8 +578,8 @@ one's job.
   observed are two samplings of one entity rather than two entities, so they
   share a slot and separate by dash. Giving latent its own hue would assert a
   distinction the data does not have *and* force a 4-hue palette whose best
-  red/green pair only reaches dE 7.2 under protanopia. **Right**, measurement
-  efficiency on its own panel, because it is a ratio and not a distance —
+  red/green pair only reaches dE 7.2 under protanopia. **Right**, the measured
+  nearest-VP ratio on its own panel, because it is a ratio and not a distance —
   sharing the left x axis would be the two-scales error. The y axis is shared,
   both panels being cumulative shares. On all four runs the right panel is
   degenerate (a vertical line at 1.0), so it prints the sentence instead: a

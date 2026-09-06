@@ -275,16 +275,18 @@ def plot_bipartite_nodes(
 
     m = graph.meta
     res_key = str(m["grid"]["resolution"])
-    n_tg_cells = m["nodes"]["targets"]["occupied_cells_by_resolution"][res_key]
+    n_tg_cells = m["nodes"]["targets"]["dispersion"][res_key]["effective_count"]
+    vp_occ = m["nodes"]["vps"]["dispersion"][res_key]["occupancy_ratio"]
     e = m["edges"]
     ax.set_title(title or "Bipartite graph — topology", fontsize=12)
     _caption(
         ax,
         f"{grid.name} {grid.resolution_arg}={resolution} "
         f"(~{grid.nominal_cell_km(resolution):.0f} km cells) · "
-        f"{len(graph.vp_nodes):,} VPs in {n_vp_cells or '-'} occupied cells · "
+        f"{len(graph.vp_nodes):,} VPs in {n_vp_cells or '-'} occupied cells "
+        f"(occupancy {vp_occ:.2f}) · "
         f"{len(assignments):,} targets in {n_tg_cells} occupied cells = K={len(seeds)} classes\n"
-        f"{e['n_edges']:,} measured edges · density {e['density']:.3f} · "
+        f"{e['n_edges']:,} measured edges · density {e['edge_density']:.3f} · "
         f"{e['connected_components']['n_components']} component(s) · "
         f"median nearest measured VP "
         f"{e['nearest_vp_km']['observed']['percentiles']['p50']:.0f} km · "
@@ -400,7 +402,7 @@ def plot_bipartite_flows(
         f"{n_all:,} geometrically distinct great-circle lines; width carries how "
         f"many edges each stands for.{sample_note}\n"
         f"Edge length p50 {length['p50']:,.0f} km, p90 {length['p90']:,.0f} km · "
-        f"density {e['density']:.3f} · "
+        f"density {e['edge_density']:.3f} · "
         f"{e['connected_components']['n_components']} component(s)\n"
         f"Duplicate IPs at one facility collapse into one line on purpose: one "
         f"line per row would report them as heavier traffic.",
@@ -481,10 +483,12 @@ def plot_distance_cdf(
     ax.legend(loc="lower right", fontsize=7.5, frameon=False)
 
     # --- right panel: the ratio -------------------------------------------
-    eff = ec["measurement_efficiency"].to_numpy()
+    eff = ec["measured_nearest_vp_ratio"].to_numpy()
     finite = np.isfinite(eff)
     e_meta = graph.meta["edges"]
-    n_got = e_meta["n_targets_measuring_their_nearest_vp"]
+    # Read off the per-target column rather than a meta scalar: the count is
+    # exactly "efficiency == 1.0", which the metric has already snapped.
+    n_got = int(graph.target_nodes["nearest_vp_is_measured"].sum())
     n_targets = graph.meta["nodes"]["targets"]["count"]
     degenerate = finite.any() and float(np.nanmax(eff[finite])) <= 1.0
 
@@ -499,7 +503,7 @@ def plot_distance_cdf(
             0.5,
             0.62,
             f"All {n_targets:,} targets measured\ntheir nearest VP.\n"
-            f"Efficiency is exactly 1.00,\nso there is no distribution\nto draw.",
+            f"The ratio is exactly 1.00,\nso there is no distribution\nto draw.",
             transform=ax_eff.transAxes,
             ha="center",
             va="center",
@@ -537,23 +541,25 @@ def plot_distance_cdf(
         )
     _style_cdf_axes(ax_eff)
     ax_eff.set_xlabel(
-        "Measurement efficiency\n(nearest measured VP ÷ nearest VP)",
+        "Measured nearest-VP ratio\n(nearest measured VP ÷ nearest VP)",
         fontsize=9,
         color=_INK_2,
     )
-    eff_pct = e_meta["measurement_efficiency"]["percentiles"]
+    ratio = e_meta["measured_nearest_vp_ratio_per_target"]
     ax_eff.set_title(
         "no allocation bias"
         if degenerate
-        else f"p50 {eff_pct['p50']:.3f} · p90 {eff_pct['p90']:.3f} · "
-             f"max {e_meta['measurement_efficiency']['max']:.3f}",
+        else f"p50 {ratio['percentiles']['p50']:.3f} · "
+             f"p90 {ratio['percentiles']['p90']:.3f} · max {ratio['max']:.3f}",
         fontsize=9,
         color=_INK_2,
     )
 
     nodes = graph.meta["nodes"]
     fig.suptitle(title or "Node and edge distance CDFs", fontsize=11, color=_INK)
-    undefined = e_meta["n_targets_efficiency_undefined"]
+    undefined = n_targets - int(
+        e_meta["measured_nearest_vp_ratio_per_target"].get("n", 0)
+    )
     undefined_note = (
         f" {undefined} target(s) have a co-located but unmeasured VP, so their "
         f"ratio is infinite and is counted rather than plotted."
@@ -702,6 +708,6 @@ def register(app: typer.Typer) -> None:
             typer.echo(
                 f"{run.run_id}: {label} · {graph.n_vps} VPs, {graph.n_targets} targets, "
                 f"{graph.meta['edges']['n_edges']:,} edges "
-                f"({graph.meta['edges']['n_distinct_segments']:,} distinct lines) -> "
+                f"({graph.meta['edges']['n_distinct_geometry_edge']:,} distinct lines) -> "
                 f"{nodes.name}, {flows.name}, {cdf.name}"
             )

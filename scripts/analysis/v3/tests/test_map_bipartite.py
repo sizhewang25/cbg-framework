@@ -193,7 +193,7 @@ def test_both_efficiency_panel_branches_render(tmp_path, grid):
     from scripts.analysis.v3.modules.bipartite import build_bipartite
 
     space, degenerate = _fixture(grid)
-    assert degenerate.meta["edges"]["measurement_efficiency"]["max"] == 1.0
+    assert degenerate.meta["edges"]["measured_nearest_vp_ratio_per_target"]["max"] == 1.0
     a = plot_distance_cdf(degenerate, tmp_path / "flat.png")
 
     # Same node sets, but every target measured only the farthest VP.
@@ -212,7 +212,7 @@ def test_both_efficiency_panel_branches_render(tmp_path, grid):
         for r in tg.itertuples()
     ]
     missed = build_bipartite(space, vps, pd.DataFrame(rows))
-    assert missed.meta["edges"]["measurement_efficiency"]["max"] > 1.0
+    assert missed.meta["edges"]["measured_nearest_vp_ratio_per_target"]["max"] > 1.0
     b = plot_distance_cdf(missed, tmp_path / "spread.png")
 
     for out in (a, b):

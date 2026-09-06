@@ -156,13 +156,27 @@ _EFFICIENCY_TOL = 1e-6
 _SEGMENT_COORD_DP = 5
 
 _MEASUREMENT_EFFICIENCY_NOTE = (
-    "nearest-measured-VP km over nearest-VP km, per target. 1.0 means the "
-    "campaign measured the geometrically nearest VP; larger means it did not. "
+    "One value per target: nearest-measured-VP km over nearest-VP km. 1.0 "
+    "means the campaign measured the geometrically nearest VP; larger means it did not. "
     "Separates 'the VP set is badly placed' (a large latent nearest-VP "
     "distance) from 'the VP set is fine but the campaign allocated probes "
     "badly' (a ratio above 1), and only the second is fixable by reallocating "
     "measurement. Undefined where a VP sits exactly on the target but carries "
-    "no edge -- counted, not folded in."
+    "no edge (the ratio is infinite); those targets are excluded, so `n` here is "
+    "below the target count by exactly that many."
+)
+
+DISPERSION_NOTE = (
+    "Extent says how far apart the set reaches; this says whether it is spread "
+    "or stacked inside that reach. Per grid rung: effective_count is the number "
+    "of distinct places the set resolves to at that scale (the occupied-cell "
+    "count of §7.3), and occupancy_ratio is effective_count / count -- 1.0 means "
+    "every node is its own place, and low means many nodes share one. The shape "
+    "of the curve across rungs is §7.3's multi-scale concentration diagnostic: "
+    "flat means genuinely distinct metros, a steep climb toward fine cells means "
+    "the set only separates intra-metro. Each rung re-bins the coordinates "
+    "rather than coarsening cell ids, since H3 is aperture-7 and a parent id is "
+    "not a geometric container."
 )
 
 _LATENT_OBSERVED_NOTE = (
@@ -290,19 +304,6 @@ def _pairwise_distances(lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, d
     return d[np.triu_indices_from(d, k=1)], note
 
 
-def _nearest_other_km(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
-    """Great-circle km to the nearest *other* node. NaN for a set of one.
-
-    Zero is a real value here, not a bug: co-located VPs (two devices at one
-    site) are exactly the case the occupied-cell count exists to collapse.
-    """
-    if lat.size < 2:
-        return np.full(lat.size, np.nan)
-    d = pairwise_km(lat, lon)
-    np.fill_diagonal(d, np.inf)
-    return d.min(axis=1)
-
-
 def nearest_across_km(
     a_lat: np.ndarray,
     a_lon: np.ndarray,
@@ -379,6 +380,11 @@ def measurement_efficiency(
 ) -> tuple[np.ndarray, int]:
     """Per-target `measured / latent`, and the count where it is undefined.
 
+    §7.3 calls this measurement efficiency, which is the name kept here; it is
+    **emitted** as `measured_nearest_vp_ratio` (column) and
+    `measured_nearest_vp_ratio_per_target` (meta block), which say what is
+    divided by what without needing the paper open.
+
     Three cases, because the degenerate ones carry different meanings:
 
     * `latent > 0` — the ordinary ratio, `>= 1` by construction since the
@@ -418,8 +424,8 @@ def _node_block(
     asns: pd.Series | None,
     pairwise: np.ndarray,
     pairwise_note: dict,
-) -> tuple[dict, np.ndarray]:
-    """The §7.3 node-set block for one side, and its per-node nearest-other km.
+) -> dict:
+    """The §7.3 node-set block for one side: extent, then dispersion.
 
     `pairwise` is passed in rather than computed here because the CDF artifact
     needs the same vector: at the `_MAX_PAIRWISE_NODES` cap an O(n^2) matrix is
@@ -435,25 +441,31 @@ def _node_block(
     at res 3 (measured, `answer_space` meta's `parent_lineage_disagreements`).
     """
     pw, pw_note = pairwise, pairwise_note
-    nn = _nearest_other_km(lat, lon)
+    n = int(lat.size)
+    cells = grid.occupied_cell_hierarchy(
+        lat, lon, grid.coarsening_ladder(resolution)
+    )
     block: dict = {
-        "count": int(lat.size),
+        "count": n,
         "asn_count": None if asns is None else int(asns.dropna().nunique()),
         # A diameter is a maximum, so one near-antipodal node sets it
         # single-handedly; §7.3 requires p95 printed beside it for that reason.
         "geographic_diameter_km": round(float(pw.max()), 3) if pw.size else None,
         "pairwise_p95_km": round(float(np.percentile(pw, 95)), 3) if pw.size else None,
         "pairwise_km": _describe(pw),
-        "nearest_other_node_km": _describe(nn),
-        "occupied_cells_by_resolution": {
-            str(r): n
-            for r, n in grid.occupied_cell_hierarchy(
-                lat, lon, grid.coarsening_ladder(resolution)
-            ).items()
+        "dispersion": {
+            "note": DISPERSION_NOTE,
+            **{
+                str(r): {
+                    "effective_count": c,
+                    "occupancy_ratio": round(c / n, 4) if n else None,
+                }
+                for r, c in cells.items()
+            },
         },
     }
     block.update(pw_note)
-    return block, nn
+    return block
 
 
 # ---- edge input -------------------------------------------------------------
@@ -663,7 +675,7 @@ def build_bipartite(
     vp_lat = vps["vp_lat"].to_numpy(dtype=float)
     vp_lon = vps["vp_lon"].to_numpy(dtype=float)
     vp_pw, vp_pw_note = _pairwise_distances(vp_lat, vp_lon)
-    vp_block, vp_nn = _node_block(
+    vp_block = _node_block(
         vp_lat,
         vp_lon,
         grid=grid,
@@ -675,15 +687,23 @@ def build_bipartite(
     by_vp = edges.groupby("vp_id")
     vp_nodes = vps.copy()
     vp_nodes["cell_id"] = grid.cell_ids(vp_lat, vp_lon, resolution)
-    vp_nodes["degree"] = (
+    # Named for the side it points at: there is no VP-to-VP edge, so a bare
+    # "degree" invites reading this as one.
+    vp_nodes["degree_to_target"] = (
         vp_nodes["vp_id"].map(by_vp.size()).fillna(0).astype(int)
     )
     vp_nodes["nearest_measured_target_km"] = (
         vp_nodes["vp_id"].map(by_vp["length_km"].min()).round(3)
     )
-    vp_nodes["nearest_other_vp_km"] = np.round(vp_nn, 3)
-    vp_block["degree"] = describe_p90(vp_nodes["degree"].to_numpy(dtype=float))
-    vp_block["n_with_no_edge"] = int((vp_nodes["degree"] == 0).sum())
+    vp_block["degree_to_target"] = describe_p90(
+        vp_nodes["degree_to_target"].to_numpy(dtype=float)
+    )
+    vp_block["degree_to_target"]["note"] = (
+        "targets this VP measured -- §7.3's measurement effort spent. Observed "
+        "by definition: the latent value is the target count for every VP, so "
+        "it carries nothing and is not emitted."
+    )
+    vp_block["n_with_no_edge"] = int((vp_nodes["degree_to_target"] == 0).sum())
 
     # --- target nodes -----------------------------------------------------
     tg_lat = targets["target_lat"].to_numpy(dtype=float)
@@ -694,7 +714,7 @@ def build_bipartite(
         else None
     )
     tg_pw, tg_pw_note = _pairwise_distances(tg_lat, tg_lon)
-    tg_block, tg_nn = _node_block(
+    tg_block = _node_block(
         tg_lat,
         tg_lon,
         grid=grid,
@@ -709,7 +729,7 @@ def build_bipartite(
     target_nodes = targets.loc[
         :, ["target_id", "target_lat", "target_lon", "cell_id", "seed_id"]
     ].copy()
-    target_nodes["degree"] = (
+    target_nodes["degree_to_vp"] = (
         target_nodes["target_id"].map(by_tg.size()).fillna(0).astype(int)
     )
     measured_km = target_nodes["target_id"].map(by_tg["length_km"].min())
@@ -717,7 +737,6 @@ def build_bipartite(
     target_nodes["nearest_measured_vp_id"] = target_nodes["target_id"].map(
         edges.loc[nearest_idx].set_index("target_id")["vp_id"]
     )
-    target_nodes["nearest_other_target_km"] = np.round(tg_nn, 3)
 
     # --- the latent half --------------------------------------------------
     # Over all VP x target pairs, ignoring the edge set: where the
@@ -727,10 +746,10 @@ def build_bipartite(
     target_nodes["nearest_vp_id"] = np.where(
         tg_latent_idx >= 0, vps["vp_id"].to_numpy()[tg_latent_idx], None
     )
-    eff, n_eff_undefined = measurement_efficiency(
+    eff, _n_eff_undefined = measurement_efficiency(
         measured_km.to_numpy(dtype=float), tg_latent_km
     )
-    target_nodes["measurement_efficiency"] = np.round(eff, 6)
+    target_nodes["measured_nearest_vp_ratio"] = np.round(eff, 6)
     # Defined on **distance**, not on id equality. Co-located VPs are common
     # (as01's VP nearest-neighbour p50 is 0.0 km), so `argmin` and any other
     # nearest-VP implementation break ties differently: comparing ids against
@@ -746,17 +765,21 @@ def build_bipartite(
     # is whether the campaign measured a VP *as close as* the closest one.
     target_nodes["nearest_vp_is_measured"] = eff <= 1.0
 
-    vp_latent_km, _ = nearest_across_km(vp_lat, vp_lon, tg_lat, tg_lon)
-    vp_nodes["nearest_target_km"] = np.round(vp_latent_km, 3)
-
     latent_pairs, latent_note = _latent_pair_distances(tg_lat, tg_lon, vp_lat, vp_lon)
 
     gaps, circ = _angular_per_target(edges, target_nodes["target_id"])
     target_nodes["max_angular_gap_deg"] = np.round(gaps, 3)
     target_nodes["circular_variance"] = np.round(circ, 6)
 
-    tg_block["degree"] = describe_p90(target_nodes["degree"].to_numpy(dtype=float))
-    tg_block["n_with_no_edge"] = int((target_nodes["degree"] == 0).sum())
+    tg_block["degree_to_vp"] = describe_p90(
+        target_nodes["degree_to_vp"].to_numpy(dtype=float)
+    )
+    tg_block["degree_to_vp"]["note"] = (
+        "VPs that measured this target -- §7.3's constraints available. Observed "
+        "by definition: the latent value is the VP count for every target, so it "
+        "carries nothing and is not emitted."
+    )
+    tg_block["n_with_no_edge"] = int((target_nodes["degree_to_vp"] == 0).sum())
     tg_block["n_seeds"] = int(space.n_seeds)
 
     # --- meta -------------------------------------------------------------
@@ -779,8 +802,11 @@ def build_bipartite(
         "edges": {
             "n_edges": int(len(edges)),
             # Measurement completeness: what share of the possible (VP, target)
-            # pairs the campaign actually measured.
-            "density": round(len(edges) / denom, 6) if denom else None,
+            # pairs the campaign actually measured. Not the same thing as
+            # measured_nearest_vp_ratio_per_target below -- this is a count ratio
+            # over all pairs, that is a distance ratio at the minimum only, and
+            # a campaign can score well on either while failing the other.
+            "edge_density": round(len(edges) / denom, 6) if denom else None,
             "connected_components": _connected_components(
                 edges, vps["vp_id"], targets["target_id"]
             ),
@@ -803,17 +829,10 @@ def build_bipartite(
                 "latent": describe_p90(tg_latent_km),
                 "note": _LATENT_OBSERVED_NOTE,
             },
-            "nearest_target_km_latent": describe_p90(vp_latent_km),
-            "measurement_efficiency": describe_p90(eff, digits=_RATIO_DIGITS),
-            "n_targets_measuring_their_nearest_vp": int(
-                target_nodes["nearest_vp_is_measured"].sum()
-            ),
-            "n_targets_efficiency_undefined": n_eff_undefined,
-            "measurement_efficiency_note": _MEASUREMENT_EFFICIENCY_NOTE,
-            "degree_latent_note": (
-                "no latent counterpart: a target's latent degree is the VP count "
-                "for every target, so it carries nothing (§7.3)."
-            ),
+            "measured_nearest_vp_ratio_per_target": {
+                **describe_p90(eff, digits=_RATIO_DIGITS),
+                "note": _MEASUREMENT_EFFICIENCY_NOTE,
+            },
         },
         "angular": {
             "note": "over measured neighbours only; the arrangement term of §7.3",
@@ -823,11 +842,12 @@ def build_bipartite(
     }
 
     segments = edge_segments(edges)
-    meta["edges"]["n_distinct_segments"] = int(len(segments))
-    meta["edges"]["segments_note"] = (
-        "geometrically distinct (VP coord, target coord) lines; fewer than "
-        "n_edges wherever several IPs share a coordinate. This is what the flow "
-        "map draws -- see edge_segments()."
+    meta["edges"]["n_distinct_geometry_edge"] = int(len(segments))
+    meta["edges"]["n_distinct_geometry_edge_note"] = (
+        "distinct (VP coord, target coord) geometries, NOT a second edge count: "
+        "all n_edges edges are distinct edges, but many share a line because "
+        "several target IPs sit at one facility. This is what the flow map "
+        "draws -- see edge_segments()."
     )
 
     edge_cdf = pd.DataFrame(
@@ -835,7 +855,7 @@ def build_bipartite(
             "quantile": _CDF_QUANTILES,
             "observed_edge_km": _cdf_column(edges["length_km"]),
             "latent_pair_km": _cdf_column(latent_pairs),
-            "measurement_efficiency": _cdf_column(eff, digits=_RATIO_DIGITS),
+            "measured_nearest_vp_ratio": _cdf_column(eff, digits=_RATIO_DIGITS),
         }
     )
     pairwise_cdf = pd.DataFrame(
@@ -1037,11 +1057,13 @@ def register(app: typer.Typer) -> None:
             )
             graph.write(out_dir)
             e = graph.meta["edges"]
-            n_vp_cells = graph.meta["nodes"]["vps"]["occupied_cells_by_resolution"]
+            res = str(graph.meta["grid"]["resolution"])
+            vp_disp = graph.meta["nodes"]["vps"]["dispersion"][res]
             typer.echo(
                 f"{run.run_id}: {graph.n_vps} VPs in "
-                f"{n_vp_cells[str(graph.meta['grid']['resolution'])]} occupied cells · "
+                f"{vp_disp['effective_count']} places "
+                f"(occupancy {vp_disp['occupancy_ratio']:.2f}) · "
                 f"{graph.n_targets} targets · {e['n_edges']:,} edges "
-                f"(density {e['density']:.3f}, "
+                f"(density {e['edge_density']:.3f}, "
                 f"{e['connected_components']['n_components']} component(s)) -> {out_dir}"
             )

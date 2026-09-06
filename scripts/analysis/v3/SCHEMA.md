@@ -287,7 +287,7 @@ ignored. They agree to 4e-4 km on as01.
 > as01's 399 targets get the same id, while every distance matches. **Never join
 > on a nearest-VP id across the two layers**; compare distances, or ask the
 > question that is actually well-posed ("was a VP *as close as* the closest one
-> measured?", which is `measurement_efficiency == 1`).
+> measured?", which is `measured_nearest_vp_ratio == 1`).
 
 Observed contrast worth carrying into the paper: as7018 `no_proximity_share`
 0.372 / `cbg_opportunity_share` 0.513 vs as01 0.0 / 0.363 — the operator VP
