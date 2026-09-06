@@ -167,8 +167,8 @@ def seed_voronoi(
 
     from scripts.visualization.cluster.voronoi import clipped_voronoi_cells
 
-    lat = np.asarray(seeds["centroid_lat"], dtype=float)
-    lon = np.asarray(seeds["centroid_lon"], dtype=float)
+    lat = np.asarray(seeds["seed_lat"], dtype=float)
+    lon = np.asarray(seeds["seed_lon"], dtype=float)
     if lat.size < 2:
         return None
 

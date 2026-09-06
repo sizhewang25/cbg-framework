@@ -60,12 +60,19 @@ def test_distance_emitted_to_every_seed():
 
 
 def test_exact_hit_ranks_the_true_seed_first():
+    """A perfect prediction is top-1 correct, but is *not* zero from the seed.
+
+    Seeds are cell centres, so landing exactly on the target still leaves the
+    target's own quantization offset between the prediction and the seed. That
+    floor is why `error_to_target_km`, not this column, is the error metric.
+    """
     space = _space()
     truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
     df = _frame(space, [CHI], ["SUCCESS"], [truth])
     assert df.loc[0, "truth_seed_rank"] == 0
     assert df.loc[0, "pred_seed_id"] == truth
-    assert df.loc[0, "error_to_truth_seed_km"] == pytest.approx(0.0, abs=1e-6)
+    offset = space.assignments.set_index("target_id").loc["tg-chi", "cell_offset_km"]
+    assert df.loc[0, "error_to_truth_seed_km"] == pytest.approx(offset, abs=1e-3)
 
 
 def test_rank_counts_strictly_closer_seeds():
@@ -102,9 +109,13 @@ def test_fallback_rows_keep_distances_but_never_count_as_correct():
     space = _space()
     truth = space.assignments.set_index("target_id")["seed_id"]["tg-chi"]
     df = _frame(space, [CHI, CHI], ["SUCCESS", "FALLBACK"], [truth, truth])
-    # Both rows are geometrically perfect...
+    # Both rows are geometrically perfect — both land on the true seed's cell,
+    # each at that cell's own quantization offset from the centre.
     assert (df["truth_seed_rank"] == 0).all()
-    assert df["error_to_truth_seed_km"].to_numpy() == pytest.approx([0.0, 0.0], abs=1e-6)
+    offset = space.assignments.set_index("target_id").loc["tg-chi", "cell_offset_km"]
+    assert df["error_to_truth_seed_km"].to_numpy() == pytest.approx(
+        [offset, offset], abs=1e-3
+    )
     # ...but the fallback must not be credited: 1 of 2, not 2 of 2.
     s = topn_summary({"m": df}, ns=(1,)).iloc[0]
     assert s["accuracy_top1"] == pytest.approx(0.5)

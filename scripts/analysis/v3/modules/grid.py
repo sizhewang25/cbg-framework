@@ -1,10 +1,11 @@
 """Answer-space grid interface: one contract, two tessellations.
 
 The answer space (§7.3/§7.4) needs a grid only as a **quantizer** — something that
-decides which target coordinates are close enough to count as one place. Everything
-downstream (seeds at target centroids, Voronoi labelling, distance-to-all-seeds
+decides which target coordinates are close enough to count as one place, and where the
+resulting place sits. Those are the two things a grid supplies — `cell_ids` and
+`cell_centers`; everything downstream (Voronoi labelling, distance-to-all-seeds
 scoring) is pure spherical geometry and does not care which tessellation produced the
-equivalence classes. This module is where that indifference is made explicit.
+equivalence classes. This module is where that division is made explicit.
 
 Two implementations:
 
@@ -114,9 +115,10 @@ class Grid(ABC):
     def nominal_cell_km(self, resolution: int) -> float:
         """The merge scale: how far apart two points can be and still share a cell.
 
-        This is the number the §7.3 straddle diagnostic is stated against, so each grid
-        picks the form that is honest for its own cell shape rather than a common
-        formula.
+        This is the number §7.3's merge scale is stated against, and the bound on
+        `cell_offset_km` — how far a target can sit from the seed standing in for it — so
+        each grid picks the form that is honest for its own cell shape rather than a
+        common formula.
         """
 
     @abstractmethod
@@ -124,6 +126,31 @@ class Grid(ABC):
         """Total cells covering the sphere at this resolution."""
 
     # ---- geometry ---------------------------------------------------------
+
+    @abstractmethod
+    def cell_centers(self, cell_ids, resolution: int) -> np.ndarray:
+        """One `(lat, lon)` degree pair per cell, as an `(N, 2)` array.
+
+        This is where the answer space's seeds come from (§7.4): one seed per occupied
+        cell, at the cell's own centre. The grid decides which targets are one place and
+        the grid decides where that place is, so a seed never depends on which targets
+        happened to land in the cell.
+
+        **The pair order is `(lat, lon)`, the opposite of `cell_boundaries`' rings.**
+        Rings are `(lon, lat)` because plotting wants them that way; a seed is written to
+        `seeds.csv` as `seed_lat` then `seed_lon`. Two conventions in one class invites a
+        silent swap, so the round trip `cell_ids(cell_centers(c, r), r) == c` is pinned
+        in `test_grid.py`: a swapped pair either lands in a different cell or is rejected
+        outright for a latitude past ±90.
+
+        `resolution` is passed even though H3 ids already encode it, for the same reason
+        `cell_boundaries` takes it: HEALPix cell 5 exists at every nside, so ids alone
+        cannot say which cells are meant, and inferring it would be a silent-wrong-answer
+        bug rather than a crash.
+
+        Empty input returns shape `(0, 2)` — unlike the ragged `cell_boundaries`, this is
+        always rectangular.
+        """
 
     @abstractmethod
     def cell_boundaries(

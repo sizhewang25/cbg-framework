@@ -210,8 +210,8 @@ def test_voronoi_matches_great_circle_nearest_seed(grid):
     truth = pairwise_km(
         qlat,
         qlon,
-        seeds["centroid_lat"].to_numpy(),
-        seeds["centroid_lon"].to_numpy(),
+        seeds["seed_lat"].to_numpy(),
+        seeds["seed_lon"].to_numpy(),
     ).argmin(axis=1)
 
     import cartopy.crs as ccrs
@@ -292,12 +292,12 @@ def test_seeds_outside_the_frame_still_shape_boundaries_inside_it():
 
     base = pd.DataFrame(
         {
-            "centroid_lat": [41.97, 37.46, 29.76],
-            "centroid_lon": [-87.90, -121.92, -95.36],
+            "seed_lat": [41.97, 37.46, 29.76],
+            "seed_lon": [-87.90, -121.92, -95.36],
         }
     )
-    off_frame = pd.DataFrame({"centroid_lat": [45.0], "centroid_lon": [-60.0]})
-    assert off_frame.loc[0, "centroid_lon"] > US_MAINLAND_EXTENT[1], "must be off-frame"
+    off_frame = pd.DataFrame({"seed_lat": [45.0], "seed_lon": [-60.0]})
+    assert off_frame.loc[0, "seed_lon"] > US_MAINLAND_EXTENT[1], "must be off-frame"
 
     a = seed_voronoi(base, US_MAINLAND_EXTENT)
     b = seed_voronoi(

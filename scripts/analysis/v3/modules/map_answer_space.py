@@ -4,7 +4,7 @@ Renders what `build-answer-space` produced, so the §7.3 quantization can be
 looked at rather than inferred from `meta.json`. Four layers, bottom to top:
 the occupied grid cells (filled, one colour per seed), the nearest-seed Voronoi
 boundaries (red dashed, no fill), the targets that occupy them, and each cell's
-seed centroid.
+seed — its centre.
 
 The Voronoi layer is the **decision boundary the accuracy numbers are computed
 against**, not decoration: `classify.py` labels each prediction by `argmin` over
@@ -15,9 +15,12 @@ nearest other seed, i.e. how far a prediction may drift before it is scored
 wrong. Drawing it makes the operator reading direct: a prediction landing
 anywhere inside one of these regions is scored as that region's class.
 
-Note the two layers are at wildly different scales and that is the point. A
-grid cell is ~45 km; a class region is hundreds of km wide. The answer space is
-a coarse nearest-seed partition whose *seeds* are placed by a fine quantizer.
+The two layers are usually at wildly different scales, and where they are not
+that is worth seeing. Only *occupied* cells become seeds, so an isolated cell's
+class region balloons to hundreds of km against a ~45 km cell; two adjacent
+occupied cells instead put the bisector on their shared edge, and region and
+cell coincide. Reading which classes are grid-sized and which are continental is
+the point of drawing both.
 
 **There is no clustering algorithm here.** Occupied cell and seed are in
 one-to-one correspondence: two targets share a class iff the grid puts them in
@@ -25,10 +28,12 @@ the same cell. That is worth stating on the figure, because the benchmark also
 ships an older `clusters/` answer space built by radius-capped complete-linkage
 agglomeration, and the two are not comparable.
 
-What the map is for is the straddle cost (§7.3, §10): grid lines fall where the
+What the map is for is the quantization (§7.3, §10): grid lines fall where the
 grid falls, not where targets are sparse, so a facility group spanning one is
-quantized into two adjacent cells and two classes. That reads instantly as two
-touching filled cells and is hard to believe from a scalar.
+quantized into two adjacent cells and two classes — two touching filled cells,
+instantly legible and hard to believe from a scalar. The seed markers show the
+other half of the same choice: a seed sits at its cell's centre, not on its
+targets, and that gap is `cell_offset_km`.
 
 Only *occupied* cells are drawn. At the default h3 `res=4` a cell is ~45 km, so
 the full 288,122-cell grid (196,608 at HEALPix `nside=128`) would be both
@@ -169,13 +174,13 @@ def plot_answer_space(
     )
 
     # --- layer 3: seeds -----------------------------------------------------
-    # Drawn last so the seed-vs-targets offset — the intra-seed spread that
-    # floors any error-distance figure — stays visible. Deliberately smaller
+    # Drawn last so the seed-vs-targets offset — `cell_offset_km`, the accepted
+    # cost of letting the grid place the seed — stays visible. Deliberately smaller
     # than a cell: at continental scale a 51 km cell is only a few pixels, and
     # an oversized marker would hide both the fill and its own targets.
     ax.scatter(
-        seeds["centroid_lon"].to_numpy(),
-        seeds["centroid_lat"].to_numpy(),
+        seeds["seed_lon"].to_numpy(),
+        seeds["seed_lat"].to_numpy(),
         s=14,
         c="#d62728",
         marker="x",

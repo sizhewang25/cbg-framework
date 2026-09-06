@@ -7,7 +7,7 @@ functions above it remain usable on their own.
 
 The grid is a *quantizer*, not the answer space: its only job is to merge target
 points that sit close enough to count as one place. Each occupied cell then
-yields one class, seeded at the centroid of the targets it merged (§7.4).
+yields one class, seeded at the centre of the cell itself (§7.4).
 
 `nside=128` is the paper's setting — 196,608 equal-area cells of 2,594 km²,
 nominally 51 km across, chosen because prior work puts metro granularity near
@@ -71,7 +71,7 @@ def nominal_cell_km(nside: int) -> float:
     """Nominal cell pitch, `sqrt(area)` (51 km at nside=128).
 
     This is the merge scale — the distance below which two targets are treated
-    as the same place — and the pitch the §7.3 straddle probability is stated
+    as the same place — and the pitch the §7.3 merge scale is stated
     against.
     """
     return float(np.sqrt(pixel_area_km2(nside)))
@@ -147,6 +147,35 @@ class HealpixGrid(Grid):
 
     def n_cells(self, resolution: int) -> int:
         return npix(resolution)
+
+    def cell_centers(self, cell_ids, resolution: int) -> np.ndarray:
+        """One `(lat, lon)` degree pair per cell, as an `(N, 2)` array.
+
+        **`(lat, lon)`, the opposite order from `cell_boundaries`.** Rings are
+        `(lon, lat)` for plotting; a seed is written to `seeds.csv` as `seed_lat` then
+        `seed_lon`. `test_grid.py` pins the round trip `cell_ids(cell_centers(c, r), r)
+        == c`, which a swapped pair cannot survive.
+
+        `resolution` is required rather than inferred, for the same reason as
+        `cell_boundaries`: HEALPix ids are not self-describing.
+
+        `healpix_to_lonlat` hands back an astropy `Longitude`, which wraps to `[0, 360)`
+        — so a Chicago pixel arrives as `271.77`, not `-88.23`. Normalizing here is not
+        cosmetic: nothing would crash, because `pairwise_km` goes through `cos`/`sin` and
+        stays correct, but `mapping.seed_voronoi` picks its projection centre from
+        `lon.mean()` and every map would render in the wrong hemisphere. Same expression
+        as `ring_lonlat`; a centre is a point, not a ring, so the relative unwrapping
+        `ring_lonlat` also does would be wrong here. A cell centred at exactly 180
+        normalizes to -180, which is the half-open convention and harmless.
+        """
+        pix = np.asarray(cell_ids, dtype=np.int64).ravel()
+        if pix.size == 0:
+            return np.zeros((0, 2), dtype=float)
+        nside = self.validate_resolution(resolution)
+        lon, lat = _healpix(nside).healpix_to_lonlat(pix)
+        lon = np.asarray(lon.to_value("deg"), dtype=float)
+        lat = np.asarray(lat.to_value("deg"), dtype=float)
+        return np.column_stack([lat, ((lon + 180.0) % 360.0) - 180.0])
 
     def cell_boundaries(
         self, cell_ids, resolution: int, *, step: int = 8

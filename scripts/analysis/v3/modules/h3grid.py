@@ -123,8 +123,8 @@ class H3Grid(Grid):
 
         Deliberately not `sqrt(area)`, which is what the HEALPix side uses. For a
         hexagon `sqrt(area)` understates the spacing by about 7%, and this number's job
-        is to be compared against seed-to-seed distances in the straddle diagnostic — so
-        it has to be a real distance between adjacent cell centres, not an area proxy.
+        is to be compared against seed-to-seed distances, which now *are* distances
+        between adjacent cell centres — so it has to be one too, not an area proxy.
         """
         edge = _h3().average_hexagon_edge_length(
             self.validate_resolution(resolution), unit="km"
@@ -135,6 +135,29 @@ class H3Grid(Grid):
         return int(_h3().get_num_cells(self.validate_resolution(resolution)))
 
     # ---- geometry ---------------------------------------------------------
+
+    def cell_centers(self, cell_ids, resolution: int) -> np.ndarray:
+        """One `(lat, lon)` degree pair per cell, as an `(N, 2)` array.
+
+        **`(lat, lon)`, the opposite order from `cell_boundaries`.** Rings are
+        `(lon, lat)` because that is what every plotting call wants; a seed is written to
+        `seeds.csv` as `seed_lat` then `seed_lon`, so it is stored the other way round.
+        Two orders in one class is a swap-bug magnet, which is why `test_grid.py` pins
+        the round trip `cell_ids(cell_centers(c, r), r) == c` — a swapped pair lands in a
+        different cell, or is rejected outright for a longitude past ±90.
+
+        `resolution` is accepted and unused, as in `cell_boundaries`: H3 ids encode their
+        own resolution, and the parameter exists so HEALPix, which needs it, can share
+        one signature.
+
+        `cell_to_latlng` is scalar-only in h3-py, hence the loop — same reasoning as
+        `cell_ids`. Pentagons are handled with no special case.
+        """
+        h3 = _h3()
+        cells = np.asarray(cell_ids, dtype=object).ravel()
+        if cells.size == 0:
+            return np.zeros((0, 2), dtype=float)
+        return np.array([h3.cell_to_latlng(c) for c in cells], dtype=float)
 
     def cell_boundaries(
         self, cell_ids, resolution: int, *, step: int = 8

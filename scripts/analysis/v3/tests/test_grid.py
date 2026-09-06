@@ -250,6 +250,65 @@ def test_cell_boundaries_of_nothing_is_nothing(grid):
     assert grid.cell_boundaries([], grid.DEFAULT_RESOLUTION) == []
 
 
+def test_cell_centers_returns_one_lat_lon_per_cell(grid):
+    r = grid.DEFAULT_RESOLUTION
+    ids = grid.cell_ids([c[0] for c in US], [c[1] for c in US], r)
+    c = grid.cell_centers(ids, r)
+    assert c.shape == (len(ids), 2)  # (N, 2) as (lat, lon) — not the ring order
+    assert np.isfinite(c).all()
+    assert (c[:, 0] >= -90.0).all() and (c[:, 0] <= 90.0).all()
+    assert (c[:, 1] >= -180.0).all() and (c[:, 1] <= 180.0).all()
+
+
+def test_cell_centers_round_trip_to_their_own_cell(grid):
+    """A centre must re-quantize to the cell it came from.
+
+    The strongest single guard on this method: a lat/lon swap, a wrong
+    resolution, or an unnormalized longitude all land the point in some other
+    cell.
+    """
+    r = grid.DEFAULT_RESOLUTION
+    ids = grid.cell_ids([c[0] for c in US], [c[1] for c in US], r)
+    c = grid.cell_centers(ids, r)
+    assert list(grid.cell_ids(c[:, 0], c[:, 1], r)) == list(ids)
+
+
+def test_cell_centers_are_lat_then_lon(grid):
+    """Tokyo makes the swap unrepresentable rather than merely wrong.
+
+    Round-tripping alone can pass a transposed pair that happens to stay in its
+    own cell. At lon 139.69 the swap would pass 139.69 as a latitude, which both
+    libraries reject outright.
+    """
+    r = grid.DEFAULT_RESOLUTION
+    tyo = (35.6812, 139.6917)
+    c = grid.cell_centers(grid.cell_ids([tyo[0]], [tyo[1]], r), r)[0]
+    assert c[0] == pytest.approx(tyo[0], abs=1.0)
+    assert c[1] == pytest.approx(tyo[1], abs=1.0)
+
+
+def test_cell_centers_lie_inside_their_own_boundary_ring(grid):
+    """Round-tripping says "in some cell"; this says "in the middle of it"."""
+    r = grid.DEFAULT_RESOLUTION
+    ids = grid.cell_ids([CHI[0]], [CHI[1]], r)
+    ring = grid.cell_boundaries(ids, r)[0]
+    lat, lon = grid.cell_centers(ids, r)[0]
+    assert ring[:, 0].min() <= lon <= ring[:, 0].max()
+    assert ring[:, 1].min() <= lat <= ring[:, 1].max()
+
+
+def test_cell_centers_of_nothing_is_nothing(grid):
+    assert grid.cell_centers([], grid.DEFAULT_RESOLUTION).shape == (0, 2)
+
+
+def test_dateline_cell_centres_stay_in_range(grid):
+    """astropy hands back longitude in [0, 360); seeds.csv must not."""
+    r = grid.DEFAULT_RESOLUTION
+    lat, lon = grid.cell_centers(grid.cell_ids([0.0], [179.98], r), r)[0]
+    assert -180.0 <= lon <= 180.0
+    assert abs(lon) > 179.0, f"centre drifted to {lon}"
+
+
 def test_ring_lonlat_keeps_a_dateline_ring_contiguous():
     """A ring split across +/-180 would otherwise smear across the whole map."""
     ring = ring_lonlat([179.9, 179.95, -179.95, -179.9], [0.0, 0.1, 0.1, 0.0])
@@ -366,3 +425,16 @@ def test_cli_front_door_turns_a_bad_resolution_into_a_cli_error():
         resolve_cli_grid("h3", [9], sweep=False)
     with pytest.raises(typer.BadParameter, match="power of two"):
         resolve_cli_grid("healpix", [100], sweep=False)
+
+
+def test_h3_pentagon_centres_are_well_formed():
+    """H3's 12 pentagons per resolution get no special case — verify that."""
+    import h3
+
+    g = get_grid("h3")
+    r = g.DEFAULT_RESOLUTION
+    pents = sorted(h3.get_pentagons(r))
+    c = g.cell_centers(pents, r)
+    assert c.shape == (12, 2)
+    assert np.isfinite(c).all()
+    assert list(g.cell_ids(c[:, 0], c[:, 1], r)) == pents

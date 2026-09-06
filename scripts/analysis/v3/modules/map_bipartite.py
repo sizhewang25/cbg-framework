@@ -246,8 +246,8 @@ def plot_bipartite_nodes(
         label=f"Target ({len(assignments):,})",
     )
     ax.scatter(
-        seeds["centroid_lon"].to_numpy(),
-        seeds["centroid_lat"].to_numpy(),
+        seeds["seed_lon"].to_numpy(),
+        seeds["seed_lat"].to_numpy(),
         s=14,
         c="#d62728",
         marker="x",
@@ -363,8 +363,8 @@ def plot_bipartite_flows(
         draw_voronoi(ax, partition, linewidth=0.6)
 
     ax.scatter(
-        seeds["centroid_lon"].to_numpy(),
-        seeds["centroid_lat"].to_numpy(),
+        seeds["seed_lon"].to_numpy(),
+        seeds["seed_lat"].to_numpy(),
         s=18,
         c="#d62728",
         marker="x",

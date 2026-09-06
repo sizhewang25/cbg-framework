@@ -90,18 +90,19 @@ def _seed_distance_frame(
 
     * `error_to_target_km` — to the raw ground-truth coordinate. **This is the
       error distance.** It owes nothing to the grid or the seeds.
-    * `error_to_truth_seed_km` — to the true seed centroid. A diagnostic of the
-      *classification* geometry, not an error metric: their difference is
-      exactly the quantization offset for that row, which is the per-row form of
-      `intra_seed_spread_km` (§7.4).
+    * `error_to_truth_seed_km` — to the true seed, i.e. to the centre of the
+      cell the target falls in. A diagnostic of the *classification* geometry,
+      not an error metric: it has a floor equal to that target's
+      `cell_offset_km`, so a perfect prediction reports ~17 km on `h3-4` rather
+      than 0 (§7.4).
     """
     seeds = space.seeds
     seed_ids = seeds["seed_id"].to_numpy()
     d = pairwise_km(
         pred_lat.to_numpy(dtype=float),
         pred_lon.to_numpy(dtype=float),
-        seeds["centroid_lat"].to_numpy(),
-        seeds["centroid_lon"].to_numpy(),
+        seeds["seed_lat"].to_numpy(),
+        seeds["seed_lon"].to_numpy(),
     )
 
     has_pred = np.isfinite(pred_lat.to_numpy(dtype=float)) & np.isfinite(

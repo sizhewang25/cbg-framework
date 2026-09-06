@@ -1,11 +1,12 @@
 """Answer-space construction invariants (paper §7.3/§7.4).
 
 Almost everything here is parametrized over **both grids**. That is the point of
-the `grid.Grid` abstraction: steps 2 and 3 of the construction (seeds at target
-centroids, nearest-seed labelling) are pure spherical geometry, so every
-invariant they guarantee has to hold whichever tessellation did the merging. A
-test that passes on one grid and fails on the other marks a place where grid
-detail leaked out of the quantizer.
+the `grid.Grid` abstraction: the grid supplies cell membership and cell centre,
+and everything the construction builds on top of those (nearest-seed labelling,
+seed mesh, margins) is pure spherical geometry — so every invariant has to hold
+whichever tessellation did the merging. A test that passes on one grid and fails
+on the other marks a place where grid detail leaked past the two methods that
+are allowed to know about it.
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ from scripts.analysis.v3.modules.answer_space import (
     build_answer_space,
     load_answer_space,
     pairwise_km,
-    spherical_centroid,
 )
+from scripts.analysis.v3.modules.grid import get_grid
+from scripts.analysis.v3.modules.paths import MissingArtifactError
 
 
 @pytest.fixture(params=("h3", "healpix"))
@@ -43,7 +45,6 @@ def test_colocated_targets_collapse_to_one_seed(grid):
     space = build_answer_space(_targets([(41.9742, -87.9073)] * 5), grid=grid)
     assert space.n_seeds == 1
     assert space.seeds.loc[0, "n_targets"] == 5
-    assert space.seeds.loc[0, "intra_seed_spread_km"] == 0.0
 
 
 def test_distant_targets_get_distinct_seeds(grid):
@@ -54,12 +55,38 @@ def test_distant_targets_get_distinct_seeds(grid):
     assert set(space.assignments["seed_id"]) == {0, 1, 2}
 
 
-def test_seed_is_centroid_of_its_members(grid):
-    space = build_answer_space(_targets([(41.90, -87.90), (41.91, -87.91)]), grid=grid)
+def test_seed_is_the_cell_centre_not_the_targets(grid):
+    """The seed is the grid's, not the data's — that is the whole point."""
+    coords = [(41.90, -87.90), (41.91, -87.91)]
+    space = build_answer_space(_targets(coords), grid=grid)
     assert space.n_seeds == 1
-    lat, lon = spherical_centroid([41.90, 41.91], [-87.90, -87.91])
-    assert space.seeds.loc[0, "centroid_lat"] == pytest.approx(lat)
-    assert space.seeds.loc[0, "centroid_lon"] == pytest.approx(lon)
+    g = get_grid(grid)
+    res = int(space.seeds.loc[0, "grid_resolution"])
+    centre = g.cell_centers([space.seeds.loc[0, "cell_id"]], res)[0]
+    assert space.seeds.loc[0, "seed_lat"] == pytest.approx(centre[0])
+    assert space.seeds.loc[0, "seed_lon"] == pytest.approx(centre[1])
+    # The negative half is what pins the change: a centroid would have landed
+    # between the two targets, and the cell centre lands on neither.
+    for lat, _ in coords:
+        assert space.seeds.loc[0, "seed_lat"] != pytest.approx(lat, abs=1e-4)
+
+
+def test_seed_does_not_depend_on_which_targets_landed_in_the_cell(grid):
+    """Target-independence: the same cell yields the same seed in every run."""
+    a = build_answer_space(_targets([(41.90, -87.90)]), grid=grid)
+    b = build_answer_space(_targets([(41.99, -87.99), (41.95, -87.95)]), grid=grid)
+    assert a.seeds.loc[0, "cell_id"] == b.seeds.loc[0, "cell_id"]
+    assert a.seeds.loc[0, "seed_lat"] == b.seeds.loc[0, "seed_lat"]
+    assert a.seeds.loc[0, "seed_lon"] == b.seeds.loc[0, "seed_lon"]
+
+
+def test_cell_offset_is_bounded_by_the_cell(grid):
+    """The quantization cost the grid + resolution declare up front."""
+    coords = [(25 + i * 0.7, -120 + i * 1.3) for i in range(40)]
+    space = build_answer_space(_targets(coords), grid=grid)
+    g = get_grid(grid)
+    res = int(space.seeds.loc[0, "grid_resolution"])
+    assert space.assignments["cell_offset_km"].max() < g.nominal_cell_km(res)
 
 
 def test_every_target_is_assigned_exactly_once(grid):
@@ -91,15 +118,40 @@ def test_margin_is_half_the_nearest_seed_distance(grid):
     )
 
 
-def test_intra_seed_spread_is_max_pairwise_within_the_seed(grid):
-    """§7.4 calls this the floor under any error-distance figure."""
-    coords = [(41.900, -87.900), (41.930, -87.930), (41.910, -87.905)]
-    space = build_answer_space(_targets(coords), grid=grid)
-    assert space.n_seeds == 1
-    d = pairwise_km([c[0] for c in coords], [c[1] for c in coords])
-    assert space.seeds.loc[0, "intra_seed_spread_km"] == pytest.approx(
-        d.max(), abs=1e-3
+def test_seed_separation_is_a_grid_distance_not_a_data_one(grid):
+    """`nearest_seed_km` / `margin_km` now describe the grid, not the targets.
+
+    This is the property the mistaken-cell-closeness analysis rests on: two runs
+    whose targets sit anywhere inside the same two cells must report the same
+    separation. Under target-centroid seeds it varied with the data — as7018
+    `h3-4` had a `margin_km` of 7.7 km between two cells 45 km apart, because
+    both centroids hugged their shared edge.
+
+    Kept loose against the pitch on purpose: H3 defines `nominal_cell_km` as true
+    centre-to-centre, HEALPix as `sqrt(area)`, so only the order of magnitude is
+    comparable across the two.
+    """
+    g = get_grid(grid)
+    res = g.DEFAULT_RESOLUTION
+    base = (41.90, -87.90)
+    first = g.cell_ids([base[0]], [base[1]], res)[0]
+    step = next(
+        d
+        for d in np.arange(0.05, 2.0, 0.01)
+        if g.cell_ids([base[0]], [base[1] + d], res)[0] != first
     )
+    a = build_answer_space(_targets([base, (base[0], base[1] + step)]), grid=grid)
+    # Same two cells, targets nudged to different corners of them.
+    b = build_answer_space(
+        _targets([(base[0] + 0.02, base[1] - 0.02), (base[0], base[1] + step + 0.02)]),
+        grid=grid,
+    )
+    assert a.n_seeds == b.n_seeds == 2
+    assert list(a.seeds["cell_id"]) == list(b.seeds["cell_id"])
+    assert list(a.seeds["nearest_seed_km"]) == list(b.seeds["nearest_seed_km"])
+    assert list(a.seeds["margin_km"]) == list(b.seeds["margin_km"])
+    pitch = g.nominal_cell_km(res)
+    assert pitch / 2 < a.seeds["nearest_seed_km"].max() < pitch * 2
 
 
 def test_duplicate_target_id_is_rejected(grid):
@@ -184,14 +236,13 @@ def test_hierarchy_reports_only_the_grid_built_and_coarser(grid):
     assert reported == [coarsest]
 
 
-def test_spherical_centroid_handles_dateline():
-    """Averaging lon directly would put this at 0°, halfway around the world."""
-    lat, lon = spherical_centroid([0.0, 0.0], [179.0, -179.0])
-    assert lat == pytest.approx(0.0, abs=1e-9)
-    assert abs(lon) == pytest.approx(180.0, abs=1e-6)
-
-
-def test_spherical_centroid_of_identical_points_is_that_point():
-    lat, lon = spherical_centroid([41.9742] * 3, [-87.9073] * 3)
-    assert lat == pytest.approx(41.9742, abs=1e-9)
-    assert lon == pytest.approx(-87.9073, abs=1e-9)
+def test_loading_a_target_centroid_answer_space_is_rejected(tmp_path, grid):
+    """Pre-cell-centre artifacts must fail loudly, not half-load."""
+    space = build_answer_space(_targets([(41.97, -87.90), (40.71, -74.01)]), grid=grid)
+    space.write(tmp_path)
+    stale = pd.read_csv(tmp_path / "seeds.csv").rename(
+        columns={"seed_lat": "centroid_lat", "seed_lon": "centroid_lon"}
+    )
+    stale.to_csv(tmp_path / "seeds.csv", index=False)
+    with pytest.raises(MissingArtifactError, match="Rebuild"):
+        load_answer_space(tmp_path)

@@ -120,8 +120,8 @@ Phases 2c and 3 — these are RQ3 phase-attribution arms, not published variants
 
 Note this is the **complete-linkage / centroid-radius-capped** answer space, not
 the grid the paper draft §7.3 describes. Same role (finite metro-granular class
-set seeded at target centroids); different construction. Flag when writing paper
-numbers.
+set); different construction — and `clusters/` seeds at target centroids where
+the grid space seeds at cell centres. Flag when writing paper numbers.
 
 The v3 layer builds the grid version instead, over either of two tessellations
 (H3 `res=4` by default, HEALPix `nside=128` for the paper's original setting) —

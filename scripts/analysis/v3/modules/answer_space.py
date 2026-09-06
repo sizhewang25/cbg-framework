@@ -6,17 +6,20 @@ Three steps, exactly as the paper states them:
    default, HEALPix `nside=128` (~51 km) for the paper's original setting; see
    `grid.py`. Cell membership is an equivalence relation whose only job is to
    merge points close enough to count as one place. Which tessellation does the
-   merging is a *parameter*: steps 2 and 3 are pure spherical geometry.
-2. Each occupied cell contributes one **seed**, the spherical centroid of the
-   targets inside it — so the answer space is K *real locations*, not K grid
-   squares.
-3. A coordinate is labelled by its nearest seed. That one rule scores ground
-   truth and predictions alike, and error distance is measured to the seed.
+   merging is a *parameter*: the grid supplies cell membership and cell centre,
+   and step 3 is pure spherical geometry on top of them.
+2. Each occupied cell contributes one **seed**, at the cell's own centre. The
+   grid decides which targets are one place, so it decides where that place is
+   too: a seed never depends on which targets happened to land in the cell, and
+   the same cell yields the same seed in every run.
+3. A coordinate is labelled by its nearest seed. Ground truth is labelled by
+   cell membership, which is the same rule wherever a cell contains its own
+   centre's Voronoi region.
 
-The grid's cost is recorded rather than argued away: grid lines fall where the
-grid falls, so a facility group straddling one yields two seeds and two classes,
-and the Voronoi step cannot undo a split the grid already made. `meta.json`
-carries the straddle diagnostic for that.
+The grid's cost is declared rather than argued away: choosing a grid at a
+resolution *is* the granularity claim, and `meta.json` carries `cell_offset_km`
+— how far each target sits from the centre standing in for it — as the measured
+size of that claim.
 
 Command: `build-answer-space`. Writes to
 `outputs/analysis/v3/<run_id>/target-answer-space/`.
@@ -67,30 +70,6 @@ def _unit_vectors(lat_deg: np.ndarray, lon_deg: np.ndarray) -> np.ndarray:
     lon = np.radians(np.asarray(lon_deg, dtype=float))
     return np.column_stack(
         [np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)]
-    )
-
-
-def spherical_centroid(lat_deg, lon_deg) -> tuple[float, float]:
-    """Centroid of points on the sphere: normalized mean of unit vectors.
-
-    Averaging lat/lon directly is wrong near the dateline and at high latitude;
-    this is the projection-free form, matching §7.4's "centroid of the targets
-    inside the cell".
-
-    Lives here rather than in a grid module because it is not grid math — it is
-    the same unit-vector mean as `_unit_vectors` above, and both grids need it
-    identically.
-    """
-    v = _unit_vectors(np.atleast_1d(lat_deg), np.atleast_1d(lon_deg)).mean(axis=0)
-    norm = float(np.sqrt(v @ v))
-    if norm == 0.0:
-        # Antipodal cancellation — impossible within one cell, but a mean of
-        # zero has no direction so there is no centroid to return.
-        raise ValueError("degenerate point set: unit vectors cancel to zero")
-    vx, vy, vz = v
-    return (
-        float(np.degrees(np.arcsin(vz / norm))),
-        float(np.degrees(np.arctan2(vy, vx))),
     )
 
 
@@ -229,74 +208,56 @@ def build_answer_space(
     # and independent of input row order. Sorting is lexicographic for H3's
     # string ids and numeric for HEALPix's ints; either way it is a total order
     # on the ids, which is all determinism needs.
-    seed_rows: list[dict] = []
-    for rank, (cell, grp) in enumerate(t.groupby("cell_id", sort=True)):
-        clat, clon = spherical_centroid(grp["target_lat"], grp["target_lon"])
-        if len(grp) > 1:
-            d = pairwise_km(grp["target_lat"].to_numpy(), grp["target_lon"].to_numpy())
-            spread = float(d.max())
-        else:
-            spread = 0.0
-        seed_rows.append(
-            {
-                "seed_id": rank,
-                "grid_scheme": grid.name,
-                "grid_resolution": resolution,
-                "cell_id": cell,
-                "centroid_lat": clat,
-                "centroid_lon": clon,
-                "n_targets": int(len(grp)),
-                "intra_seed_spread_km": round(spread, 3),
-            }
-        )
-    seeds = pd.DataFrame(seed_rows)
+    #
+    # One batched `cell_centers` call rather than one per group: HEALPix answers
+    # the whole array in a single vectorized call, and asking per cell would let
+    # a scalar-shaped implementation pass unnoticed.
+    counts = t.groupby("cell_id", sort=True).size()
+    cells = counts.index.to_numpy()
+    centers = grid.cell_centers(cells, resolution)
+    seeds = pd.DataFrame(
+        {
+            "seed_id": np.arange(len(cells)),
+            "grid_scheme": grid.name,
+            "grid_resolution": resolution,
+            "cell_id": cells,
+            # Deliberately unrounded: rounding would move the seed off the exact
+            # centre and could break `cell_ids(seed) == cell_id` at a boundary.
+            "seed_lat": centers[:, 0],
+            "seed_lon": centers[:, 1],
+            "n_targets": counts.to_numpy().astype(int),
+        }
+    )
 
-    # Assign every target to its cell's seed. Note this is cell membership, not
-    # nearest-seed — for ground truth the two can differ, and the paper's rule
-    # is that the *cell* defines a target's class while nearest-seed labels
-    # arbitrary coordinates (predictions). Both are recorded so the gap is
-    # visible rather than assumed to be empty.
+    # Assign every target to its cell's seed: cell membership *is* the class.
+    # Predictions are labelled by nearest seed instead (`classify.py`), which is
+    # the same rule wherever a cell contains its own centre's Voronoi region.
     cell_to_seed = dict(zip(seeds["cell_id"], seeds["seed_id"]))
     t["seed_id"] = t["cell_id"].map(cell_to_seed).astype(int)
 
-    seed_lat = seeds["centroid_lat"].to_numpy()
-    seed_lon = seeds["centroid_lon"].to_numpy()
+    seed_lat = seeds["seed_lat"].to_numpy()
+    seed_lon = seeds["seed_lon"].to_numpy()
     d_to_all = pairwise_km(
         t["target_lat"].to_numpy(), t["target_lon"].to_numpy(), seed_lat, seed_lon
     )
-    t["dist_to_seed_km"] = np.round(
+    # The quantization offset, and the whole cost of the cell-centre choice:
+    # how far a target sits from the centre standing in for it. Bounded by the
+    # cell, so the grid and its resolution declare it up front.
+    t["cell_offset_km"] = np.round(
         d_to_all[np.arange(len(t)), t["seed_id"].to_numpy()], 3
     )
-    nearest_seed = d_to_all.argmin(axis=1)
-    t["nearest_seed_id"] = nearest_seed
-    t["cell_seed_is_nearest"] = nearest_seed == t["seed_id"].to_numpy()
 
     # Seed-to-seed geometry: the margin at which coordinate error flips a label.
     mesh = pairwise_km(seed_lat, seed_lon)
     K = len(seeds)
     if K > 1:
-        off = mesh + np.diag(np.full(K, np.inf))
-        nearest_km = off.min(axis=1)
-        nearest_id = off.argmin(axis=1)
+        nearest_km = (mesh + np.diag(np.full(K, np.inf))).min(axis=1)
     else:
         nearest_km = np.array([np.inf])
-        nearest_id = np.array([-1])
-    seeds["nearest_seed_id"] = nearest_id
     seeds["nearest_seed_km"] = np.round(nearest_km, 3)
     # The boundary between two adjacent classes bisects the geodesic joining
     # their seeds, so half the per-seed minimum is the margin at the seed.
     seeds["margin_km"] = np.round(nearest_km / 2.0, 3)
-    seeds["radius_km"] = [
-        round(
-            float(
-                t.loc[t["seed_id"] == sid, "dist_to_seed_km"].max()
-                if (t["seed_id"] == sid).any()
-                else 0.0
-            ),
-            3,
-        )
-        for sid in seeds["seed_id"]
-    ]
     deg = _delaunay_degree(seed_lat, seed_lon)
     if deg is not None:
         seeds["delaunay_degree"] = deg
@@ -306,10 +267,6 @@ def build_answer_space(
     )
     mesh_df.index.name = "seed_id"
 
-    pitch = grid.nominal_cell_km(resolution)
-    n_close_pairs = (
-        int(((mesh < pitch) & (mesh > 0)).sum() // 2) if K > 1 else 0
-    )
     meta = {
         "source": source_label,
         "grid": grid.describe(resolution),
@@ -336,22 +293,10 @@ def build_answer_space(
             ).items()
         },
         "targets_per_seed": _describe(seeds["n_targets"].to_numpy()),
-        "intra_seed_spread_km": _describe(seeds["intra_seed_spread_km"].to_numpy()),
-        "dist_to_seed_km": _describe(t["dist_to_seed_km"].to_numpy()),
+        "cell_offset_km": _describe(t["cell_offset_km"].to_numpy()),
         "nearest_seed_km": _describe(nearest_km),
         "margin_km": _describe(nearest_km / 2.0),
         "seed_pairwise_km": _describe(mesh[np.triu_indices(K, k=1)]) if K > 1 else {"n": 0},
-        "straddle_diagnostic": {
-            "note": (
-                "Seed pairs closer than one cell pitch are candidate grid-line "
-                "splits: one facility group quantized into two classes. Voronoi "
-                "cannot undo a split the grid already made (§7.3, §10)."
-            ),
-            "n_seed_pairs_within_one_cell_pitch": n_close_pairs,
-            "n_targets_whose_cell_seed_is_not_nearest": int(
-                (~t["cell_seed_is_nearest"]).sum()
-            ),
-        },
     }
     if deg is not None:
         meta["delaunay_degree"] = _describe(deg.astype(float))
@@ -364,9 +309,7 @@ def build_answer_space(
             "target_lon",
             "cell_id",
             "seed_id",
-            "dist_to_seed_km",
-            "nearest_seed_id",
-            "cell_seed_is_nearest",
+            "cell_offset_km",
         ],
     ].reset_index(drop=True)
 
@@ -410,6 +353,15 @@ def load_answer_space(path: Path) -> AnswerSpace:
     )
     meta = json.loads(meta_p.read_text()) if meta_p.exists() else {}
     seeds = pd.read_csv(seeds_p)
+    if "centroid_lat" in seeds.columns:
+        # Written when seeds were the spherical centroid of a cell's targets.
+        # Every seed coordinate, hence every class boundary, differs; loading it
+        # beside current code would silently mix two answer spaces.
+        raise MissingArtifactError(
+            f"{seeds_p} was built with target-centroid seeds (it has a "
+            f"`centroid_lat` column); seeds are now cell centres. Rebuild with "
+            f"`build-answer-space`."
+        )
     assignments = pd.read_csv(assign_p)
     # `cell_id` is grid-specific in dtype (HEALPix int64, H3 hex string) and CSV
     # is untyped, so pandas' inference has to be corrected by the scheme that
@@ -432,11 +384,11 @@ def sweep_row(space: "AnswerSpace") -> dict:
     """One line of `grid_sweep.<grid>.csv`: how the partition changes with scale.
 
     The point of the sweep is the trade-off, so each row pairs what coarsening
-    buys (fewer classes, fewer straddle candidates) against what it costs
-    (targets pulled further from their own seed, which floors error distance).
+    buys (fewer classes) against what it costs (`cell_offset_km`: targets sit
+    further from the cell centre standing in for them).
     """
     m = space.meta
-    spread = m["intra_seed_spread_km"]
+    offset = m["cell_offset_km"]
     return {
         "grid": m["grid"]["scheme"],
         "resolution": m["grid"]["resolution"],
@@ -445,14 +397,8 @@ def sweep_row(space: "AnswerSpace") -> dict:
         "n_targets": m["n_targets"],
         "n_classes": m["n_seeds"],
         "n_singleton_classes": m["n_singleton_seeds"],
-        "straddle_pairs_within_one_pitch": m["straddle_diagnostic"][
-            "n_seed_pairs_within_one_cell_pitch"
-        ],
-        "n_cell_seed_not_nearest": m["straddle_diagnostic"][
-            "n_targets_whose_cell_seed_is_not_nearest"
-        ],
-        "intra_seed_spread_km_mean": spread["mean"],
-        "intra_seed_spread_km_max": spread["max"],
+        "cell_offset_km_p50": offset["percentiles"]["p50"],
+        "cell_offset_km_max": offset["max"],
         "nearest_seed_km_p50": m["nearest_seed_km"]["percentiles"]["p50"],
     }
 

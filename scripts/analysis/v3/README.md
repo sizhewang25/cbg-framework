@@ -220,13 +220,17 @@ obvious home for it when that is repointed.
 
 A grid quantizes the run's ground-truth targets. The grid is a **quantizer, not
 the answer space**: its only job is to merge points close enough to count as one
-place. Each occupied cell then contributes one **seed** at the spherical
-centroid of the targets inside it, so the answer space is K *real locations*
-rather than K grid squares. A coordinate is labelled by its nearest seed.
+place. Each occupied cell then contributes one **seed at the cell's own
+centre**: choosing a grid at a resolution *is* the granularity claim, so the
+grid decides both which targets are one place and where that place is. A seed
+therefore never depends on which targets happened to land in the cell — the same
+cell yields the same seed in every run. A coordinate is labelled by its nearest
+seed.
 
-Steps 2 and 3 are pure spherical geometry, which is why the grid is swappable at
-all: [modules/grid.py](modules/grid.py) defines the contract and the two
-implementations supply only point→cell, scale, and cell boundaries.
+Everything past cell membership and cell centre is pure spherical geometry, which
+is why the grid is swappable at all: [modules/grid.py](modules/grid.py) defines
+the contract and the two implementations supply only point→cell, cell→centre,
+scale, and cell boundaries.
 `meta.json` carries the occupied-cell count down the grid's coarsening ladder —
 the multi-scale concentration diagnostic §7.3 asks for.
 
@@ -254,20 +258,20 @@ exactly nested, which H3 is neither of.
 Pitch is defined differently per grid, on purpose: HEALPix uses `sqrt(area)`
 because its cells are exactly equal-area, H3 uses hexagon centre-to-centre
 (`edge × √3`) because `sqrt(area)` understates a hexagon's spacing by ~7%. Both
-are the distance the straddle diagnostic compares seed pairs against, so both
-have to be real distances.
+are compared against seed-to-seed distances, which are now distances between
+occupied cell centres, so both have to be real distances.
 
 `--sweep` builds a grid's whole ladder and writes `grid_sweep.<grid>.csv` beside
-it, pairing what coarsening buys (fewer classes, fewer straddle candidates)
-against what it costs (`intra_seed_spread_km`, the floor under every
-error-distance figure).
+it, pairing what coarsening buys (fewer classes) against what it costs
+(`cell_offset_km`: targets sit further from the centre standing in for them).
 
 ### What each grid costs, measured
 
 `meta.json` records both grids' costs rather than arguing them away.
-`straddle_diagnostic` (both grids) counts seed pairs closer than one cell pitch
-and targets whose own cell seed is not their nearest seed.
-`grid_diagnostics` is grid-specific and **empty for HEALPix**, which has nothing
+`cell_offset_km` (both grids) is the distribution of target-to-seed distances —
+the quantization the grid choice buys, bounded by the cell. Measured on the four
+runs: p50 ≈ 16-20 km and max ≈ 26 km at `h3-4`, p50 ≈ 19-25 km and max ≈ 41 km
+at `healpix-128`. `grid_diagnostics` is grid-specific and **empty for HEALPix**, which has nothing
 to disclose. For H3 it reports:
 
 - `cell_area_km2_min` / `_max` / `_max_over_min` over the *occupied* cells. H3
@@ -595,11 +599,10 @@ baseline rather than the variant.
 grid exist to define the classes, so accuracy is measured against them; error
 distance has its own ground truth and is measured to the **raw target**
 (`error_to_target_km`). Routing it through the seed would import the grid's
-quantization into a number that needs none — with cell-centre seeds that would
-have been a systematic ~17-20 km added to every *correct* answer. The parquet
-also keeps `error_to_truth_seed_km`, whose difference from
-`error_to_target_km` is exactly that offset per row, i.e. the per-row form of
-`intra_seed_spread_km`. One consequence is a useful check: re-quantizing changes
+quantization into a number that needs none — since seeds are cell centres, that
+would add a systematic ~17-20 km (`h3-4`) to every *correct* answer. The parquet
+also keeps `error_to_truth_seed_km`, whose difference from `error_to_target_km`
+is exactly that offset per row, i.e. the row's `cell_offset_km`. One consequence is a useful check: re-quantizing changes
 accuracy but must leave `error_km_*` bit-identical, and it does across `h3-4`
 and `healpix-128` on all four runs.
 
@@ -842,10 +845,12 @@ coverage reaches 959), which is why it is recorded in the manifest.
 ## Answer-space map
 
 `plot-answer-space` draws the occupied cells (filled, one colour per seed), the
-nearest-seed class boundaries, their targets, and their seed centroids on one
-cartopy panel. It exists to make the §7.3 straddle cost visible: a facility group spanning a grid line is quantized
-into two adjacent cells and two classes, which reads instantly as two touching
-filled cells and is hard to believe from a scalar. Only occupied cells are
+nearest-seed class boundaries, their targets, and their seeds — the cell centres
+— on one cartopy panel. It exists to make the §7.3 quantization visible: a
+facility group spanning a grid line is quantized into two adjacent cells and two
+classes, which reads instantly as two touching filled cells and is hard to
+believe from a scalar. The seed markers show the other half of the same choice,
+sitting at cell centres rather than on their targets. Only occupied cells are
 drawn — the full grid (288,122 cells at `h3-4`, 196,608 at `healpix-128`) is
 unreadable at continental scale.
 

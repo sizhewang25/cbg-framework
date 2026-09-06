@@ -2,9 +2,8 @@
 
 HEALPix-*specific* facts only -- the parts no other tessellation can offer,
 chiefly exact equal area and exact nesting via bit shift. The grid-agnostic
-contract both grids must satisfy lives in `test_grid.py`, and
-`spherical_centroid` moved to `test_answer_space.py` along with the function
-itself, which was never grid math.
+contract both grids must satisfy lives in `test_grid.py`, including
+`cell_centers`, which places the answer space's seeds.
 """
 
 from __future__ import annotations
