@@ -143,12 +143,28 @@ edges against the projected 2-D Delaunay's 43 on as01, 60 against 56 on as02.
 **A first pass justified this with the wrong evidence** ("a neighbour can be the
 17th-nearest of 18"). The correctly projected diagram also has a rank-16
 neighbour on as01: outer seeds have unbounded Voronoi cells and legitimately
-border far-away ones. The inflation is ~7-10% of edges. Corrected in SCHEMA.md,
-which now documents both `delaunay_degree` (a superset of true adjacency) and
-`seeds_crossed` (narrower than it by ~40%, since a shared edge need not lie on
-the segment joining two seeds). Neither is a neighbour count; they miss in
-opposite directions. Both left as they are and documented rather than
-recomputed, so existing answer spaces stay valid.
+border far-away ones. The inflation is ~7-10% of edges, not a gross distortion.
+
+`delaunay_degree` was then **removed outright** rather than documented, and
+`seeds.csv` now carries `class_adjacency_degree` from the same walk
+`confusion.py` uses — one definition of adjacency in the layer instead of two
+that disagree. `seed_crossing_matrix` moved into `answer_space.py`, which owns
+seed geometry, with a `MAX_SEEDS_FOR_ADJACENCY = 128` guard (the walk is 0.08s at
+K=27 and 15.6s at K=120; `h3-4` sits at K=18-27).
+
+That the walk is *stricter* than sharing a Voronoi edge turned out to be a
+feature, not a compromise: the excluded pairs are the far ones, median separation
+1410 km against 728 km on as01, whose cells touch only a long way from both
+seeds. No small coordinate error confuses those, so counting them would inflate
+the local density §7.4 asks for. On the controlled five-seed cap the walk gives
+the north seed degree 3, matching the projected 2-D Delaunay exactly; the hull's
+4 was the outlier.
+
+Also closes §7.4's third bullet, which had no implementation at all:
+`meta.json`'s `adjacency_edge_km` is the separation distribution over adjacent
+pairs. Verified: `seeds.csv`, the answer-space `meta.json` and
+`confusion_manifest.json` report the same mean degree on all four runs, and
+`topn_accuracy.csv` is byte-identical after rebuilding every answer space.
 
 **Answer-space density costs accuracy, but not universally.** Shortest-Ping
 across density tertiles: as01 0.33 → 0.71 → 0.82, as02 0.16 → 0.42 → 0.51, but

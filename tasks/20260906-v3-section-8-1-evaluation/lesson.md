@@ -57,7 +57,16 @@
   seeds. The claim shipped in a commit before I checked it against the
   alternative construction, which took one query. Compare against the *right*
   implementation, not against intuition about what a wrong one should look like.
-- **When two measures of one idea disagree, say which direction each errs.**
+- **When two measures of one idea disagree, deleting one beats documenting
+  both.** I first wrote a careful SCHEMA note explaining that
   `delaunay_degree` overstates adjacency, `seeds_crossed == 1` understates it,
-  and true adjacency sits between. Documenting only "these are not the same"
-  would leave a reader free to substitute either.
+  and truth sits between. The note was accurate and still the wrong fix: nothing
+  read the column, so keeping it only preserved the chance of picking the wrong
+  one. Removed, and the surviving definition now comes from a single function
+  that both the per-seed and per-pair columns call.
+- **"Stricter than the textbook relation" is not automatically a defect.** The
+  walk undercounts Voronoi adjacency by ~40%, which looked like a compromise
+  until I checked *which* pairs it drops: the far ones, whose cells touch only a
+  long way from both seeds. For "how many classes is this answer confusable
+  with", excluding them is more correct, not less. Measure what a discrepancy
+  consists of before deciding which side is wrong.

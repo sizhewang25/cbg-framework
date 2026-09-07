@@ -11,9 +11,29 @@ from scripts.analysis.v3.modules.confusion import (
     confusion_by_density,
     confusion_pairs,
     density_bins,
-    geodesic_points,
-    seed_crossing_matrix,
 )
+
+
+def _latlon_seeds(points):
+    """Seeds at explicit coordinates, with the margins the crossing walk steps by.
+
+    `seed_crossing_matrix` lives in `answer_space` and is exercised there
+    (`test_seed_adjacency.py`); these two only check that its output reaches
+    `confusion_pairs.csv` intact.
+    """
+    lat = [p[0] for p in points]
+    lon = [p[1] for p in points]
+    d = pairwise_km(np.array(lat, float), np.array(lon, float))
+    np.fill_diagonal(d, np.inf)
+    return pd.DataFrame(
+        {
+            "seed_id": range(len(points)),
+            "seed_lat": lat,
+            "seed_lon": lon,
+            "nearest_seed_km": d.min(axis=1),
+            "margin_km": d.min(axis=1) / 2.0,
+        }
+    )
 
 
 def _seeds(nearest):
@@ -213,122 +233,7 @@ def test_a_missing_prediction_keeps_the_row_with_null_geometry():
     assert np.isnan(out.iloc[0]["boundary_margin_km"])
 
 
-# ---- class adjacency, walked rather than triangulated ------------------------
-
-
-def _latlon_seeds(points):
-    """Seeds at explicit coordinates, with the margins the crossing walk steps by."""
-    lat = [p[0] for p in points]
-    lon = [p[1] for p in points]
-    d = pairwise_km(np.array(lat, float), np.array(lon, float))
-    np.fill_diagonal(d, np.inf)
-    return pd.DataFrame(
-        {
-            "seed_id": range(len(points)),
-            "seed_lat": lat,
-            "seed_lon": lon,
-            "nearest_seed_km": d.min(axis=1),
-            "margin_km": d.min(axis=1) / 2.0,
-        }
-    )
-
-
-def test_geodesic_points_hit_both_endpoints():
-    lat, lon = geodesic_points(40.0, -100.0, 45.0, -80.0, 9)
-    assert (lat[0], lon[0]) == pytest.approx((40.0, -100.0))
-    assert (lat[-1], lon[-1]) == pytest.approx((45.0, -80.0))
-    assert len(lat) == 9
-
-
-def test_geodesic_points_are_evenly_spaced_along_the_great_circle():
-    """Spherical interpolation, not lat/lon interpolation — at these longitudes
-    the straight line in degrees bows hundreds of km off the actual path."""
-    lat, lon = geodesic_points(40.0, -120.0, 40.0, -74.0, 21)
-    steps = np.array(
-        [
-            float(pairwise_km(lat[i : i + 1], lon[i : i + 1], lat[i + 1 : i + 2], lon[i + 1 : i + 2])[0, 0])
-            for i in range(len(lat) - 1)
-        ]
-    )
-    assert steps.std() / steps.mean() < 1e-6
-    # A great circle between two equal-latitude points bows poleward.
-    assert lat.max() > 40.0
-
-
-def test_two_seeds_are_one_boundary_apart():
-    c = seed_crossing_matrix(_latlon_seeds([(40.0, -100.0), (41.0, -100.0)]))
-    assert c[0, 1] == 1
-    assert c[0, 0] == 0
-
-
-def test_a_seed_in_the_way_adds_a_crossing():
-    """Three collinear cells: the ends are two boundaries apart, not one."""
-    c = seed_crossing_matrix(
-        _latlon_seeds([(38.0, -100.0), (40.0, -100.0), (42.0, -100.0)])
-    )
-    assert c[0, 1] == 1 and c[1, 2] == 1
-    assert c[0, 2] == 2
-
-
-def test_the_matrix_is_symmetric_with_a_zero_diagonal():
-    c = seed_crossing_matrix(
-        _latlon_seeds([(38.0, -100.0), (40.0, -100.0), (42.0, -100.0), (40.0, -96.0)])
-    )
-    assert (c == c.T).all()
-    assert (np.diag(c) == 0).all()
-
-
-def test_a_neighbouring_cell_need_not_be_the_nearest_seed():
-    """The whole reason `seeds_crossed` exists.
-
-    C sits north of A with nothing between them — one boundary away — while B
-    sits closer to the east. Ranking by distance calls C "second nearest" and
-    misses that the estimate only slipped across a single line.
-    """
-    seeds = _latlon_seeds([(40.0, -100.0), (40.0, -99.0), (41.2, -100.0)])
-    c = seed_crossing_matrix(seeds)
-    d = pairwise_km(
-        seeds.seed_lat.to_numpy(float), seeds.seed_lon.to_numpy(float)
-    )
-    assert d[0, 1] < d[0, 2]          # B is nearer to A than C is
-    assert c[0, 2] == 1               # ...but C is one boundary away
-    assert c[0, 1] == 1
-
-
-def test_outer_seeds_around_a_centre_are_not_adjacent_to_each_other():
-    """The failure mode that ruled out the convex-hull triangulation.
-
-    Five seeds in a small cap: a centre with four around it. Walking the path
-    from north to south passes through the centre cell, so they are two
-    boundaries apart, and the correctly projected 2-D Delaunay agrees — it gives
-    the north seed degree 3 (centre, east, west).
-
-    `answer_space._delaunay_degree` gives it 4, counting *south* as a neighbour:
-    the hull of the unit vectors triangulates the whole sphere, so it must close
-    around the far side and joins the outer seeds across the empty hemisphere.
-    This is the controlled case behind SCHEMA.md's note on that column.
-    """
-    seeds = _latlon_seeds(
-        [
-            (40.0, -100.0),   # centre
-            (42.0, -100.0),   # N
-            (38.0, -100.0),   # S
-            (40.0, -97.4),    # E
-            (40.0, -102.6),   # W
-        ]
-    )
-    c = seed_crossing_matrix(seeds)
-    assert (c[0, 1:] == 1).all()      # the centre borders all four
-    assert c[1, 2] == 2               # N to S goes through the centre
-    assert c[3, 4] == 2               # E to W likewise
-
-    from scripts.analysis.v3.modules.answer_space import _delaunay_degree
-
-    hull_degree = _delaunay_degree(
-        seeds.seed_lat.to_numpy(float), seeds.seed_lon.to_numpy(float)
-    )
-    walked_degree = (c == 1).sum(axis=1)
-    assert hull_degree[1] > walked_degree[1]
+# ---- seeds_crossed in the pairs table ---------------------------------------
 
 
 def test_seeds_crossed_lands_in_the_pairs_table():

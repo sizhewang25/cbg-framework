@@ -862,14 +862,19 @@ methods** — by rank, Octant-Spline (79%) leads SoI CBG (52%); by crossings SoI
 leads at 96% against Octant-Spline's 90%. Distance rank was measuring how
 crowded the neighbourhood is, not how near the miss was.
 
-**Neither this nor `seeds.csv`'s `delaunay_degree` is a neighbour count**, and
-they miss in opposite directions — `delaunay_degree` is a sphere-hull superset of
-true adjacency, `seeds_crossed == 1` is narrower than it by about 40%.
-[SCHEMA.md](SCHEMA.md#fields-that-are-not-accurate-for-the-obvious-reading) has
-the measurements and the reason each is left as it is. What `seeds_crossed`
-answers exactly — and what §8.1 wants — is *how many class boundaries lie between
-the right answer and the given one*, which is a property of the path rather than
-of the cells' topology.
+`seeds_crossed == 1` is **the** definition of class adjacency in this layer:
+`seed_crossing_matrix` lives in `answer_space.py` and the same walk produces
+`seeds.csv`'s `class_adjacency_degree`, so the per-pair column and the per-seed
+count cannot disagree.
+
+It is stricter than "shares a Voronoi edge", and that is the point. The pairs it
+excludes are the far ones, whose cells touch only a long way from both seeds —
+median separation 1410 km against 728 km for the one-crossing pairs on as01. A
+target near one of those is not realistically confusable with the other, so
+counting the pair would inflate the local density §7.4 asks for. It replaced a
+`delaunay_degree` column built from the convex hull of the unit vectors, which
+triangulates the *whole sphere* and so joined outer seeds across the empty
+hemisphere; see [SCHEMA.md](SCHEMA.md).
 
 `confusion_by_density.csv` bins targets by their true seed's `nearest_seed_km`.
 Crowding does cost accuracy on as01 (0.33 → 0.71 → 0.82 for Shortest-Ping across

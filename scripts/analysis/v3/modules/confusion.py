@@ -60,7 +60,11 @@ import pandas as pd
 import typer
 
 from scripts.analysis.v3.modules import io
-from scripts.analysis.v3.modules.answer_space import load_answer_space, pairwise_km
+from scripts.analysis.v3.modules.answer_space import (
+    load_answer_space,
+    pairwise_km,
+    seed_crossing_matrix,
+)
 from scripts.analysis.v3.modules.classify import DEFAULT_TOPN
 from scripts.analysis.v3.modules.diagram.common.labels import label_for
 from scripts.analysis.v3.modules.diagram.common.membership import available_methods
@@ -123,87 +127,6 @@ def density_bins(
         )
     idx = np.clip(np.searchsorted(edges, v, side="right") - 1, 0, len(edges) - 2)
     return pd.Series(idx, index=nearest_seed_km.index, name="density_bin"), edges
-
-
-def geodesic_points(
-    lat_a: float, lon_a: float, lat_b: float, lon_b: float, n: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """`n` points evenly spaced along the great circle from a to b, inclusive.
-
-    Spherical linear interpolation of the two unit vectors, so the path is the
-    actual geodesic rather than a straight line in lat/lon — which at these
-    longitudes would bow hundreds of kilometres off it.
-    """
-    ra, rb = np.radians([lat_a, lat_b]), np.radians([lon_a, lon_b])
-    a = np.array([np.cos(ra[0]) * np.cos(rb[0]), np.cos(ra[0]) * np.sin(rb[0]), np.sin(ra[0])])
-    b = np.array([np.cos(ra[1]) * np.cos(rb[1]), np.cos(ra[1]) * np.sin(rb[1]), np.sin(ra[1])])
-    omega = float(np.arccos(np.clip(a @ b, -1.0, 1.0)))
-    t = np.linspace(0.0, 1.0, n)[:, None]
-    if omega < 1e-9:
-        p = np.repeat(a[None, :], n, axis=0)
-    else:
-        p = (np.sin((1 - t) * omega) * a + np.sin(t * omega) * b) / np.sin(omega)
-    p /= np.linalg.norm(p, axis=1, keepdims=True)
-    return np.degrees(np.arcsin(np.clip(p[:, 2], -1, 1))), np.degrees(
-        np.arctan2(p[:, 1], p[:, 0])
-    )
-
-
-def seed_crossing_matrix(seeds: pd.DataFrame, *, max_samples: int = 4096) -> np.ndarray:
-    """`C[i, j]` = Voronoi class boundaries crossed on the geodesic from seed i to j.
-
-    **This is the relation the confusion question actually wants**: how many
-    class boundaries lie between the right answer and the given one. `C == 1` is
-    "the estimate slipped across exactly one line", which implies the two cells
-    share a boundary; `C == 3` is three cells away. Distance rank cannot say
-    this — a seed can be the second-nearest without sharing any boundary, and a
-    genuine neighbour can be the twentieth-nearest.
-
-    **`C == 1` is not the same as "shares a boundary", and the gap is large.**
-    The implication runs one way only: a shared edge need not lie on the segment
-    joining two seeds, so a genuinely adjacent pair can walk through a third cell.
-    Measured at `h3-4`, mean degree under `C == 1` is 2.7-2.8 against 4.8-5.3 for
-    true (projected 2-D Delaunay) adjacency — roughly 40% of adjacent pairs are
-    not one crossing apart. Read `seeds_crossed == 1` as "one boundary on the
-    direct path", which is the question the confusion table is asking, and not as
-    a claim about the cells' full topology.
-
-    Computed by walking the path rather than read off `seeds.csv`'s
-    `delaunay_degree`, which is inaccurate for this purpose — see the note on
-    that column in [SCHEMA.md](../SCHEMA.md). Briefly: it comes from the convex
-    hull of the unit vectors, which closes the triangulation around the far side
-    of the sphere and so joins outer seeds across the empty hemisphere. Measured
-    against the correctly projected 2-D Delaunay of the same seeds, the hull is a
-    strict superset: 48 edges against 43 on as01, 60 against 56 on as02.
-
-    Only seeds that genuinely sit between two others can appear on a geodesic, so
-    the walk cannot pick up a wrap-around edge.
-
-    Sampling is stepped at a quarter of the tightest margin in the answer space,
-    so a cell cannot be stepped over. Under-sampling could only ever *undercount*
-    crossings, and `max_samples` caps the work on very long paths; the cap is
-    recorded in the manifest when it binds.
-    """
-    lat = seeds["seed_lat"].to_numpy(dtype=float)
-    lon = seeds["seed_lon"].to_numpy(dtype=float)
-    K = len(seeds)
-    out = np.zeros((K, K), dtype=int)
-    if K < 2:
-        return out
-
-    margins = seeds["margin_km"].to_numpy(dtype=float)
-    margins = margins[np.isfinite(margins) & (margins > 0)]
-    step_km = max(1.0, float(margins.min()) / 4.0) if margins.size else 1.0
-    mesh = pairwise_km(lat, lon)
-
-    for i in range(K):
-        for j in range(i + 1, K):
-            n = int(np.clip(mesh[i, j] / step_km + 2, 32, max_samples))
-            plat, plon = geodesic_points(lat[i], lon[i], lat[j], lon[j], n)
-            owner = pairwise_km(plat, plon, lat, lon).argmin(axis=1)
-            crossings = int((owner[1:] != owner[:-1]).sum())
-            out[i, j] = out[j, i] = crossings
-    return out
 
 
 def _percentiles(values: np.ndarray, prefix: str) -> dict:
@@ -433,16 +356,16 @@ def build_for_run(
             if space.n_seeds
             else None,
             "max_seeds_crossed": int(off_diag.max()) if off_diag.size else 0,
+            "agrees_with_seeds_csv": "class_adjacency_degree",
             "basis": (
-                "seeds_crossed walks the geodesic between two seeds and counts "
-                "the Voronoi class boundaries ON THAT PATH. It is neither "
-                "seeds.csv's delaunay_degree (a sphere-hull superset of true "
-                "adjacency; see SCHEMA.md) nor true adjacency itself: a shared "
-                "edge need not lie on the segment joining two seeds, so this "
-                "degree runs ~40% below the projected 2-D Delaunay degree "
-                "(2.7-2.8 vs 4.8-5.3 at h3-4). Correct for 'how many boundaries "
-                "lie between the right answer and the given one'; not a "
-                "neighbour count."
+                "seeds_crossed counts the Voronoi class boundaries on the direct "
+                "geodesic between two seeds. seeds_crossed == 1 is this layer's "
+                "class adjacency and matches seeds.csv's class_adjacency_degree, "
+                "which answer_space computes from the same walk. Stricter than "
+                "sharing a Voronoi edge: pairs whose cells touch only far from "
+                "both seeds are excluded, and those are the far pairs (median "
+                "separation 1410 km vs 728 km on as01), which no small "
+                "coordinate error could confuse."
             ),
         },
         "density_bin_basis": (
@@ -452,11 +375,9 @@ def build_for_run(
         ),
         "distance_vs_adjacency": (
             "pred_seed_neighbour_rank orders seeds by DISTANCE; seeds_crossed "
-            "counts BOUNDARIES on the direct path. rank 1 implies "
-            "seeds_crossed 1, not the reverse: a seed can be fifth-nearest and "
-            "still share a boundary. Read seeds_crossed == 1 as 'one boundary "
-            "away on the direct path' -- the narrower of the two readings, and "
-            "the one §8.1 asks for."
+            "counts BOUNDARIES. rank 1 implies seeds_crossed 1, not the "
+            "reverse: a seed can be fifth-nearest and still be one boundary "
+            "away. Read seeds_crossed == 1 as 'a neighbouring class'."
         ),
         "error_columns": {
             "error_to_target_km": "prediction to the raw ground truth -- THE error distance",
