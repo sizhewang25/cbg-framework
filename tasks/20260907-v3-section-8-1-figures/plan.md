@@ -186,6 +186,12 @@ two entries" contract (`confusion.py:98-129`). Reuse it.
 First cut used a jittered scatter with a margin reference. Reworked after
 review into two band figures sharing one renderer.
 
+**Rows are grid cells, bands are rugs.** Bands stack contiguously from the x
+axis with separators between them — the layout of a spectrum-allocation chart —
+each row keeping a thin gutter above its band for the median readout. The y
+tick sits at the band's middle rather than the row's, since it names the data
+and not the cell that also holds the gutter.
+
 **Rug bands, not bins and not jitter.** Each point is a thin vertical line
 spanning its band, in the method's hue at low alpha; coincident values darken
 by overplotting. Density becomes a property of the data rather than of a bin
@@ -211,7 +217,7 @@ bands total 81.8% and the missing 18.2% *is* its fallback rate, visible in the
 figure for free and labelled as such.
 
 **Two y modes, one module, two commands.** `seeds_crossed` (cells away from the
-true class, 0-indexed because it counts boundaries) and the **nearest-cell
+true class, 0-indexed because it counts boundaries) and the **top-cell
 index** of the true class (`tg_seed_rank + 1`, 1-indexed because it is an index
 into the cells ordered by distance from the estimate). The 1-indexing is what
 makes the second axis read straight off the reported metric — `index <= N` *is*

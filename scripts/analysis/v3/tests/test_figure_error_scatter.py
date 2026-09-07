@@ -178,6 +178,48 @@ def test_level_labels_cover_every_band():
 
 
 # ---------------------------------------------------------------------------
+# the row grid
+# ---------------------------------------------------------------------------
+
+
+def test_rows_are_contiguous_unit_cells_starting_at_the_x_axis():
+    """The bottom row's lower edge is y=0, so it rests on the axis like the
+    tracks in a spectrum-allocation chart rather than floating at a tick."""
+    for mode in (S.CELLS, S.RANK):
+        first_lo, _ = S.band_span(mode, mode.index_base)
+        assert first_lo == pytest.approx(S.BAND_BOTTOM)
+        for k, level in enumerate(mode.levels):
+            lo, hi = S.band_span(mode, level)
+            assert lo == pytest.approx(k + S.BAND_BOTTOM)
+            assert hi == pytest.approx(k + S.BAND_TOP)
+
+
+def test_the_median_readout_stays_inside_its_own_row():
+    """Above the band but below the next separator — otherwise the number would
+    sit in the row above and name the wrong band."""
+    for mode in (S.CELLS, S.RANK):
+        for k, level in enumerate(mode.levels):
+            _, hi = S.band_span(mode, level)
+            text_y = k + S.MEDIAN_TEXT_Y
+            assert hi < text_y < k + 1
+
+
+def test_the_tick_sits_at_the_bands_middle_not_the_rows():
+    """The tick names the data, so it aligns with the band rather than with the
+    grid cell that also holds the readout gutter."""
+    lo, hi = S.band_span(S.RANK, 1)
+    assert S.band_centre(S.RANK, 1) == pytest.approx((lo + hi) / 2)
+    assert S.band_centre(S.RANK, 1) < 0.5  # below the row's own centre
+
+
+def test_bands_do_not_touch_so_the_grid_lines_stay_visible():
+    for mode in (S.CELLS, S.RANK):
+        levels = list(mode.levels)
+        for a, b in zip(levels, levels[1:]):
+            assert S.band_span(mode, a)[1] < S.band_span(mode, b)[0]
+
+
+# ---------------------------------------------------------------------------
 # shared with the error CDF
 # ---------------------------------------------------------------------------
 

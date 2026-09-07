@@ -15,8 +15,8 @@ coordinate error on a log axis.
   cell and the predicted one. "Two cells away" is a statement about the answer
   space's local density, which is the nearest-seed snapping story §8.1 asks
   about.
-* **`rank`** — the true class's **nearest-cell index**: 1 if it is the cell
-  closest to the estimate, 2 if one other cell is closer, and so on. This is
+* **`rank`** — the true class's **top-cell index**: 1 if it is the cell closest
+  to the estimate, 2 if one other cell is closer, and so on. This is
   the quantity the reported metric is built on, and the 1-indexing is what
   makes it read directly — `index <= N` *is* top-N, where the underlying
   `tg_seed_rank < N` needed translating. Band 1 is top-1 accuracy and the
@@ -165,16 +165,23 @@ RANK = YMode(
     column="tg_seed_rank",
     index_base=1,
     n_bands=4,
-    axis_label="Nearest cell index of the true class",
+    axis_label="Top cell index of the true class",
     stem="error_vs_rank",
-    title="Coordinate error against nearest-cell index",
+    title="Coordinate error against top-cell index",
 )
 
 MODES: dict[str, YMode] = {CELLS.key: CELLS, RANK.key: RANK}
 
-#: Half-height of a band, in level units. Leaves a 0.4 gap between bands, which
-#: is what the median readout above each band needs to not touch the one above.
-BAND_HALF = 0.30
+#: Rows are contiguous grid cells of height 1, so the bottom row's lower edge
+#: *is* the x axis and the separators between rows read as a grid rather than as
+#: bands floating at a tick. Everything below is a fraction of one row.
+#:
+#: The band does not fill its row: the strip above it is the gutter the median
+#: readout sits in. Without it the number would land inside the row above and
+#: name the wrong band.
+BAND_BOTTOM = 0.10
+BAND_TOP = 0.66
+MEDIAN_TEXT_Y = 0.70
 
 #: Per-line alpha. Low enough that ~7 coincident targets read as solid and a
 #: lone one is still visible. Past that the band saturates; see the module
@@ -314,6 +321,26 @@ def level_labels(mode: YMode, max_observed: int) -> list[str]:
     return labels
 
 
+def band_span(mode: YMode, level: int) -> tuple[float, float]:
+    """`(bottom, top)` of a band in axes data units.
+
+    Row `k = level - index_base` occupies `[k, k+1]`; the band sits in its lower
+    portion so the gutter above it can hold the median readout.
+    """
+    k = level - mode.index_base
+    return k + BAND_BOTTOM, k + BAND_TOP
+
+
+def band_centre(mode: YMode, level: int) -> float:
+    """Where the band's tick label goes — the band's middle, not the row's.
+
+    The tick names the data, so it lines up with the data rather than with the
+    grid cell that also contains the readout gutter.
+    """
+    lo, hi = band_span(mode, level)
+    return (lo + hi) / 2
+
+
 def _fmt_km(value: float) -> str:
     if not np.isfinite(value):
         return "—"
@@ -353,7 +380,7 @@ def plot_bands(
     fig, axes = plt.subplots(
         n_rows,
         n_cols,
-        figsize=(4.9 * n_cols, 0.62 * mode.n_bands * n_rows + 2.0 * n_rows + 1.2),
+        figsize=(4.9 * n_cols, 0.78 * mode.n_bands * n_rows + 2.0 * n_rows + 1.2),
         sharex=True,
         sharey=True,
         squeeze=False,
@@ -371,7 +398,12 @@ def plot_bands(
         ax.set_facecolor(_SURFACE)
         shares: dict[int, float] = {}
 
+        # Row separators first, so the grid sits under the data.
+        for k in range(mode.n_bands + 1):
+            ax.axhline(k, color=_C_GRID, linewidth=0.8, zorder=1)
+
         for level in mode.levels:
+            lo, hi = band_span(mode, level)
             gl = g.loc[g["level"] == level]
             if len(gl):
                 # One line per target, no binning and no jitter: density comes
@@ -379,8 +411,8 @@ def plot_bands(
                 # cluster of targets rather than a bin that happens to be wide.
                 ax.vlines(
                     np.clip(gl["error_km"].to_numpy(dtype=float), min_x_km, max_x_km),
-                    level - BAND_HALF,
-                    level + BAND_HALF,
+                    lo,
+                    hi,
                     color=hue,
                     alpha=LINE_ALPHA,
                     linewidth=LINE_WIDTH,
@@ -391,17 +423,14 @@ def plot_bands(
             row = tb.loc[(method, level)]
             p50 = float(row["error_km_p50"])
             if np.isfinite(p50):
+                # Exactly the band's height, like every other line in it — the
+                # median is one of the targets, not an annotation layer.
                 ax.vlines(
-                    p50,
-                    level - BAND_HALF - 0.04,
-                    level + BAND_HALF + 0.04,
-                    color=_C_INK,
-                    linewidth=1.5,
-                    zorder=4,
+                    p50, lo, hi, color=_C_INK, linewidth=1.5, zorder=4
                 )
                 ax.annotate(
                     _fmt_km(p50),
-                    xy=(p50, level + BAND_HALF + 0.07),
+                    xy=(p50, level - mode.index_base + MEDIAN_TEXT_Y),
                     ha="center",
                     va="bottom",
                     fontsize=7,
@@ -431,8 +460,10 @@ def plot_bands(
         ax.set_xscale("log")
         ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
         ax.set_xlim(min_x_km, max_x_km)
-        ax.set_ylim(mode.index_base - 0.7, mode.top_level + 0.7)
-        ax.set_yticks(list(mode.levels))
+        # Exactly the stack of rows: no padding, so the first row rests on the
+        # x axis and the last closes the panel.
+        ax.set_ylim(0, mode.n_bands)
+        ax.set_yticks([band_centre(mode, lv) for lv in mode.levels])
         ax.set_yticklabels(labels, fontsize=8.5)
         ax.grid(True, axis="x", which="major", color=_C_GRID, linewidth=0.7, zorder=0)
         ax.set_axisbelow(True)
@@ -449,7 +480,7 @@ def plot_bands(
         # axis). A right-hand tick is aligned with its band and cannot overlap.
         share_ax = ax.twinx()
         share_ax.set_ylim(ax.get_ylim())
-        share_ax.set_yticks(list(mode.levels))
+        share_ax.set_yticks([band_centre(mode, lv) for lv in mode.levels])
         share_ax.set_yticklabels(
             [f"{shares.get(lv, 0.0) * 100:.1f}%" for lv in mode.levels],
             fontsize=7.5,

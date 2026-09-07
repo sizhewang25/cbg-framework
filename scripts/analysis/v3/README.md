@@ -1028,14 +1028,21 @@ readable — and each method turns out to have its own signature in the pair.
 **Two y modes, because the two quantities are not the same.** `plot-error-vs-cells`
 uses `seeds_crossed` (how many class boundaries lie between the true cell and
 the predicted one — the answer space's local density, the snapping story).
-`plot-error-vs-rank` uses the true class's **nearest-cell index** — 1 if it is
-the cell closest to the estimate, 2 if one other cell is closer, and so on.
+`plot-error-vs-rank` uses the true class's **top-cell index** — 1 if it is the
+cell closest to the estimate, 2 if one other cell is closer, and so on.
 That is `tg_seed_rank + 1`, and the 1-indexing is what makes the axis read
 straight off the reported metric: `index <= N` *is* top-N, so band 1 is top-1
 accuracy and bands 1-3 sum to top-3. SCHEMA.md warns the two quantities get
 confused and that they order the methods differently, so they live in one
 module with the distinction documented once and the CLI exposes them
 separately. Both figures draw four bands, the top one a bucket.
+
+**Rows are grid cells.** Bands stack contiguously from the x axis with
+separators between them, so the panel reads as a stack of tracks rather than
+marks floating at ticks. Each row keeps a thin gutter above its band for the
+median readout, which would otherwise land in the row above and name the wrong
+band; the median rule itself is exactly the band's height, like every other
+line in it.
 
 **Density is drawn, not binned and not jittered.** Each point is one line at
 alpha 0.15, so coincident values darken by overplotting; there is no bin width
