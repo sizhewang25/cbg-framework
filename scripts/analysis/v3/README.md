@@ -118,9 +118,9 @@ python -m scripts.analysis.v3.cli table-headline \
 python -m scripts.analysis.v3.cli plot-error-cdf \
   --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
 
-# 3g. Where the two metrics disagree: coordinate error vs class boundaries
-python -m scripts.analysis.v3.cli plot-error-vs-cells \
-  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
+# 3g. Where the two metrics disagree: coordinate error vs class error
+python -m scripts.analysis.v3.cli plot-error-vs-cells --all-runs
+python -m scripts.analysis.v3.cli plot-error-vs-rank  --all-runs
 
 # 4. Set overlap of correct classifications (repeat per top-N)
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
@@ -1019,41 +1019,55 @@ series.
 
 ## Where the two metrics disagree
 
-`plot-error-vs-cells` is the only figure that puts accuracy and error distance
-on the same point, which is what turns §2.4(a)'s claim that they can disagree
-into a count. One point per (method, solved target): x the coordinate error,
-y how many class boundaries lie between the true cell and the predicted one.
+Two band figures, one renderer. One band per class-error level, one thin line
+per target inside it, x = the coordinate error on a log axis. These are the
+only figures that put accuracy and error distance on the same point, which is
+what turns §2.4(a)'s claim that they are different metrics into something
+readable — and each method turns out to have its own signature in the pair.
 
-**It cannot be built from `confusion_pairs.csv`.** That file keeps only rows
-that were wrong at the reported top-N, so the whole `y == 0` column — 1,100 to
-1,414 rows per run — is absent from it. Crossings are recomputed from the same
-`answer_space.seed_crossing_matrix`, and on the rows the two do share they
-agree exactly (874 / 1,297 / 1,477 rows, delta 0).
+**Two y modes, because the two quantities are not the same.** `plot-error-vs-cells`
+uses `seeds_crossed` (how many class boundaries lie between the true cell and
+the predicted one — the answer space's local density, the snapping story).
+`plot-error-vs-rank` uses `tg_seed_rank` (how many classes sit closer to the
+estimate than the true one — the quantity the reported metric is built on,
+since `tg_seed_rank < N` *is* top-N). SCHEMA.md warns these get confused and
+that they order the methods differently, so they live in one module with the
+distinction documented once and the CLI exposes them separately.
 
-**The reference is the answer space's own margin**, the median half-distance
-from a seed to its nearest other seed (151 / 172 / 160 km on as01/02/03). An
-error inside it was small enough to have landed in the right cell, which is
-what makes the two off-diagonal regions meaningful rather than arbitrary:
+**Density is drawn, not binned and not jittered.** Each point is one line at
+alpha 0.15, so coincident values darken by overplotting; there is no bin width
+to choose and no random offset, and an x position on the figure is an x
+position in the data. The limit is that accumulation saturates near 7
+coincident lines, which Shortest-Ping and SoI hit because many targets share a
+VP coordinate and their answer *is* that coordinate — so their darkest stripes
+stop distinguishing 7 from 30. The band's share label carries the count.
 
-| region | reading | as02 |
-| --- | --- | --: |
-| `y == 0`, error > margin | right class, bad coordinate — the answer space absorbed the error, which is what a bounded metro-granular criterion is *for* | 288 |
-| `y >= 1`, error ≤ margin | wrong class despite a good coordinate — nearest-seed snapping, the §8.1 artifact | 111 |
+**The denominator is every target, so band 0 is the accuracy.** `seeds_crossed
+== 0` and `tg_seed_rank == 0` are the same event (the crossing matrix is >= 1
+off the diagonal) and both are top-1 correctness. `topn_accuracy.csv` divides
+by every target and counts fallbacks as failures, so these figures must too:
+on as02 Vanilla, 123 band-0 rows over 412 targets is 0.298, its top-1 accuracy
+exactly, while over its 337 solved rows it would read 0.365 and match nothing.
+The bands therefore sum to `1 - fallback_rate` and the shortfall is named in
+the panel header — Vanilla's four bands total 81.8% and the missing 18.2% is
+where its fallbacks went.
 
-The two axes do correlate: median error rises monotonically with crossings on
-every method (25 → 530 → 757 → 1,448 km for Shortest-Ping on as02). That is
-what makes the off-diagonal points worth naming rather than assuming, and it
-also gives each method a signature. Shortest-Ping and SoI score **zero** in the
-first region — when they get the cell right the coordinate is always inside the
-margin, because the answer *is* a VP coordinate and a VP-proximate target is
-genuinely close. Spotter is the mirror image: 126 in the first region and zero
-in the second, since it never has a good coordinate to lose to a boundary.
+Both identities are checked rather than assumed: band-0 share equals
+`accuracy_top1` and cumulative rank <= 2 equals `accuracy_top3`, to 0.000000 on
+all three operator runs.
 
-One panel per method rather than six colours in one frame: 2,400 points over
-four ordinal levels is an ink blot, and the panel is the method's identity, so
-the palette's all-pairs CVD margin never has to carry anything here. The error
-axis, the row filter and the distance column are shared with `plot-error-cdf`
-so the two figures can be read against each other without rescaling.
+**What the pair shows.** The two axes correlate — median error rises
+monotonically with class error on every method — so the readable result is the
+*shape* of each band stack. Shortest-Ping and SoI put 37% of targets in band 0
+as a few tight discrete stripes under 60 km, because the answer is a VP
+coordinate. Octant-Hull puts 65% there but smeared from 0.3 km to 600 km.
+Spotter puts 41% there at a 195 km median, the worst band-0 of the six. Same
+metric, three different mechanisms.
+
+One panel per method rather than six hues in one frame: the bands would overlap
+into each other, and the panel already carries identity, so colour never has to
+separate six series and the palette's all-pairs margin is not called on. The
+error axis, row filter and distance column are shared with `plot-error-cdf`.
 
 ## Two policies the code enforces
 

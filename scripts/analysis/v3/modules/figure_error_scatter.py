@@ -1,46 +1,68 @@
-"""Error distance against class distance: where the two metrics disagree.
+"""Error distance against class error: two band figures, one renderer.
 
-§2.4(a) claims accuracy and error distance can disagree, and that the
-disagreement is itself a finding. The accuracy table and the error CDF each
-report one axis; this figure is the only one that puts them on the same point,
-so the claim becomes countable rather than rhetorical.
+§2.4(a) claims accuracy and error distance are different metrics and that the
+disagreement is itself a finding. The accuracy table reports one axis and the
+error CDF the other; these are the only figures that put both on the same
+point, so the claim becomes readable rather than rhetorical — and each method
+turns out to have its own signature in the pair.
 
-One point per (method, solved target): x is the coordinate error, y is how many
-class boundaries lie between the true cell and the predicted one. `y == 0` is
-the correct cell, `y == 1` one boundary out, and so on. Two off-diagonal
-regions are the payload:
+One band per class-error level, one thin line per target inside it, x = the
+coordinate error on a log axis.
 
-* **`y == 0` with a large x** — right class, bad coordinate. The answer space
-  absorbed the error, which is exactly what a bounded metro-granular criterion
-  is *for*. On as02 this is 16.3% of all points.
-* **`y >= 1` with a small x** — wrong class despite a good coordinate. This is
-  the nearest-seed snapping artifact §8.1 asks about: the estimate was close
-  but fell on the wrong side of a boundary. 2.6% on as02, so it is real and
-  much rarer than the first.
+## Two y modes, because the two quantities are not the same
 
-The two axes do correlate — median error rises monotonically with crossings on
-every method (25 → 530 → 757 → 1,448 km for Shortest-Ping on as02) — which is
-what makes the off-diagonal points worth naming rather than assuming.
+* **`cells`** — `seeds_crossed`, how many class boundaries lie between the true
+  cell and the predicted one. "Two cells away" is a statement about the answer
+  space's local density, which is the nearest-seed snapping story §8.1 asks
+  about.
+* **`rank`** — `tg_seed_rank`, how many seeds sit closer to the estimate than
+  the true one. This is the quantity the reported metric is built on:
+  `tg_seed_rank < N` *is* top-N.
 
-## Every solved row, not just the wrong ones
+SCHEMA.md warns these get confused and that they order the methods
+differently — on as01, 42% of wrong rows are at rank 1 while 67% are one
+boundary away, and by rank Octant-Spline leads SoI while by crossings SoI
+leads. They therefore live in one module, so the distinction is documented
+once and the two figures share an x axis, a renderer and a denominator; the CLI
+exposes them as separate commands so each figure has its own name.
 
-`confusion_pairs.csv` cannot back this figure: it keeps only rows that were
-*wrong* at the reported top-N, so the entire `y == 0` column is absent from it.
-Crossings are therefore recomputed here for all solved rows, from the same
-`answer_space.seed_crossing_matrix` that module uses — one walk, so a point at
-`y == 1` here and a `seeds_crossed == 1` row there mean the same thing.
+## Density is drawn, not binned and not jittered
 
-Row and distance policy are shared with the error CDF (`io.solved_mask`,
-`error_to_target_km`) and so is the x range, so the two figures can be read
-against each other without rescaling.
+Each point is a vertical line spanning its band, in the method's hue at low
+alpha, so coincident values darken by overplotting. No bin width to choose and
+no random offset to mislead — an x position on the figure is an x position in
+the data.
 
-Command: `plot-error-vs-cells`. Writes to
+The one limit: alpha accumulation saturates at roughly 1/alpha coincident lines
+(about 7 at alpha 0.15). Shortest-Ping and SoI have exact repeated errors,
+because many targets share a VP coordinate and the answer *is* that
+coordinate, so their darkest stripes stop distinguishing 7 coincident points
+from 30. The band's row-share label carries the count, so this costs
+within-band shading detail and no reported number.
+
+## The denominator is every target, so band 0 is the accuracy
+
+Band 0 means the method named the true class: `seeds_crossed == 0` and
+`tg_seed_rank == 0` are the same event (the crossing matrix is >= 1 off the
+diagonal), and both are top-1 correctness. `topn_accuracy.csv` divides by
+*every* target and counts fallbacks as failures, so this figure must too —
+dividing by solved rows instead would make band 0 disagree with the accuracy
+the paper reports. On as02 Vanilla, 123 band-0 rows over 412 targets is 0.298,
+its top-1 accuracy exactly; over its 337 solved rows it would read 0.365 and
+match nothing.
+
+The bands therefore sum to `1 - fallback_rate` rather than to 1, and the
+shortfall is labelled: Vanilla's four bands total 81.8% and the missing 18.2%
+is where its fallbacks went.
+
+Commands: `plot-error-vs-cells`, `plot-error-vs-rank`. Both write to
 `outputs/analysis/v3/<run_id>/target-cls-accuracy/<grid>-<resolution>/`.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -84,179 +106,234 @@ from scripts.analysis.v3.modules.paths import (
 )
 
 #: The error axis is shared with `plot-error-cdf` on purpose — same column, same
-#: row filter, same bounds — so a reader can put the two figures side by side
-#: and read one x position across both. That module owns the error axis; this
-#: one borrows it rather than declaring a second set of bounds free to drift.
+#: row filter, same bounds — so a reader can put the figures side by side and
+#: read one x position across all of them. That module owns the error axis;
+#: these borrow it rather than declaring bounds free to drift.
 from scripts.analysis.v3.modules.figure_error_cdf import (  # noqa: E402
     DEFAULT_X_MAX_KM,
     ERROR_COLUMN,
     X_MIN_KM,
 )
 
-FIGURE_PNG = "error_vs_cells.png"
-POINTS_CSV = "error_vs_cells_points.csv"
-SUMMARY_CSV = "error_vs_cells_summary.csv"
-MANIFEST_JSON = "error_vs_cells_manifest.json"
 
-#: Crossing levels drawn. 4 is the most observed at `h3-4` on any operator run
-#: and levels 3+ hold 2-5% of points, so the top level is a `3+` bucket rather
-#: than its own sparse row.
-MAX_LEVEL = 3
+@dataclass(frozen=True)
+class YMode:
+    """One class-error axis: where its values come from and how they read."""
 
-#: Vertical spread within a level, in level units. y is ordinal with four values
-#: and there are ~400 points per method, so without jitter each level is one
-#: opaque line and the density along x is unreadable.
-JITTER = 0.3
+    key: str
+    #: Column on the scored frame, or `None` when the values are walked from the
+    #: answer space rather than read off a row.
+    column: str | None
+    #: Values at or above this fold into a top bucket. Set from the observed
+    #: range: crossings reach 4 and rank reaches 7 at `h3-4`, and both tail off
+    #: to a couple of percent, so a sparse row per value would be mostly white.
+    max_level: int
+    axis_label: str
+    level0_label: str
+    stem: str
+    title: str
 
-#: Fixed, so re-running the command does not reshuffle the cloud and make two
-#: renders of the same data look like different data.
-JITTER_SEED = 0
+CELLS = YMode(
+    key="cells",
+    column=None,
+    max_level=3,
+    axis_label="Cells away from the true class",
+    level0_label="0 · true class",
+    stem="error_vs_cells",
+    title="Coordinate error against class distance",
+)
 
-#: The x reference: an error smaller than this was smaller than the typical
-#: half-distance to the nearest other class, so it "should" have landed in the
-#: right cell. Read per run from the answer space rather than hardcoded — it is
-#: 150-172 km across as01/02/03 at `h3-4`.
-MARGIN_QUANTILE = 0.5
+RANK = YMode(
+    key="rank",
+    column="tg_seed_rank",
+    max_level=5,
+    axis_label="Classes closer to the estimate than the true one",
+    level0_label="0 · top-1 correct",
+    stem="error_vs_rank",
+    title="Coordinate error against class rank",
+)
+
+MODES: dict[str, YMode] = {CELLS.key: CELLS, RANK.key: RANK}
+
+#: Half-height of a band, in level units. Leaves a 0.4 gap between bands, which
+#: is what the median readout above each band needs to not touch the one above.
+BAND_HALF = 0.30
+
+#: Per-line alpha. Low enough that ~7 coincident targets read as solid and a
+#: lone one is still visible. Past that the band saturates; see the module
+#: docstring.
+LINE_ALPHA = 0.15
+LINE_WIDTH = 0.9
 
 
-def crossings_per_target(
+def load_points(
     run: RunPaths,
+    mode: YMode,
     *,
     analysis_root: Path | None,
     grid: str,
     resolution: int,
     methods: list[str] | None = None,
-) -> tuple[pd.DataFrame, float, int]:
-    """One row per (method, solved target): error distance and boundaries crossed.
+) -> tuple[pd.DataFrame, dict[str, dict]]:
+    """One row per (method, placed target), plus each method's row counts.
 
-    Returns `(points, margin_km, max_crossings)` — the reference scale and the
-    unclipped maximum travel with the points, since both are figure furniture
-    that has to come from the same answer space the crossings did.
+    `counts[method]["n_targets"]` is every scored row including fallbacks, and
+    it is the denominator every share in this figure uses — see the module
+    docstring for why solved rows would be the wrong one.
     """
-    space = load_answer_space(
-        run.answer_space_dir(root=analysis_root, grid=grid, resolution=resolution)
-    )
-    crossings = seed_crossing_matrix(space.seeds)
-    pos = {int(s): i for i, s in enumerate(space.seeds["seed_id"].to_numpy())}
-    margin_km = float(space.seeds["margin_km"].quantile(MARGIN_QUANTILE))
-
     cls_dir = run.cls_accuracy_dir(
         root=analysis_root, grid=grid, resolution=resolution
     )
     chosen = list(methods) if methods else list(PUBLISHED_METHODS)
 
+    crossings = pos = None
+    if mode.column is None:
+        space = load_answer_space(
+            run.answer_space_dir(root=analysis_root, grid=grid, resolution=resolution)
+        )
+        crossings = seed_crossing_matrix(space.seeds)
+        pos = {int(s): i for i, s in enumerate(space.seeds["seed_id"].to_numpy())}
+
     frames: list[pd.DataFrame] = []
+    counts: dict[str, dict] = {}
     for method in chosen:
         df = load_scored(cls_dir, method)
-        df = df.loc[io.solved_mask(df)]
-        if df.empty:
+        n_targets = int(len(df))
+        solved = df.loc[io.solved_mask(df)]
+        if mode.column is None:
+            placed = solved.loc[solved["pred_seed_id"] >= 0]
+            values = np.array(
+                [
+                    crossings[pos[int(t)], pos[int(p)]]
+                    for t, p in zip(placed["tg_seed_id"], placed["pred_seed_id"])
+                ],
+                dtype=int,
+            )
+        else:
+            placed = solved.loc[solved[mode.column] >= 0]
+            values = placed[mode.column].to_numpy(dtype=int)
+        counts[method] = {
+            "n_targets": n_targets,
+            "n_solved": int(len(solved)),
+            "n_placed": int(len(placed)),
+        }
+        if placed.empty:
             continue
-        # A row with no predicted seed cannot be placed on the y axis at all;
-        # `load_scored` marks those with pred_seed_id < 0.
-        df = df.loc[df["pred_seed_id"] >= 0]
-        walked = np.array(
-            [
-                crossings[pos[int(t)], pos[int(p)]]
-                for t, p in zip(df["tg_seed_id"], df["pred_seed_id"])
-            ],
-            dtype=int,
-        )
         frames.append(
             pd.DataFrame(
                 {
                     "method": method,
                     "method_label": short_label(method),
-                    "target_id": df["target_id"].to_numpy(),
-                    "error_km": df[ERROR_COLUMN].to_numpy(dtype=float),
-                    "seeds_crossed": walked,
-                    "level": np.clip(walked, 0, MAX_LEVEL),
+                    "target_id": placed["target_id"].to_numpy(),
+                    "error_km": placed[ERROR_COLUMN].to_numpy(dtype=float),
+                    "class_error": values,
+                    "level": np.clip(values, 0, mode.max_level),
                 }
             )
         )
     if not frames:
         raise ValueError(
-            f"no solved rows for {chosen} on {run.run_id} at "
+            f"no placed rows for {chosen} on {run.run_id} at "
             f"{grid_slug(grid, resolution)}; run `classify` first"
         )
-    points = pd.concat(frames, ignore_index=True)
-    return points, margin_km, int(points["seeds_crossed"].max())
+    return pd.concat(frames, ignore_index=True), counts
 
 
-def summarise(points: pd.DataFrame, *, margin_km: float) -> pd.DataFrame:
-    """Per (method, level): count, share and the level's error percentiles.
+def band_table(
+    points: pd.DataFrame, counts: dict[str, dict], mode: YMode
+) -> pd.DataFrame:
+    """Per (method, band): count, share of **all** targets, error percentiles.
 
-    Also the two disagreement counts per method, so the figure's annotation and
-    any number quoted in the text come from one place.
+    `share` is over `n_targets`, so `share` at level 0 is the method's top-1
+    accuracy and the bands sum to `1 - fallback_rate`. `cumulative_share` makes
+    the rank mode's top-N reading direct: through level 2 it is `accuracy_top3`.
     """
     rows: list[dict] = []
     for method, g in points.groupby("method", sort=False):
-        n = len(g)
-        far_but_right = int(((g["level"] == 0) & (g["error_km"] > margin_km)).sum())
-        near_but_wrong = int(((g["level"] >= 1) & (g["error_km"] <= margin_km)).sum())
-        for level, gl in g.groupby("level", sort=True):
+        n_targets = counts.get(method, {}).get("n_targets", len(g)) or 1
+        running = 0
+        for level in range(mode.max_level + 1):
+            gl = g.loc[g["level"] == level]
+            running += len(gl)
             rows.append(
                 {
                     "method": method,
                     "method_label": short_label(method),
-                    "level": int(level),
+                    "y_mode": mode.key,
+                    "level": level,
                     "n": len(gl),
-                    "share": round(len(gl) / n, 4) if n else np.nan,
-                    "error_km_p25": round(float(gl["error_km"].quantile(0.25)), 3),
-                    "error_km_p50": round(float(gl["error_km"].median()), 3),
-                    "error_km_p75": round(float(gl["error_km"].quantile(0.75)), 3),
-                    "n_right_cell_beyond_margin": far_but_right,
-                    "n_wrong_cell_within_margin": near_but_wrong,
-                    "margin_km": round(margin_km, 3),
+                    "n_targets": n_targets,
+                    "share": round(len(gl) / n_targets, 4),
+                    "cumulative_share": round(running / n_targets, 4),
+                    "error_km_p25": round(float(gl["error_km"].quantile(0.25)), 3)
+                    if len(gl)
+                    else np.nan,
+                    "error_km_p50": round(float(gl["error_km"].median()), 3)
+                    if len(gl)
+                    else np.nan,
+                    "error_km_p75": round(float(gl["error_km"].quantile(0.75)), 3)
+                    if len(gl)
+                    else np.nan,
                 }
             )
     return pd.DataFrame(rows)
 
 
-def _level_labels(max_crossings: int) -> list[str]:
-    labels = ["0 · correct cell"] + [str(i) for i in range(1, MAX_LEVEL)]
-    labels.append(f"{MAX_LEVEL}+" if max_crossings > MAX_LEVEL else str(MAX_LEVEL))
+def level_labels(mode: YMode, max_observed: int) -> list[str]:
+    """Band tick labels, with a `+` on the top one only when it is a bucket."""
+    labels = [mode.level0_label] + [str(i) for i in range(1, mode.max_level)]
+    labels.append(
+        f"{mode.max_level}+" if max_observed > mode.max_level else str(mode.max_level)
+    )
     return labels
 
 
-def plot_error_vs_cells(
+def _fmt_km(value: float) -> str:
+    if not np.isfinite(value):
+        return "—"
+    if value >= 100:
+        return f"{value:,.0f}"
+    return f"{value:.1f}" if value < 10 else f"{value:.0f}"
+
+
+def plot_bands(
     points: pd.DataFrame,
-    summary: pd.DataFrame,
+    table: pd.DataFrame,
     out_path: Path,
     *,
+    mode: YMode,
     title: str,
     subtitle: str,
-    margin_km: float,
-    max_crossings: int,
+    max_observed: int,
     max_x_km: float = DEFAULT_X_MAX_KM,
     min_x_km: float = X_MIN_KM,
 ) -> Path:
-    """Small multiples, one panel per method, shared log x and shared ordinal y.
+    """Small multiples, one panel per method, shared log x and shared bands.
 
-    One panel per method rather than one panel with six colours: 2,400 points
-    over four y levels in one frame is an ink blot, and the panel *is* the
-    method's identity, so colour is redundant here and the palette's all-pairs
-    CVD margin never has to carry anything.
+    One panel per method rather than six hues in one frame: the bands would
+    overlap into one another and the panel already carries the method's
+    identity, so colour never has to separate six series here and the
+    palette's all-pairs margin is not called on.
     """
     from matplotlib.ticker import FuncFormatter
 
     methods = [m for m in PUBLISHED_METHODS if m in set(points["method"])]
     methods += [m for m in points["method"].unique() if m not in methods]
     colors = method_colors(methods)
-    labels = _level_labels(max_crossings)
+    labels = level_labels(mode, max_observed)
 
     n_cols = 3
     n_rows = int(np.ceil(len(methods) / n_cols))
     fig, axes = plt.subplots(
         n_rows,
         n_cols,
-        figsize=(4.7 * n_cols, 3.1 * n_rows + 1.1),
+        figsize=(4.9 * n_cols, 0.62 * (mode.max_level + 1) * n_rows + 2.0 * n_rows + 1.2),
         sharex=True,
         sharey=True,
         squeeze=False,
     )
-    rng = np.random.default_rng(JITTER_SEED)
     by_method = {m: g for m, g in points.groupby("method", sort=False)}
-    sm = summary.set_index(["method", "level"])
+    tb = table.set_index(["method", "level"])
 
     for idx, ax in enumerate(axes.flat):
         if idx >= len(methods):
@@ -264,68 +341,74 @@ def plot_error_vs_cells(
             continue
         method = methods[idx]
         g = by_method[method]
+        hue = colors[method]
         ax.set_facecolor(_SURFACE)
+        shares: dict[int, float] = {}
 
-        ax.axvline(margin_km, color=_C_AXIS, linestyle="--", linewidth=1.1, zorder=1)
-        for level in range(MAX_LEVEL + 1):
-            ax.axhline(level, color=_C_GRID, linewidth=0.7, zorder=0)
-
-        y = g["level"].to_numpy(dtype=float) + rng.uniform(
-            -JITTER, JITTER, size=len(g)
-        )
-        ax.scatter(
-            np.maximum(g["error_km"].to_numpy(dtype=float), min_x_km),
-            y,
-            s=11,
-            color=colors[method],
-            alpha=0.42,
-            linewidths=0,
-            zorder=2,
-        )
-        # Per-level median: the monotone trend the off-diagonal points depart
-        # from, drawn as a rule rather than a marker so it reads against the
-        # cloud it summarises.
-        for level in range(MAX_LEVEL + 1):
-            if (method, level) not in sm.index:
+        for level in range(mode.max_level + 1):
+            gl = g.loc[g["level"] == level]
+            if len(gl):
+                # One line per target, no binning and no jitter: density comes
+                # from lines landing on the same x, so a dark stripe is a real
+                # cluster of targets rather than a bin that happens to be wide.
+                ax.vlines(
+                    np.clip(gl["error_km"].to_numpy(dtype=float), min_x_km, max_x_km),
+                    level - BAND_HALF,
+                    level + BAND_HALF,
+                    color=hue,
+                    alpha=LINE_ALPHA,
+                    linewidth=LINE_WIDTH,
+                    zorder=2,
+                )
+            if (method, level) not in tb.index:
                 continue
-            p50 = float(sm.loc[(method, level), "error_km_p50"])
-            ax.plot(
-                [p50, p50],
-                [level - JITTER - 0.08, level + JITTER + 0.08],
-                color=_C_INK,
-                linewidth=1.6,
-                alpha=0.75,
-                zorder=3,
-                solid_capstyle="butt",
-            )
+            row = tb.loc[(method, level)]
+            p50 = float(row["error_km_p50"])
+            if np.isfinite(p50):
+                ax.vlines(
+                    p50,
+                    level - BAND_HALF - 0.04,
+                    level + BAND_HALF + 0.04,
+                    color=_C_INK,
+                    linewidth=1.5,
+                    zorder=4,
+                )
+                ax.annotate(
+                    _fmt_km(p50),
+                    xy=(p50, level + BAND_HALF + 0.07),
+                    ha="center",
+                    va="bottom",
+                    fontsize=7,
+                    color=_C_INK,
+                    zorder=5,
+                )
+            shares[level] = float(row["share"])
 
-        row = summary[summary["method"] == method].iloc[0]
+        n_targets = int(tb.loc[(method, 0), "n_targets"])
+        drawn = int(table.loc[table["method"] == method, "n"].sum())
+        missing = n_targets - drawn
+        header = f"n = {n_targets}"
+        if missing:
+            header += f" · {missing / n_targets * 100:.1f}% fell back"
         ax.annotate(
-            f"right cell, > margin: {int(row['n_right_cell_beyond_margin'])}\n"
-            f"wrong cell, ≤ margin: {int(row['n_wrong_cell_within_margin'])}",
-            # Upper-left, not lower-right: the y == 0 row is where the points
-            # are, and the panel's top-left is empty in every method because a
-            # high crossing count only ever comes with a high error.
-            xy=(0.015, 0.96),
+            header,
+            xy=(0.015, 0.97),
             xycoords="axes fraction",
             ha="left",
             va="top",
             fontsize=7.5,
-            color=_C_INK_2,
+            color=_C_MUTED,
             family="monospace",
-            bbox=dict(
-                boxstyle="round", facecolor=_SURFACE, edgecolor=_C_GRID, alpha=0.92
-            ),
         )
-        ax.set_title(
-            short_label(method), fontsize=10.5, fontweight="bold", color=colors[method]
-        )
+
+        ax.set_title(short_label(method), fontsize=10.5, fontweight="bold", color=hue)
         ax.set_xscale("log")
         ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
         ax.set_xlim(min_x_km, max_x_km)
-        ax.set_ylim(-0.55, MAX_LEVEL + 0.55)
-        ax.set_yticks(range(MAX_LEVEL + 1))
+        ax.set_ylim(-0.7, mode.max_level + 0.7)
+        ax.set_yticks(range(mode.max_level + 1))
         ax.set_yticklabels(labels, fontsize=8.5)
+        ax.grid(True, axis="x", which="major", color=_C_GRID, linewidth=0.7, zorder=0)
         ax.set_axisbelow(True)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
@@ -333,33 +416,54 @@ def plot_error_vs_cells(
             ax.spines[side].set_color(_C_AXIS)
         ax.tick_params(colors=_C_MUTED, labelsize=8.5)
 
+        # Shares hang off a twin y axis rather than off annotations at the panel
+        # edge: placed text lands in the gap *between* panels, where it reads as
+        # belonging to either, and inside the panel it collides with the long
+        # tail on as01/as03 (Shortest-Ping's p95 is 3,871 km, ~93% along the log
+        # axis). A right-hand tick is aligned with its band and cannot overlap.
+        share_ax = ax.twinx()
+        share_ax.set_ylim(ax.get_ylim())
+        share_ax.set_yticks(range(mode.max_level + 1))
+        share_ax.set_yticklabels(
+            [f"{shares.get(lv, 0.0) * 100:.1f}%" for lv in range(mode.max_level + 1)],
+            fontsize=7.5,
+        )
+        share_ax.tick_params(axis="y", length=0, colors=_C_INK_2)
+        for tick in share_ax.get_yticklabels():
+            tick.set_family("monospace")
+        for side in ("top", "right", "left", "bottom"):
+            share_ax.spines[side].set_visible(False)
+
     fig.suptitle(title, fontsize=13, fontweight="bold", color=_C_INK, y=0.995)
-    fig.text(0.5, 0.958, subtitle, ha="center", va="top", fontsize=9.5, color=_C_INK_2)
-    # `fig.supxlabel` self-positions at the figure bottom and lands on top of
-    # the footnote below; placed text keeps the two apart at any panel count.
+    fig.text(0.5, 0.955, subtitle, ha="center", va="top", fontsize=9.5, color=_C_INK_2)
     fig.text(
         0.5,
-        0.082,
+        0.075,
         "Error distance to the raw target (km)",
         ha="center",
         va="bottom",
         fontsize=10.5,
         color=_C_INK_2,
     )
-    fig.supylabel("Class boundaries crossed", fontsize=10.5, color=_C_INK_2)
+    fig.supylabel(mode.axis_label, fontsize=10.5, color=_C_INK_2)
     fig.text(
         0.5,
         0.008,
-        f"Dashed rule: {margin_km:.0f} km, the median half-distance to the nearest "
-        "other class — an error inside it was small enough to have landed in the "
-        "right cell.\nBlack ticks are each level's median error. Solved rows only; "
-        "fallbacks excluded (§7.2). Vertical jitter is cosmetic.",
+        "One line per target, no binning: a dark stripe is targets sharing an "
+        "error. Black rule and figure above each band are its median error.\n"
+        "Percentages on the right are shares of all targets, so the top band is "
+        "the method's top-1 accuracy and the bands sum to 100% minus fallbacks.",
         ha="center",
         va="bottom",
         fontsize=8,
         color=_C_MUTED,
     )
-    fig.tight_layout(rect=(0.02, 0.125, 1, 0.95))
+    fig.tight_layout(rect=(0.02, 0.115, 0.99, 0.945))
+    # `tight_layout` spaces the columns for the widest tick label, which leaves
+    # the share column sitting midway between two panels where it reads as
+    # belonging to either. Tightened afterwards so each panel's shares hug its
+    # own right spine.
+    fig.subplots_adjust(wspace=0.20)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=_SURFACE)
@@ -370,6 +474,7 @@ def plot_error_vs_cells(
 def build(
     run: RunPaths,
     *,
+    mode: YMode,
     analysis_root: Path | None = None,
     grid: str = DEFAULT_GRID,
     resolution: int,
@@ -377,78 +482,132 @@ def build(
     max_x_km: float = DEFAULT_X_MAX_KM,
     min_x_km: float = X_MIN_KM,
 ) -> tuple[Path, pd.DataFrame, pd.DataFrame, dict]:
-    """Render and return `(png, points, summary, manifest)`."""
-    points, margin_km, max_crossings = crossings_per_target(
+    """Render and return `(png, points, table, manifest)`."""
+    points, counts = load_points(
         run,
+        mode,
         analysis_root=analysis_root,
         grid=grid,
         resolution=resolution,
         methods=methods,
     )
-    summary = summarise(points, margin_km=margin_km)
+    table = band_table(points, counts, mode)
+    max_observed = int(points["class_error"].max())
     out_dir = run.cls_accuracy_dir(
         root=analysis_root, grid=grid, resolution=resolution
     )
-    png = plot_error_vs_cells(
+    png = plot_bands(
         points,
-        summary,
-        out_dir / FIGURE_PNG,
-        title="Coordinate error against class error",
-        subtitle=f"{run.run_id} · {grid_slug(grid, resolution)} · solved rows only",
-        margin_km=margin_km,
-        max_crossings=max_crossings,
+        table,
+        out_dir / f"{mode.stem}.png",
+        mode=mode,
+        title=mode.title,
+        subtitle=f"{run.run_id} · {grid_slug(grid, resolution)}",
+        max_observed=max_observed,
         max_x_km=max_x_km,
         min_x_km=min_x_km,
     )
-    n = len(points)
     manifest = {
         "run_id": run.run_id,
         "grid": {"scheme": grid, "resolution": resolution},
+        "y_mode": mode.key,
+        "y_axis": mode.axis_label,
         "methods": [m for m in PUBLISHED_METHODS if m in set(points["method"])],
-        "n_points": n,
         "error_column": ERROR_COLUMN,
-        "margin_km": round(margin_km, 3),
-        "margin_basis": (
-            f"quantile {MARGIN_QUANTILE} of seeds.csv's margin_km — half the "
-            "distance from each seed to its nearest other seed, i.e. the scale at "
-            "which a coordinate error becomes a wrong label"
+        "max_level_drawn": mode.max_level,
+        "max_level_observed": max_observed,
+        "top_level_is_a_bucket": max_observed > mode.max_level,
+        "n_lines_drawn": int(len(points)),
+        "counts": counts,
+        "share_denominator": (
+            "n_targets — every scored row, fallbacks included. Level 0 is "
+            "therefore the method's top-1 accuracy exactly, matching "
+            "topn_accuracy.csv, and the bands sum to 1 - fallback_rate rather "
+            "than to 1. Dividing by solved rows would make level 0 disagree "
+            "with the accuracy the paper reports (as02 Vanilla: 0.365 vs 0.298)."
         ),
-        "max_crossings_observed": max_crossings,
-        "top_level_is_a_bucket": max_crossings > MAX_LEVEL,
-        "disagreement": {
-            "right_cell_beyond_margin": int(
-                ((points["level"] == 0) & (points["error_km"] > margin_km)).sum()
-            ),
-            "wrong_cell_within_margin": int(
-                ((points["level"] >= 1) & (points["error_km"] <= margin_km)).sum()
-            ),
-            "note": (
-                "the two off-diagonal regions §2.4(a) predicts: the answer space "
-                "absorbing a coordinate error, and nearest-seed snapping losing a "
-                "good coordinate to the wrong side of a boundary"
-            ),
-        },
-        "crossings_basis": (
-            "answer_space.seed_crossing_matrix, the same walk confusion_pairs.csv "
-            "uses, so a point at y == 1 here and seeds_crossed == 1 there mean the "
-            "same thing. Recomputed rather than read from that file because it "
-            "keeps only rows wrong at the reported top-N, which is the whole y == 0 "
-            "column missing."
+        "level_0_meaning": (
+            "the method named the true class. seeds_crossed == 0 and "
+            "tg_seed_rank == 0 are the same event, since the crossing matrix is "
+            ">= 1 off the diagonal, and both are top-1 correctness."
+        ),
+        "density_encoding": (
+            f"one {LINE_WIDTH} pt line per target at alpha {LINE_ALPHA}, no "
+            "binning and no jitter, so an x position on the figure is an x "
+            "position in the data. Accumulation saturates near "
+            f"{int(1 / LINE_ALPHA)} coincident lines; Shortest-Ping and SoI hit "
+            "that because many targets share a VP coordinate and the answer is "
+            "that coordinate. The band's share label carries the count."
         ),
         "row_policy": (
-            "solved rows only via io.solved_mask (FALLBACK excluded, §7.2; "
-            "Shortest-Ping's BASELINE rows counted as solved), plus rows with a "
-            "predicted seed — a row without one cannot be placed on the y axis"
+            "solved rows with a placeable class error are drawn (FALLBACK "
+            "excluded per §7.2; Shortest-Ping's all-BASELINE rows counted as "
+            "solved), but every share divides by n_targets"
         ),
-        "jitter": {"amount": JITTER, "seed": JITTER_SEED, "note": "cosmetic"},
     }
-    return png, points, summary, manifest
+    return png, points, table, manifest
 
 
 # ---- CLI --------------------------------------------------------------------
 
 
+def _run_mode(
+    mode: YMode,
+    *,
+    run_id: list[str] | None,
+    all_runs: bool,
+    grid: str,
+    resolution: list[int],
+    sweep: bool,
+    method: list[str] | None,
+    max_x_km: float,
+    min_x_km: float,
+    outputs_root: Path,
+    analysis_root: Path,
+) -> None:
+    """Shared body of both commands — they differ only in their `YMode`."""
+    if all_runs and run_id:
+        raise typer.BadParameter("pass --run-id or --all-runs, not both")
+    runs = (
+        discover_runs(outputs_root)
+        if all_runs
+        else [resolve_run(rid, outputs_root) for rid in (run_id or [])]
+    )
+    if not runs:
+        raise typer.BadParameter("pass at least one --run-id, or --all-runs")
+
+    g, resolutions = resolve_cli_grid(grid, resolution, sweep=sweep)
+    for run in runs:
+        for res in resolutions:
+            png, points, table, manifest = build(
+                run,
+                mode=mode,
+                analysis_root=analysis_root,
+                grid=g.name,
+                resolution=res,
+                methods=list(method) if method else None,
+                max_x_km=max_x_km,
+                min_x_km=min_x_km,
+            )
+            points.to_csv(png.parent / f"{mode.stem}_points.csv", index=False)
+            table.to_csv(png.parent / f"{mode.stem}_bands.csv", index=False)
+            (png.parent / f"{mode.stem}_manifest.json").write_text(
+                json.dumps(manifest, indent=2) + "\n"
+            )
+            top = table.loc[table["level"] == 0].set_index("method_label")["share"]
+            best = top.idxmax()
+            typer.echo(
+                f"{run.run_id} {grid_slug(g.name, res)} {mode.key} · "
+                f"{manifest['n_lines_drawn']} lines · "
+                f"level-0 share best {best} {top[best]:.3f} -> {png}"
+            )
+
+
 def register(app: typer.Typer) -> None:
+    #: Two commands rather than one with a `--y` switch: each figure has its own
+    #: name in `--help` and its own config sub-block, and the two answer
+    #: different questions (SCHEMA.md §"Fields that are not accurate for the
+    #: obvious reading"). They share `_run_mode`, so the axes cannot diverge.
     @app.command("plot-error-vs-cells")
     def plot_error_vs_cells_cmd(
         run_id: list[str] = typer.Option(
@@ -463,10 +622,7 @@ def register(app: typer.Typer) -> None:
         ),
         sweep: bool = typer.Option(False, "--sweep", help=SWEEP_HELP),
         method: list[str] = typer.Option(
-            None,
-            "--method",
-            help="Restrict to these method ids (repeatable). Default: the six "
-            "published variants.",
+            None, "--method", help="Restrict to these method ids (repeatable)."
         ),
         max_x_km: float = typer.Option(
             DEFAULT_X_MAX_KM, "--max-x-km", help="Upper bound of the log x axis (km)."
@@ -481,42 +637,72 @@ def register(app: typer.Typer) -> None:
             DEFAULT_ANALYSIS_ROOT, help="Root for v3 analysis outputs."
         ),
     ) -> None:
-        """Coordinate error vs class boundaries crossed, one panel per method.
+        """Coordinate error against cells away from the true class.
 
-        Writes error_vs_cells.png + points/summary CSVs + a manifest into
+        Writes error_vs_cells.{png,_points.csv,_bands.csv,_manifest.json} into
         target-cls-accuracy/<grid>-<resolution>/. Needs `classify`.
         """
-        if all_runs and run_id:
-            raise typer.BadParameter("pass --run-id or --all-runs, not both")
-        runs = (
-            discover_runs(outputs_root)
-            if all_runs
-            else [resolve_run(rid, outputs_root) for rid in (run_id or [])]
+        _run_mode(
+            CELLS,
+            run_id=run_id,
+            all_runs=all_runs,
+            grid=grid,
+            resolution=resolution,
+            sweep=sweep,
+            method=method,
+            max_x_km=max_x_km,
+            min_x_km=min_x_km,
+            outputs_root=outputs_root,
+            analysis_root=analysis_root,
         )
-        if not runs:
-            raise typer.BadParameter("pass at least one --run-id, or --all-runs")
 
-        g, resolutions = resolve_cli_grid(grid, resolution, sweep=sweep)
-        for run in runs:
-            for res in resolutions:
-                png, points, summary, manifest = build(
-                    run,
-                    analysis_root=analysis_root,
-                    grid=g.name,
-                    resolution=res,
-                    methods=list(method) if method else None,
-                    max_x_km=max_x_km,
-                    min_x_km=min_x_km,
-                )
-                points.to_csv(png.parent / POINTS_CSV, index=False)
-                summary.to_csv(png.parent / SUMMARY_CSV, index=False)
-                (png.parent / MANIFEST_JSON).write_text(
-                    json.dumps(manifest, indent=2) + "\n"
-                )
-                d = manifest["disagreement"]
-                typer.echo(
-                    f"{run.run_id} {grid_slug(g.name, res)} · "
-                    f"{manifest['n_points']} points · margin {manifest['margin_km']:.0f} km · "
-                    f"right-cell-but-far {d['right_cell_beyond_margin']}, "
-                    f"wrong-cell-but-near {d['wrong_cell_within_margin']} -> {png}"
-                )
+    @app.command("plot-error-vs-rank")
+    def plot_error_vs_rank_cmd(
+        run_id: list[str] = typer.Option(
+            None, "--run-id", help="Runs to render (repeatable), one figure each."
+        ),
+        all_runs: bool = typer.Option(
+            False, "--all-runs", help="Render every run found under --outputs-root."
+        ),
+        grid: str = typer.Option(DEFAULT_GRID, "--grid", help=GRID_HELP),
+        resolution: list[int] = typer.Option(
+            [], "--resolution", "-r", help=RESOLUTION_HELP
+        ),
+        sweep: bool = typer.Option(False, "--sweep", help=SWEEP_HELP),
+        method: list[str] = typer.Option(
+            None, "--method", help="Restrict to these method ids (repeatable)."
+        ),
+        max_x_km: float = typer.Option(
+            DEFAULT_X_MAX_KM, "--max-x-km", help="Upper bound of the log x axis (km)."
+        ),
+        min_x_km: float = typer.Option(
+            X_MIN_KM, "--min-x-km", help="Lower bound of the log x axis (km)."
+        ),
+        outputs_root: Path = typer.Option(
+            DEFAULT_OUTPUTS_ROOT, help="Root holding <run_id>/ benchmark outputs."
+        ),
+        analysis_root: Path = typer.Option(
+            DEFAULT_ANALYSIS_ROOT, help="Root for v3 analysis outputs."
+        ),
+    ) -> None:
+        """Coordinate error against how many classes outrank the true one.
+
+        `tg_seed_rank < N` is top-N, so each band's cumulative share is that
+        top-N accuracy: level 0 is top-1, through level 2 is top-3.
+
+        Writes error_vs_rank.{png,_points.csv,_bands.csv,_manifest.json} into
+        target-cls-accuracy/<grid>-<resolution>/. Needs `classify`.
+        """
+        _run_mode(
+            RANK,
+            run_id=run_id,
+            all_runs=all_runs,
+            grid=grid,
+            resolution=resolution,
+            sweep=sweep,
+            method=method,
+            max_x_km=max_x_km,
+            min_x_km=min_x_km,
+            outputs_root=outputs_root,
+            analysis_root=analysis_root,
+        )

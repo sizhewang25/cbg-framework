@@ -96,4 +96,19 @@
   `<=` for the near side, so a point exactly on the margin lands in exactly one
   of them. Both `>=`/`<=` would double-count it and the two counts would no
   longer add up against the total.
+- **"Show the % per bin" can silently change the denominator.** Adding the
+  share label only works if band 0 equals the reported top-1 accuracy, and that
+  forces the denominator to be every target rather than the rows drawn. The two
+  differ only on methods that fall back — one of six here — so a spot check on
+  any other method would have passed and the figure would have disagreed with
+  the paper's own table on Vanilla alone.
+- **Alpha accumulation is a density encoding with a ceiling.** It saturates
+  near 1/alpha coincident marks, and the data most likely to hit it is the data
+  with exactly repeated values — here Shortest-Ping and SoI, whose answer *is*
+  a VP coordinate. Stating the ceiling and putting the count in a label costs a
+  sentence; discovering it from a reader's question would cost the figure.
+- **A right-edge annotation belongs to whichever panel it is nearest.** Placed
+  at the axes edge in a multi-panel grid it lands mid-gutter and reads as
+  belonging to either neighbour. A twin axis fixed the alignment but not the
+  ambiguity; tightening `wspace` after `tight_layout` was the actual fix.
 

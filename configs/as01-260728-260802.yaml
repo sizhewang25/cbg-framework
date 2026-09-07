@@ -37,8 +37,11 @@ analysis:
   # Error-distance CDF, one curve per method, log x, fallbacks excluded.
   plot-error-cdf: {}
 
-  # Coordinate error against class error, one panel per method.
+  # Coordinate error against class error, one panel per method. Two y modes:
+  # cells away from the true class, and classes outranking it (top-N's own
+  # quantity). See README "Where the two metrics disagree".
   plot-error-vs-cells: {}
+  plot-error-vs-rank: {}
 
   plot-venn:
     top_n: 1

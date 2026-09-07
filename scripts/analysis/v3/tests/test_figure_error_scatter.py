@@ -1,10 +1,10 @@
-"""`plot-error-vs-cells` — the y axis, the two disagreement regions, the axes shared with the CDF.
+"""`plot-error-vs-cells` / `plot-error-vs-rank` — the denominator and the bands.
 
-The figure exists to count where accuracy and error distance disagree, so the
-tests that matter are the ones guarding the counting: that the `y == 0` column
-is present at all (it is absent from `confusion_pairs.csv`, which is why this
-recomputes), that the margin comparison is not off by an endpoint, and that the
-error axis is the same one `plot-error-cdf` uses.
+The figures exist so band 0 can be read as the method's accuracy, which makes
+the share denominator the load-bearing detail: dividing by solved rows instead
+of by every target would make band 0 disagree with `topn_accuracy.csv` on any
+method that falls back. Most of these tests guard that, the rest guard the band
+bookkeeping and that the two y modes stay distinguishable.
 """
 
 from __future__ import annotations
@@ -19,154 +19,200 @@ from scripts.analysis.v3.modules import io
 from scripts.analysis.v3.modules.classify import SHORTEST_PING
 
 
-def _points(rows):
-    """`[(method, error_km, seeds_crossed), ...]` -> a `crossings_per_target` frame."""
-    df = pd.DataFrame(rows, columns=["method", "error_km", "seeds_crossed"])
+def _points(rows, mode=S.CELLS):
+    """`[(method, error_km, class_error), ...]` -> a `load_points` frame."""
+    df = pd.DataFrame(rows, columns=["method", "error_km", "class_error"])
     df["method_label"] = df["method"]
     df["target_id"] = [f"tg-{i}" for i in range(len(df))]
-    df["level"] = np.clip(df["seeds_crossed"], 0, S.MAX_LEVEL)
+    df["level"] = np.clip(df["class_error"], 0, mode.max_level)
     return df
 
 
 # ---------------------------------------------------------------------------
-# the y axis
+# the share denominator — why this figure exists in this shape
 # ---------------------------------------------------------------------------
 
 
-def test_the_correct_cell_is_level_zero():
-    """The column `confusion_pairs.csv` cannot supply — it keeps wrong rows only."""
-    p = _points([("m", 10.0, 0)])
-    assert int(p.loc[0, "level"]) == 0
+def test_shares_divide_by_every_target_not_by_the_drawn_rows():
+    """as02 Vanilla: 123 band-0 rows / 412 targets = 0.298 = its top-1 accuracy.
+
+    Over its 337 solved rows the same count reads 0.365 and matches nothing.
+    """
+    p = _points([("m", 10.0, 0)] * 123 + [("m", 500.0, 1)] * 214)
+    t = S.band_table(p, {"m": {"n_targets": 412}}, S.CELLS)
+    assert t.loc[t["level"] == 0, "share"].iloc[0] == pytest.approx(0.2985, abs=5e-4)
 
 
-def test_levels_past_the_top_fold_into_the_bucket():
-    p = _points([("m", 1.0, 3), ("m", 1.0, 4), ("m", 1.0, 9)])
-    assert p["level"].tolist() == [S.MAX_LEVEL] * 3
+def test_the_bands_sum_to_one_minus_the_fallback_share():
+    p = _points([("m", 10.0, 0)] * 80 + [("m", 500.0, 1)] * 20)
+    t = S.band_table(p, {"m": {"n_targets": 125}}, S.CELLS)
+    assert t["share"].sum() == pytest.approx(0.8, abs=1e-3)  # 25/125 fell back
 
 
-def test_the_top_level_is_labelled_as_a_bucket_only_when_it_is_one():
-    assert S._level_labels(S.MAX_LEVEL)[-1] == str(S.MAX_LEVEL)
-    assert S._level_labels(S.MAX_LEVEL + 1)[-1] == f"{S.MAX_LEVEL}+"
+def test_a_method_with_no_fallbacks_sums_to_one():
+    p = _points([("m", 10.0, 0)] * 50 + [("m", 500.0, 2)] * 50)
+    t = S.band_table(p, {"m": {"n_targets": 100}}, S.CELLS)
+    assert t["share"].sum() == pytest.approx(1.0, abs=1e-3)
 
 
-def test_the_zero_level_is_named_not_just_numbered():
-    assert "correct cell" in S._level_labels(4)[0]
+def test_a_missing_count_falls_back_to_the_drawn_rows_rather_than_dividing_by_zero():
+    p = _points([("m", 10.0, 0), ("m", 20.0, 1)])
+    t = S.band_table(p, {}, S.CELLS)
+    assert t["share"].sum() == pytest.approx(1.0, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------
-# the two disagreement regions
+# cumulative share — the top-N reading on the rank mode
 # ---------------------------------------------------------------------------
 
 
-def test_right_cell_beyond_the_margin_is_counted():
-    p = _points([("m", 500.0, 0), ("m", 10.0, 0)])
-    row = S.summarise(p, margin_km=100.0).iloc[0]
-    assert int(row["n_right_cell_beyond_margin"]) == 1
-
-
-def test_wrong_cell_within_the_margin_is_counted():
-    p = _points([("m", 10.0, 1), ("m", 900.0, 2)])
-    s = S.summarise(p, margin_km=100.0)
-    assert int(s["n_wrong_cell_within_margin"].iloc[0]) == 1
-
-
-def test_a_point_exactly_on_the_margin_is_inside_it():
-    """`>` for the far side and `<=` for the near side, so the two are disjoint
-    and every point falls in exactly one of them or neither."""
-    p = _points([("m", 100.0, 0), ("m", 100.0, 1)])
-    row = S.summarise(p, margin_km=100.0).iloc[0]
-    assert int(row["n_right_cell_beyond_margin"]) == 0
-    assert int(row["n_wrong_cell_within_margin"]) == 1
-
-
-def test_the_two_regions_never_double_count_a_point():
-    rng = np.random.default_rng(0)
+def test_cumulative_share_is_running_and_ends_at_the_total():
     p = _points(
-        [("m", float(e), int(c)) for e, c in zip(rng.uniform(1, 3000, 200),
-                                                 rng.integers(0, 5, 200))]
+        [("m", 1.0, 0)] * 40 + [("m", 2.0, 1)] * 30 + [("m", 3.0, 2)] * 30,
+        mode=S.RANK,
     )
-    row = S.summarise(p, margin_km=150.0).iloc[0]
-    far = (p["level"] == 0) & (p["error_km"] > 150.0)
-    near = (p["level"] >= 1) & (p["error_km"] <= 150.0)
-    assert not (far & near).any()
-    assert int(row["n_right_cell_beyond_margin"]) == int(far.sum())
-    assert int(row["n_wrong_cell_within_margin"]) == int(near.sum())
+    t = S.band_table(p, {"m": {"n_targets": 100}}, S.RANK).set_index("level")
+    assert t.loc[0, "cumulative_share"] == pytest.approx(0.40)
+    assert t.loc[2, "cumulative_share"] == pytest.approx(1.00)
+    assert t["cumulative_share"].is_monotonic_increasing
 
 
-def test_the_counts_are_per_method_not_pooled():
-    p = _points([("a", 500.0, 0), ("b", 10.0, 0)])
-    s = S.summarise(p, margin_km=100.0).set_index("method")
-    assert int(s.loc["a", "n_right_cell_beyond_margin"]) == 1
-    assert int(s.loc["b", "n_right_cell_beyond_margin"]) == 0
+def test_cumulative_through_rank_two_is_the_top_three_reading():
+    """`tg_seed_rank < N` is top-N, so rank <= 2 is top-3 by construction."""
+    p = _points([("m", 1.0, r) for r in [0, 0, 1, 2, 3, 4]], mode=S.RANK)
+    t = S.band_table(p, {"m": {"n_targets": 6}}, S.RANK).set_index("level")
+    # stored at 4 decimals, matching every other rate in this layer
+    assert t.loc[2, "cumulative_share"] == pytest.approx(4 / 6, abs=5e-5)
 
 
 # ---------------------------------------------------------------------------
-# the summary
+# bands
 # ---------------------------------------------------------------------------
 
 
-def test_shares_sum_to_one_per_method():
-    p = _points([("m", 1.0, 0), ("m", 2.0, 1), ("m", 3.0, 1), ("m", 4.0, 2)])
-    s = S.summarise(p, margin_km=100.0)
-    assert s["share"].sum() == pytest.approx(1.0)
-    assert s["n"].sum() == 4
+def test_every_band_gets_a_row_even_when_empty():
+    """The share axis puts a tick on every band, so every band needs a row."""
+    p = _points([("m", 1.0, 0)])
+    t = S.band_table(p, {"m": {"n_targets": 1}}, S.CELLS)
+    assert t["level"].tolist() == list(range(S.CELLS.max_level + 1))
+    assert int(t.loc[t["level"] == 3, "n"].iloc[0]) == 0
+    assert np.isnan(t.loc[t["level"] == 3, "error_km_p50"].iloc[0])
 
 
-def test_each_level_reports_its_own_error_percentiles():
+def test_values_past_the_top_band_fold_into_it():
+    p = _points([("m", 1.0, 3), ("m", 1.0, 4), ("m", 1.0, 12)])
+    assert p["level"].tolist() == [S.CELLS.max_level] * 3
+
+
+def test_each_band_reports_its_own_median():
     p = _points([("m", 10.0, 0), ("m", 20.0, 0), ("m", 900.0, 2)])
-    s = S.summarise(p, margin_km=100.0).set_index("level")
-    assert s.loc[0, "error_km_p50"] == pytest.approx(15.0)
-    assert s.loc[2, "error_km_p50"] == pytest.approx(900.0)
+    t = S.band_table(p, {"m": {"n_targets": 3}}, S.CELLS).set_index("level")
+    assert t.loc[0, "error_km_p50"] == pytest.approx(15.0)
+    assert t.loc[2, "error_km_p50"] == pytest.approx(900.0)
+
+
+def test_counts_are_per_method():
+    p = _points([("a", 1.0, 0), ("b", 1.0, 1)])
+    t = S.band_table(p, {"a": {"n_targets": 1}, "b": {"n_targets": 1}}, S.CELLS)
+    a = t[(t["method"] == "a") & (t["level"] == 0)]
+    b = t[(t["method"] == "b") & (t["level"] == 0)]
+    assert int(a["n"].iloc[0]) == 1
+    assert int(b["n"].iloc[0]) == 0
 
 
 # ---------------------------------------------------------------------------
-# row policy, shared with the CDF
+# the two y modes stay distinguishable
 # ---------------------------------------------------------------------------
 
 
-def test_the_error_column_and_x_range_are_the_cdfs():
-    """Both figures put error distance on x; a second set of bounds here would
-    be free to drift and the two could no longer be read against each other."""
+def test_cells_walks_the_answer_space_and_rank_reads_a_column():
+    assert S.CELLS.column is None
+    assert S.RANK.column == "tg_seed_rank"
+
+
+def test_the_modes_have_different_depths_matching_their_observed_ranges():
+    """Crossings reach 4 at h3-4, rank reaches 7 — hence 4 bands versus 6."""
+    assert S.CELLS.max_level == 3
+    assert S.RANK.max_level == 5
+
+
+def test_both_modes_are_registered_under_their_key():
+    assert S.MODES["cells"] is S.CELLS
+    assert S.MODES["rank"] is S.RANK
+
+
+def test_each_mode_names_level_zero_for_what_it_means():
+    assert "true class" in S.CELLS.level0_label
+    assert "top-1" in S.RANK.level0_label
+
+
+def test_the_modes_write_to_different_files():
+    assert S.CELLS.stem != S.RANK.stem
+
+
+def test_the_top_label_is_a_bucket_only_when_it_buckets():
+    assert S.level_labels(S.CELLS, S.CELLS.max_level)[-1] == "3"
+    assert S.level_labels(S.CELLS, S.CELLS.max_level + 1)[-1] == "3+"
+    assert S.level_labels(S.RANK, 7)[-1] == "5+"
+
+
+def test_level_labels_cover_every_band():
+    assert len(S.level_labels(S.RANK, 7)) == S.RANK.max_level + 1
+
+
+# ---------------------------------------------------------------------------
+# shared with the error CDF
+# ---------------------------------------------------------------------------
+
+
+def test_the_error_column_and_x_bounds_are_the_cdfs():
+    """A second set of bounds here and the figures could not be read as a set."""
     assert S.ERROR_COLUMN is CDF.ERROR_COLUMN
     assert S.X_MIN_KM == CDF.X_MIN_KM
     assert S.DEFAULT_X_MAX_KM == CDF.DEFAULT_X_MAX_KM
 
 
-def test_fallbacks_are_excluded_by_the_shared_predicate():
+def test_fallbacks_are_excluded_from_the_drawn_lines():
     df = pd.DataFrame({"status": ["SUCCESS", "FALLBACK", "BASELINE"]})
     assert io.solved_mask(df).tolist() == [True, False, False]
 
 
 # ---------------------------------------------------------------------------
-# rendering
+# formatting and rendering
 # ---------------------------------------------------------------------------
 
 
-def test_the_jitter_is_reproducible():
-    """Two renders of one dataset must not look like two datasets."""
-    a = np.random.default_rng(S.JITTER_SEED).uniform(-S.JITTER, S.JITTER, 50)
-    b = np.random.default_rng(S.JITTER_SEED).uniform(-S.JITTER, S.JITTER, 50)
-    assert np.array_equal(a, b)
+@pytest.mark.parametrize(
+    "value,expected",
+    [(1448.0, "1,448"), (516.0, "516"), (51.0, "51"), (2.4, "2.4"), (np.nan, "—")],
+)
+def test_median_readouts_are_formatted_for_their_magnitude(value, expected):
+    assert S._fmt_km(value) == expected
 
 
-def test_the_figure_renders_to_a_non_empty_png(tmp_path):
-    p = _points(
-        [(SHORTEST_PING, 10.0, 0), (SHORTEST_PING, 800.0, 2),
-         ("octant_cbg_hull", 3.0, 0), ("octant_cbg_hull", 400.0, 1)]
-    )
-    s = S.summarise(p, margin_km=160.0)
-    out = S.plot_error_vs_cells(
-        p, s, tmp_path / "scatter.png",
-        title="t", subtitle="s", margin_km=160.0, max_crossings=2,
-    )
-    assert out.exists() and out.stat().st_size > 5_000
+def test_both_modes_render_to_a_non_empty_png(tmp_path):
+    for mode in (S.CELLS, S.RANK):
+        p = _points(
+            [(SHORTEST_PING, 10.0, 0), (SHORTEST_PING, 800.0, 2),
+             ("octant_cbg_hull", 3.0, 0), ("octant_cbg_hull", 400.0, 1)],
+            mode=mode,
+        )
+        counts = {m: {"n_targets": 2} for m in p["method"].unique()}
+        t = S.band_table(p, counts, mode)
+        out = S.plot_bands(
+            p, t, tmp_path / f"{mode.stem}.png",
+            mode=mode, title="t", subtitle="s", max_observed=2,
+        )
+        assert out.exists() and out.stat().st_size > 5_000
 
 
-def test_a_single_method_renders_without_empty_panels_erroring(tmp_path):
-    p = _points([("m", 10.0, 0)])
-    s = S.summarise(p, margin_km=100.0)
-    out = S.plot_error_vs_cells(
-        p, s, tmp_path / "one.png",
-        title="t", subtitle="s", margin_km=100.0, max_crossings=0,
+def test_a_method_whose_bands_do_not_sum_to_one_still_renders(tmp_path):
+    """Vanilla's case: the panel header names the shortfall as fallbacks."""
+    p = _points([("vanilla_cbg", 10.0, 0)])
+    t = S.band_table(p, {"vanilla_cbg": {"n_targets": 4}}, S.CELLS)
+    out = S.plot_bands(
+        p, t, tmp_path / "v.png",
+        mode=S.CELLS, title="t", subtitle="s", max_observed=0,
     )
     assert out.exists()
+    assert t["share"].sum() == pytest.approx(0.25)

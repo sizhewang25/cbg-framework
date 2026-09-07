@@ -134,17 +134,42 @@ Shortest-Ping's rows are all `BASELINE`, never `SUCCESS`; a hand-written
 orange and red guides at 100/500/1,000 km would read as Octant-Hull, Vanilla
 and Spotter. Guides are neutral ink here.
 
-### Verification — `plot-error-vs-cells`
+### Verification — the two band figures
 
 | check | result |
 | --- | --- |
-| `pytest scripts/analysis/v3/tests/` | **517 passed** |
+| `pytest scripts/analysis/v3/tests/` | **527 passed** |
+| band-0 share vs `accuracy_top1`, both modes, all 3 runs | **delta 0.000000** |
+| cumulative rank <= 2 vs `accuracy_top3`, all 3 runs | **delta 0.000000** |
+| band shares vs `1 - fallback_rate` | **delta 1e-4** (4-decimal rounding across bands) |
 | crossings vs `confusion_pairs.csv` on shared rows | **delta 0** (874 / 1,297 / 1,477 rows) |
-| error vs `confusion_pairs.csv` on shared rows | **delta 0.000000 km** |
-| level-0 rows this figure adds | **1,414 / 1,100 / 1,178** — absent from `confusion_pairs.csv` |
-| the two disagreement regions | disjoint by construction (`>` far, `<=` near), pinned by test |
+| level-0 rows these figures add | **1,414 / 1,100 / 1,178** — absent from `confusion_pairs.csv` |
 
-### §2.4(a)'s claim, counted
+### The denominator was the load-bearing decision
+
+Band 0 only equals top-1 accuracy against the right denominator.
+`seeds_crossed == 0` and `tg_seed_rank == 0` are the same event (the crossing
+matrix is >= 1 off the diagonal) and both are top-1 correctness, but
+`topn_accuracy.csv` divides by *every* target and counts fallbacks as failures.
+Dividing by solved rows instead would have made band 0 disagree with the
+accuracy the paper reports on the one method that falls back — as02 Vanilla
+reads 0.298 over 412 targets and 0.365 over its 337 solved rows.
+
+Consequence and a gain: bands sum to `1 - fallback_rate`, so Vanilla's four
+bands total 81.8% and the panel header names the missing 18.2% as fallbacks.
+
+### What the pair shows
+
+The two axes correlate (median error rises monotonically with class error on
+every method), so the readable result is the *shape* of each band stack, and
+the three mechanisms separate cleanly:
+
+- **Shortest-Ping / SoI** — 37% in band 0, as a few tight discrete stripes
+  under 60 km. The answer is a VP coordinate, so errors repeat exactly.
+- **Octant-Hull** — 65% in band 0 but smeared from 0.3 km to 600 km.
+- **Spotter** — 41% in band 0 at a 195 km median, the worst band 0 of the six.
+
+### §2.4(a)'s claim, counted (first design, superseded)
 
 The section asserts accuracy and error distance can disagree and that the
 disagreement is a finding. On as02, against a 172 km margin:
