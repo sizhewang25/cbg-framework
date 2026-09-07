@@ -184,8 +184,21 @@ MODES: dict[str, YMode] = {CELLS.key: CELLS, RANK.key: RANK}
 #: reads as sitting on the row's floor, and it makes the bottom band rest on the
 #: x axis itself rather than hovering a tenth of a row above it.
 BAND_BOTTOM = 0.0
-BAND_TOP = 0.72
-MEDIAN_TEXT_Y = 0.76
+BAND_TOP = 0.70
+MEDIAN_TEXT_Y = 0.72
+
+#: Inches of figure height per band. This is the knob that compacts the y
+#: direction: the fractions above are shares of a row, so shrinking the row
+#: shortens the band *and* its gutter together, where trading one fraction
+#: against the other can only move height from one to the other.
+#:
+#: At 0.50 the gutter is 0.30 x 0.50 = 0.15 in, against ~0.10 in for the 7 pt
+#: median readout — the floor this cannot go below without the number touching
+#: the band.
+ROW_INCHES = 0.50
+
+#: Inches per panel row for the title, x tick labels and padding.
+PANEL_CHROME_INCHES = 1.7
 
 #: Per-line alpha. Low enough that ~7 coincident targets read as solid and a
 #: lone one is still visible. Past that the band saturates; see the module
@@ -385,7 +398,12 @@ def plot_bands(
     fig, axes = plt.subplots(
         n_rows,
         n_cols,
-        figsize=(4.9 * n_cols, 0.78 * mode.n_bands * n_rows + 2.0 * n_rows + 1.2),
+        figsize=(
+            4.9 * n_cols,
+            ROW_INCHES * mode.n_bands * n_rows
+            + PANEL_CHROME_INCHES * n_rows
+            + 1.2,
+        ),
         sharex=True,
         sharey=True,
         squeeze=False,

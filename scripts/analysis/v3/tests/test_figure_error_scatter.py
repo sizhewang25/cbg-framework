@@ -204,6 +204,13 @@ def test_the_gutter_is_only_above_the_band():
             assert lo == pytest.approx(k)
 
 
+def test_the_gutter_leaves_physical_room_for_the_readout():
+    """The compaction knob is `ROW_INCHES`; below ~0.13 in of gutter the 7 pt
+    median number starts touching the band it labels."""
+    gutter_inches = (1.0 - S.BAND_TOP) * S.ROW_INCHES
+    assert gutter_inches >= 0.13
+
+
 def test_the_median_readout_stays_inside_its_own_row():
     """Above the band but below the next separator — otherwise the number would
     sit in the row above and name the wrong band."""
