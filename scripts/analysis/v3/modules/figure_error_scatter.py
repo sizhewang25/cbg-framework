@@ -15,9 +15,12 @@ coordinate error on a log axis.
   cell and the predicted one. "Two cells away" is a statement about the answer
   space's local density, which is the nearest-seed snapping story §8.1 asks
   about.
-* **`rank`** — `tg_seed_rank`, how many seeds sit closer to the estimate than
-  the true one. This is the quantity the reported metric is built on:
-  `tg_seed_rank < N` *is* top-N.
+* **`rank`** — the true class's **nearest-cell index**: 1 if it is the cell
+  closest to the estimate, 2 if one other cell is closer, and so on. This is
+  the quantity the reported metric is built on, and the 1-indexing is what
+  makes it read directly — `index <= N` *is* top-N, where the underlying
+  `tg_seed_rank < N` needed translating. Band 1 is top-1 accuracy and the
+  cumulative share through band 3 is top-3.
 
 SCHEMA.md warns these get confused and that they order the methods
 differently — on as01, 42% of wrong rows are at rank 1 while 67% are one
@@ -42,12 +45,12 @@ within-band shading detail and no reported number.
 
 ## The denominator is every target, so band 0 is the accuracy
 
-Band 0 means the method named the true class: `seeds_crossed == 0` and
-`tg_seed_rank == 0` are the same event (the crossing matrix is >= 1 off the
-diagonal), and both are top-1 correctness. `topn_accuracy.csv` divides by
+The correct band — 0 for `cells`, 1 for `rank` — means the method named the
+true class: `seeds_crossed == 0` and `tg_seed_rank == 0` are the same event
+(the crossing matrix is >= 1 off the diagonal), and both are top-1 correctness. `topn_accuracy.csv` divides by
 *every* target and counts fallbacks as failures, so this figure must too —
-dividing by solved rows instead would make band 0 disagree with the accuracy
-the paper reports. On as02 Vanilla, 123 band-0 rows over 412 targets is 0.298,
+dividing by solved rows instead would make that band disagree with the
+accuracy the paper reports. On as02 Vanilla, 123 band-0 rows over 412 targets is 0.298,
 its top-1 accuracy exactly; over its 337 solved rows it would read 0.365 and
 match nothing.
 
@@ -118,27 +121,41 @@ from scripts.analysis.v3.modules.figure_error_cdf import (  # noqa: E402
 
 @dataclass(frozen=True)
 class YMode:
-    """One class-error axis: where its values come from and how they read."""
+    """One class-error axis: where its values come from and how it is numbered."""
 
     key: str
     #: Column on the scored frame, or `None` when the values are walked from the
     #: answer space rather than read off a row.
     column: str | None
-    #: Values at or above this fold into a top bucket. Set from the observed
-    #: range: crossings reach 4 and rank reaches 7 at `h3-4`, and both tail off
-    #: to a couple of percent, so a sparse row per value would be mostly white.
-    max_level: int
+    #: What the raw value is shifted by before it is drawn or tabulated.
+    #:
+    #: `cells` counts boundaries, so 0 is "no boundary crossed" and 0-indexing
+    #: is the only honest numbering. `rank` is an *index into* the cells ordered
+    #: by distance from the estimate, so it is 1-indexed: index 1 means the true
+    #: cell is the nearest one. That makes the axis read straight off top-N —
+    #: `index <= N` is exactly top-N — where `rank < N` needed translating.
+    index_base: int
+    #: Bands drawn. The top one is a bucket whenever anything exceeds it.
+    n_bands: int
     axis_label: str
-    level0_label: str
     stem: str
     title: str
+
+    @property
+    def levels(self) -> range:
+        return range(self.index_base, self.index_base + self.n_bands)
+
+    @property
+    def top_level(self) -> int:
+        return self.index_base + self.n_bands - 1
+
 
 CELLS = YMode(
     key="cells",
     column=None,
-    max_level=3,
+    index_base=0,
+    n_bands=4,
     axis_label="Cells away from the true class",
-    level0_label="0 · true class",
     stem="error_vs_cells",
     title="Coordinate error against class distance",
 )
@@ -146,11 +163,11 @@ CELLS = YMode(
 RANK = YMode(
     key="rank",
     column="tg_seed_rank",
-    max_level=5,
-    axis_label="Classes closer to the estimate than the true one",
-    level0_label="0 · top-1 correct",
+    index_base=1,
+    n_bands=4,
+    axis_label="Nearest cell index of the true class",
     stem="error_vs_rank",
-    title="Coordinate error against class rank",
+    title="Coordinate error against nearest-cell index",
 )
 
 MODES: dict[str, YMode] = {CELLS.key: CELLS, RANK.key: RANK}
@@ -227,7 +244,9 @@ def load_points(
                     "target_id": placed["target_id"].to_numpy(),
                     "error_km": placed[ERROR_COLUMN].to_numpy(dtype=float),
                     "class_error": values,
-                    "level": np.clip(values, 0, mode.max_level),
+                    "level": np.clip(
+                        values + mode.index_base, mode.index_base, mode.top_level
+                    ),
                 }
             )
         )
@@ -252,7 +271,7 @@ def band_table(
     for method, g in points.groupby("method", sort=False):
         n_targets = counts.get(method, {}).get("n_targets", len(g)) or 1
         running = 0
-        for level in range(mode.max_level + 1):
+        for level in mode.levels:
             gl = g.loc[g["level"] == level]
             running += len(gl)
             rows.append(
@@ -280,11 +299,18 @@ def band_table(
 
 
 def level_labels(mode: YMode, max_observed: int) -> list[str]:
-    """Band tick labels, with a `+` on the top one only when it is a bucket."""
-    labels = [mode.level0_label] + [str(i) for i in range(1, mode.max_level)]
-    labels.append(
-        f"{mode.max_level}+" if max_observed > mode.max_level else str(mode.max_level)
-    )
+    """Band tick labels: bare integers, with a `+` on the top one when it buckets.
+
+    Nothing but the number. What the first band *means* is carried by the axis
+    label and the footnote, so the ticks stay a clean integer scale rather than
+    one annotated value beside three plain ones.
+
+    `max_observed` is the raw value, so it is shifted by `index_base` before
+    being compared with the top band.
+    """
+    top = mode.top_level
+    labels = [str(i) for i in mode.levels if i != top]
+    labels.append(f"{top}+" if max_observed + mode.index_base > top else str(top))
     return labels
 
 
@@ -327,7 +353,7 @@ def plot_bands(
     fig, axes = plt.subplots(
         n_rows,
         n_cols,
-        figsize=(4.9 * n_cols, 0.62 * (mode.max_level + 1) * n_rows + 2.0 * n_rows + 1.2),
+        figsize=(4.9 * n_cols, 0.62 * mode.n_bands * n_rows + 2.0 * n_rows + 1.2),
         sharex=True,
         sharey=True,
         squeeze=False,
@@ -345,7 +371,7 @@ def plot_bands(
         ax.set_facecolor(_SURFACE)
         shares: dict[int, float] = {}
 
-        for level in range(mode.max_level + 1):
+        for level in mode.levels:
             gl = g.loc[g["level"] == level]
             if len(gl):
                 # One line per target, no binning and no jitter: density comes
@@ -384,7 +410,7 @@ def plot_bands(
                 )
             shares[level] = float(row["share"])
 
-        n_targets = int(tb.loc[(method, 0), "n_targets"])
+        n_targets = int(tb.loc[(method, mode.index_base), "n_targets"])
         drawn = int(table.loc[table["method"] == method, "n"].sum())
         missing = n_targets - drawn
         header = f"n = {n_targets}"
@@ -405,8 +431,8 @@ def plot_bands(
         ax.set_xscale("log")
         ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
         ax.set_xlim(min_x_km, max_x_km)
-        ax.set_ylim(-0.7, mode.max_level + 0.7)
-        ax.set_yticks(range(mode.max_level + 1))
+        ax.set_ylim(mode.index_base - 0.7, mode.top_level + 0.7)
+        ax.set_yticks(list(mode.levels))
         ax.set_yticklabels(labels, fontsize=8.5)
         ax.grid(True, axis="x", which="major", color=_C_GRID, linewidth=0.7, zorder=0)
         ax.set_axisbelow(True)
@@ -423,9 +449,9 @@ def plot_bands(
         # axis). A right-hand tick is aligned with its band and cannot overlap.
         share_ax = ax.twinx()
         share_ax.set_ylim(ax.get_ylim())
-        share_ax.set_yticks(range(mode.max_level + 1))
+        share_ax.set_yticks(list(mode.levels))
         share_ax.set_yticklabels(
-            [f"{shares.get(lv, 0.0) * 100:.1f}%" for lv in range(mode.max_level + 1)],
+            [f"{shares.get(lv, 0.0) * 100:.1f}%" for lv in mode.levels],
             fontsize=7.5,
         )
         share_ax.tick_params(axis="y", length=0, colors=_C_INK_2)
@@ -446,13 +472,22 @@ def plot_bands(
         color=_C_INK_2,
     )
     fig.supylabel(mode.axis_label, fontsize=10.5, color=_C_INK_2)
+    # Only the rank mode's bands accumulate into a reported metric: its index is
+    # 1-based, so summing bands 1..N is top-N. Crossings do not have that
+    # property (SCHEMA.md), so the clause is not printed on that figure.
+    cumulative_note = (
+        f", and bands 1-{mode.index_base + 2} sum to top-{mode.index_base + 2}"
+        if mode is RANK
+        else ""
+    )
     fig.text(
         0.5,
         0.008,
         "One line per target, no binning: a dark stripe is targets sharing an "
         "error. Black rule and figure above each band are its median error.\n"
-        "Percentages on the right are shares of all targets, so the top band is "
-        "the method's top-1 accuracy and the bands sum to 100% minus fallbacks.",
+        "Percentages on the right are shares of all targets, so the bottom "
+        f"band is the method's top-1 accuracy{cumulative_note} and the bands "
+        "sum to 100% minus fallbacks.",
         ha="center",
         va="bottom",
         fontsize=8,
@@ -514,9 +549,10 @@ def build(
         "y_axis": mode.axis_label,
         "methods": [m for m in PUBLISHED_METHODS if m in set(points["method"])],
         "error_column": ERROR_COLUMN,
-        "max_level_drawn": mode.max_level,
-        "max_level_observed": max_observed,
-        "top_level_is_a_bucket": max_observed > mode.max_level,
+        "index_base": mode.index_base,
+        "bands_drawn": list(mode.levels),
+        "max_raw_value_observed": max_observed,
+        "top_band_is_a_bucket": max_observed + mode.index_base > mode.top_level,
         "n_lines_drawn": int(len(points)),
         "counts": counts,
         "share_denominator": (
@@ -526,10 +562,13 @@ def build(
             "than to 1. Dividing by solved rows would make level 0 disagree "
             "with the accuracy the paper reports (as02 Vanilla: 0.365 vs 0.298)."
         ),
-        "level_0_meaning": (
+        "correct_band": mode.index_base,
+        "correct_band_meaning": (
             "the method named the true class. seeds_crossed == 0 and "
             "tg_seed_rank == 0 are the same event, since the crossing matrix is "
-            ">= 1 off the diagonal, and both are top-1 correctness."
+            ">= 1 off the diagonal, and both are top-1 correctness. The rank mode "
+            "is 1-indexed, so its correct band is 1 and `index <= N` is top-N: "
+            "cumulative share through band 3 is accuracy_top3."
         ),
         "density_encoding": (
             f"one {LINE_WIDTH} pt line per target at alpha {LINE_ALPHA}, no "
@@ -594,12 +633,14 @@ def _run_mode(
             (png.parent / f"{mode.stem}_manifest.json").write_text(
                 json.dumps(manifest, indent=2) + "\n"
             )
-            top = table.loc[table["level"] == 0].set_index("method_label")["share"]
+            top = table.loc[table["level"] == mode.index_base].set_index(
+                "method_label"
+            )["share"]
             best = top.idxmax()
             typer.echo(
                 f"{run.run_id} {grid_slug(g.name, res)} {mode.key} · "
                 f"{manifest['n_lines_drawn']} lines · "
-                f"level-0 share best {best} {top[best]:.3f} -> {png}"
+                f"band-{mode.index_base} share best {best} {top[best]:.3f} -> {png}"
             )
 
 

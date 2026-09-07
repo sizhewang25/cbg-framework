@@ -24,13 +24,19 @@ def _points(rows, mode=S.CELLS):
     df = pd.DataFrame(rows, columns=["method", "error_km", "class_error"])
     df["method_label"] = df["method"]
     df["target_id"] = [f"tg-{i}" for i in range(len(df))]
-    df["level"] = np.clip(df["class_error"], 0, mode.max_level)
+    df["level"] = np.clip(
+        df["class_error"] + mode.index_base, mode.index_base, mode.top_level
+    )
     return df
 
 
 # ---------------------------------------------------------------------------
 # the share denominator — why this figure exists in this shape
 # ---------------------------------------------------------------------------
+
+
+def _correct(table, mode):
+    return table.loc[table["level"] == mode.index_base]
 
 
 def test_shares_divide_by_every_target_not_by_the_drawn_rows():
@@ -40,7 +46,7 @@ def test_shares_divide_by_every_target_not_by_the_drawn_rows():
     """
     p = _points([("m", 10.0, 0)] * 123 + [("m", 500.0, 1)] * 214)
     t = S.band_table(p, {"m": {"n_targets": 412}}, S.CELLS)
-    assert t.loc[t["level"] == 0, "share"].iloc[0] == pytest.approx(0.2985, abs=5e-4)
+    assert _correct(t, S.CELLS)["share"].iloc[0] == pytest.approx(0.2985, abs=5e-4)
 
 
 def test_the_bands_sum_to_one_minus_the_fallback_share():
@@ -72,17 +78,21 @@ def test_cumulative_share_is_running_and_ends_at_the_total():
         mode=S.RANK,
     )
     t = S.band_table(p, {"m": {"n_targets": 100}}, S.RANK).set_index("level")
-    assert t.loc[0, "cumulative_share"] == pytest.approx(0.40)
-    assert t.loc[2, "cumulative_share"] == pytest.approx(1.00)
+    assert t.loc[1, "cumulative_share"] == pytest.approx(0.40)
+    assert t.loc[3, "cumulative_share"] == pytest.approx(1.00)
     assert t["cumulative_share"].is_monotonic_increasing
 
 
-def test_cumulative_through_rank_two_is_the_top_three_reading():
-    """`tg_seed_rank < N` is top-N, so rank <= 2 is top-3 by construction."""
+def test_the_rank_index_is_one_based_so_band_n_sums_to_top_n():
+    """`index <= N` is top-N once the axis is 1-indexed.
+
+    `tg_seed_rank < N` needed translating; the shifted index does not, which is
+    the whole reason the rank mode is numbered from 1.
+    """
     p = _points([("m", 1.0, r) for r in [0, 0, 1, 2, 3, 4]], mode=S.RANK)
     t = S.band_table(p, {"m": {"n_targets": 6}}, S.RANK).set_index("level")
-    # stored at 4 decimals, matching every other rate in this layer
-    assert t.loc[2, "cumulative_share"] == pytest.approx(4 / 6, abs=5e-5)
+    assert t.loc[1, "share"] == pytest.approx(2 / 6, abs=5e-5)  # top-1
+    assert t.loc[3, "cumulative_share"] == pytest.approx(4 / 6, abs=5e-5)  # top-3
 
 
 # ---------------------------------------------------------------------------
@@ -94,14 +104,15 @@ def test_every_band_gets_a_row_even_when_empty():
     """The share axis puts a tick on every band, so every band needs a row."""
     p = _points([("m", 1.0, 0)])
     t = S.band_table(p, {"m": {"n_targets": 1}}, S.CELLS)
-    assert t["level"].tolist() == list(range(S.CELLS.max_level + 1))
-    assert int(t.loc[t["level"] == 3, "n"].iloc[0]) == 0
-    assert np.isnan(t.loc[t["level"] == 3, "error_km_p50"].iloc[0])
+    assert t["level"].tolist() == list(S.CELLS.levels)
+    top = S.CELLS.top_level
+    assert int(t.loc[t["level"] == top, "n"].iloc[0]) == 0
+    assert np.isnan(t.loc[t["level"] == top, "error_km_p50"].iloc[0])
 
 
 def test_values_past_the_top_band_fold_into_it():
     p = _points([("m", 1.0, 3), ("m", 1.0, 4), ("m", 1.0, 12)])
-    assert p["level"].tolist() == [S.CELLS.max_level] * 3
+    assert p["level"].tolist() == [S.CELLS.top_level] * 3
 
 
 def test_each_band_reports_its_own_median():
@@ -130,10 +141,13 @@ def test_cells_walks_the_answer_space_and_rank_reads_a_column():
     assert S.RANK.column == "tg_seed_rank"
 
 
-def test_the_modes_have_different_depths_matching_their_observed_ranges():
-    """Crossings reach 4 at h3-4, rank reaches 7 — hence 4 bands versus 6."""
-    assert S.CELLS.max_level == 3
-    assert S.RANK.max_level == 5
+def test_cells_is_zero_indexed_and_rank_is_one_indexed():
+    """Crossings count boundaries, so 0 means none crossed. Rank is an index
+    into the cells ordered by distance, so 1 means the true cell is nearest."""
+    assert S.CELLS.index_base == 0
+    assert list(S.CELLS.levels) == [0, 1, 2, 3]
+    assert S.RANK.index_base == 1
+    assert list(S.RANK.levels) == [1, 2, 3, 4]
 
 
 def test_both_modes_are_registered_under_their_key():
@@ -141,9 +155,10 @@ def test_both_modes_are_registered_under_their_key():
     assert S.MODES["rank"] is S.RANK
 
 
-def test_each_mode_names_level_zero_for_what_it_means():
-    assert "true class" in S.CELLS.level0_label
-    assert "top-1" in S.RANK.level0_label
+def test_the_band_ticks_are_bare_integers():
+    """What band 1 means lives in the axis label and footnote, not the tick."""
+    assert S.level_labels(S.CELLS, 4) == ["0", "1", "2", "3+"]
+    assert S.level_labels(S.RANK, 7) == ["1", "2", "3", "4+"]
 
 
 def test_the_modes_write_to_different_files():
@@ -151,13 +166,15 @@ def test_the_modes_write_to_different_files():
 
 
 def test_the_top_label_is_a_bucket_only_when_it_buckets():
-    assert S.level_labels(S.CELLS, S.CELLS.max_level)[-1] == "3"
-    assert S.level_labels(S.CELLS, S.CELLS.max_level + 1)[-1] == "3+"
-    assert S.level_labels(S.RANK, 7)[-1] == "5+"
+    assert S.level_labels(S.CELLS, 3)[-1] == "3"
+    assert S.level_labels(S.CELLS, 4)[-1] == "3+"
+    # raw rank 3 shifts to index 4, the top band, so it is not yet a bucket
+    assert S.level_labels(S.RANK, 3)[-1] == "4"
+    assert S.level_labels(S.RANK, 7)[-1] == "4+"
 
 
 def test_level_labels_cover_every_band():
-    assert len(S.level_labels(S.RANK, 7)) == S.RANK.max_level + 1
+    assert len(S.level_labels(S.RANK, 7)) == S.RANK.n_bands
 
 
 # ---------------------------------------------------------------------------

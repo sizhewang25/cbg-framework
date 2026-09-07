@@ -53,7 +53,8 @@
 - [x] Annotate each band's median error above its rule
 - [x] Drop the margin rule, both disagreement annotations, the footnote line and the two orphaned summary columns
 - [x] Add the `tg_seed_rank` y mode in the same module, as its own CLI command
-- [x] Rename the y axes: "Cells away from the true class" / "Seeds closer to the estimate than the true one"
+- [x] Rename the y axes: "Cells away from the true class" / "Nearest cell index of the true class"
+- [x] Make the rank axis 1-indexed with four bands (1/2/3/4+), so `index <= N` is top-N
 - [x] Pin band-0 share == `accuracy_top1` and cumulative rank <= 2 == `accuracy_top3` on all runs
 - [x] Update `test_figure_error_scatter.py`, README and the three per-run configs
 

@@ -1028,11 +1028,14 @@ readable — and each method turns out to have its own signature in the pair.
 **Two y modes, because the two quantities are not the same.** `plot-error-vs-cells`
 uses `seeds_crossed` (how many class boundaries lie between the true cell and
 the predicted one — the answer space's local density, the snapping story).
-`plot-error-vs-rank` uses `tg_seed_rank` (how many classes sit closer to the
-estimate than the true one — the quantity the reported metric is built on,
-since `tg_seed_rank < N` *is* top-N). SCHEMA.md warns these get confused and
-that they order the methods differently, so they live in one module with the
-distinction documented once and the CLI exposes them separately.
+`plot-error-vs-rank` uses the true class's **nearest-cell index** — 1 if it is
+the cell closest to the estimate, 2 if one other cell is closer, and so on.
+That is `tg_seed_rank + 1`, and the 1-indexing is what makes the axis read
+straight off the reported metric: `index <= N` *is* top-N, so band 1 is top-1
+accuracy and bands 1-3 sum to top-3. SCHEMA.md warns the two quantities get
+confused and that they order the methods differently, so they live in one
+module with the distinction documented once and the CLI exposes them
+separately. Both figures draw four bands, the top one a bucket.
 
 **Density is drawn, not binned and not jittered.** Each point is one line at
 alpha 0.15, so coincident values darken by overplotting; there is no bin width
@@ -1042,9 +1045,9 @@ coincident lines, which Shortest-Ping and SoI hit because many targets share a
 VP coordinate and their answer *is* that coordinate — so their darkest stripes
 stop distinguishing 7 from 30. The band's share label carries the count.
 
-**The denominator is every target, so band 0 is the accuracy.** `seeds_crossed
-== 0` and `tg_seed_rank == 0` are the same event (the crossing matrix is >= 1
-off the diagonal) and both are top-1 correctness. `topn_accuracy.csv` divides
+**The denominator is every target, so the bottom band is the accuracy.**
+`seeds_crossed == 0` and nearest-cell index 1 are the same event (the crossing
+matrix is >= 1 off the diagonal) and both are top-1 correctness. `topn_accuracy.csv` divides
 by every target and counts fallbacks as failures, so these figures must too:
 on as02 Vanilla, 123 band-0 rows over 412 targets is 0.298, its top-1 accuracy
 exactly, while over its 337 solved rows it would read 0.365 and match nothing.
@@ -1052,9 +1055,9 @@ The bands therefore sum to `1 - fallback_rate` and the shortfall is named in
 the panel header — Vanilla's four bands total 81.8% and the missing 18.2% is
 where its fallbacks went.
 
-Both identities are checked rather than assumed: band-0 share equals
-`accuracy_top1` and cumulative rank <= 2 equals `accuracy_top3`, to 0.000000 on
-all three operator runs.
+Both identities are checked rather than assumed: the bottom band's share
+equals `accuracy_top1` and the rank mode's cumulative share through band 3
+equals `accuracy_top3`, to 0.000000 on all three operator runs.
 
 **What the pair shows.** The two axes correlate — median error rises
 monotonically with class error on every method — so the readable result is the

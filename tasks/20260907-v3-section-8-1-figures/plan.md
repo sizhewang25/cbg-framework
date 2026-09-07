@@ -210,21 +210,27 @@ Consequence, and a gain: bands sum to `1 - fallback_rate`, so Vanilla's four
 bands total 81.8% and the missing 18.2% *is* its fallback rate, visible in the
 figure for free and labelled as such.
 
-**Two y modes, one module, two commands.** `seeds_crossed` (cells away) and
-`tg_seed_rank` (seeds closer than the truth). SCHEMA warns the two get confused
-and that they order methods differently, so they live in one module with the
-distinction documented once; the CLI exposes them separately so each figure has
-its own command. Rank reaches only 0..7 on as02 despite K=22 seeds, so it gets
-six bands (0-4, 5+), not twenty-two.
+**Two y modes, one module, two commands.** `seeds_crossed` (cells away from the
+true class, 0-indexed because it counts boundaries) and the **nearest-cell
+index** of the true class (`tg_seed_rank + 1`, 1-indexed because it is an index
+into the cells ordered by distance from the estimate). The 1-indexing is what
+makes the second axis read straight off the reported metric — `index <= N` *is*
+top-N, so band 1 is top-1 accuracy and bands 1-3 sum to top-3, where
+`tg_seed_rank < N` needed translating.
+
+SCHEMA warns the two quantities get confused and that they order methods
+differently, so they live in one module with the distinction documented once;
+the CLI exposes them separately so each figure has its own command. Both draw
+four bands with the top one a bucket: cells 0/1/2/3+, index 1/2/3/4+.
 
 **The margin reference is removed** — dashed rule, both disagreement
 annotations, the footnote line and the two orphaned summary columns. The figure
 now makes one point: error distance and classification accuracy are different
 metrics, and each method has its own pattern in both.
 
-**Assertions pinned rather than eyeballed:** band-0 share equals
-`accuracy_top1` for every method on every run, and cumulative rank <= 2 equals
-`accuracy_top3`.
+**Assertions pinned rather than eyeballed:** the bottom band's share equals
+`accuracy_top1` for every method on every run, and the rank mode's cumulative
+share through band 3 equals `accuracy_top3`.
 
 ## Caveats
 
