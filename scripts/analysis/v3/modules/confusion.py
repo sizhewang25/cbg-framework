@@ -60,7 +60,7 @@ import pandas as pd
 import typer
 
 from scripts.analysis.v3.modules import io
-from scripts.analysis.v3.modules.answer_space import load_answer_space
+from scripts.analysis.v3.modules.answer_space import load_answer_space, pairwise_km
 from scripts.analysis.v3.modules.classify import DEFAULT_TOPN
 from scripts.analysis.v3.modules.diagram.common.labels import label_for
 from scripts.analysis.v3.modules.diagram.common.membership import available_methods
@@ -123,6 +123,82 @@ def density_bins(
         )
     idx = np.clip(np.searchsorted(edges, v, side="right") - 1, 0, len(edges) - 2)
     return pd.Series(idx, index=nearest_seed_km.index, name="density_bin"), edges
+
+
+def geodesic_points(
+    lat_a: float, lon_a: float, lat_b: float, lon_b: float, n: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """`n` points evenly spaced along the great circle from a to b, inclusive.
+
+    Spherical linear interpolation of the two unit vectors, so the path is the
+    actual geodesic rather than a straight line in lat/lon — which at these
+    longitudes would bow hundreds of kilometres off it.
+    """
+    ra, rb = np.radians([lat_a, lat_b]), np.radians([lon_a, lon_b])
+    a = np.array([np.cos(ra[0]) * np.cos(rb[0]), np.cos(ra[0]) * np.sin(rb[0]), np.sin(ra[0])])
+    b = np.array([np.cos(ra[1]) * np.cos(rb[1]), np.cos(ra[1]) * np.sin(rb[1]), np.sin(ra[1])])
+    omega = float(np.arccos(np.clip(a @ b, -1.0, 1.0)))
+    t = np.linspace(0.0, 1.0, n)[:, None]
+    if omega < 1e-9:
+        p = np.repeat(a[None, :], n, axis=0)
+    else:
+        p = (np.sin((1 - t) * omega) * a + np.sin(t * omega) * b) / np.sin(omega)
+    p /= np.linalg.norm(p, axis=1, keepdims=True)
+    return np.degrees(np.arcsin(np.clip(p[:, 2], -1, 1))), np.degrees(
+        np.arctan2(p[:, 1], p[:, 0])
+    )
+
+
+def seed_crossing_matrix(seeds: pd.DataFrame, *, max_samples: int = 4096) -> np.ndarray:
+    """`C[i, j]` = Voronoi class boundaries crossed on the geodesic from seed i to j.
+
+    **This is the relation the confusion question actually wants**: how many
+    class boundaries lie between the right answer and the given one. `C == 1` is
+    "the estimate slipped across exactly one line", which implies the two cells
+    share a boundary; `C == 3` is three cells away. Distance rank cannot say
+    this — a seed can be the second-nearest without sharing any boundary, and a
+    genuine neighbour can be the twentieth-nearest.
+
+    The converse of that implication does not hold and is not claimed: two cells
+    can share a boundary the *direct* path misses, since the shared edge need not
+    lie on the segment joining their seeds. That makes `C == 1` slightly stricter
+    than adjacency, which is the right side to err on here — the question is
+    about the path from truth to answer, not about the cells' full topology.
+
+    Computed by walking the path rather than from a triangulation, deliberately.
+    `answer_space._delaunay_degree` takes the convex hull of the unit vectors,
+    which triangulates the **whole sphere**; with 18-22 seeds confined to the US
+    that connects the outer seeds straight across the empty region, and those
+    wrap-around edges are indistinguishable from real adjacency in the output.
+    Measured on as01, a "Delaunay neighbour" can be the 17th-nearest of 18 seeds.
+    Only seeds that genuinely sit between two others can appear on the geodesic,
+    so this construction has no such failure mode.
+
+    Sampling is stepped at a quarter of the tightest margin in the answer space,
+    so a cell cannot be stepped over. Under-sampling could only ever *undercount*
+    crossings, and `max_samples` caps the work on very long paths; the cap is
+    recorded in the manifest when it binds.
+    """
+    lat = seeds["seed_lat"].to_numpy(dtype=float)
+    lon = seeds["seed_lon"].to_numpy(dtype=float)
+    K = len(seeds)
+    out = np.zeros((K, K), dtype=int)
+    if K < 2:
+        return out
+
+    margins = seeds["margin_km"].to_numpy(dtype=float)
+    margins = margins[np.isfinite(margins) & (margins > 0)]
+    step_km = max(1.0, float(margins.min()) / 4.0) if margins.size else 1.0
+    mesh = pairwise_km(lat, lon)
+
+    for i in range(K):
+        for j in range(i + 1, K):
+            n = int(np.clip(mesh[i, j] / step_km + 2, 32, max_samples))
+            plat, plon = geodesic_points(lat[i], lon[i], lat[j], lon[j], n)
+            owner = pairwise_km(plat, plon, lat, lon).argmin(axis=1)
+            crossings = int((owner[1:] != owner[:-1]).sum())
+            out[i, j] = out[j, i] = crossings
+    return out
 
 
 def _percentiles(values: np.ndarray, prefix: str) -> dict:
@@ -214,6 +290,7 @@ def confusion_pairs(
     seed_mesh_km: pd.DataFrame,
     *,
     top_n: int = 1,
+    crossings: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """One row per wrong prediction: which class it chose, and how far off that was.
 
@@ -222,10 +299,18 @@ def confusion_pairs(
     still recorded, because a coordinate does exist and where it landed is the
     information this table is for.
 
-    `pred_seed_neighbour_rank` is the predicted seed's position in the true
-    seed's own distance ordering (1 = the true seed's nearest neighbour), read
-    off `seed_mesh_km.csv` rather than recomputed, so it cannot disagree with the
-    answer space's own geometry.
+    Two columns say how far off the class was, and they are not the same
+    question. `seeds_crossed` counts the **class boundaries** between the true
+    seed and the predicted one (`seed_crossing_matrix`); `pred_seed_neighbour_rank`
+    is the predicted seed's position in the true seed's **distance** ordering,
+    read off `seed_mesh_km.csv` rather than recomputed so it cannot disagree with
+    the answer space's own geometry.
+
+    `seeds_crossed == 1` is the one to read as "a neighbouring cell". Distance
+    rank 1 implies it but is much narrower: measured at `h3-4`, 27-55% of wrong
+    top-1 rows are at rank 1 while 65-80% are one boundary away. Reporting rank
+    alone understates near-misses by up to a factor of three, because a seed can
+    be the fifth-nearest and still share a boundary.
     """
     if seed_mesh_km.empty:
         raise MissingArtifactError(
@@ -238,6 +323,9 @@ def confusion_pairs(
     # 0, so a true neighbour starts at 1 and the numbers read as "nth nearest".
     order = mesh.rank(axis=1, method="min").astype(int) - 1
     near_by_seed = seeds.set_index("seed_id")["nearest_seed_km"]
+    if crossings is None:
+        crossings = seed_crossing_matrix(seeds)
+    pos = {int(s): i for i, s in enumerate(seeds["seed_id"].to_numpy())}
 
     frames = []
     for method, df in scored.items():
@@ -260,6 +348,10 @@ def confusion_pairs(
         sub["pred_seed_neighbour_rank"] = [
             int(order.at[t, p]) if p >= 0 else -1 for t, p in pairs
         ]
+        sub["seeds_crossed"] = [
+            int(crossings[pos[int(t)], pos[int(p)]]) if p >= 0 else -1
+            for t, p in pairs
+        ]
         # Near zero means the estimate sat almost equidistant from both seeds:
         # the class flip was a tie-break, not a mislocation.
         sub["boundary_margin_km"] = (
@@ -272,7 +364,7 @@ def confusion_pairs(
             columns=[
                 "method", "method_label", "top_n", "target_id", "status",
                 "tg_seed_id", "pred_seed_id", "tg_seed_rank",
-                "tg_seed_nearest_seed_km", "tg_to_pred_seed_km",
+                "tg_seed_nearest_seed_km", "tg_to_pred_seed_km", "seeds_crossed",
                 "pred_seed_neighbour_rank", "boundary_margin_km", *_ERROR_COLUMNS,
             ]
         )
@@ -281,7 +373,7 @@ def confusion_pairs(
         [
             "method", "method_label", "top_n", "target_id", "status",
             "tg_seed_id", "pred_seed_id", "tg_seed_rank",
-            "tg_seed_nearest_seed_km", "tg_to_pred_seed_km",
+            "tg_seed_nearest_seed_km", "tg_to_pred_seed_km", "seeds_crossed",
             "pred_seed_neighbour_rank", "boundary_margin_km", *_ERROR_COLUMNS,
         ]
     ]
@@ -307,10 +399,19 @@ def build_for_run(
     by_density, edges = confusion_by_density(
         scored, space.seeds, ns=ns, n_bins=n_bins
     )
+    # Computed once and passed down: it is a property of the answer space, not
+    # of a method or an N, and the K x K walk would otherwise be repeated per N.
+    crossings = seed_crossing_matrix(space.seeds)
     pairs = pd.concat(
-        [confusion_pairs(scored, space.seeds, space.seed_mesh_km, top_n=n) for n in ns],
+        [
+            confusion_pairs(
+                scored, space.seeds, space.seed_mesh_km, top_n=n, crossings=crossings
+            )
+            for n in ns
+        ],
         ignore_index=True,
     )
+    off_diag = crossings[~np.eye(len(space.seeds), dtype=bool)] if space.n_seeds > 1 else np.array([])
     manifest = {
         "run_id": run.run_id,
         "grid": {
@@ -321,10 +422,31 @@ def build_for_run(
         "methods": chosen,
         "topn_reported": list(ns),
         "density_bin_edges_km": [round(float(e), 3) for e in edges],
+        "class_adjacency": {
+            "mean_degree": round(float((crossings == 1).sum(axis=1).mean()), 3)
+            if space.n_seeds
+            else None,
+            "max_seeds_crossed": int(off_diag.max()) if off_diag.size else 0,
+            "basis": (
+                "seeds_crossed walks the geodesic between two seeds and counts "
+                "Voronoi class boundaries. NOT seeds.csv's delaunay_degree, which "
+                "comes from the convex hull of the unit vectors and so "
+                "triangulates the whole sphere -- with the seeds confined to one "
+                "country that links the outer ones straight across the empty "
+                "region. On as01 a 'Delaunay neighbour' can be the 17th-nearest "
+                "of 18 seeds, and the hull degree reads 5.3 against 2.8 here."
+            ),
+        },
         "density_bin_basis": (
             "quantiles of the TRUE seed's nearest_seed_km, taken over targets. "
             "Fixed-width bins would put most of a run in one bucket, since seed "
             "spacing is dominated by the grid pitch."
+        ),
+        "distance_vs_adjacency": (
+            "pred_seed_neighbour_rank orders seeds by DISTANCE; seeds_crossed "
+            "counts BOUNDARIES. rank 1 implies seeds_crossed 1, not the reverse: "
+            "a seed can be fifth-nearest and still share a boundary. Read "
+            "seeds_crossed == 1 as 'a neighbouring cell'."
         ),
         "error_columns": {
             "error_to_target_km": "prediction to the raw ground truth -- THE error distance",
@@ -408,13 +530,13 @@ def register(app: typer.Typer) -> None:
                 )
                 first = pairs[pairs.top_n == ns[0]]
                 adjacent = (
-                    float((first["pred_seed_neighbour_rank"] == 1).mean())
+                    float((first["seeds_crossed"] == 1).mean())
                     if len(first)
                     else float("nan")
                 )
                 typer.echo(
                     f"{run.run_id}: {len(manifest['methods'])} methods · "
                     f"{len(by_density)} density rows · {len(first):,} wrong at "
-                    f"top{ns[0]} ({adjacent:.1%} onto the true seed's nearest "
-                    f"neighbour) -> {out_dir}"
+                    f"top{ns[0]} ({adjacent:.1%} one class boundary away) "
+                    f"-> {out_dir}"
                 )

@@ -159,8 +159,17 @@ Three columns carry the load and are easy to confuse:
   the quantization the grid choice buys. Measured at `h3-4`: p50 ≈ 16-20 km,
   max ≈ 26 km. It is *not* an error metric and must never be pooled with
   `error_km_*`.
+- **`delaunay_degree`** (per seed) — **not a usable neighbour count.** It comes
+  from the convex hull of the unit vectors, which is the spherical Delaunay
+  triangulation *of the whole sphere*; with the seeds confined to one country
+  that joins the outer ones straight across the empty region. On `as01` a
+  "Delaunay neighbour" can be the 17th-nearest of 18 seeds, and the column reads
+  a mean 5.3 against 2.8 from walking the actual paths. For "is the predicted
+  cell adjacent to the true one", use `confusion_pairs.csv`'s `seeds_crossed`.
 - **`nearest_seed_km` / `margin_km`** (per seed) — distance to the closest other
-  seed, and half of it. Since seeds sit on the grid, these now describe the
+  seed, and half of it. Unaffected by the above: the nearest-neighbour graph is
+  always a subgraph of the Delaunay triangulation, so nearest-overall and
+  nearest-Delaunay-neighbour coincide. Since seeds sit on the grid, these now describe the
   tessellation and the occupancy pattern rather than where targets happened to
   fall, which is what makes them usable for "how close was the mistaken class to
   the true one".

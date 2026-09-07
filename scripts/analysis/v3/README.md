@@ -844,9 +844,33 @@ equidistant from both classes and the flip was a tie-break; large, it was
 confidently inside the wrong cell. The medians separate the variants cleanly:
 Vanilla CBG's wrong answers sit at 31 / 70 / 87 km on as01 / as02 / as03 while
 Shortest-Ping's sit at 670 / 606 / 281 km. Vanilla misses narrowly and often;
-the baseline, when it misses, misses by a region. `pred_seed_neighbour_rank`
-says the same thing from the answer space's side — 42% / 27% / 55% of all
-top-1 mistakes land on the true seed's *nearest* neighbour.
+the baseline, when it misses, misses by a region.
+
+### Boundaries crossed, not distance rank
+
+**`seeds_crossed` is the column to read as "a neighbouring cell".**
+`seed_crossing_matrix` walks the geodesic from the true seed to the predicted
+one and counts Voronoi class boundaries: 1 means the estimate slipped across a
+single line, 3 means it landed three cells away.
+
+`pred_seed_neighbour_rank` — the predicted seed's position in the true seed's
+*distance* ordering — sits beside it and answers a different question. Rank 1
+implies one crossing, but not the reverse: a seed can be fifth-nearest and still
+share a boundary. The gap is not a rounding difference. On as01, 67% of wrong
+top-1 rows are one boundary away against 42% at rank 1, and it **reorders the
+methods** — by rank, Octant-Spline (79%) leads SoI CBG (52%); by crossings SoI
+leads at 96% against Octant-Spline's 90%. Distance rank was measuring how
+crowded the neighbourhood is, not how near the miss was.
+
+Walked rather than triangulated, deliberately. `answer_space._delaunay_degree`
+takes the convex hull of the unit vectors, which *is* the spherical Delaunay
+triangulation — of the **whole sphere**. With 18-22 seeds confined to one
+country that joins the outer seeds straight across the empty region: on as01 a
+"Delaunay neighbour" can be the 17th-nearest of 18 seeds, and the hull reports a
+mean degree of 5.3 where walking the paths gives 2.8. Only seeds that genuinely
+sit between two others can appear on a geodesic, so the walk has no such failure
+mode. `seeds.csv`'s `delaunay_degree` carries that inflation and should not be
+read as a neighbour count.
 
 `confusion_by_density.csv` bins targets by their true seed's `nearest_seed_km`.
 Crowding does cost accuracy on as01 (0.33 → 0.71 → 0.82 for Shortest-Ping across

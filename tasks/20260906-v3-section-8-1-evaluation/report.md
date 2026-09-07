@@ -127,6 +127,21 @@ rate and low accuracy are not the same failure as the baseline's — its answers
 land near the boundary of the right cell. 42% / 27% / 55% of all top-1 mistakes
 land on the true seed's *nearest* neighbour.
 
+**Near-misses were undercounted by up to 3x, and the method ranking with them.**
+`pred_seed_neighbour_rank` (distance rank) was standing in for "landed in a
+neighbouring cell". It is far narrower: on as01, 42% of wrong top-1 rows are at
+rank 1 while 67% are one class boundary away, and the ordering flips — by rank
+Octant-Spline (79%) leads SoI CBG (52%); by crossings SoI leads 96% to 90%.
+Fixed by `seeds_crossed`, which walks the geodesic between the two seeds and
+counts Voronoi boundaries.
+
+Not built from `answer_space._delaunay_degree`: that takes the convex hull of the
+unit vectors, triangulating the **whole sphere**, so with seeds confined to the
+US the outer ones get joined across the empty region (mean degree 5.3 vs 2.8
+walked; a "neighbour" can be the 17th-nearest of 18). `seeds.csv`'s
+`delaunay_degree` carries that inflation and is now flagged in SCHEMA.md as not
+a neighbour count.
+
 **Answer-space density costs accuracy, but not universally.** Shortest-Ping
 across density tertiles: as01 0.33 → 0.71 → 0.82, as02 0.16 → 0.42 → 0.51, but
 as03 0.67 → 0.25 → 0.44. The non-monotone run is the one to explain, not the one

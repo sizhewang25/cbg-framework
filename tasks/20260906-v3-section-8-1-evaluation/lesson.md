@@ -39,3 +39,15 @@
   resolution puts many seeds at exactly the same pitch, so the tie case is
   normal rather than exotic. Fixed by making the contract "always at least two
   edges" instead of making every caller special-case it.
+- **A proxy that is a strict subset can still reorder the ranking.** Distance
+  rank 1 implies one boundary crossing, so using it for "landed in a neighbouring
+  cell" felt safely conservative — an undercount, nothing worse. It was not: the
+  two disagree by up to 3x and they order the methods differently, because rank
+  is sensitive to how crowded the neighbourhood is and crossings are not. A
+  one-directional implication says nothing about whether the two measures rank
+  the same way.
+- **A stored column can be right about its own definition and wrong for the
+  use.** `delaunay_degree` correctly reports the spherical Delaunay degree; the
+  hull just triangulates the whole sphere, so for seeds inside one country it
+  counts wrap-around edges as neighbours. The tell was cheap and I did not look
+  for it until asked: a "neighbour" at distance rank 17 of 18.
