@@ -34,6 +34,9 @@ analysis:
   classify:
     topn: "1,3"
 
+  # Error-distance CDF, one curve per method, log x, fallbacks excluded.
+  plot-error-cdf: {}
+
   plot-venn:
     top_n: 1
 

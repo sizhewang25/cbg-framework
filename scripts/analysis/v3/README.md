@@ -108,6 +108,16 @@ python -m scripts.analysis.v3.cli table-accuracy \
   --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
 python -m scripts.analysis.v3.cli table-accuracy --run-id as7018_us_test01
 
+# 3e. The same numbers as the paper prints them: datasets down the rows, methods
+#     across the columns, best-in-row marked. Each dataset gets a reserved
+#     WEIGHTED row (no weighted run exists yet).
+python -m scripts.analysis.v3.cli table-headline \
+  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
+
+# 3f. Error-distance CDF per method, log x, fallbacks excluded
+python -m scripts.analysis.v3.cli plot-error-cdf \
+  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
+
 # 4. Set overlap of correct classifications (repeat per top-N)
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 3
@@ -154,6 +164,18 @@ target-cls-accuracy/
 ```
 
 e.g. `h3-4/`, `h3-3/`, `healpix-128/` side by side.
+
+Cross-run artifacts land in `_cross/<kind>/<dataset-set>/` instead, since their
+numbers are a function of a *set* of runs and belong to none of them:
+
+```
+_cross/accuracy-table/<dataset-set>/  accuracy_table.<grid>.{csv,md,manifest.json}
+                                      dataset_context.<grid>.csv
+                                      headline_top{1,3}.<grid>.{csv,md}
+                                      headline.<grid>.manifest.json
+_cross/cost-accuracy/<dataset-set>/   pareto_<cost>.<grid>.top<N>.{csv,png,json}
+_cross/venn-diagram/<dataset-set>/    overlap_*.<grid>.top<N>.*
+```
 
 **Two axes, two filename mechanisms.** The answer space parameterizes every
 number downstream of it, so both output trees are grouped by
@@ -909,6 +931,87 @@ The three §8.2 shares go in a separate `dataset_context.csv` rather than being
 repeated down every method row, where they would read as a property of the
 variant. The accuracy column means something different when 37% of a run's
 targets have no proximate VP (as7018) than when none do (as01, as03).
+
+## The paper's own layout
+
+`table-accuracy` prints one row per (run, method), which is right for
+re-analysis and wrong for the paper: §8.1 compares *methods within a dataset*,
+so the methods have to be adjacent columns. `table-headline` transposes it and
+adds the two things a paper table needs and a data table does not.
+
+**A best-in-row mark with a tie rule.** Bolding the argmax alone asserts a
+ranking the sample size does not support — on as03 the gap from Octant-Hull
+(0.502) to Spotter (0.474) is 0.028 against a standard error of 0.023 on 458
+targets, and on as02 the baseline leads SoI by 0.003. The mark is instead
+"within one standard error of the row's best", computed once per row on the
+best cell's own rate, so several methods can be marked and a near-tie reads as
+a tie. That is what happens on as03 at top-3, where Shortest-Ping and SoI both
+reach 0.926 and *beat* Octant-Hull — the ranking flip top-1 alone would hide,
+which is why the appendix table exists.
+
+**A reserved row per dataset variant the section compares.** §8.1 sets each
+mesh campaign against its traffic-weighted subset, so the rows are `AS01 MESH`,
+`AS01 WEIGHTED`, `AS02 MESH`, … Every WEIGHTED row is empty: `has_weight` is
+false on all three operator runs and the canonical source CSVs carry no weight
+column, so that campaign is **uncollected rather than unanalyzed**. The rows
+print as `—` rather than being omitted, because a table missing half its rows
+reads as though the mesh numbers were the whole comparison.
+
+The pairing is stated, not inferred: `--weighted-run-id as01=<run_id>`.
+`short_dataset` supplies the dataset key everywhere else in this layer, but it
+strips only an all-numeric trailing tail, so no plausible weighted run name
+reduces to its dataset — `as01-weighted-260728` comes back unchanged and
+`as01w-260728-260802` reduces to `as01w`. A fallback would file the row under
+the wrong dataset instead of failing.
+
+Fallback rate rides inside the cell (`(fb 0.27)`) and only where non-zero,
+because Vanilla CBG is the only variant that ever falls back; a parallel
+six-column block would be five-sixths zeros with the one number that matters
+hardest to find.
+
+Nothing is recomputed — both tables read `topn_accuracy.csv` through
+`accuracy_table.accuracy_rows`, and their 18 shared cells agree exactly at both
+top-1 and top-3.
+
+## The error half
+
+Accuracy and error distance can disagree, and §2.4(a) treats the disagreement
+as a finding, so `plot-error-cdf` reports the other axis: one CDF curve per
+method on a log x, over solved rows only.
+
+**The distance is to the raw target.** `error_to_target_km`, not
+`error_to_tg_seed_km` — seeds sit at cell centres, so routing through one would
+add the row's `cell_offset_km` (p50 16-20 km at `h3-4`) to every answer,
+correct ones included. Re-quantizing the answer space changes accuracy and
+must leave this figure bit-identical.
+
+**Fallbacks are out, and the baseline is not a fallback.** `io.solved_mask` is
+the shared predicate — extracted from `classify.topn_summary` when this figure
+became its second caller, so the CDF's per-method `n` equals
+`topn_accuracy.csv`'s `n_solved` by construction rather than by coincidence. It
+also carries the case a hand-written filter gets wrong: Shortest-Ping's rows
+are all `BASELINE`, never `SUCCESS`, so `status == "SUCCESS"` returns an
+all-false mask and drops the baseline curve entirely.
+
+**Two numbers that had to be made to agree.** `error_cdf_percentiles.csv` and
+`topn_accuracy.csv` both carry `error_km_p50`, and they disagreed by 0.7-1.3 km
+until this module dropped `method="nearest"` for numpy's default. The v2
+plotter's `nearest` had a real reason — a quoted percentile named an actual
+target and matched the MTL world-map viewer's bookmarks — but it is not worth
+two definitions of the column the paper's accuracy table reads.
+
+**The log floor is 0.1 km, not the v2 plotter's 1 km.** Sub-kilometre errors
+are not rare here: 8 to 20 rows per method across as01/02/03, up to 4.4% of a
+run, with an observed minimum of 0.135 km. A 1 km floor flattens the left tail
+of exactly the curves that earned it and pins their p5 to the clamp. The
+manifest records `n_clamped_to_floor` (empty on all three runs) so a future run
+cannot start clipping silently, and the clamp never touches the percentile CSV.
+
+**The baseline is grey and dashed** rather than wearing its variant hue: the
+figure shows variants against a reference, not seven peers. The guide verticals
+at 100/500/1,000 km are neutral ink, because the v2 plotter's green/orange/red
+are Octant-Hull, Vanilla and Spotter in this paper's palette and would read as
+series.
 
 ## Two policies the code enforces
 

@@ -4,8 +4,8 @@
 #   python -m scripts.analysis.v3.cli --config configs/cross-as01-as03.yaml plot-pareto
 #   python -m scripts.analysis.v3.cli --config configs/cross-as01-as03.yaml plot-venn
 #
-# `plot-pareto` and `plot-venn` both take `--run-id` repeatably and consume the
-# list as-is. The remaining commands score one run at a time and will reject this
+# `plot-pareto`, `plot-venn` and `table-headline` all take `--run-id` repeatably
+# and consume the list as-is. The remaining commands score one run at a time and will reject this
 # file by name rather than fail on a type — use the per-run configs, or
 # `--all-runs`, for those.
 #
@@ -23,6 +23,12 @@ analysis:
   common:
     grid: h3
     resolution: [4]
+
+  # §8.1's headline table: datasets down the rows, methods across the columns.
+  # The three operator datasets in one table; the WEIGHTED row under each is
+  # reserved and prints as `-` until a weighted run exists to pair to it with
+  # `--weighted-run-id <dataset>=<run_id>`.
+  table-headline: {}
 
   plot-pareto:
     top_n: 1
