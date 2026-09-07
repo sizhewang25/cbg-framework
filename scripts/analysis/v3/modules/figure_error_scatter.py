@@ -176,12 +176,16 @@ MODES: dict[str, YMode] = {CELLS.key: CELLS, RANK.key: RANK}
 #: *is* the x axis and the separators between rows read as a grid rather than as
 #: bands floating at a tick. Everything below is a fraction of one row.
 #:
-#: The band does not fill its row: the strip above it is the gutter the median
-#: readout sits in. Without it the number would land inside the row above and
-#: name the wrong band.
-BAND_BOTTOM = 0.10
-BAND_TOP = 0.66
-MEDIAN_TEXT_Y = 0.70
+#: The band sits on its row's floor and stops short of the ceiling: the strip
+#: above it is the gutter the median readout occupies. Without that gutter the
+#: number would land inside the row above and name the wrong band.
+#:
+#: There is deliberately no gutter *below*. A band resting on its separator
+#: reads as sitting on the row's floor, and it makes the bottom band rest on the
+#: x axis itself rather than hovering a tenth of a row above it.
+BAND_BOTTOM = 0.0
+BAND_TOP = 0.72
+MEDIAN_TEXT_Y = 0.76
 
 #: Per-line alpha. Low enough that ~7 coincident targets read as solid and a
 #: lone one is still visible. Past that the band saturates; see the module
@@ -324,8 +328,9 @@ def level_labels(mode: YMode, max_observed: int) -> list[str]:
 def band_span(mode: YMode, level: int) -> tuple[float, float]:
     """`(bottom, top)` of a band in axes data units.
 
-    Row `k = level - index_base` occupies `[k, k+1]`; the band sits in its lower
-    portion so the gutter above it can hold the median readout.
+    Row `k = level - index_base` occupies `[k, k+1]`; the band rests on that
+    row's floor and stops below its ceiling, leaving the gutter that holds the
+    median readout.
     """
     k = level - mode.index_base
     return k + BAND_BOTTOM, k + BAND_TOP

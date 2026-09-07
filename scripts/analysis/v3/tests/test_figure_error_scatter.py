@@ -183,15 +183,25 @@ def test_level_labels_cover_every_band():
 
 
 def test_rows_are_contiguous_unit_cells_starting_at_the_x_axis():
-    """The bottom row's lower edge is y=0, so it rests on the axis like the
-    tracks in a spectrum-allocation chart rather than floating at a tick."""
+    """The bottom band's lower edge is y=0 exactly — resting on the axis like
+    the tracks in a spectrum-allocation chart, not hovering above it."""
     for mode in (S.CELLS, S.RANK):
         first_lo, _ = S.band_span(mode, mode.index_base)
-        assert first_lo == pytest.approx(S.BAND_BOTTOM)
+        assert first_lo == 0.0
         for k, level in enumerate(mode.levels):
             lo, hi = S.band_span(mode, level)
             assert lo == pytest.approx(k + S.BAND_BOTTOM)
             assert hi == pytest.approx(k + S.BAND_TOP)
+
+
+def test_the_gutter_is_only_above_the_band():
+    """A band rests on its row's floor; the free strip is the ceiling side."""
+    assert S.BAND_BOTTOM == 0.0
+    assert S.BAND_TOP < 1.0
+    for mode in (S.CELLS, S.RANK):
+        for k, level in enumerate(mode.levels):
+            lo, _ = S.band_span(mode, level)
+            assert lo == pytest.approx(k)
 
 
 def test_the_median_readout_stays_inside_its_own_row():
