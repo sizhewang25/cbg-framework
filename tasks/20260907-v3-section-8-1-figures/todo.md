@@ -46,6 +46,17 @@
 - [x] `plot-error-vs-cells: {}` in the three per-run configs; README step 3g + a section
 - [ ] Insert into the paper draft (§2.4(a)'s disagreement claim, and §8.1's dense-region subsection)
 
+## Phase 0e: rework the error-vs-class figures (2026-09-07)
+- [ ] Replace jitter+bins with rug bands: one thin line per point in the method's hue, alpha accumulation for density
+- [ ] Switch the denominator to `n_targets` so band 0 == `accuracy_top1`; label the shortfall as the fallback rate
+- [ ] Row-share % on each band's right edge
+- [ ] Annotate each band's median error above its rule
+- [ ] Drop the margin rule, both disagreement annotations, the footnote line and the two orphaned summary columns
+- [ ] Add the `tg_seed_rank` y mode in the same module, as its own CLI command
+- [ ] Rename the y axes: "Cells away from the true class" / "Seeds closer to the estimate than the true one"
+- [ ] Pin band-0 share == `accuracy_top1` and cumulative rank <= 2 == `accuracy_top3` on all runs
+- [ ] Update `test_figure_error_scatter.py`, README and the three per-run configs
+
 ## Phase 1: Figure D's data step (build first — most load-bearing)
 - [ ] Add `COVARIATES = ("tg_seed_nearest_vp_km", "min_inflation")` and `breakdown_by_covariate(membership, labels, *, weights=None)` to `breakdown.py`
 - [ ] Reuse `confusion.density_bins` for the quantile binning rather than re-deriving edges
