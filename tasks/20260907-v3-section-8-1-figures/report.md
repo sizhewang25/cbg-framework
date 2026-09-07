@@ -6,8 +6,9 @@
 
 ## Summary
 
-Two artifacts built and verified: the §8.1 **headline table**
-(`table-headline`) and the **error-distance CDF** (`plot-error-cdf`). The four
+Three artifacts built and verified: the §8.1 **headline table**
+(`table-headline`), the **error-distance CDF** (`plot-error-cdf`) and the
+**error-vs-class-error scatter** (`plot-error-vs-cells`). The four originally
 planned figures are still planned only. The design is recorded in [plan.md](plan.md)
 and was settled against the data rather than in the abstract — two pilots were
 run before any figure was specified, and one of them reordered the figure set.
@@ -132,6 +133,37 @@ Shortest-Ping's rows are all `BASELINE`, never `SUCCESS`; a hand-written
 **The v2 plotter's threshold colours are this paper's variant hues.** Green,
 orange and red guides at 100/500/1,000 km would read as Octant-Hull, Vanilla
 and Spotter. Guides are neutral ink here.
+
+### Verification — `plot-error-vs-cells`
+
+| check | result |
+| --- | --- |
+| `pytest scripts/analysis/v3/tests/` | **517 passed** |
+| crossings vs `confusion_pairs.csv` on shared rows | **delta 0** (874 / 1,297 / 1,477 rows) |
+| error vs `confusion_pairs.csv` on shared rows | **delta 0.000000 km** |
+| level-0 rows this figure adds | **1,414 / 1,100 / 1,178** — absent from `confusion_pairs.csv` |
+| the two disagreement regions | disjoint by construction (`>` far, `<=` near), pinned by test |
+
+### §2.4(a)'s claim, counted
+
+The section asserts accuracy and error distance can disagree and that the
+disagreement is a finding. On as02, against a 172 km margin:
+
+- **288 points** are right-class-but-beyond-margin — the answer space absorbing
+  a coordinate error, which is what a bounded metro-granular criterion is for.
+- **111 points** are wrong-class-but-within-margin — nearest-seed snapping,
+  the artifact §8.1's dense-region subsection asks about.
+
+The axes do correlate (median error rises monotonically with crossings on every
+method: 25 → 530 → 757 → 1,448 km for Shortest-Ping), which is what makes the
+off-diagonal points worth naming.
+
+**Each method has a signature in those two regions.** Shortest-Ping and SoI
+score **zero** in the first: when they get the cell right the coordinate is
+always inside the margin, because the answer *is* a VP coordinate and a
+VP-proximate target is genuinely close. Spotter is the mirror image — 126 in
+the first region, zero in the second, since it never has a good coordinate to
+lose to a boundary.
 
 ### The table's two non-obvious decisions
 

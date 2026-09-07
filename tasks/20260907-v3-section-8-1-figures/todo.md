@@ -34,6 +34,18 @@
 - [x] README: pipeline step 3f and an "error half" section
 - [ ] Insert the CDF into the paper draft (§8.3's `TODO: error distance`)
 
+## Phase 0d: error vs class-error scatter (done 2026-09-07)
+- [x] New `modules/figure_error_scatter.py` + `plot-error-vs-cells`: x = error distance (log), y = class boundaries crossed (0 = correct cell), one panel per method
+- [x] Recompute crossings for **all** solved rows — `confusion_pairs.csv` keeps only wrong rows, so its `y == 0` column is missing entirely
+- [x] Verified against `confusion_pairs.csv` on shared rows: crossings delta 0, error delta 0
+- [x] Margin reference read per run from `seeds.csv` (151/172/160 km), not hardcoded
+- [x] Two disagreement regions counted per method, disjoint by construction (`>` far, `<=` near)
+- [x] Seeded jitter so two renders of one dataset do not look like two datasets
+- [x] Share the error axis, row filter and distance column with `plot-error-cdf`
+- [x] `test_figure_error_scatter.py` — 16 tests
+- [x] `plot-error-vs-cells: {}` in the three per-run configs; README step 3g + a section
+- [ ] Insert into the paper draft (§2.4(a)'s disagreement claim, and §8.1's dense-region subsection)
+
 ## Phase 1: Figure D's data step (build first — most load-bearing)
 - [ ] Add `COVARIATES = ("tg_seed_nearest_vp_km", "min_inflation")` and `breakdown_by_covariate(membership, labels, *, weights=None)` to `breakdown.py`
 - [ ] Reuse `confusion.density_bins` for the quantile binning rather than re-deriving edges

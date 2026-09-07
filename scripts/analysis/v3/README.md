@@ -118,6 +118,10 @@ python -m scripts.analysis.v3.cli table-headline \
 python -m scripts.analysis.v3.cli plot-error-cdf \
   --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
 
+# 3g. Where the two metrics disagree: coordinate error vs class boundaries
+python -m scripts.analysis.v3.cli plot-error-vs-cells \
+  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
+
 # 4. Set overlap of correct classifications (repeat per top-N)
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 3
@@ -1012,6 +1016,44 @@ figure shows variants against a reference, not seven peers. The guide verticals
 at 100/500/1,000 km are neutral ink, because the v2 plotter's green/orange/red
 are Octant-Hull, Vanilla and Spotter in this paper's palette and would read as
 series.
+
+## Where the two metrics disagree
+
+`plot-error-vs-cells` is the only figure that puts accuracy and error distance
+on the same point, which is what turns §2.4(a)'s claim that they can disagree
+into a count. One point per (method, solved target): x the coordinate error,
+y how many class boundaries lie between the true cell and the predicted one.
+
+**It cannot be built from `confusion_pairs.csv`.** That file keeps only rows
+that were wrong at the reported top-N, so the whole `y == 0` column — 1,100 to
+1,414 rows per run — is absent from it. Crossings are recomputed from the same
+`answer_space.seed_crossing_matrix`, and on the rows the two do share they
+agree exactly (874 / 1,297 / 1,477 rows, delta 0).
+
+**The reference is the answer space's own margin**, the median half-distance
+from a seed to its nearest other seed (151 / 172 / 160 km on as01/02/03). An
+error inside it was small enough to have landed in the right cell, which is
+what makes the two off-diagonal regions meaningful rather than arbitrary:
+
+| region | reading | as02 |
+| --- | --- | --: |
+| `y == 0`, error > margin | right class, bad coordinate — the answer space absorbed the error, which is what a bounded metro-granular criterion is *for* | 288 |
+| `y >= 1`, error ≤ margin | wrong class despite a good coordinate — nearest-seed snapping, the §8.1 artifact | 111 |
+
+The two axes do correlate: median error rises monotonically with crossings on
+every method (25 → 530 → 757 → 1,448 km for Shortest-Ping on as02). That is
+what makes the off-diagonal points worth naming rather than assuming, and it
+also gives each method a signature. Shortest-Ping and SoI score **zero** in the
+first region — when they get the cell right the coordinate is always inside the
+margin, because the answer *is* a VP coordinate and a VP-proximate target is
+genuinely close. Spotter is the mirror image: 126 in the first region and zero
+in the second, since it never has a good coordinate to lose to a boundary.
+
+One panel per method rather than six colours in one frame: 2,400 points over
+four ordinal levels is an ink blot, and the panel is the method's identity, so
+the palette's all-pairs CVD margin never has to carry anything here. The error
+axis, the row filter and the distance column are shared with `plot-error-cdf`
+so the two figures can be read against each other without rescaling.
 
 ## Two policies the code enforces
 

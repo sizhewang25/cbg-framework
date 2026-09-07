@@ -78,4 +78,22 @@
   claimed the curves started at zero when they started at 100 m. Rendering the
   figure and looking at it is the only thing that catches this class of bug —
   the palette validator checks colour, not axes.
+- **Check whether the existing table covers the whole domain before building on
+  it.** `confusion_pairs.csv` has a `seeds_crossed` column and looked like the
+  obvious input for a scatter against it. Its row-inclusion rule keeps only
+  rows *wrong* at the reported top-N, so the entire `y == 0` column — over a
+  thousand rows per run, and half the point of the figure — is absent. Reading
+  the filter, not the schema, is what surfaced it; and recomputing from the
+  same `seed_crossing_matrix` meant the two artifacts could still be checked
+  against each other (delta 0 on every shared row).
+- **A threshold on a figure needs to come from the data, not from a round
+  number.** The two disagreement regions only mean something against a scale
+  that says when a coordinate error *should* have changed the label. The answer
+  space already publishes it — `seeds.csv`'s `margin_km`, half the distance to
+  the nearest other seed — so the rule is read per run (151/172/160 km) rather
+  than picked as "100 km looks about right".
+- **Two adjacent regions need disjoint comparisons.** `>` for the far side and
+  `<=` for the near side, so a point exactly on the margin lands in exactly one
+  of them. Both `>=`/`<=` would double-count it and the two counts would no
+  longer add up against the total.
 

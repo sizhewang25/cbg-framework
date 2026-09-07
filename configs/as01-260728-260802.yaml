@@ -37,6 +37,9 @@ analysis:
   # Error-distance CDF, one curve per method, log x, fallbacks excluded.
   plot-error-cdf: {}
 
+  # Coordinate error against class error, one panel per method.
+  plot-error-vs-cells: {}
+
   plot-venn:
     top_n: 1
 
