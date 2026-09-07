@@ -96,7 +96,7 @@ def guard_one_setup(runs: dict[str, RunPaths], *, allow_mixed: bool) -> None:
         raise typer.BadParameter(
             f"selected runs span {len(setups)} setups: "
             + "; ".join(f"{s} = {v}" for s, v in by_setup.items())
-            + ". These swap the VP/target roles (SCHEMA.md §7), so one frontier over "
+            + ". These swap the VP/target roles (SCHEMA.md §7), so one artifact over "
             "both would not be a like-for-like comparison. Pass --allow-mixed-setups "
             "to override, or select runs from one setup."
         )

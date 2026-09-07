@@ -131,3 +131,36 @@
   error axis, which is the whole basis of comparing bands. Copying the row
   framing was right, copying the axis structure would have broken the figure.
 
+- **Prove a plotting refactor inert with md5, not with a passing suite.** Pulling
+  `_draw_panel` out of `plot_bands` touched every mark on six figures; the tests
+  only assert "renders, non-empty". Hashing all six PNGs and the band CSVs before
+  and after is the check that the extraction moved code and nothing else, and it
+  costs one loop.
+- **A cross-dataset figure's orientation is the whole design.** 18 panels lay out
+  the same way either way; what changes is which comparison is a straight-line
+  read. The question was "does this method's signature survive a change of
+  dataset", which is within-method, so methods take the rows. Picking the
+  transpose would not have looked wrong — it would just have made the figure's
+  own question the hard scan.
+- **Keep the shared axis physically the same length across figures that invite
+  comparison.** The per-run and cross figures both live in §8.1, so the cross
+  grid keeps the 4.9 in panel width rather than fitting six method columns; an
+  x position means the same thing in both, and five decades still label without
+  collisions.
+- **Don't pool runs with disjoint targets of different sizes.** 399 / 412 / 458
+  targets means one pooled band share silently weights as03 heaviest and
+  describes no dataset. The grid puts three panels side by side instead, each
+  with its own `n` printed — and each panel then equals that run's own figure
+  exactly, which is a checkable property rather than a claim.
+- **"Cross-dataset" is two questions, and picking one silently answers the wrong
+  half.** Merging the runs asks "how good is each method on the fleet"; keeping
+  them apart asks "does each method behave the same everywhere". I built the
+  second and reported it as *the* cross-dataset figure. Both are cheap once the
+  loader is shared — the fix was a `--layout` flag and one extra filename stem,
+  not a second module.
+- **Pooling is legal or illegal depending on the data, so check rather than
+  argue.** I had written "a pooled share would describe no dataset" into three
+  files; the actual objection to pooling is double-counting, which only happens
+  if the runs share targets. `guard_disjoint_targets` turns the worry into an
+  assertion, and `weighting_check` turns the remaining caveat (micro vs macro
+  average) into a number — max 0.6 pp here.

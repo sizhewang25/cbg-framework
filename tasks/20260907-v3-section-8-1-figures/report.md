@@ -240,6 +240,78 @@ reduces to its dataset: `as01-weighted-260728` and
 (`--weighted-run-id as01=<run_id>`), with a test pinning that `short_dataset`
 cannot do the job — so nobody re-introduces the inference.
 
+## The cross-dataset band grid
+
+`plot-error-vs-rank` / `plot-error-vs-cells` now take two or more `--run-id`
+and render one grid instead of one figure per run: methods down the rows,
+datasets across the columns, into `_cross/error-vs-class/as01+as02+as03/`.
+
+**What it shows that the per-run figures cannot.** The per-run figure
+establishes that each method has a signature in the accuracy/error pair; the
+grid asks whether the signature survives a change of dataset, and the answer is
+that it degrades in a specific way rather than dissolving. Octant-Hull's
+correct band runs 72.9% / 65.0% / 50.2% across as01/02/03 while its
+one-cell-out band runs 21.6% / 28.6% / 40.2% — the targets it loses slide one
+band up, they do not scatter. Vanilla's two failure modes move independently:
+its fallback share is worst on as01 (26.6% / 18.2% / 20.3%) while its correct
+band is *best* there (44.1% / 29.8% / 30.8%), so giving up and being wrong are
+not the same difficulty.
+
+**Orientation is a choice, not a default.** Methods own the rows because the
+cross-dataset comparison is a within-method read, so a method's three datasets
+sit side by side. The transpose puts the same 18 panels on the page and turns
+that comparison into a vertical scan across two intervening rows. Three columns
+also keep the 4.9 in panel width, and therefore the length of the log x axis,
+identical to the per-run figure — which is the whole basis for reading an x
+position across the two figures. Six method columns would need ~3 in panels and
+could not label five decades without collisions.
+
+**In the comparison layout nothing is pooled.** as01/02/03 have disjoint target
+sets of different sizes (399 / 412 / 458), so a pooled band share is
+target-weighted — which the pooled layout below reports and quantifies rather
+than avoiding. Each comparison panel runs through the same
+`load_points` / `band_table` pair the per-run figure uses and prints its own
+`n`. Verified: all 18 correct-band shares equal that run's `accuracy_top1` and
+all 18 cumulative-through-band-3 values equal its `accuracy_top3`, delta
+0.000000.
+
+**The refactor is provably inert.** `_draw_panel`, `panel_header` and
+`footnote_text` came out of `plot_bands` so the two figures share one panel
+renderer. All six per-run PNGs and both band CSVs per run re-render to
+identical md5s afterwards, so the extraction moved code and changed no output.
+
+## The pooled layout
+
+`--layout` now chooses between two cross-dataset figures, default `pooled`:
+
+* **`pooled`** merges the runs' targets into one 1,269-target population and
+  reuses the per-run six-panel renderer unchanged. Legitimate because the
+  operator runs' target sets are disjoint — 399 + 412 + 458 distinct ids, and
+  `guard_disjoint_targets` checks it rather than trusting it, since a shared id
+  would be counted once per run in the denominator and drawn twice in the band.
+  It is the same pooling `plot-venn` already performs over these three runs.
+* **`compare`** is the per-dataset grid, now suffixed `_by_dataset`.
+
+**Pooling is where the density encoding starts working.** At 399 targets a band
+is a few dozen stripes; at 1,269 Octant-Hull's correct band is a continuous
+smear over 789 targets — 0.135 km to 466 km, 33 km median, 4-135 km IQR. The
+figure stops being a list of marks and becomes a distribution.
+
+**The weighting caveat is measured, not asserted.** A pooled share is a
+micro-average, so as03 carries 36% of the denominator and it is *not* the mean
+of the three datasets' accuracies. `weighting_check` puts both in the manifest
+per method; the largest gap across the six is 0.0064 (Octant-Spline: 0.5524
+pooled against 0.5588 macro), and Spotter is the only method where pooling
+helps rather than hurts. So the two averages agree here, which is worth knowing
+precisely because it could easily not have been true — Spotter's per-dataset
+accuracy rises with dataset size (0.389 / 0.413 / 0.474) while everyone else's
+falls.
+
+Verified: pooled correct-band shares equal the target-weighted mean of the
+three runs' `accuracy_top1` to 5e-5, the band CSV's rounding.
+
+Suite: 553 passing, up 22.
+
 ## Conclusions
 
 To be filled when the figures land.

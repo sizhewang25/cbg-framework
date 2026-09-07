@@ -58,8 +58,47 @@ The bands therefore sum to `1 - fallback_rate` rather than to 1, and the
 shortfall is labelled: Vanilla's four bands total 81.8% and the missing 18.2%
 is where its fallbacks went.
 
-Commands: `plot-error-vs-cells`, `plot-error-vs-rank`. Both write to
-`outputs/analysis/v3/<run_id>/target-cls-accuracy/<grid>-<resolution>/`.
+## One run per figure, or two ways of putting several together
+
+Passing two or more `--run-id` renders a cross-dataset figure, and `--layout`
+picks which question it answers. They are different questions, not two
+renderings of one, so both are kept and each writes its own file.
+
+**`pooled` (the default)** merges the runs' targets into one population and
+draws this module's own six-panel grid over it — same renderer, so a pooled
+panel is read exactly like a single-run one. The operator runs' target sets are
+**disjoint** (399 + 412 + 458 distinct ids, checked by
+`guard_disjoint_targets` rather than assumed), so the union is a 1,269-target
+population and not a double count; this is the same pooling `plot-venn`
+performs over the same three runs. It is the fleet-wide answer, and it is the
+form where the density encoding finally has enough targets to read as a
+distribution rather than as a handful of stripes.
+
+A pooled share is a **micro**-average — pick a target at random from the fleet
+— so it is target-weighted and as03 carries 36% of it. The subtitle says so,
+and the manifest's `weighting` block reports the macro-average (the mean of the
+three datasets' shares) beside it. On as01/02/03 the two agree to within
+0.6 pp on every method, so the weighting is a caveat that has been measured
+rather than a distortion to worry about.
+
+**`compare`** keeps each run separate: one panel per (method, dataset), methods
+down the rows and datasets across the columns, sharing one error axis and one
+band stack. Each panel's counts, shares and medians come from that run's own
+`load_points` / `band_table`, so a panel is identical to the same panel in that
+run's own figure. It answers whether a method's signature survives a change of
+dataset, and on as01/02/03 it does not uniformly: Octant-Hull's correct band
+runs 72.9% / 65.0% / 50.2% while its one-cell-out band runs
+21.6% / 28.6% / 40.2%, so the same method degrades by sliding one band up
+rather than by scattering.
+
+`--all-runs` stays per-run either way: which datasets belong in one figure is a
+claim about comparability (§7.3), so it is named rather than discovered, and
+mixing the two run families is refused by `cross.guard_one_setup`.
+
+Commands: `plot-error-vs-cells`, `plot-error-vs-rank`. One run writes to
+`outputs/analysis/v3/<run_id>/target-cls-accuracy/<grid>-<resolution>/`;
+several write to `outputs/analysis/v3/_cross/error-vs-class/<dataset-set>/`,
+with the comparison grid suffixed `_by_dataset`.
 """
 
 from __future__ import annotations
@@ -72,7 +111,7 @@ import numpy as np
 import pandas as pd
 import typer
 
-from scripts.analysis.v3.modules import io
+from scripts.analysis.v3.modules import cross, io
 from scripts.analysis.v3.modules.answer_space import (
     load_answer_space,
     seed_crossing_matrix,
@@ -367,6 +406,177 @@ def _fmt_km(value: float) -> str:
     return f"{value:.1f}" if value < 10 else f"{value:.0f}"
 
 
+def panel_header(bands: pd.DataFrame) -> str:
+    """`n = 412 · 18.2% fell back` — the panel's denominator and its shortfall.
+
+    The bands sum to `1 - fallback_rate` rather than to 1, so the shortfall has
+    to be named somewhere or the reader is left to infer it from percentages
+    that do not add up. Read off the band table rather than recomputed, so it
+    cannot disagree with the shares beside it.
+    """
+    if bands.empty:
+        return ""
+    n_targets = int(bands["n_targets"].iloc[0])
+    drawn = int(bands["n"].sum())
+    missing = n_targets - drawn
+    header = f"n = {n_targets}"
+    if missing and n_targets:
+        header += f" · {missing / n_targets * 100:.1f}% fell back"
+    return header
+
+
+def _draw_panel(
+    ax,
+    *,
+    group: pd.DataFrame,
+    bands: pd.DataFrame,
+    mode: YMode,
+    hue: str,
+    y_labels: list[str],
+    min_x_km: float,
+    max_x_km: float,
+    title: str | None = None,
+    title_color: str | None = None,
+    header: str | None = None,
+) -> None:
+    """One panel's band stack: separators, target lines, medians, shares.
+
+    Shared by the per-run figure (one panel per method) and the cross-dataset
+    grid (one panel per method x dataset), so the two cannot drift in band
+    geometry, alpha, median rule or share denominator — the whole point of the
+    cross figure is that a band in it is the same object as a band in the
+    per-run figure.
+
+    `group` is this panel's points and `bands` its rows of `band_table`.
+    """
+    from matplotlib.ticker import FuncFormatter
+
+    ax.set_facecolor(_SURFACE)
+    shares: dict[int, float] = {}
+
+    # Row separators first, so the grid sits under the data.
+    for k in range(mode.n_bands + 1):
+        ax.axhline(k, color=_C_GRID, linewidth=0.8, zorder=1)
+
+    by_level = bands.set_index("level")
+    for level in mode.levels:
+        lo, hi = band_span(mode, level)
+        gl = group.loc[group["level"] == level]
+        if len(gl):
+            # One line per target, no binning and no jitter: density comes
+            # from lines landing on the same x, so a dark stripe is a real
+            # cluster of targets rather than a bin that happens to be wide.
+            ax.vlines(
+                np.clip(gl["error_km"].to_numpy(dtype=float), min_x_km, max_x_km),
+                lo,
+                hi,
+                color=hue,
+                alpha=LINE_ALPHA,
+                linewidth=LINE_WIDTH,
+                zorder=2,
+            )
+        if level not in by_level.index:
+            continue
+        row = by_level.loc[level]
+        p50 = float(row["error_km_p50"])
+        if np.isfinite(p50):
+            # Exactly the band's height, like every other line in it — the
+            # median is one of the targets, not an annotation layer.
+            ax.vlines(p50, lo, hi, color=_C_INK, linewidth=1.5, zorder=4)
+            ax.annotate(
+                _fmt_km(p50),
+                xy=(p50, level - mode.index_base + MEDIAN_TEXT_Y),
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color=_C_INK,
+                zorder=5,
+            )
+        shares[level] = float(row["share"])
+
+    if header:
+        ax.annotate(
+            header,
+            xy=(0.015, 0.97),
+            xycoords="axes fraction",
+            ha="left",
+            va="top",
+            fontsize=7.5,
+            color=_C_MUTED,
+            family="monospace",
+        )
+    if title:
+        ax.set_title(
+            title,
+            fontsize=10.5,
+            fontweight="bold",
+            color=title_color or hue,
+        )
+
+    ax.set_xscale("log")
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+    ax.set_xlim(min_x_km, max_x_km)
+    # Exactly the stack of rows: no padding, so the first row rests on the
+    # x axis and the last closes the panel.
+    ax.set_ylim(0, mode.n_bands)
+    ax.set_yticks([band_centre(mode, lv) for lv in mode.levels])
+    ax.set_yticklabels(y_labels, fontsize=8.5)
+    ax.grid(True, axis="x", which="major", color=_C_GRID, linewidth=0.7, zorder=0)
+    ax.set_axisbelow(True)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(_C_AXIS)
+    ax.tick_params(colors=_C_MUTED, labelsize=8.5)
+
+    # Shares hang off a twin y axis rather than off annotations at the panel
+    # edge: placed text lands in the gap *between* panels, where it reads as
+    # belonging to either, and inside the panel it collides with the long
+    # tail on as01/as03 (Shortest-Ping's p95 is 3,871 km, ~93% along the log
+    # axis). A right-hand tick is aligned with its band and cannot overlap.
+    share_ax = ax.twinx()
+    share_ax.set_ylim(ax.get_ylim())
+    share_ax.set_yticks([band_centre(mode, lv) for lv in mode.levels])
+    share_ax.set_yticklabels(
+        [f"{shares.get(lv, 0.0) * 100:.1f}%" for lv in mode.levels],
+        fontsize=7.5,
+    )
+    share_ax.tick_params(axis="y", length=0, colors=_C_INK_2)
+    for tick in share_ax.get_yticklabels():
+        tick.set_family("monospace")
+    for side in ("top", "right", "left", "bottom"):
+        share_ax.spines[side].set_visible(False)
+
+
+def footnote_text(mode: YMode) -> str:
+    """What the lines, the black rule and the percentages are.
+
+    Shared by both figures so the per-run and cross-dataset renderings make the
+    same promises about the same marks.
+    """
+    # Only the rank mode's bands accumulate into a reported metric: its index is
+    # 1-based, so summing bands 1..N is top-N. Crossings do not have that
+    # property (SCHEMA.md), so the clause is not printed on that figure.
+    cumulative_note = (
+        f", and bands 1-{mode.index_base + 2} sum to top-{mode.index_base + 2}"
+        if mode is RANK
+        else ""
+    )
+    return (
+        "One line per target, no binning: a dark stripe is targets sharing an "
+        "error. Black rule and figure above each band are its median error.\n"
+        "Percentages on the right are shares of all targets, so the bottom "
+        f"band is the method's top-1 accuracy{cumulative_note} and the bands "
+        "sum to 100% minus fallbacks."
+    )
+
+
+def panel_methods(points: pd.DataFrame) -> list[str]:
+    """Published order first, then anything `--method` added, in first-seen order."""
+    methods = [m for m in PUBLISHED_METHODS if m in set(points["method"])]
+    return methods + [m for m in points["method"].unique() if m not in methods]
+
+
 def plot_bands(
     points: pd.DataFrame,
     table: pd.DataFrame,
@@ -386,10 +596,7 @@ def plot_bands(
     identity, so colour never has to separate six series here and the
     palette's all-pairs margin is not called on.
     """
-    from matplotlib.ticker import FuncFormatter
-
-    methods = [m for m in PUBLISHED_METHODS if m in set(points["method"])]
-    methods += [m for m in points["method"].unique() if m not in methods]
+    methods = panel_methods(points)
     colors = method_colors(methods)
     labels = level_labels(mode, max_observed)
 
@@ -409,110 +616,25 @@ def plot_bands(
         squeeze=False,
     )
     by_method = {m: g for m, g in points.groupby("method", sort=False)}
-    tb = table.set_index(["method", "level"])
 
     for idx, ax in enumerate(axes.flat):
         if idx >= len(methods):
             ax.set_visible(False)
             continue
         method = methods[idx]
-        g = by_method[method]
-        hue = colors[method]
-        ax.set_facecolor(_SURFACE)
-        shares: dict[int, float] = {}
-
-        # Row separators first, so the grid sits under the data.
-        for k in range(mode.n_bands + 1):
-            ax.axhline(k, color=_C_GRID, linewidth=0.8, zorder=1)
-
-        for level in mode.levels:
-            lo, hi = band_span(mode, level)
-            gl = g.loc[g["level"] == level]
-            if len(gl):
-                # One line per target, no binning and no jitter: density comes
-                # from lines landing on the same x, so a dark stripe is a real
-                # cluster of targets rather than a bin that happens to be wide.
-                ax.vlines(
-                    np.clip(gl["error_km"].to_numpy(dtype=float), min_x_km, max_x_km),
-                    lo,
-                    hi,
-                    color=hue,
-                    alpha=LINE_ALPHA,
-                    linewidth=LINE_WIDTH,
-                    zorder=2,
-                )
-            if (method, level) not in tb.index:
-                continue
-            row = tb.loc[(method, level)]
-            p50 = float(row["error_km_p50"])
-            if np.isfinite(p50):
-                # Exactly the band's height, like every other line in it — the
-                # median is one of the targets, not an annotation layer.
-                ax.vlines(
-                    p50, lo, hi, color=_C_INK, linewidth=1.5, zorder=4
-                )
-                ax.annotate(
-                    _fmt_km(p50),
-                    xy=(p50, level - mode.index_base + MEDIAN_TEXT_Y),
-                    ha="center",
-                    va="bottom",
-                    fontsize=7,
-                    color=_C_INK,
-                    zorder=5,
-                )
-            shares[level] = float(row["share"])
-
-        n_targets = int(tb.loc[(method, mode.index_base), "n_targets"])
-        drawn = int(table.loc[table["method"] == method, "n"].sum())
-        missing = n_targets - drawn
-        header = f"n = {n_targets}"
-        if missing:
-            header += f" · {missing / n_targets * 100:.1f}% fell back"
-        ax.annotate(
-            header,
-            xy=(0.015, 0.97),
-            xycoords="axes fraction",
-            ha="left",
-            va="top",
-            fontsize=7.5,
-            color=_C_MUTED,
-            family="monospace",
+        bands = table.loc[table["method"] == method]
+        _draw_panel(
+            ax,
+            group=by_method[method],
+            bands=bands,
+            mode=mode,
+            hue=colors[method],
+            y_labels=labels,
+            min_x_km=min_x_km,
+            max_x_km=max_x_km,
+            title=short_label(method),
+            header=panel_header(bands),
         )
-
-        ax.set_title(short_label(method), fontsize=10.5, fontweight="bold", color=hue)
-        ax.set_xscale("log")
-        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
-        ax.set_xlim(min_x_km, max_x_km)
-        # Exactly the stack of rows: no padding, so the first row rests on the
-        # x axis and the last closes the panel.
-        ax.set_ylim(0, mode.n_bands)
-        ax.set_yticks([band_centre(mode, lv) for lv in mode.levels])
-        ax.set_yticklabels(labels, fontsize=8.5)
-        ax.grid(True, axis="x", which="major", color=_C_GRID, linewidth=0.7, zorder=0)
-        ax.set_axisbelow(True)
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            ax.spines[side].set_color(_C_AXIS)
-        ax.tick_params(colors=_C_MUTED, labelsize=8.5)
-
-        # Shares hang off a twin y axis rather than off annotations at the panel
-        # edge: placed text lands in the gap *between* panels, where it reads as
-        # belonging to either, and inside the panel it collides with the long
-        # tail on as01/as03 (Shortest-Ping's p95 is 3,871 km, ~93% along the log
-        # axis). A right-hand tick is aligned with its band and cannot overlap.
-        share_ax = ax.twinx()
-        share_ax.set_ylim(ax.get_ylim())
-        share_ax.set_yticks([band_centre(mode, lv) for lv in mode.levels])
-        share_ax.set_yticklabels(
-            [f"{shares.get(lv, 0.0) * 100:.1f}%" for lv in mode.levels],
-            fontsize=7.5,
-        )
-        share_ax.tick_params(axis="y", length=0, colors=_C_INK_2)
-        for tick in share_ax.get_yticklabels():
-            tick.set_family("monospace")
-        for side in ("top", "right", "left", "bottom"):
-            share_ax.spines[side].set_visible(False)
 
     fig.suptitle(title, fontsize=13, fontweight="bold", color=_C_INK, y=0.995)
     fig.text(0.5, 0.955, subtitle, ha="center", va="top", fontsize=9.5, color=_C_INK_2)
@@ -526,22 +648,10 @@ def plot_bands(
         color=_C_INK_2,
     )
     fig.supylabel(mode.axis_label, fontsize=10.5, color=_C_INK_2)
-    # Only the rank mode's bands accumulate into a reported metric: its index is
-    # 1-based, so summing bands 1..N is top-N. Crossings do not have that
-    # property (SCHEMA.md), so the clause is not printed on that figure.
-    cumulative_note = (
-        f", and bands 1-{mode.index_base + 2} sum to top-{mode.index_base + 2}"
-        if mode is RANK
-        else ""
-    )
     fig.text(
         0.5,
         0.008,
-        "One line per target, no binning: a dark stripe is targets sharing an "
-        "error. Black rule and figure above each band are its median error.\n"
-        "Percentages on the right are shares of all targets, so the bottom "
-        f"band is the method's top-1 accuracy{cumulative_note} and the bands "
-        "sum to 100% minus fallbacks.",
+        footnote_text(mode),
         ha="center",
         va="bottom",
         fontsize=8,
@@ -641,6 +751,497 @@ def build(
     return png, points, table, manifest
 
 
+# ---- cross-dataset ----------------------------------------------------------
+
+#: This module's artifact kind under `_cross/`, the sibling of `venn`'s
+#: `"venn-diagram"` and `pareto`'s `"cost-accuracy"`. One kind for both y modes:
+#: the filenames are stemmed by mode (`error_vs_rank` / `error_vs_cells`), so
+#: they coexist in one directory the way the per-run figures do.
+CROSS_KIND = "error-vs-class"
+
+#: Inches per panel row in the cross grid, against `PANEL_CHROME_INCHES` in the
+#: per-run figure. Much smaller because the grid shares its x axis down each
+#: column and carries the method name as a row label rather than a per-panel
+#: title, so a row needs padding and nothing else. The bands themselves are
+#: `ROW_INCHES` tall in both figures — that is what makes a band in one
+#: comparable to a band in the other.
+CROSS_ROW_CHROME_INCHES = 0.42
+
+#: The two cross-dataset layouts.
+#:
+#: * `POOLED` merges the runs' targets into one population and draws the
+#:   per-run figure's own six-panel grid over it. The three operator runs have
+#:   **disjoint** target sets, so their union is a population rather than a
+#:   double count — the same pooling `plot-venn` does over the same three runs.
+#:   Read it as the fleet-wide answer to "how often is each method right, and
+#:   how wrong is it when it is not".
+#: * `COMPARE` keeps each run separate, one panel per (method, dataset), and
+#:   answers whether a method's signature survives a change of dataset.
+#:
+#: They are different questions rather than a rendering choice, so both are
+#: kept and each writes its own file.
+POOLED = "pooled"
+COMPARE = "compare"
+LAYOUTS: tuple[str, ...] = (POOLED, COMPARE)
+
+
+def layout_stem(mode: YMode, layout: str) -> str:
+    """Filename stem per layout, so the two coexist in one directory.
+
+    The pooled figure keeps the bare stem because it is the cross-dataset
+    figure a reader wants by default; the comparison grid is suffixed with what
+    makes it different.
+    """
+    if layout not in LAYOUTS:
+        raise ValueError(f"unknown layout {layout!r}; expected one of {LAYOUTS}")
+    return mode.stem if layout == POOLED else f"{mode.stem}_by_dataset"
+
+
+def load_cross_points(
+    runs: dict[str, RunPaths],
+    mode: YMode,
+    *,
+    analysis_root: Path | None,
+    grid: str,
+    resolution: int,
+    methods: list[str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, dict]]:
+    """Every run's points and bands in one frame each, keyed by `dataset`.
+
+    Each run goes through the same `load_points` / `band_table` pair the
+    per-run figure uses, so a `dataset` share here is the same number as the
+    share in that run's own figure. This loader never pools: the returned
+    `table` is per-dataset, and the pooled layout re-derives its own bands from
+    the pooled `points` and `pool_counts`. Both layouts therefore start from
+    one read of the data.
+    """
+    points: list[pd.DataFrame] = []
+    tables: list[pd.DataFrame] = []
+    counts: dict[str, dict] = {}
+    for run_id in sorted(runs, key=lambda r: cross.short_dataset(r)):
+        run = runs[run_id]
+        dataset = cross.short_dataset(run_id)
+        pts, cnt = load_points(
+            run,
+            mode,
+            analysis_root=analysis_root,
+            grid=grid,
+            resolution=resolution,
+            methods=methods,
+        )
+        tbl = band_table(pts, cnt, mode)
+        points.append(pts.assign(dataset=dataset, run_id=run_id))
+        tables.append(tbl.assign(dataset=dataset, run_id=run_id))
+        counts[dataset] = {"run_id": run_id, "methods": cnt}
+    return (
+        pd.concat(points, ignore_index=True),
+        pd.concat(tables, ignore_index=True),
+        counts,
+    )
+
+
+def pool_counts(counts: dict[str, dict]) -> dict[str, dict]:
+    """Per method, the runs' row counts added up into one population.
+
+    `n_targets` is the sum over the runs that *have* that method, so a method
+    missing from one run is scored on the targets it was actually run on rather
+    than penalized for the rest — the same rule `pareto.dataset_lines` applies
+    when a variant is absent. All six published variants exist on all three
+    operator runs today, so this is a guard rather than a live case; the
+    manifest records the per-method dataset list so it cannot go unnoticed.
+
+    Pooling is legitimate here because the runs' target sets are **disjoint**:
+    as01/02/03 draw 399, 412 and 458 distinct targets, so the union is a
+    1,269-target population and not a double count. `guard_disjoint_targets`
+    checks that rather than trusting it.
+
+    What pooling *does* do is weight by target count: as03 carries 36% of the
+    pooled denominator. So a pooled share is a micro-average — "pick a target
+    at random from the fleet" — and not the mean of the three datasets'
+    accuracies. The pooled manifest reports both so the gap is visible.
+    """
+    pooled: dict[str, dict] = {}
+    for dataset, entry in counts.items():
+        for method, cnt in entry["methods"].items():
+            acc = pooled.setdefault(
+                method,
+                {"n_targets": 0, "n_solved": 0, "n_placed": 0, "datasets": []},
+            )
+            for key in ("n_targets", "n_solved", "n_placed"):
+                acc[key] += int(cnt.get(key, 0))
+            acc["datasets"].append(dataset)
+    for cnt in pooled.values():
+        cnt["datasets"] = sorted(cnt["datasets"])
+    return pooled
+
+
+def guard_disjoint_targets(points: pd.DataFrame) -> dict[str, int]:
+    """Refuse to pool runs that share a `target_id`.
+
+    A shared target would be counted once per run in the pooled denominator and
+    drawn twice in the band, so the pooled share would stop being a rate over a
+    population. The three operator runs are disjoint by construction — each
+    draws its targets from its own AS — but that is a property of the data, and
+    a re-run with an overlapping target list would otherwise pool silently.
+    """
+    if "dataset" not in points.columns:
+        return {}
+    per_method = points.groupby("method")["target_id"]
+    dupes = {
+        str(method): int(ids.duplicated().sum())
+        for method, ids in per_method
+        if ids.duplicated().any()
+    }
+    if dupes:
+        worst = max(dupes.items(), key=lambda kv: kv[1])
+        raise typer.BadParameter(
+            f"the selected runs share targets ({worst[1]} repeated ids on "
+            f"{worst[0]}, {len(dupes)} methods affected), so pooling them would "
+            "count those targets once per run in the denominator and draw them "
+            f"twice in the band. Use --layout {COMPARE}, which keeps each run's "
+            "numbers separate."
+        )
+    return dupes
+
+
+def cross_grid_shape(points: pd.DataFrame) -> tuple[int, int]:
+    """`(n_rows, n_cols)` of the cross grid: methods down, datasets across.
+
+    Not the transpose. The figure answers "does this method's pattern survive a
+    change of dataset", which is a within-method read, so a method owns a row
+    and its datasets sit side by side in it.
+    """
+    return len(panel_methods(points)), int(points["dataset"].nunique())
+
+
+def cross_figsize(n_rows: int, n_cols: int, mode: YMode) -> tuple[float, float]:
+    """Inches for the cross grid.
+
+    Width per column is the per-run figure's panel width, so the log x axis is
+    the same length in both and an x position can be read across them. Height
+    per row is `ROW_INCHES * n_bands` — also the per-run figure's — plus a
+    smaller chrome allowance, since the grid shares its x axis down each column
+    and names the method in a row label rather than a per-panel title.
+    """
+    return (
+        4.9 * n_cols,
+        (ROW_INCHES * mode.n_bands + CROSS_ROW_CHROME_INCHES) * n_rows + 1.6,
+    )
+
+
+def plot_cross_bands(
+    points: pd.DataFrame,
+    table: pd.DataFrame,
+    out_path: Path,
+    *,
+    mode: YMode,
+    title: str,
+    subtitle: str,
+    max_observed: int,
+    max_x_km: float = DEFAULT_X_MAX_KM,
+    min_x_km: float = X_MIN_KM,
+) -> Path:
+    """One panel per (method, dataset): methods down the rows, datasets across.
+
+    ## Why this orientation
+
+    The per-run figure answers "what does each method's error/class pattern
+    look like"; this one answers "does that pattern survive a change of
+    dataset", which is a *within-method, across-dataset* read. So a method owns
+    a row and its three datasets sit side by side in it, left to right. The
+    transpose would put the same panels on the page and make the cross-dataset
+    comparison a vertical scan across two intervening rows.
+
+    Three columns rather than six also keeps the panel width — and therefore
+    the log x axis — identical to the per-run figure, which is the whole basis
+    for reading an x position across the two. Six method columns would need
+    ~3 in panels and could not label five decades without collisions.
+
+    ## What is shared and what is not
+
+    x and y are shared across every panel: same error axis, same band stack,
+    same top-band bucket label, so any two panels are directly comparable. The
+    numbers are not shared — each panel's `n`, shares and medians are its own
+    run's, and each panel prints its own `n` because the runs differ in size
+    (399 / 412 / 458 targets).
+    """
+    methods = panel_methods(points)
+    datasets = sorted(points["dataset"].unique())
+    colors = method_colors(methods)
+    labels = level_labels(mode, max_observed)
+
+    n_rows, n_cols = cross_grid_shape(points)
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=cross_figsize(n_rows, n_cols, mode),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    groups = {k: g for k, g in points.groupby(["method", "dataset"], sort=False)}
+
+    for r, method in enumerate(methods):
+        for c, dataset in enumerate(datasets):
+            ax = axes[r][c]
+            bands = table.loc[
+                (table["method"] == method) & (table["dataset"] == dataset)
+            ]
+            _draw_panel(
+                ax,
+                group=groups.get(
+                    (method, dataset), points.iloc[0:0]
+                ),
+                bands=bands,
+                mode=mode,
+                hue=colors[method],
+                y_labels=labels,
+                min_x_km=min_x_km,
+                max_x_km=max_x_km,
+                # The dataset names the column, so it is a header on the top
+                # row only and in ink — it is not a series, and painting it in
+                # the row's method hue would imply it were one.
+                title=dataset.upper() if r == 0 else None,
+                title_color=_C_INK,
+                header=panel_header(bands),
+            )
+            if c == 0:
+                # The method rides on the left in its own hue, once per row,
+                # rather than once per panel: the row *is* the method, and
+                # repeating the name three times across it would say so three
+                # times while crowding out the band tick labels.
+                ax.set_ylabel(
+                    short_label(method),
+                    fontsize=10.5,
+                    fontweight="bold",
+                    color=colors[method],
+                    labelpad=8,
+                )
+
+    fig.suptitle(title, fontsize=13, fontweight="bold", color=_C_INK, y=0.997)
+    fig.text(0.5, 0.975, subtitle, ha="center", va="top", fontsize=9.5, color=_C_INK_2)
+    fig.text(
+        0.5,
+        0.048,
+        "Error distance to the raw target (km)",
+        ha="center",
+        va="bottom",
+        fontsize=10.5,
+        color=_C_INK_2,
+    )
+    # The method names occupy the per-axes ylabel slot, so the class-error axis
+    # label goes outside them at figure level.
+    fig.supylabel(mode.axis_label, fontsize=10.5, color=_C_INK_2, x=0.004)
+    fig.text(
+        0.5,
+        0.006,
+        footnote_text(mode),
+        ha="center",
+        va="bottom",
+        fontsize=8,
+        color=_C_MUTED,
+    )
+    fig.tight_layout(rect=(0.03, 0.062, 0.99, 0.968))
+    fig.subplots_adjust(wspace=0.20)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200, bbox_inches="tight", facecolor=_SURFACE)
+    plt.close(fig)
+    return out_path
+
+
+def weighting_check(
+    per_dataset: pd.DataFrame, pooled: pd.DataFrame, mode: YMode
+) -> dict[str, dict]:
+    """Per method, the pooled correct-band share against the datasets' mean.
+
+    A pooled share is a micro-average: pick a target at random from the fleet.
+    The mean of the three datasets' shares is a macro-average: pick a dataset,
+    then a target. They differ whenever accuracy correlates with dataset size,
+    and the difference is the whole content of the "pooling weights as03
+    heaviest" caveat — so it is measured and recorded rather than warned about.
+    """
+    correct_d = per_dataset.loc[per_dataset["level"] == mode.index_base]
+    correct_p = pooled.loc[pooled["level"] == mode.index_base].set_index("method")
+    out: dict[str, dict] = {}
+    for method, g in correct_d.groupby("method"):
+        if method not in correct_p.index:
+            continue
+        micro = float(correct_p.loc[method, "share"])
+        macro = float(g["share"].mean())
+        out[str(method)] = {
+            "pooled_micro": round(micro, 4),
+            "dataset_macro_mean": round(macro, 4),
+            "delta": round(micro - macro, 4),
+            "per_dataset": {
+                str(d): round(float(v), 4)
+                for d, v in zip(g["dataset"], g["share"])
+            },
+        }
+    return out
+
+
+def build_cross(
+    runs: dict[str, RunPaths],
+    *,
+    mode: YMode,
+    layouts: tuple[str, ...] | list[str] = (POOLED,),
+    analysis_root: Path | None = None,
+    grid: str = DEFAULT_GRID,
+    resolution: int,
+    methods: list[str] | None = None,
+    max_x_km: float = DEFAULT_X_MAX_KM,
+    min_x_km: float = X_MIN_KM,
+    out_dir: Path | None = None,
+) -> list[dict]:
+    """Render the requested cross-dataset layouts from **one** read of the data.
+
+    Returns one entry per layout: `{"layout", "stem", "png", "points",
+    "table", "manifest"}`. The loader runs once whatever is asked for, since
+    reading and walking the answer space is the expensive part and both layouts
+    consume the same rows.
+    """
+    unknown = [lay for lay in layouts if lay not in LAYOUTS]
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown layout(s) {unknown}; expected any of {list(LAYOUTS)}"
+        )
+    points, per_dataset, counts = load_cross_points(
+        runs,
+        mode,
+        analysis_root=analysis_root,
+        grid=grid,
+        resolution=resolution,
+        methods=methods,
+    )
+    max_observed = int(points["class_error"].max())
+    slug = grid_slug(grid, resolution)
+    datasets = sorted(points["dataset"].unique())
+    target_dir = out_dir or cross.cross_dir(analysis_root, runs.keys(), kind=CROSS_KIND)
+
+    common = {
+        "run_ids": sorted(runs),
+        "datasets": datasets,
+        "grid": {"scheme": grid, "resolution": resolution},
+        "y_mode": mode.key,
+        "y_axis": mode.axis_label,
+        "methods": panel_methods(points),
+        "error_column": ERROR_COLUMN,
+        "index_base": mode.index_base,
+        "bands_drawn": list(mode.levels),
+        "max_raw_value_observed": max_observed,
+        "top_band_is_a_bucket": max_observed + mode.index_base > mode.top_level,
+        "n_lines_drawn": int(len(points)),
+    }
+
+    built: list[dict] = []
+    for layout in layouts:
+        stem = layout_stem(mode, layout)
+        if layout == POOLED:
+            guard_disjoint_targets(points)
+            pooled_counts = pool_counts(counts)
+            table = band_table(points, pooled_counts, mode)
+            n_pooled = max(
+                (c["n_targets"] for c in pooled_counts.values()), default=0
+            )
+            png = plot_bands(
+                points,
+                table,
+                target_dir / f"{stem}.{slug}.png",
+                mode=mode,
+                title=mode.title,
+                # "target-weighted" rides on the figure rather than only in the
+                # manifest: the shares here are a micro-average over the merged
+                # population, so the largest run carries the most weight, and a
+                # reader comparing this to a per-dataset number needs to know
+                # which average they are looking at.
+                subtitle=(
+                    f"{' + '.join(datasets)} pooled · {slug} · "
+                    f"{n_pooled:,} targets · shares are target-weighted"
+                ),
+                max_observed=max_observed,
+                max_x_km=max_x_km,
+                min_x_km=min_x_km,
+            )
+            manifest = {
+                **common,
+                "cross_layout": layout,
+                "layout": (
+                    "the per-run figure's own six-panel grid, one panel per "
+                    "method, drawn over the runs' merged targets. Identical "
+                    "renderer, so a pooled panel is read exactly like a "
+                    "single-run one."
+                ),
+                "pooling": (
+                    "the runs' targets are merged into one population. Their "
+                    "target sets are disjoint (399 + 412 + 458 distinct ids), "
+                    "checked by guard_disjoint_targets rather than assumed, so "
+                    "the union is a population and not a double count — the "
+                    "same pooling plot-venn performs over these three runs. "
+                    "n_targets per method is the sum over the runs that carry "
+                    "that method."
+                ),
+                "share_denominator": (
+                    f"{n_pooled} pooled targets — every scored row, fallbacks "
+                    "included. A share here is a micro-average over the fleet, "
+                    "so it is target-weighted: as03 carries 36% of it. See "
+                    "weighting for the macro-average beside it."
+                ),
+                "weighting": weighting_check(per_dataset, table, mode),
+                "counts": {"pooled": pooled_counts, "per_dataset": counts},
+            }
+        else:
+            table = per_dataset
+            png = plot_cross_bands(
+                points,
+                table,
+                target_dir / f"{stem}.{slug}.png",
+                mode=mode,
+                title=mode.title,
+                subtitle=(
+                    f"{' + '.join(datasets)} · {slug} · "
+                    "rows are methods, columns are datasets"
+                ),
+                max_observed=max_observed,
+                max_x_km=max_x_km,
+                min_x_km=min_x_km,
+            )
+            manifest = {
+                **common,
+                "cross_layout": layout,
+                "layout": (
+                    "one panel per (method, dataset): methods down the rows in "
+                    "PUBLISHED_METHODS order, datasets across the columns. x "
+                    "and y are shared by every panel, including the top band's "
+                    "bucket label, so any two panels are directly comparable."
+                ),
+                "pooling": (
+                    "nothing is pooled. Each panel's counts, shares and medians "
+                    "come from that run's own load_points/band_table, so a "
+                    "panel here is identical to the same panel in the run's own "
+                    "figure."
+                ),
+                "share_denominator": (
+                    "each panel divides by its own run's n_targets — every "
+                    "scored row, fallbacks included — so the correct band is "
+                    "that run's top-1 accuracy from topn_accuracy.csv and the "
+                    "bands sum to 1 - fallback_rate."
+                ),
+                "counts": counts,
+            }
+        built.append(
+            {
+                "layout": layout,
+                "stem": stem,
+                "png": png,
+                "points": points,
+                "table": table,
+                "manifest": manifest,
+            }
+        )
+    return built
+
+
 # ---- CLI --------------------------------------------------------------------
 
 
@@ -657,20 +1258,92 @@ def _run_mode(
     min_x_km: float,
     outputs_root: Path,
     analysis_root: Path,
+    allow_mixed_setups: bool = False,
+    out_dir: Path | None = None,
+    layout: list[str] | None = None,
 ) -> None:
     """Shared body of both commands — they differ only in their `YMode`."""
     if all_runs and run_id:
         raise typer.BadParameter("pass --run-id or --all-runs, not both")
-    runs = (
-        discover_runs(outputs_root)
-        if all_runs
-        else [resolve_run(rid, outputs_root) for rid in (run_id or [])]
-    )
-    if not runs:
+    ids = list(run_id or [])
+    if not ids and not all_runs:
         raise typer.BadParameter("pass at least one --run-id, or --all-runs")
 
     g, resolutions = resolve_cli_grid(grid, resolution, sweep=sweep)
-    for run in runs:
+
+    # Two or more --run-id means one cross-dataset grid, matching `plot-venn`'s
+    # convention. --all-runs stays per-run: which datasets belong in one figure
+    # is a claim about comparability (§7.3 declines the operator/public
+    # head-to-head), so it has to be named rather than discovered.
+    if len(ids) > 1:
+        runs = {rid: resolve_run(rid, outputs_root) for rid in ids}
+        cross.guard_one_setup(runs, allow_mixed=allow_mixed_setups)
+        layouts = list(layout) if layout else [POOLED]
+        for res in resolutions:
+            slug = grid_slug(g.name, res)
+            for built in build_cross(
+                runs,
+                mode=mode,
+                layouts=layouts,
+                analysis_root=analysis_root,
+                grid=g.name,
+                resolution=res,
+                methods=list(method) if method else None,
+                max_x_km=max_x_km,
+                min_x_km=min_x_km,
+                out_dir=out_dir,
+            ):
+                png, table, stem = built["png"], built["table"], built["stem"]
+                manifest = built["manifest"]
+                built["points"].to_csv(
+                    png.parent / f"{stem}_points.{slug}.csv", index=False
+                )
+                table.to_csv(png.parent / f"{stem}_bands.{slug}.csv", index=False)
+                (png.parent / f"{stem}.{slug}.manifest.json").write_text(
+                    json.dumps(manifest, indent=2) + "\n"
+                )
+                correct = table.loc[table["level"] == mode.index_base]
+                if built["layout"] == POOLED:
+                    top = correct.set_index("method_label")["share"]
+                    best = top.idxmax()
+                    summary = (
+                        f"{int(correct['n_targets'].max()):,} pooled targets · "
+                        f"band-{mode.index_base} best {best} {top[best]:.3f}"
+                    )
+                else:
+                    summary = "band-{} best per dataset: {}".format(
+                        mode.index_base,
+                        ", ".join(
+                            f"{d} {g_.set_index('method_label')['share'].idxmax()} "
+                            f"{g_['share'].max():.3f}"
+                            for d, g_ in correct.groupby("dataset", sort=True)
+                        ),
+                    )
+                typer.echo(
+                    f"{'+'.join(manifest['datasets'])} {slug} {mode.key} "
+                    f"[{built['layout']}] · "
+                    f"{len(manifest['methods'])} methods x "
+                    f"{len(manifest['datasets'])} datasets · "
+                    f"{manifest['n_lines_drawn']} lines · {summary} -> {png}"
+                )
+        return
+
+    if layout:
+        raise typer.BadParameter(
+            "--layout applies to the cross-dataset figures (two or more "
+            "--run-id); a single run has one layout"
+        )
+    if out_dir is not None:
+        raise typer.BadParameter(
+            "--out-dir applies to the cross-dataset grid (two or more --run-id); "
+            "a single run always writes back into its own target-cls-accuracy/"
+        )
+    runs_list = (
+        discover_runs(outputs_root)
+        if all_runs
+        else [resolve_run(ids[0], outputs_root)]
+    )
+    for run in runs_list:
         for res in resolutions:
             png, points, table, manifest = build(
                 run,
@@ -706,10 +1379,17 @@ def register(app: typer.Typer) -> None:
     @app.command("plot-error-vs-cells")
     def plot_error_vs_cells_cmd(
         run_id: list[str] = typer.Option(
-            None, "--run-id", help="Runs to render (repeatable), one figure each."
+            None,
+            "--run-id",
+            help="Run to render (repeatable). One run writes back into that run's "
+            "target-cls-accuracy/; two or more render one cross-dataset grid "
+            "into _cross/error-vs-class/. Omit with --all-runs.",
         ),
         all_runs: bool = typer.Option(
-            False, "--all-runs", help="Render every run found under --outputs-root."
+            False,
+            "--all-runs",
+            help="Render every run under --outputs-root, each on its own "
+            "(never pooled into the cross grid).",
         ),
         grid: str = typer.Option(DEFAULT_GRID, "--grid", help=GRID_HELP),
         resolution: list[int] = typer.Option(
@@ -731,11 +1411,32 @@ def register(app: typer.Typer) -> None:
         analysis_root: Path = typer.Option(
             DEFAULT_ANALYSIS_ROOT, help="Root for v3 analysis outputs."
         ),
+        layout: list[str] = typer.Option(
+            None,
+            "--layout",
+            help=f"Cross-dataset layout (repeatable): {POOLED!r} merges the "
+            f"runs' targets into one population and draws the usual six-panel "
+            f"grid over it; {COMPARE!r} keeps them separate, one panel per "
+            f"(method, dataset). Default: {POOLED!r}. Ignored for a single run.",
+        ),
+        allow_mixed_setups: bool = typer.Option(
+            False,
+            "--allow-mixed-setups",
+            help="Permit one cross grid over both run families. They swap the "
+            "VP/target roles (SCHEMA.md §7), so the default refuses.",
+        ),
+        out_dir: Path = typer.Option(
+            None, help="Override the cross-dataset output directory."
+        ),
     ) -> None:
         """Coordinate error against cells away from the true class.
 
-        Writes error_vs_cells.{png,_points.csv,_bands.csv,_manifest.json} into
-        target-cls-accuracy/<grid>-<resolution>/. Needs `classify`.
+        One run writes error_vs_cells.{png,_points.csv,_bands.csv,
+        _manifest.json}} into that run's
+        target-cls-accuracy/<grid>-<resolution>/. Two or more write one
+        grid of methods x datasets into
+        _cross/error-vs-class/<dataset-set>/, grid-slugged.
+        Needs `classify`.
         """
         _run_mode(
             CELLS,
@@ -749,15 +1450,25 @@ def register(app: typer.Typer) -> None:
             min_x_km=min_x_km,
             outputs_root=outputs_root,
             analysis_root=analysis_root,
+            allow_mixed_setups=allow_mixed_setups,
+            out_dir=out_dir,
+            layout=list(layout) if layout else None,
         )
 
     @app.command("plot-error-vs-rank")
     def plot_error_vs_rank_cmd(
         run_id: list[str] = typer.Option(
-            None, "--run-id", help="Runs to render (repeatable), one figure each."
+            None,
+            "--run-id",
+            help="Run to render (repeatable). One run writes back into that run's "
+            "target-cls-accuracy/; two or more render one cross-dataset grid "
+            "into _cross/error-vs-class/. Omit with --all-runs.",
         ),
         all_runs: bool = typer.Option(
-            False, "--all-runs", help="Render every run found under --outputs-root."
+            False,
+            "--all-runs",
+            help="Render every run under --outputs-root, each on its own "
+            "(never pooled into the cross grid).",
         ),
         grid: str = typer.Option(DEFAULT_GRID, "--grid", help=GRID_HELP),
         resolution: list[int] = typer.Option(
@@ -779,14 +1490,35 @@ def register(app: typer.Typer) -> None:
         analysis_root: Path = typer.Option(
             DEFAULT_ANALYSIS_ROOT, help="Root for v3 analysis outputs."
         ),
+        layout: list[str] = typer.Option(
+            None,
+            "--layout",
+            help=f"Cross-dataset layout (repeatable): {POOLED!r} merges the "
+            f"runs' targets into one population and draws the usual six-panel "
+            f"grid over it; {COMPARE!r} keeps them separate, one panel per "
+            f"(method, dataset). Default: {POOLED!r}. Ignored for a single run.",
+        ),
+        allow_mixed_setups: bool = typer.Option(
+            False,
+            "--allow-mixed-setups",
+            help="Permit one cross grid over both run families. They swap the "
+            "VP/target roles (SCHEMA.md §7), so the default refuses.",
+        ),
+        out_dir: Path = typer.Option(
+            None, help="Override the cross-dataset output directory."
+        ),
     ) -> None:
         """Coordinate error against how many classes outrank the true one.
 
         `tg_seed_rank < N` is top-N, so each band's cumulative share is that
         top-N accuracy: level 0 is top-1, through level 2 is top-3.
 
-        Writes error_vs_rank.{png,_points.csv,_bands.csv,_manifest.json} into
-        target-cls-accuracy/<grid>-<resolution>/. Needs `classify`.
+        One run writes error_vs_rank.{png,_points.csv,_bands.csv,
+        _manifest.json}} into that run's
+        target-cls-accuracy/<grid>-<resolution>/. Two or more write one
+        grid of methods x datasets into
+        _cross/error-vs-class/<dataset-set>/, grid-slugged.
+        Needs `classify`.
         """
         _run_mode(
             RANK,
@@ -800,4 +1532,7 @@ def register(app: typer.Typer) -> None:
             min_x_km=min_x_km,
             outputs_root=outputs_root,
             analysis_root=analysis_root,
+            allow_mixed_setups=allow_mixed_setups,
+            out_dir=out_dir,
+            layout=list(layout) if layout else None,
         )

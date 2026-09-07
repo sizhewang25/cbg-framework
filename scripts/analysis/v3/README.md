@@ -121,6 +121,12 @@ python -m scripts.analysis.v3.cli plot-error-cdf \
 # 3g. Where the two metrics disagree: coordinate error vs class error
 python -m scripts.analysis.v3.cli plot-error-vs-cells --all-runs
 python -m scripts.analysis.v3.cli plot-error-vs-rank  --all-runs
+# two or more --run-id go cross-dataset -> _cross/error-vs-class/
+#   --layout pooled  (default) the six-panel grid over the merged 1,269 targets
+#   --layout compare           one panel per (method, dataset)
+python -m scripts.analysis.v3.cli plot-error-vs-rank \
+  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802 \
+  --layout pooled --layout compare
 
 # 4. Set overlap of correct classifications (repeat per top-N)
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
@@ -179,6 +185,10 @@ _cross/accuracy-table/<dataset-set>/  accuracy_table.<grid>.{csv,md,manifest.jso
                                       headline.<grid>.manifest.json
 _cross/cost-accuracy/<dataset-set>/   pareto_<cost>.<grid>.top<N>.{csv,png,json}
 _cross/venn-diagram/<dataset-set>/    overlap_*.<grid>.top<N>.*
+_cross/error-vs-class/<dataset-set>/  error_vs_{cells,rank}.<grid>.png
+                                      error_vs_{cells,rank}_by_dataset.<grid>.png
+                                      <stem>_{points,bands}.<grid>.csv
+                                      <stem>.<grid>.manifest.json
 ```
 
 **Two axes, two filename mechanisms.** The answer space parameterizes every
@@ -1078,6 +1088,50 @@ One panel per method rather than six hues in one frame: the bands would overlap
 into each other, and the panel already carries identity, so colour never has to
 separate six series and the palette's all-pairs margin is not called on. The
 error axis, row filter and distance column are shared with `plot-error-cdf`.
+
+**Two or more `--run-id` go cross-dataset**, following `plot-venn`'s
+convention, into `_cross/error-vs-class/<dataset-set>/`. `--layout` picks which
+question the figure answers; they are different questions, so both are kept and
+each writes its own file.
+
+**`--layout pooled` (the default)** merges the runs' targets into one
+population and draws the same six-panel grid over it. The operator runs' target
+sets are disjoint — 399 + 412 + 458 distinct ids, checked by
+`guard_disjoint_targets` rather than assumed — so the union is a 1,269-target
+population and not a double count, the same pooling `plot-venn` performs over
+these three runs. This is also the form where the density encoding has enough
+targets to read as a distribution: Octant-Hull's correct band is a continuous
+smear over its 789 targets, 0.135 km to 466 km with a 33 km median and a 4-135
+km interquartile range, where a single run showed a few dozen stripes.
+
+A pooled share is a **micro**-average, so it is target-weighted and as03
+carries 36% of it. The subtitle says so and the manifest's `weighting` block
+reports the macro-average (the mean of the three datasets' shares) beside it:
+they agree to within 0.6 pp on every method here, so the weighting is measured
+rather than assumed away. Pooled correct-band shares equal the target-weighted
+mean of the three runs' `accuracy_top1` to 5e-5 (the CSV's rounding), e.g.
+Octant-Hull 0.6217 against 0.729 / 0.650 / 0.502 per dataset.
+
+**`--layout compare`** keeps each run separate: one panel per (method,
+dataset), methods down the rows and datasets across the columns. It answers
+whether a method's signature survives a change of dataset, and on as01/02/03 it
+does not uniformly — Octant-Hull's correct band runs 72.9% / 65.0% / 50.2%
+while its one-cell-out band runs 21.6% / 28.6% / 40.2%, so the same method
+degrades by sliding one band up rather than by scattering.
+
+Methods own the rows there because that is a within-method read; the transpose
+would put the same panels on the page and make the cross-dataset comparison a
+vertical scan across two intervening rows. Three columns also keep the panel
+width, and therefore the log x axis, identical to the per-run figure — the
+whole basis for reading an x position across the two — where six method columns
+could not label five decades without collisions. Each panel's numbers are its
+own run's, so all 18 correct-band shares match that run's `accuracy_top1` to
+0.000000 (and the rank mode's cumulative through band 3 its `accuracy_top3`),
+and each panel prints its own `n` because the runs differ in size.
+
+`--all-runs` stays per-run either way: which datasets belong in one figure is a
+claim about comparability (§7.3), so it is named rather than discovered, and
+mixing the two run families is refused.
 
 ## Two policies the code enforces
 

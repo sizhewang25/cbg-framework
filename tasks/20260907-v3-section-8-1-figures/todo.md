@@ -68,6 +68,31 @@
 - [x] Derive every y coordinate from `band_span` / `band_centre` so the row invariants are testable
 - [x] Pin the four row invariants plus the gutter's physical floor (≥ 0.13 in for the 7 pt readout)
 
+## Phase 0g: cross-dataset band grid (2026-09-07)
+- [x] Extract `_draw_panel` from `plot_bands`, so the per-run and cross figures cannot drift in band geometry, alpha, median rule or share denominator
+- [x] Verify the extraction is byte-identical: all six per-run PNGs and band CSVs re-render to the same md5
+- [x] `load_cross_points` — each run through the same `load_points`/`band_table`, tagged `dataset` + `run_id`, nothing pooled
+- [x] `plot_cross_bands` — methods down the rows, datasets across the columns; dataset headers in ink on the top row, method names as row labels in their hue
+- [x] Keep the 4.9 in panel width so the log x axis is the same length as the per-run figure's
+- [x] `CROSS_ROW_CHROME_INCHES = 0.42` against `PANEL_CHROME_INCHES = 1.7` — a shared x axis and a row label need padding and nothing else
+- [x] `footnote_text` / `panel_header` hoisted, so both figures make the same promises about the same marks
+- [x] Two or more `--run-id` switches to the grid (`plot-venn`'s convention); `--all-runs` stays per-run; mixed setups refused via `cross.guard_one_setup`
+- [x] `--out-dir` on a single run refused by name rather than silently ignored
+- [x] Verified: all 18 correct-band shares equal `accuracy_top1` and all 18 cumulative-through-band-3 equal `accuracy_top3`, delta 0.000000
+- [x] 13 tests: the per-dataset denominator, the dataset key, column sort, concat integrity, grid orientation, band-height parity, render, output path, panel header, footnote clause
+- [x] `configs/cross-as01-as03.yaml` gains `plot-error-vs-rank` / `plot-error-vs-cells`; README pipeline step 3g, `_cross/` tree and section prose updated
+
+## Phase 0h: pooled layout, per review (2026-09-07)
+- [x] `--layout pooled|compare` (repeatable), default `pooled`; `pooled` merges the runs' targets and reuses the six-panel `plot_bands` unchanged
+- [x] `pool_counts` sums each method's row counts over the runs that carry it, so a missing variant is scored on the targets it ran on
+- [x] `guard_disjoint_targets` refuses to pool runs sharing a `target_id` — it would count them once per run in the denominator and draw them twice
+- [x] `weighting_check` records the pooled micro-average against the datasets' macro mean per method: max delta 0.0064, so the target weighting is measured not waved away
+- [x] "shares are target-weighted" goes in the pooled subtitle, not only the manifest
+- [x] `layout_stem` keeps both figures on disk: `error_vs_rank.<grid>.png` pooled, `error_vs_rank_by_dataset.<grid>.png` compare
+- [x] One load serves both layouts — pinned by counting `load_points` calls
+- [x] Verified: pooled correct-band shares equal the target-weighted mean of the three runs' `accuracy_top1` to 5e-5 (the band CSV's rounding)
+- [x] 9 more tests; `configs/cross-as01-as03.yaml` asks for both layouts; README and module docstring rewritten around the two questions
+
 ## Phase 1: Figure D's data step (build first — most load-bearing)
 - [ ] Add `COVARIATES = ("tg_seed_nearest_vp_km", "min_inflation")` and `breakdown_by_covariate(membership, labels, *, weights=None)` to `breakdown.py`
 - [ ] Reuse `confusion.density_bins` for the quantile binning rather than re-deriving edges

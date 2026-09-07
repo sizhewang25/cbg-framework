@@ -4,13 +4,15 @@
 #   python -m scripts.analysis.v3.cli --config configs/cross-as01-as03.yaml plot-pareto
 #   python -m scripts.analysis.v3.cli --config configs/cross-as01-as03.yaml plot-venn
 #
-# `plot-pareto`, `plot-venn` and `table-headline` all take `--run-id` repeatably
-# and consume the list as-is. The remaining commands score one run at a time and will reject this
-# file by name rather than fail on a type — use the per-run configs, or
-# `--all-runs`, for those.
+# `plot-pareto`, `plot-venn`, `table-headline` and the two `plot-error-vs-*`
+# commands all take `--run-id` repeatably and consume the list as-is. The
+# remaining commands score one run at a time and will reject this file by name
+# rather than fail on a type — use the per-run configs, or `--all-runs`, for
+# those.
 #
-# The two commands pool the same three runs into sibling directories:
-# `_cross/cost-accuracy/as01+as02+as03/` and `_cross/venn-diagram/as01+as02+as03/`.
+# Each writes into its own sibling directory under `_cross/`:
+# `cost-accuracy/`, `venn-diagram/`, `accuracy-table/` and `error-vs-class/`,
+# all keyed `as01+as02+as03/`.
 
 run_id:
   - as01-260728-260802
@@ -43,3 +45,21 @@ analysis:
   # of the six (worth +74 drawn targets here, at the cost of that comparability).
   plot-venn:
     top_n: 1
+
+  # The band figures in their cross-dataset form, both layouts:
+  #
+  #   pooled  -> error_vs_*.h3-4.png            the six-panel grid over the
+  #              three runs' merged 1,269 targets (their target sets are
+  #              disjoint, so the union is a population). Shares are
+  #              target-weighted; the manifest reports the macro-average too.
+  #   compare -> error_vs_*_by_dataset.h3-4.png one panel per (method,
+  #              dataset), each run's own numbers, for whether a method's
+  #              signature survives a change of dataset.
+  #
+  # Both y modes are emitted because they order the methods differently
+  # (SCHEMA.md): `rank` is the axis the reported metric is built on, `cells` is
+  # the answer space's local density.
+  plot-error-vs-rank:
+    layout: [pooled, compare]
+  plot-error-vs-cells:
+    layout: [pooled, compare]
