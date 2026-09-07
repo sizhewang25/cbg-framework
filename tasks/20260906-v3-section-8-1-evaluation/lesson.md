@@ -49,5 +49,15 @@
 - **A stored column can be right about its own definition and wrong for the
   use.** `delaunay_degree` correctly reports the spherical Delaunay degree; the
   hull just triangulates the whole sphere, so for seeds inside one country it
-  counts wrap-around edges as neighbours. The tell was cheap and I did not look
-  for it until asked: a "neighbour" at distance rank 17 of 18.
+  closes around the far side and counts wrap-around edges as neighbours.
+- **Being right about the defect is not the same as being right about the
+  evidence.** I called a rank-17-of-18 "Delaunay neighbour" proof of the
+  inflation. It proves nothing — the correctly projected diagram has a rank-16
+  neighbour too, because outer cells are unbounded and genuinely border far
+  seeds. The claim shipped in a commit before I checked it against the
+  alternative construction, which took one query. Compare against the *right*
+  implementation, not against intuition about what a wrong one should look like.
+- **When two measures of one idea disagree, say which direction each errs.**
+  `delaunay_degree` overstates adjacency, `seeds_crossed == 1` understates it,
+  and true adjacency sits between. Documenting only "these are not the same"
+  would leave a reader free to substitute either.

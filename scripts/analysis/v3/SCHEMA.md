@@ -159,13 +159,8 @@ Three columns carry the load and are easy to confuse:
   the quantization the grid choice buys. Measured at `h3-4`: p50 ≈ 16-20 km,
   max ≈ 26 km. It is *not* an error metric and must never be pooled with
   `error_km_*`.
-- **`delaunay_degree`** (per seed) — **not a usable neighbour count.** It comes
-  from the convex hull of the unit vectors, which is the spherical Delaunay
-  triangulation *of the whole sphere*; with the seeds confined to one country
-  that joins the outer ones straight across the empty region. On `as01` a
-  "Delaunay neighbour" can be the 17th-nearest of 18 seeds, and the column reads
-  a mean 5.3 against 2.8 from walking the actual paths. For "is the predicted
-  cell adjacent to the true one", use `confusion_pairs.csv`'s `seeds_crossed`.
+- **`delaunay_degree`** (per seed) — **overstates adjacency; see the accuracy
+  note below.**
 - **`nearest_seed_km` / `margin_km`** (per seed) — distance to the closest other
   seed, and half of it. Unaffected by the above: the nearest-neighbour graph is
   always a subgraph of the Delaunay triangulation, so nearest-overall and
@@ -173,6 +168,54 @@ Three columns carry the load and are easy to confuse:
   tessellation and the occupancy pattern rather than where targets happened to
   fall, which is what makes them usable for "how close was the mistaken class to
   the true one".
+
+> ### Fields that are not accurate for the obvious reading
+>
+> Two adjacency-flavoured numbers in this layer mean something narrower than
+> their names suggest. Neither is wrong about its own definition; both are wrong
+> for "which classes border this one", and they err in **opposite directions**.
+>
+> **`seeds.csv` / `meta.json` `delaunay_degree` — a strict superset of true
+> adjacency.** It is the spherical Delaunay degree, taken as the convex hull of
+> the unit vectors. That is a correct spherical triangulation, but of the *whole
+> sphere*: with the seeds confined to one country, the hull has to close around
+> the far side, which joins outer seeds across the empty hemisphere. Measured
+> against the 2-D Delaunay of the same seeds in an azimuthal-equidistant
+> projection (the same projection `analysis/v3/modules/mapping.py` uses and
+> measures at 0.35% frame-area error):
+>
+> | run | hull edges | projected edges | hull-only | projected-only | mean degree |
+> | --- | --: | --: | --: | --: | --- |
+> | as01 | 48 | 43 | **5** | 0 | 5.33 vs 4.78 |
+> | as02 | 60 | 56 | **4** | 0 | 5.45 vs 5.09 |
+>
+> Confirmed on a controlled case: five seeds in a small cap (a centre plus N, S,
+> E, W) give the hull degree 4 for the north seed, counting the *south* one as
+> its neighbour. The projected diagram gives 3, correctly.
+>
+> **High distance rank is not the tell.** An earlier version of this note cited
+> "a Delaunay neighbour can be the 17th-nearest of 18 seeds" as evidence of the
+> inflation. That is wrong: the correctly projected diagram also has a
+> rank-16 neighbour on as01. Seeds on the outer boundary have *unbounded* Voronoi
+> cells and genuinely border far-away seeds. The inflation is ~7-10% of edges,
+> not a gross distortion.
+>
+> No v3 module reads the column; it exists for paper §7.4's per-seed degree
+> bullet, and it does not currently answer that bullet's stated question ("how
+> many classes each answer is confusable with"). Left in place and documented
+> rather than recomputed, so existing answer spaces stay valid.
+>
+> **`confusion_pairs.csv` `seeds_crossed` — narrower than adjacency.** It counts
+> the class boundaries on the *direct geodesic* between two seeds. `== 1` implies
+> the pair is adjacent; the converse fails, because a shared edge need not lie on
+> the segment joining them. Mean degree under `seeds_crossed == 1` is 2.7-2.8
+> against 4.8-5.3 for projected adjacency — about 40% of adjacent pairs are more
+> than one crossing apart. It is the right quantity for "how many boundaries lie
+> between the right answer and the given one" and the wrong one for a neighbour
+> count.
+>
+> So: `delaunay_degree` > true adjacency > `seeds_crossed == 1`. Neither endpoint
+> of that chain is a substitute for the middle.
 
 `seeds.csv` is grid-neutral apart from `cell_id`, whose dtype is grid-specific
 (int64 for HEALPix, canonical hex string for H3); `Grid.coerce_cell_ids` is the

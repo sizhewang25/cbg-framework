@@ -300,10 +300,13 @@ def test_outer_seeds_around_a_centre_are_not_adjacent_to_each_other():
 
     Five seeds in a small cap: a centre with four around it. Walking the path
     from north to south passes through the centre cell, so they are two
-    boundaries apart. `answer_space._delaunay_degree` takes the hull of the unit
-    vectors, which triangulates the whole sphere and therefore joins the four
-    outer seeds to each other straight across the far side — reporting a degree
-    for them that no amount of real geometry supports.
+    boundaries apart, and the correctly projected 2-D Delaunay agrees — it gives
+    the north seed degree 3 (centre, east, west).
+
+    `answer_space._delaunay_degree` gives it 4, counting *south* as a neighbour:
+    the hull of the unit vectors triangulates the whole sphere, so it must close
+    around the far side and joins the outer seeds across the empty hemisphere.
+    This is the controlled case behind SCHEMA.md's note on that column.
     """
     seeds = _latlon_seeds(
         [

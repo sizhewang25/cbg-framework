@@ -135,12 +135,20 @@ Octant-Spline (79%) leads SoI CBG (52%); by crossings SoI leads 96% to 90%.
 Fixed by `seeds_crossed`, which walks the geodesic between the two seeds and
 counts Voronoi boundaries.
 
-Not built from `answer_space._delaunay_degree`: that takes the convex hull of the
-unit vectors, triangulating the **whole sphere**, so with seeds confined to the
-US the outer ones get joined across the empty region (mean degree 5.3 vs 2.8
-walked; a "neighbour" can be the 17th-nearest of 18). `seeds.csv`'s
-`delaunay_degree` carries that inflation and is now flagged in SCHEMA.md as not
-a neighbour count.
+Not built from `answer_space._delaunay_degree`: the hull of the unit vectors
+triangulates the **whole sphere**, so with seeds confined to the US it closes
+around the far side and joins the outer ones across the empty hemisphere — 48
+edges against the projected 2-D Delaunay's 43 on as01, 60 against 56 on as02.
+
+**A first pass justified this with the wrong evidence** ("a neighbour can be the
+17th-nearest of 18"). The correctly projected diagram also has a rank-16
+neighbour on as01: outer seeds have unbounded Voronoi cells and legitimately
+border far-away ones. The inflation is ~7-10% of edges. Corrected in SCHEMA.md,
+which now documents both `delaunay_degree` (a superset of true adjacency) and
+`seeds_crossed` (narrower than it by ~40%, since a shared edge need not lie on
+the segment joining two seeds). Neither is a neighbour count; they miss in
+opposite directions. Both left as they are and documented rather than
+recomputed, so existing answer spaces stay valid.
 
 **Answer-space density costs accuracy, but not universally.** Shortest-Ping
 across density tertiles: as01 0.33 → 0.71 → 0.82, as02 0.16 → 0.42 → 0.51, but

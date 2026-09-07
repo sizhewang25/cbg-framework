@@ -159,20 +159,25 @@ def seed_crossing_matrix(seeds: pd.DataFrame, *, max_samples: int = 4096) -> np.
     this — a seed can be the second-nearest without sharing any boundary, and a
     genuine neighbour can be the twentieth-nearest.
 
-    The converse of that implication does not hold and is not claimed: two cells
-    can share a boundary the *direct* path misses, since the shared edge need not
-    lie on the segment joining their seeds. That makes `C == 1` slightly stricter
-    than adjacency, which is the right side to err on here — the question is
-    about the path from truth to answer, not about the cells' full topology.
+    **`C == 1` is not the same as "shares a boundary", and the gap is large.**
+    The implication runs one way only: a shared edge need not lie on the segment
+    joining two seeds, so a genuinely adjacent pair can walk through a third cell.
+    Measured at `h3-4`, mean degree under `C == 1` is 2.7-2.8 against 4.8-5.3 for
+    true (projected 2-D Delaunay) adjacency — roughly 40% of adjacent pairs are
+    not one crossing apart. Read `seeds_crossed == 1` as "one boundary on the
+    direct path", which is the question the confusion table is asking, and not as
+    a claim about the cells' full topology.
 
-    Computed by walking the path rather than from a triangulation, deliberately.
-    `answer_space._delaunay_degree` takes the convex hull of the unit vectors,
-    which triangulates the **whole sphere**; with 18-22 seeds confined to the US
-    that connects the outer seeds straight across the empty region, and those
-    wrap-around edges are indistinguishable from real adjacency in the output.
-    Measured on as01, a "Delaunay neighbour" can be the 17th-nearest of 18 seeds.
-    Only seeds that genuinely sit between two others can appear on the geodesic,
-    so this construction has no such failure mode.
+    Computed by walking the path rather than read off `seeds.csv`'s
+    `delaunay_degree`, which is inaccurate for this purpose — see the note on
+    that column in [SCHEMA.md](../SCHEMA.md). Briefly: it comes from the convex
+    hull of the unit vectors, which closes the triangulation around the far side
+    of the sphere and so joins outer seeds across the empty hemisphere. Measured
+    against the correctly projected 2-D Delaunay of the same seeds, the hull is a
+    strict superset: 48 edges against 43 on as01, 60 against 56 on as02.
+
+    Only seeds that genuinely sit between two others can appear on a geodesic, so
+    the walk cannot pick up a wrap-around edge.
 
     Sampling is stepped at a quarter of the tightest margin in the answer space,
     so a cell cannot be stepped over. Under-sampling could only ever *undercount*
@@ -306,11 +311,12 @@ def confusion_pairs(
     read off `seed_mesh_km.csv` rather than recomputed so it cannot disagree with
     the answer space's own geometry.
 
-    `seeds_crossed == 1` is the one to read as "a neighbouring cell". Distance
-    rank 1 implies it but is much narrower: measured at `h3-4`, 27-55% of wrong
-    top-1 rows are at rank 1 while 65-80% are one boundary away. Reporting rank
-    alone understates near-misses by up to a factor of three, because a seed can
-    be the fifth-nearest and still share a boundary.
+    `seeds_crossed == 1` is the one to read as "a neighbouring cell", with the
+    caveat above that it means *on the direct path*. Distance rank 1 implies it
+    but is much narrower: measured at `h3-4`, 27-55% of wrong top-1 rows are at
+    rank 1 while 59-75% are one boundary away. Reporting rank alone understates
+    near-misses by up to a factor of three, because a seed can be the
+    fifth-nearest and still share a boundary.
     """
     if seed_mesh_km.empty:
         raise MissingArtifactError(
@@ -429,12 +435,14 @@ def build_for_run(
             "max_seeds_crossed": int(off_diag.max()) if off_diag.size else 0,
             "basis": (
                 "seeds_crossed walks the geodesic between two seeds and counts "
-                "Voronoi class boundaries. NOT seeds.csv's delaunay_degree, which "
-                "comes from the convex hull of the unit vectors and so "
-                "triangulates the whole sphere -- with the seeds confined to one "
-                "country that links the outer ones straight across the empty "
-                "region. On as01 a 'Delaunay neighbour' can be the 17th-nearest "
-                "of 18 seeds, and the hull degree reads 5.3 against 2.8 here."
+                "the Voronoi class boundaries ON THAT PATH. It is neither "
+                "seeds.csv's delaunay_degree (a sphere-hull superset of true "
+                "adjacency; see SCHEMA.md) nor true adjacency itself: a shared "
+                "edge need not lie on the segment joining two seeds, so this "
+                "degree runs ~40% below the projected 2-D Delaunay degree "
+                "(2.7-2.8 vs 4.8-5.3 at h3-4). Correct for 'how many boundaries "
+                "lie between the right answer and the given one'; not a "
+                "neighbour count."
             ),
         },
         "density_bin_basis": (
@@ -444,9 +452,11 @@ def build_for_run(
         ),
         "distance_vs_adjacency": (
             "pred_seed_neighbour_rank orders seeds by DISTANCE; seeds_crossed "
-            "counts BOUNDARIES. rank 1 implies seeds_crossed 1, not the reverse: "
-            "a seed can be fifth-nearest and still share a boundary. Read "
-            "seeds_crossed == 1 as 'a neighbouring cell'."
+            "counts BOUNDARIES on the direct path. rank 1 implies "
+            "seeds_crossed 1, not the reverse: a seed can be fifth-nearest and "
+            "still share a boundary. Read seeds_crossed == 1 as 'one boundary "
+            "away on the direct path' -- the narrower of the two readings, and "
+            "the one §8.1 asks for."
         ),
         "error_columns": {
             "error_to_target_km": "prediction to the raw ground truth -- THE error distance",

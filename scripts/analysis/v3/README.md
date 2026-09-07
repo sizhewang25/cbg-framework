@@ -862,15 +862,14 @@ methods** — by rank, Octant-Spline (79%) leads SoI CBG (52%); by crossings SoI
 leads at 96% against Octant-Spline's 90%. Distance rank was measuring how
 crowded the neighbourhood is, not how near the miss was.
 
-Walked rather than triangulated, deliberately. `answer_space._delaunay_degree`
-takes the convex hull of the unit vectors, which *is* the spherical Delaunay
-triangulation — of the **whole sphere**. With 18-22 seeds confined to one
-country that joins the outer seeds straight across the empty region: on as01 a
-"Delaunay neighbour" can be the 17th-nearest of 18 seeds, and the hull reports a
-mean degree of 5.3 where walking the paths gives 2.8. Only seeds that genuinely
-sit between two others can appear on a geodesic, so the walk has no such failure
-mode. `seeds.csv`'s `delaunay_degree` carries that inflation and should not be
-read as a neighbour count.
+**Neither this nor `seeds.csv`'s `delaunay_degree` is a neighbour count**, and
+they miss in opposite directions — `delaunay_degree` is a sphere-hull superset of
+true adjacency, `seeds_crossed == 1` is narrower than it by about 40%.
+[SCHEMA.md](SCHEMA.md#fields-that-are-not-accurate-for-the-obvious-reading) has
+the measurements and the reason each is left as it is. What `seeds_crossed`
+answers exactly — and what §8.1 wants — is *how many class boundaries lie between
+the right answer and the given one*, which is a property of the path rather than
+of the cells' topology.
 
 `confusion_by_density.csv` bins targets by their true seed's `nearest_seed_km`.
 Crowding does cost accuracy on as01 (0.33 → 0.71 → 0.82 for Shortest-Ping across
