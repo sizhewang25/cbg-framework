@@ -138,12 +138,37 @@ and Spotter. Guides are neutral ink here.
 
 | check | result |
 | --- | --- |
-| `pytest scripts/analysis/v3/tests/` | **527 passed** |
-| band-0 share vs `accuracy_top1`, both modes, all 3 runs | **delta 0.000000** |
-| cumulative rank <= 2 vs `accuracy_top3`, all 3 runs | **delta 0.000000** |
+| `pytest scripts/analysis/v3/tests/` | **533 passed** |
+| correct-band share vs `accuracy_top1`, both modes, all 3 runs | **delta 0.000000** |
+| rank mode's cumulative through band 3 vs `accuracy_top3`, all 3 runs | **delta 0.000000** |
 | band shares vs `1 - fallback_rate` | **delta 1e-4** (4-decimal rounding across bands) |
 | crossings vs `confusion_pairs.csv` on shared rows | **delta 0** (874 / 1,297 / 1,477 rows) |
 | level-0 rows these figures add | **1,414 / 1,100 / 1,178** — absent from `confusion_pairs.csv` |
+
+### Layout, settled over four review rounds
+
+The figures went through jitter → bins → rug bands → grid rows. What stuck:
+
+- **Rows are contiguous grid cells** (`ylim (0, n_bands)`, separators between
+  them), so the bottom row rests on the x axis and each panel reads as a stack
+  of tracks rather than marks floating at ticks.
+- **The gutter is above the band only.** It exists because contiguous rows leave
+  the median readout nowhere else to go — below, it just left every band
+  hovering above its own separator.
+- **The tick sits at the band's centre, not the row's**, since it labels the
+  data and not the cell that also holds the gutter.
+- **The median rule is exactly the band's height.** It was taller on both
+  sides, which made it read as an annotation layer over the band instead of as
+  one of the targets in it.
+- **Ticks are bare integers.** What band 1 means is in the axis label and the
+  footnote, so the scale is not one annotated value beside three plain ones.
+- **Compaction is physical, not fractional** — see the lesson; `ROW_INCHES` is
+  the knob, cut 0.78 → 0.50 for 24% less figure height (2,298 → 1,737 px).
+
+Every y coordinate derives from `band_span` / `band_centre`, which is what makes
+the row invariants testable rather than implied: rows start at the axis, bands
+never touch, the readout stays inside its own row, the tick lands on the band's
+centre, and the gutter keeps ≥ 0.13 in of physical room for the 7 pt number.
 
 ### The denominator was the load-bearing decision
 
@@ -164,10 +189,10 @@ The two axes correlate (median error rises monotonically with class error on
 every method), so the readable result is the *shape* of each band stack, and
 the three mechanisms separate cleanly:
 
-- **Shortest-Ping / SoI** — 37% in band 0, as a few tight discrete stripes
-  under 60 km. The answer is a VP coordinate, so errors repeat exactly.
-- **Octant-Hull** — 65% in band 0 but smeared from 0.3 km to 600 km.
-- **Spotter** — 41% in band 0 at a 195 km median, the worst band 0 of the six.
+- **Shortest-Ping / SoI** — 37% in the correct band, as a few tight discrete
+  stripes under 60 km. The answer is a VP coordinate, so errors repeat exactly.
+- **Octant-Hull** — 65% correct but smeared from 0.3 km to 600 km.
+- **Spotter** — 41% correct at a 195 km median, the worst of the six.
 
 ### §2.4(a)'s claim, counted (first design, superseded)
 

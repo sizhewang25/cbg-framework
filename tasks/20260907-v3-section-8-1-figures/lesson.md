@@ -111,4 +111,23 @@
   at the axes edge in a multi-panel grid it lands mid-gutter and reads as
   belonging to either neighbour. A twin axis fixed the alignment but not the
   ambiguity; tightening `wspace` after `tight_layout` was the actual fix.
+- **Compacting a figure is a physical knob, not a fractional one.** "Make the
+  band shorter and the gutter smaller" is unsatisfiable in row fractions —
+  they sum to the row, so trading one only moves height to the other. Shrinking
+  the row's *inch* height shortens both. Naming that constant (`ROW_INCHES`)
+  made the request answerable and the floor statable: at 0.50 in the gutter is
+  0.15 in against ~0.10 in of 7 pt text, which is now a test rather than a
+  thing to rediscover the next time someone compacts it.
+- **A tick labels the data, not the cell it sits in.** Once each row held a band
+  *and* a readout gutter, the row's centre stopped being the band's centre.
+  Putting the tick at the row's centre would have floated every label above the
+  thing it named.
+- **An annotation that is also a data mark should be drawn as one.** The median
+  rule was 0.04 taller than the band on each side — enough to read as an
+  overlay rather than as the middle target of the band. Same height, same
+  meaning.
+- **Ask what "like the ref image" does not include.** The spectrum chart's rows
+  carry *different* x ranges because they continue a sequence; ours share one
+  error axis, which is the whole basis of comparing bands. Copying the row
+  framing was right, copying the axis structure would have broken the figure.
 

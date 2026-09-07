@@ -53,10 +53,20 @@
 - [x] Annotate each band's median error above its rule
 - [x] Drop the margin rule, both disagreement annotations, the footnote line and the two orphaned summary columns
 - [x] Add the `tg_seed_rank` y mode in the same module, as its own CLI command
-- [x] Rename the y axes: "Cells away from the true class" / "Nearest cell index of the true class"
+- [x] Rename the y axes: "Cells away from the true class" / "Top cell index of the true class"
 - [x] Make the rank axis 1-indexed with four bands (1/2/3/4+), so `index <= N` is top-N
 - [x] Pin band-0 share == `accuracy_top1` and cumulative rank <= 2 == `accuracy_top3` on all runs
 - [x] Update `test_figure_error_scatter.py`, README and the three per-run configs
+
+## Phase 0f: band layout, per review (2026-09-07)
+- [x] Lay the bands out as contiguous grid rows — `ylim (0, n_bands)`, separators between rows, bottom row resting on the x axis
+- [x] Bare-integer band ticks; what band 1 means lives in the axis label and footnote
+- [x] Tick at the band's centre, not the row's, since it labels the data and not the gutter
+- [x] Median rule exactly the band's height, so it reads as one of the targets rather than an annotation layer
+- [x] Gutter above each band only — `BAND_BOTTOM = 0.0`, so a band rests on its row's floor
+- [x] Compact y: `ROW_INCHES` 0.78 → 0.50 and `PANEL_CHROME_INCHES` 2.0 → 1.7, for 24% less figure height
+- [x] Derive every y coordinate from `band_span` / `band_centre` so the row invariants are testable
+- [x] Pin the four row invariants plus the gutter's physical floor (≥ 0.13 in for the 7 pt readout)
 
 ## Phase 1: Figure D's data step (build first — most load-bearing)
 - [ ] Add `COVARIATES = ("tg_seed_nearest_vp_km", "min_inflation")` and `breakdown_by_covariate(membership, labels, *, weights=None)` to `breakdown.py`
