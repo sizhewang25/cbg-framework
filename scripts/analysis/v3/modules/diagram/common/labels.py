@@ -35,6 +35,24 @@ PREFERRED_ORDER: tuple[str, ...] = (
 )
 
 
+#: The six published variants, by id, in §8.1's print order — the method set
+#: every paper table and figure reports by default.
+#:
+#: Distinct from `PREFERRED_ORDER`, which is a *sort key* and therefore lists
+#: both spellings of Octant-Spline so either sorts correctly. A method list can
+#: only hold one, and this holds the operator runs' spelling: `as7018_us_test01`
+#: names it `octant_cbg` and is out of scope until it is re-run with its columns
+#: consolidated onto the other AS runs' schema.
+PUBLISHED_METHODS: tuple[str, ...] = (
+    SHORTEST_PING,
+    "million_scale_cbg",
+    "vanilla_cbg",
+    "octant_cbg_hull",
+    "octant_cbg_spl",
+    "spotter_cbg",
+)
+
+
 def artifact_name(
     stem: str, ext: str, top_n: int, grid: str | None = None
 ) -> str:
@@ -66,6 +84,20 @@ def label_for(method: str) -> str:
     if label is not None:
         return label
     return method if method == SHORTEST_PING else f"{method} CBG"
+
+
+def short_label(method: str) -> str:
+    """`label_for` with the trailing " CBG" dropped.
+
+    Every method but Shortest-Ping is a CBG variant and the surrounding figure
+    or table header says so, so repeating it once per column only makes the
+    labels wide enough to collide. Written for `plot-pareto`, which still
+    re-exports it; moved here when `table-headline` became the second caller,
+    since it is a pure function of `label_for` and pulling it from `pareto`
+    would drag matplotlib into a table command.
+    """
+    label = label_for(method)
+    return label[: -len(" CBG")] if label.endswith(" CBG") else label
 
 
 # ---------------------------------------------------------------------------

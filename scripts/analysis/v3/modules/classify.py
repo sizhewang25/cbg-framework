@@ -275,12 +275,7 @@ def topn_summary(
     rows: list[dict] = []
     for method, df in frames.items():
         n_total = len(df)
-        is_baseline = (df["status"] == "BASELINE").all() if n_total else False
-        solved = (
-            np.ones(n_total, dtype=bool)
-            if is_baseline
-            else df["status"].isin(io.CBG_SUCCESS_STATUSES).to_numpy()
-        )
+        solved = io.solved_mask(df)
         rank = df["tg_seed_rank"].to_numpy()
         err = df["error_to_target_km"].to_numpy(dtype=float)
         row = {

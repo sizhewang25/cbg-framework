@@ -46,6 +46,10 @@ _VARIANT_HUES: tuple[str, ...] = (
 _C_OTHER = "#898781"
 
 _C_GRID = "#e1e0d9"
+#: Axis spines. Darker than `_C_GRID` so a spine reads as a boundary and a
+#: gridline as background. Was defined locally in `pareto.py`; hoisted here when
+#: `figure_error_cdf` became the second figure to need it.
+_C_AXIS = "#c3c2b7"
 _C_INK = "#0b0b0b"
 _C_INK_2 = "#52514e"
 _C_MUTED = "#898781"

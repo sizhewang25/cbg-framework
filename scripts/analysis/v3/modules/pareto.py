@@ -73,6 +73,9 @@ from scripts.analysis.v3.modules.diagram.common import (
     label_for,
     method_colors,
 )
+from scripts.analysis.v3.modules.diagram.common.labels import (
+    short_label as labels_short_label,
+)
 
 #: Re-exported so this module keeps one import surface for its own figure code
 #: and for `test_pareto.py`, which owns the palette's colour-blindness contract.
@@ -80,6 +83,7 @@ from scripts.analysis.v3.modules.diagram.common import (
 #: `label_for`, and because every module that draws a variant needs them; that
 #: package cannot import this one back.
 from scripts.analysis.v3.modules.diagram.common.palette import (  # noqa: E402
+    _C_AXIS,
     _C_OTHER,
     _LABEL_HUES,
     _VARIANT_HUES,
@@ -92,14 +96,10 @@ _short_dataset = cross.short_dataset
 _guard_one_setup = cross.guard_one_setup
 
 
-def short_label(method: str) -> str:
-    """`venn.label_for` with the trailing " CBG" dropped.
-
-    Every method but Shortest-Ping is a CBG variant and the figure says so, so
-    repeating it up to 16 times only makes the labels wide enough to collide.
-    """
-    label = label_for(method)
-    return label[: -len(" CBG")] if label.endswith(" CBG") else label
+#: Moved to `diagram/common/labels.py` once `table-headline` needed it too.
+#: Bound here so this module's own figure code and `test_pareto.py` keep one
+#: name for it, matching how `cross.py`'s helpers are re-exported above.
+short_label = labels_short_label
 
 # ---------------------------------------------------------------------------
 # § cost model -- moved to modules/cost.py
@@ -389,7 +389,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 _C_LINE = "#898781"  # the per-dataset polylines: neutral, because hue is taken
 _C_GRID = "#e1e0d9"
-_C_AXIS = "#c3c2b7"
 _C_INK = "#0b0b0b"
 _C_INK_2 = "#52514e"
 _C_MUTED = "#898781"

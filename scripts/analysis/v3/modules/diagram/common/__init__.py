@@ -8,11 +8,13 @@ in one place and reaches every figure at once. Nothing here draws a diagram;
 from scripts.analysis.v3.modules.diagram.common.labels import (
     LABELS,
     PREFERRED_ORDER,
+    PUBLISHED_METHODS,
     RING_LETTERS,
     artifact_name,
     label_for,
     region_key,
     ring_letter_map,
+    short_label,
 )
 from scripts.analysis.v3.modules.diagram.common.membership import (
     RUN_KEY_SEP,
@@ -32,6 +34,7 @@ from scripts.analysis.v3.modules.diagram.common.tables import (
 __all__ = [
     "LABELS",
     "PREFERRED_ORDER",
+    "PUBLISHED_METHODS",
     "RING_LETTERS",
     "RUN_KEY_SEP",
     "SET_IDS",
@@ -46,5 +49,6 @@ __all__ = [
     "pooled_membership",
     "region_key",
     "ring_letter_map",
+    "short_label",
     "venn_spec",
 ]

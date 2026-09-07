@@ -33,6 +33,33 @@ from scripts.analysis.v3.modules.paths import MissingArtifactError, RunPaths
 #: a CBG answer — paper §7.2 counts it as a failure.
 CBG_SUCCESS_STATUSES = frozenset({"SUCCESS"})
 
+
+def solved_mask(df) -> "np.ndarray":
+    """Which rows carry an answer the method itself produced.
+
+    `FALLBACK` rows have a `pred_lat`/`pred_lon` — the shortest-ping VP's — so
+    they are not missing data, they are the baseline's answer wearing a
+    variant's name. Paper §7.2 counts them as failures, so every error
+    distribution and every accuracy rate is taken over this mask.
+
+    Shortest-Ping is the exception the mask has to encode rather than leave to
+    each caller: its rows are all `BASELINE`, never `SUCCESS`, because it has no
+    pipeline to succeed or fall back in. Testing `status == "SUCCESS"` on it
+    would return an all-false mask and silently drop the baseline from whatever
+    was being computed — an empty CDF curve, or a divide-by-zero accuracy.
+
+    Lives here rather than in `classify` because `topn_accuracy.csv` and the
+    error CDF both need it, and two copies would be free to disagree about
+    which rows the denominators cover.
+    """
+    import numpy as np
+
+    if len(df) == 0:
+        return np.zeros(0, dtype=bool)
+    if (df["status"] == "BASELINE").all():
+        return np.ones(len(df), dtype=bool)
+    return df["status"].isin(CBG_SUCCESS_STATUSES).to_numpy()
+
 #: Columns every caller needs; nested list-of-struct columns are excluded by
 #: default because they are large and only the phase-forensics work reads them.
 _NESTED_COLUMNS = ("ltd_predictions", "mtl_participants")
