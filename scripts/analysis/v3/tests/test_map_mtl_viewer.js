@@ -176,6 +176,35 @@ for (const v of ["all", "fail", "correct", "wrong", "failed"]) {
   api.redraw();
 }
 
+// Percentiles run over the error distribution, not over the dropdown -- which
+// is ordered failures-first, so indexing it directly reads the scale backwards
+// and p5 lands on the worst case. Both ends select a real target and the
+// direction is monotone.
+statusSel.value = "all";
+api.repopulate();
+const pctSel = el("pct");
+const selectedTarget = () => api.selected();
+const errorAt = (p) => {
+  pctSel.value = String(p);
+  api.repopulate();
+  api.redraw();
+  return selectedTarget().error_km;
+};
+const errs = [5, 25, 50, 75, 95].map(errorAt);
+if (errs.some((e) => e === null || e === undefined)) {
+  throw new Error(`a percentile selected a target with no error: ${JSON.stringify(errs)}`);
+}
+for (let i = 1; i < errs.length; i++) {
+  if (errs[i] < errs[i - 1]) {
+    throw new Error(
+      `percentile error is not monotone increasing: ${JSON.stringify(errs)} ` +
+      `- p5 must be the small error, p95 the large one`
+    );
+  }
+}
+pctSel.value = "";
+api.repopulate();
+
 statusSel.value = "all";
 api.repopulate();
 targetSel.value = "0";
@@ -232,5 +261,6 @@ if (anyRings && highlighted === 0) {
 
 console.log(JSON.stringify({
   targets: nOpts, draws: reactCalls, clicks, hovers, highlighted, anyRings,
+  percentileErrors: errs,
   layers: firstLayers, allLayers: [...allLayers],
 }));

@@ -518,6 +518,12 @@ def test_the_viewer_executes_against_a_real_payload(tmp_path):
 
     # Hovering a VP lifts its own constraint out of the bundle, and unhovering
     # puts it back; the harness fails outright if either half stops firing.
+    # p5 must be the near-miss and p95 the disaster. The dropdown is ordered
+    # failures-first, so a percentile taken over *it* reads the scale backwards;
+    # the harness fails outright if the sequence stops being monotone.
+    errs = report["percentileErrors"]
+    assert errs == sorted(errs), errs
+
     assert report["hovers"] > 0
     assert report["anyRings"] is True
     assert report["highlighted"] > 0, "hovering a VP never highlighted its LTD ring"

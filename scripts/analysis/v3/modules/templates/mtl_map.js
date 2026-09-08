@@ -168,6 +168,32 @@
     if (q.trim()) rows.sort((a, b) => (b.score - a.score) || (a.i - b.i));
     return rows.map((r) => r.t);
   }
+  // pN means "the target at the Nth percentile of error distance", so p5 is a
+  // near-miss and p95 is a disaster. The dropdown is deliberately ordered
+  // failures-first, so indexing *it* by percentile reads the scale backwards --
+  // which is what this used to do. Rank on error instead, then map back to the
+  // dropdown position.
+  //
+  // `failed` rows are excluded rather than pooled. On a fallback the benchmark
+  // fills `error_km` with the *Shortest-Ping VP's* error, not the method's, so
+  // mixing the two answers a question about neither -- on as01 `vanilla_cbg`
+  // its 106 fallbacks pull p50 from 75.1 km down to 51.1 km. Excluding them
+  // makes these percentiles agree with `topn_accuracy.csv`'s `error_km_*`,
+  // which is computed over solved rows for the same reason. Filter Status to
+  // `failed` to walk those instead; the control then falls back to the
+  // dropdown's own severity order, since there is no method error to rank on.
+  function errorRanking() {
+    return currentList
+      .map((t, i) => ({ i, e: t.error_km, ok: t.status !== "failed" }))
+      .filter((r) => r.ok && r.e !== null && r.e !== undefined)
+      .sort((a, b) => (a.e - b.e) || (a.i - b.i));
+  }
+  function percentileTargetIndex(p) {
+    const ranked = errorRanking();
+    if (!ranked.length) return percentileIndex(p, currentList.length);
+    return ranked[percentileIndex(p, ranked.length)].i;
+  }
+
   function populateTargets() {
     const prev = currentList[+targetSel.value];
     currentList = activeList();
@@ -178,7 +204,7 @@
       targetSel.appendChild(o);
     });
     let idx = 0;
-    if (pctSel.value !== "") idx = percentileIndex(+pctSel.value, currentList.length);
+    if (pctSel.value !== "") idx = percentileTargetIndex(+pctSel.value);
     else if (prev) {
       const p = currentList.findIndex((t) => t.target_id === prev.target_id && t.fold === prev.fold);
       if (p >= 0) idx = p;
@@ -509,7 +535,8 @@
       `filter, ${shown} drawn${dropped ? `, ${dropped} dropped` : ""} · ` +
       `region=${t.region ? t.region.kind : "none"} · ` +
       `top-3 seeds ${(t.top_seeds || []).map((s) => "#" + s).join(", ") || "—"} · ` +
-      `rank ${tIdx + 1}/${currentList.length}${hiddenNote}`;
+      `rank ${tIdx + 1}/${currentList.length} by severity` +
+      (pctSel.value !== "" ? ` (p${pctSel.value} by error, solved only)` : "") + hiddenNote;
 
     Plotly.react(plotDiv, traces, layout, { responsive: true });
 
@@ -581,7 +608,7 @@
   }
 
   pctSel.addEventListener("change", () => {
-    if (pctSel.value !== "") targetSel.value = String(percentileIndex(+pctSel.value, currentList.length));
+    if (pctSel.value !== "") targetSel.value = String(percentileTargetIndex(+pctSel.value));
     draw();
   });
   statusSel.addEventListener("change", () => { populateTargets(); draw(); });
@@ -607,6 +634,7 @@
       clickKind: () => clickKind,
       dispatchClick: (ev) => onPlotClick(ev),
       dispatchHover: (ev) => onPlotHover(ev),
+      selected: () => currentList[+targetSel.value || 0],
       dispatchUnhover: () => onPlotUnhover(),
     };
   }
