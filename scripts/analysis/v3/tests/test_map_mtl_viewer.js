@@ -77,6 +77,7 @@ function isTransparent(color) {
 let reactCalls = 0;
 let lastTraces = null;
 const restyleCalls = [];
+const tooltipTraces = new Set();
 const HIGHLIGHT_NAMES = new Set([
   "vp-constraint-highlight", "vp-constraint-highlight-inner",
 ]);
@@ -112,6 +113,11 @@ global.Plotly = {
       // antipodal complement -- the whole globe minus the shape. Stack a few
       // and the map is one flat wash of colour. The outline is identical
       // either way, so nothing else here would notice.
+      // No trace may render a Plotly tooltip: detail is the click panel's job,
+      // and a second differently-styled box on top of it is noise.
+      if (t.hoverinfo === "text" || t.text) {
+        tooltipTraces.add(t.name || "(unnamed)");
+      }
       if (t.fill === "toself" && !isTransparent(t.fillcolor)) {
         for (const [k, ring] of splitRings(t.lat, t.lon).entries()) {
           if (signedArea(ring) > 0) {
@@ -261,5 +267,10 @@ if (anyRings && highlighted === 0) {
 console.log(JSON.stringify({
   targets: nOpts, draws: reactCalls, clicks, hovers, highlighted, anyRings,
   percentileErrors: errs,
+  tooltipTraces: [...tooltipTraces],
+  // `hoverinfo: "none"` keeps hover events flowing; `"skip"` would not.
+  hoverableVpTraces: Object.entries(api.clickKind())
+    .filter(([c, k]) => k === "vp" && lastTraces[+c] && lastTraces[+c].hoverinfo === "none")
+    .length,
   layers: firstLayers, allLayers: [...allLayers],
 }));

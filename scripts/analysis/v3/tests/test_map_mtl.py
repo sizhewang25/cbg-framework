@@ -544,16 +544,26 @@ def test_the_viewer_executes_against_a_real_payload(tmp_path):
     assert report["targets"] == len(space.assignments)
     assert report["clicks"] >= 3, "target, prediction and VP traces must all be clickable"
     layers = " | ".join(report["layers"])
-    for expected in ("Voronoi cells", "seed regions", "top-1 seed", "margin",
+    for expected in ("Voronoi cells", "seed regions", "top-1 seed",
                      "measured VPs", "latent VPs", "shortest-ping VP",
                      "feasible region", "outer bounds", "true target", "prediction"):
         assert expected in layers, f"{expected!r} missing from the default view {layers!r}"
 
-    # Only reachable with `post-filter only` unchecked, which is why the harness
-    # reports the union over every control state rather than the first draw.
+    # Layers that are off by default are still reachable, which is why the
+    # harness reports the union over every control state and not just the first
+    # draw. Both of these are deliberately unchecked in the shell: the dropped
+    # constraints outnumber the binding ones several-fold, and the margin circle
+    # is an annotation on the answer space rather than part of the result.
     every = " | ".join(report["allLayers"])
-    assert "dropped by inclusion filter" in every, every
-    assert "dropped by inclusion filter" not in layers, "dropped rings must be off by default"
+    for off_by_default in ("dropped by inclusion filter", "margin"):
+        assert off_by_default in every, f"{off_by_default!r} unreachable: {every!r}"
+        assert off_by_default not in layers, f"{off_by_default!r} must be off by default"
+
+    # One popup per mark. Plotly tooltips are suppressed everywhere so the click
+    # panel is the single place detail is reported; VP traces keep
+    # `hoverinfo: "none"` rather than `"skip"` so the ring highlight still fires.
+    assert report["tooltipTraces"] == [], report["tooltipTraces"]
+    assert report["hoverableVpTraces"] > 0
 
     # Hovering a VP lifts its own constraint out of the bundle, and unhovering
     # puts it back; the harness fails outright if either half stops firing.

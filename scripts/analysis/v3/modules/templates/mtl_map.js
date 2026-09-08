@@ -49,7 +49,6 @@
   const HL_TRACE_INNER = "vp-constraint-highlight-inner";
   const REGION_FILL = "rgba(20,120,90,0.20)";
   const REGION_LINE = "rgba(15,90,70,0.75)";
-  const HOLE_FILL = "rgb(225,235,245)";
   const VP_MEASURED = "rgba(105,105,105,0.95)";
   const VP_LATENT = "rgba(140,140,140,0.85)";
   const VP_SPING = "rgba(30,110,220,0.95)";
@@ -100,13 +99,6 @@
       outLat.push(lats[i]); outLon.push(lons[i]);
     }
     return { lats: outLat, lons: outLon };
-  }
-  function pointDistanceKm(a, b) {
-    const lat1 = a[0]*Math.PI/180, lon1 = a[1]*Math.PI/180;
-    const lat2 = b[0]*Math.PI/180, lon2 = b[1]*Math.PI/180;
-    const dlat = lat2 - lat1, dlon = lon2 - lon1;
-    const h = Math.sin(dlat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dlon/2)**2;
-    return EARTH * 2 * Math.asin(Math.sqrt(Math.max(0, Math.min(1, h))));
   }
   function compactSearch(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
   function isSubsequence(needle, haystack) {
@@ -287,11 +279,14 @@
     return { type: "scattergeo", mode: "lines", lat, lon, fill: "toself",
              fillcolor: fillColor, line, hoverinfo: "skip" };
   }
-  function connectorTrace(from, to, color, label) {
+  // No `text`: every mark on this map reports through the click popup, so a
+  // second, differently-styled Plotly tooltip on top of it is just noise.
+  // `hoverinfo: "none"` rather than `"skip"` keeps the trace clickable.
+  function connectorTrace(from, to, color) {
     return { type: "scattergeo", mode: "lines",
              lat: [from[0], to[0]], lon: [from[1], to[1]],
              line: { width: 1.6, color, dash: "dash" },
-             text: [label, label], hoverinfo: "text", showlegend: false };
+             hoverinfo: "none", showlegend: false };
   }
 
   // ---- main draw ----
@@ -355,9 +350,7 @@
           lat: [s1.lat, s2.lat], lon: [s1.lon, s2.lon],
           line: { width: 1.2, color: SEED_LINK, dash: "dot" },
           name: `top1↔top2 (${(2 * t.margin_km).toFixed(0)} km)`,
-          text: [`top1↔top2 = ${(2 * t.margin_km).toFixed(1)} km`,
-                 `top1↔top2 = ${(2 * t.margin_km).toFixed(1)} km`],
-          hoverinfo: "text" });
+          hoverinfo: "skip" });
       }
     }
 
@@ -438,17 +431,23 @@
       if (fillRings.length) traces.push(Object.assign(
         ringsToTrace(fillRings, REGION_FILL, REGION_LINE, 1.3),
         { name: `feasible region (${t.region.kind})` }));
+      // A hole is drawn as an outline over the same fill, not as a punched-out
+      // patch. Plotly cannot express a real hole on a `toself` path, so the
+      // previous version overpainted it in the ocean colour — which reads as a
+      // lake wherever the region sits on land, and as nothing at all wherever
+      // it sits on water. An outline says "excluded" without claiming a colour
+      // the basemap does not have.
       if (holeRings.length) traces.push(Object.assign(
-        ringsToTrace(holeRings, HOLE_FILL, REGION_LINE, 1.0),
-        { name: "holes", showlegend: false }));
+        ringsToTrace(holeRings, "rgba(0,0,0,0)", REGION_LINE, 1.0, "dot"),
+        { name: `excluded (${holeRings.length})`, showlegend: false }));
     }
 
     // 6) VPs. Latent = in the roster but with no observation for THIS target,
     //    drawn hollow: Plotly markers cannot carry a dashed outline.
     const obsByVp = new Map();
     for (const o of (t.obs || [])) obsByVp.set(o[0], o);
-    const mLat = [], mLon = [], mIds = [], mText = [];
-    const lLat = [], lLon = [], lIds = [], lText = [];
+    const mLat = [], mLon = [], mIds = [];
+    const lLat = [], lLon = [], lIds = [];
     let spCoord = null;
     for (const vpId of Object.keys(vps)) {
       const c = vps[vpId];
@@ -456,54 +455,49 @@
       const o = obsByVp.get(vpId);
       if (o) {
         mLat.push(c[0]); mLon.push(c[1]); mIds.push(vpId);
-        mText.push(`VP ${vpId}<br>RTT = ${o[1].toFixed(2)} ms<br>infl = ${o[2] == null ? "—" : o[2].toFixed(2) + "×"}`);
       } else if (showLatent.checked) {
         lLat.push(c[0]); lLon.push(c[1]); lIds.push(vpId);
-        lText.push(`VP ${vpId}<br>latent (not measured for this target)`);
       }
     }
     if (lLat.length) {
       clickKind[traces.length] = "vp";
       traces.push({ type: "scattergeo", mode: "markers", lat: lLat, lon: lLon,
-        customdata: lIds, text: lText, hoverinfo: "text",
+        customdata: lIds, hoverinfo: "none",
         marker: { size: 6, symbol: "circle-open", color: VP_LATENT, line: { width: 1.1, color: VP_LATENT } },
         name: `latent VPs (${lLat.length})` });
     }
     if (mLat.length) {
       clickKind[traces.length] = "vp";
       traces.push({ type: "scattergeo", mode: "markers", lat: mLat, lon: mLon,
-        customdata: mIds, text: mText, hoverinfo: "text",
+        customdata: mIds, hoverinfo: "none",
         marker: { size: 7, color: VP_MEASURED, line: { width: 0.8, color: "white" } },
         name: `measured VPs (${mLat.length})` });
     }
     if (spCoord) {
-      const o = obsByVp.get(t.sping_vp_id);
+      // Same click popup as every other VP; only the marker colour differs.
       clickKind[traces.length] = "vp";
       traces.push({ type: "scattergeo", mode: "markers", lat: [spCoord[0]], lon: [spCoord[1]],
-        customdata: [t.sping_vp_id],
-        text: [`shortest-ping VP ${t.sping_vp_id}` + (o ? `<br>RTT = ${o[1].toFixed(2)} ms` : "")],
-        hoverinfo: "text",
+        customdata: [t.sping_vp_id], hoverinfo: "none",
         marker: { size: 10, color: VP_SPING, line: { width: 1.2, color: "white" } },
         name: "shortest-ping VP" });
     }
 
     // 7) the error itself, then the two endpoints on top of it.
     if (t.pred) {
-      const km = t.error_km != null ? t.error_km : pointDistanceKm(t.pred, t.true);
       clickKind[traces.length] = "pred";
-      traces.push(connectorTrace(t.pred, t.true, ERR_LINK, `error = ${km.toFixed(1)} km`));
+      traces.push(connectorTrace(t.pred, t.true, ERR_LINK));
     }
     clickKind[traces.length] = "target";
     traces.push({ type: "scattergeo", mode: "markers", lat: [t.true[0]], lon: [t.true[1]],
       marker: { size: 13, color: "gold", symbol: "star", line: { color: "black", width: 1 } },
-      text: [`true target ${t.target_id}`], hoverinfo: "text", name: "true target" });
+      hoverinfo: "none", name: "true target" });
     if (t.pred) {
       clickKind[traces.length] = "pred";
       traces.push({ type: "scattergeo", mode: "markers", lat: [t.pred[0]], lon: [t.pred[1]],
         marker: { size: 12, symbol: "triangle-up",
                   color: t.status === "correct" ? OK_GREEN : BAD_RED,
                   line: { color: "white", width: 1.4 } },
-        text: [`prediction (${t.status})`], hoverinfo: "text", name: "prediction" });
+        hoverinfo: "none", name: "prediction" });
     }
 
     const layout = {

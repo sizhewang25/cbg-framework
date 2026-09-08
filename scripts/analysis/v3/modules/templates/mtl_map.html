@@ -60,17 +60,17 @@
     <option value="robinson">robinson</option>
   </select></label>
   <label>Hide rings ≥ <select id="maxR">
-    <option value="10000" selected>10 000 km</option>
+    <option value="0" selected>(show all)</option>
     <option value="20000">20 000 km</option>
+    <option value="10000">10 000 km</option>
     <option value="5000">5 000 km</option>
     <option value="2000">2 000 km</option>
-    <option value="0">(show all)</option>
   </select></label>
 </div>
 <div class="controls">
   <label><input type="checkbox" id="showVoronoi" checked> Voronoi (CONUS)</label>
   <label><input type="checkbox" id="showSeeds" checked> seed regions</label>
-  <label><input type="checkbox" id="showMargin" checked> margin circle</label>
+  <label><input type="checkbox" id="showMargin"> margin circle</label>
   <label><input type="checkbox" id="showRings" checked> LTD constraints</label>
   <label title="A disk that fully contains another is not the binding constraint, so the MTL drops it before intersecting. On by default: the surviving set is what actually formed the region."><input type="checkbox" id="keptOnly" checked> post-filter only</label>
   <label><input type="checkbox" id="showRegion" checked> feasible region</label>
@@ -79,7 +79,7 @@
     <span class="swatch" style="background:#d62728"></span>top-1
     <span class="swatch" style="background:#ff8c00"></span>top-2
     <span class="swatch" style="background:#ffd700"></span>top-3
-    · click any marker for detail
+    · hover a VP to isolate its constraint · click any marker for detail
   </span>
 </div>
 <div id="meta" class="meta"></div>

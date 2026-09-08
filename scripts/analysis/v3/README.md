@@ -1732,8 +1732,29 @@ Layers, bottom to top: the CONUS Voronoi partition (red dashed — the top-1
 decision boundary); every occupied cell as a **seed region**, with the
 prediction's top-1/top-2/top-3 in red/orange/yellow; the **margin** circle; each
 VP's LTD constraint; the MTL feasible region; the VPs; and the prediction and
-truth joined by the error. Clicking the star, the triangle or any VP pins a
-popup with the numbers behind that mark.
+truth joined by the error.
+
+Two layers are off by default because they outweigh what they annotate: the
+constraints the inclusion filter dropped (several times more numerous than the
+binding ones) and the margin circle (an annotation on the answer space rather
+than part of the result).
+
+### One popup per mark
+
+Hover and click do different jobs, and neither duplicates the other. Hovering a
+VP isolates its constraint (below); **clicking** any mark — the star, the
+triangle, the error line, any VP — pins a panel with the numbers behind it.
+
+Plotly's own tooltips are suppressed everywhere, with `hoverinfo: "none"` rather
+than `"skip"` so hover *events* keep flowing to the highlight. Otherwise a
+click panel and a differently-styled Plotly box report the same mark at once,
+and the marks that carry two overlapping traces — the prediction and its error
+line, the truth and that same line — produced two or three boxes between them.
+`tests/test_map_mtl_viewer.js` fails if any trace regains a tooltip.
+
+The target's panel is the metadata one: id, fold, coordinates, its true seed and
+that seed's cell, the offset to it, measured VPs over the roster, the top-1
+verdict, the VP proximity label and min-RTT inflation.
 
 ### Nothing here is read from a v3 artifact
 
