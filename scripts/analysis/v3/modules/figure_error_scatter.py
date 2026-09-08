@@ -875,33 +875,32 @@ def pool_counts(counts: dict[str, dict]) -> dict[str, dict]:
     return pooled
 
 
-def guard_disjoint_targets(points: pd.DataFrame) -> dict[str, int]:
-    """Refuse to pool runs that share a `target_id`.
+def guard_disjoint_targets(points: pd.DataFrame) -> dict[tuple[str, str], int]:
+    """Refuse to pool runs that share a `target_id`, drawing it twice.
 
-    A shared target would be counted once per run in the pooled denominator and
-    drawn twice in the band, so the pooled share would stop being a rate over a
-    population. The three operator runs are disjoint by construction — each
-    draws its targets from its own AS — but that is a property of the data, and
-    a re-run with an overlapping target list would otherwise pool silently.
+    The check itself lives in `cross.guard_disjoint_targets`, which
+    `table-headline` also calls and which therefore may not import matplotlib.
+    This wrapper is the adapter: it reduces the long points frame to one target
+    set per dataset and supplies this figure's own remedy, since "use --layout
+    compare" is advice only a plotting command can give.
+
+    Reducing over the whole frame rather than per method is deliberate — the
+    hazard is that two *runs* describe the same target, which is a property of
+    the run pair and not of the method drawn over it.
     """
     if "dataset" not in points.columns:
         return {}
-    per_method = points.groupby("method")["target_id"]
-    dupes = {
-        str(method): int(ids.duplicated().sum())
-        for method, ids in per_method
-        if ids.duplicated().any()
+    ids_by_dataset = {
+        str(dataset): set(g["target_id"])
+        for dataset, g in points.groupby("dataset", sort=False)
     }
-    if dupes:
-        worst = max(dupes.items(), key=lambda kv: kv[1])
-        raise typer.BadParameter(
-            f"the selected runs share targets ({worst[1]} repeated ids on "
-            f"{worst[0]}, {len(dupes)} methods affected), so pooling them would "
-            "count those targets once per run in the denominator and draw them "
-            f"twice in the band. Use --layout {COMPARE}, which keeps each run's "
-            "numbers separate."
-        )
-    return dupes
+    return cross.guard_disjoint_targets(
+        ids_by_dataset,
+        remedy=(
+            f"Those targets would also be drawn twice in the band. Use --layout "
+            f"{COMPARE}, which keeps each run's numbers separate."
+        ),
+    )
 
 
 def cross_grid_shape(points: pd.DataFrame) -> tuple[int, int]:
