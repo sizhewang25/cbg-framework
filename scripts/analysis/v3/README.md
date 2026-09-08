@@ -993,12 +993,12 @@ adds the two things a paper table needs and a data table does not.
 
 **A best-in-row mark with a tie rule.** Bolding the argmax alone asserts a
 ranking the sample size does not support — on as03 the gap from Octant-Hull
-(0.502) to Spotter (0.474) is 0.028 against a standard error of 0.023 on 458
+(50.2%) to Spotter (47.4%) is 0.028 against a standard error of 0.023 on 458
 targets, and on as02 the baseline leads SoI by 0.003. The mark is instead
 "within one standard error of the row's best", computed once per row on the
 best cell's own rate, so several methods can be marked and a near-tie reads as
 a tie. That is what happens on as03 at top-3, where Shortest-Ping and SoI both
-reach 0.926 and *beat* Octant-Hull — the ranking flip top-1 alone would hide,
+reach 92.6% and *beat* Octant-Hull — the ranking flip top-1 alone would hide,
 which is why the appendix table exists.
 
 **Dataset types own the rows, with the per-AS breakdown beneath.** §8.1's story
@@ -1016,14 +1016,14 @@ datasets' targets and scores once — "pick a target at random from the fleet" �
 rather than averaging the three rates; on as01/02/03 the two differ by at most
 0.0064 and the manifest's `weighting` block reports both. Breakdown rows print
 `accuracy_topN` verbatim, because three of the thirty-six cells round
-differently the two ways (as01's Spotter reads 0.389 verbatim and 0.388
+differently the two ways (as01's Spotter reads 38.9% verbatim and 38.8%
 reconstructed) and agreeing with `table-accuracy` to the printed digit is the
 invariant the module exists under. `accuracy_is_reconstructed` marks the split
 per cell.
 
 Two things the pooling forces the table to say out loud. A pooled winner can
 lead the population while leading one dataset in it — at top-3 Octant-Hull takes
-the pooled row at 0.891 having led only as02, with as01 going to Octant-Spline
+the pooled row at 89.1% having led only as02, with as01 going to Octant-Spline
 and as03 to Shortest-Ping and SoI — so that cell gets a `†` and a footnote
 naming what it lost. And a method absent from one run is pooled over the runs
 that carry it, so its denominator is under the row's `n`; that cell gets a `‡`
@@ -1046,10 +1046,17 @@ reduces to its dataset — `as01-weighted-260728` comes back unchanged and
 `as01w-260728-260802` reduces to `as01w`. A fallback would file the row under
 the wrong dataset instead of failing.
 
-Fallback rate rides inside the cell (`(fb 0.27)`) and only where non-zero,
+Fallback rate rides inside the cell (`(fb 26.6%)`) and only where non-zero,
 because Vanilla CBG is the only variant that ever falls back; a parallel
 six-column block would be five-sixths zeros with the one number that matters
 hardest to find.
+
+Every rate in the markdown prints as a **percentage to one decimal** (`pct`),
+the unit `plot-outcome-bars` labels its segments in, so a cell can be checked
+against its bar without converting either. Same precision as the `.3f` this
+printed before, though not the same digit on a rate landing exactly on a half
+at four decimals — none of these cells do, and the CSVs, which keep the
+unrounded fractions, are the pair that has to agree.
 
 Both tables read `topn_accuracy.csv` through `accuracy_table.accuracy_rows`,
 and their 18 shared cells agree exactly at both top-1 and top-3. The pooled

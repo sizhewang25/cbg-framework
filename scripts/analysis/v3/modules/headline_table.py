@@ -53,7 +53,7 @@ manifest reports both, so the weighting is measured rather than waved away.
 
 Two consequences the table has to carry rather than hide. A pooled winner can
 lead the population while leading only one of the datasets in it: at top-3
-Octant-Hull takes the pooled row at 0.891 having led as02 alone, since as01
+Octant-Hull takes the pooled row at 89.1% having led as02 alone, since as01
 goes to Octant-Spline and as03 to Shortest-Ping and SoI. That cell gets a `†`
 and a footnote naming what it lost. And a method absent from one run is pooled
 over the runs that carry it, so its denominator is smaller than the row's
@@ -61,8 +61,8 @@ printed `n`; that cell gets a `‡` and its own count.
 
 **Only the aggregate is computed.** Dataset rows print `accuracy_topN` verbatim
 from `topn_accuracy.csv`, never a rate recomputed from counts — three of the
-thirty-six cells round differently the two ways (as01 Spotter reads 0.389
-verbatim and 0.388 reconstructed), and this table agreeing with
+thirty-six cells round differently the two ways (as01 Spotter reads 38.9%
+verbatim and 38.8% reconstructed), and this table agreeing with
 `table-accuracy`'s to the printed digit is the invariant the module exists
 under. The aggregate has no such source of truth, so it is the one row that
 sums counts; `accuracy_is_reconstructed` says so per cell.
@@ -70,13 +70,16 @@ sums counts; `accuracy_is_reconstructed` says so per cell.
 ## Best-in-row is marked with a tie rule, not with an argmax
 
 Bolding the row maximum alone asserts a ranking the sample size does not
-support. On as03 the gap from Octant-Hull (0.502) to Spotter (0.474) is 0.028
+support. On as03 the gap from Octant-Hull (50.2%) to Spotter (47.4%) is 0.028
 against a standard error of 0.023 on 458 targets; on as02 the baseline leads
 SoI by 0.003. So the mark is "within one standard error of the row's best",
 computed on the best cell's own rate, and the caption states it. Several
 methods can therefore be marked in one row, which is the honest rendering of a
 near-tie and is exactly what happens on as03 at top-3, where Shortest-Ping and
-SoI both reach 0.926 and beat Octant-Hull.
+SoI both reach 92.6% and beat Octant-Hull.
+
+Rates print as percentages to one decimal (see `pct`); the CSV twin and the
+manifest keep the fractions.
 
 Command: `table-headline`. Writes to
 `outputs/analysis/v3/_cross/accuracy-table/<dataset-set>/`.
@@ -162,7 +165,7 @@ BODY_TOP_N = 1
 APPENDIX_TOP_N = 3
 
 #: Marks a value that did not come out of this pipeline. `§` rather than `*`,
-#: which markdown reads as emphasis — a cell ending `0.993*` beside a bolded
+#: which markdown reads as emphasis — a cell ending `99.3%*` beside a bolded
 #: neighbour renders unpredictably.
 PROVISIONAL_MARK = "§"
 
@@ -604,6 +607,31 @@ def _mark_unanimity(long: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def pct(rate: float) -> str:
+    """A rate as a percentage to one decimal, as `plot-outcome-bars` labels it.
+
+    One decimal because it is the same precision as the `.3f` this printed
+    before — the precision the verbatim-vs-reconstructed invariant above is
+    stated at — and because the bars drawing these same numbers use it
+    (`figure_outcome_bars` labels every segment `{share * 100:.1f}%`), so a
+    reader can check a cell against its segment without converting either.
+
+    Same precision is not the same digit on every input: a rate landing exactly
+    on a half at four decimals (`0.3885`) can round either way once it is
+    multiplied by 100, and 267 of the 10,001 four-decimal rates take the other
+    branch than `.3f` would. None of as01/02/03's cells are among them at
+    top-1 or top-3 — the three real half-cases are pinned in
+    `test_a_breakdown_rows_accuracy_is_the_csv_value_verbatim_never_reconstructed`
+    — so the switch of units moved no printed digit here. A future run's cell
+    could differ from `table-accuracy`'s markdown in the last place; the CSVs,
+    which carry the unrounded rate, are the pair that must agree.
+
+    The CSV twin keeps fractions: it is the re-analysis artifact, and the
+    manifest's `weighting` deltas are meant to be read as rates.
+    """
+    return f"{rate * 100:.1f}%"
+
+
 def _cell(
     accuracy: float,
     fallback: float,
@@ -626,7 +654,7 @@ def _cell(
     """
     if not np.isfinite(accuracy):
         return PENDING
-    text = f"{accuracy:.3f}"
+    text = pct(accuracy)
     if is_best:
         text = f"**{text}**"
     if provisional:
@@ -636,7 +664,7 @@ def _cell(
     if is_best and not unanimous:
         text = f"{text}{NON_UNANIMOUS_MARK}"
     if np.isfinite(fallback) and fallback > 0:
-        text = f"{text} (fb {fallback:.2f})"
+        text = f"{text} (fb {pct(fallback)})"
     return text
 
 
@@ -654,15 +682,16 @@ def render_markdown(
         f"# §8.1 top-{top_n} classification accuracy — {grid_slug(grid, resolution)}"
         f" ({role})",
         "",
-        f"Top-{top_n} accuracy per dataset type and method, with the per-AS breakdown",
-        "beneath each type. A type's row pools its datasets' targets and scores once,",
-        "so it is target-weighted. **Bold** marks every method within one",
-        "standard error of that row's best, so a near-tie shows as a tie rather than",
-        "as a winner. `(fb x)` is the fallback rate where non-zero; fallbacks count",
-        "as failures (§7.2), so they are already subtracted from the accuracy beside",
-        f"them. `{INCOMPLETE_MARK}` marks a cell pooled over fewer datasets than its",
-        f"row, `{NON_UNANIMOUS_MARK}` a pooled winner that does not lead every dataset",
-        "it pools, and `—` a row that is reserved and has no data yet.",
+        f"Top-{top_n} accuracy per dataset type and method, as a percentage to one",
+        "decimal, with the per-AS breakdown beneath each type. A type's row pools its",
+        "datasets' targets and scores once, so it is target-weighted. **Bold** marks",
+        "every method within one standard error of that row's best, so a near-tie shows",
+        "as a tie rather than as a winner. `(fb x%)` is the fallback rate where",
+        "non-zero; fallbacks count as failures (§7.2), so they are already subtracted",
+        f"from the accuracy beside them. `{INCOMPLETE_MARK}` marks a cell pooled over",
+        f"fewer datasets than its row, `{NON_UNANIMOUS_MARK}` a pooled winner that does",
+        f"not lead every dataset it pools, and `{PENDING}` a row that is reserved with",
+        "no data yet — never a measured zero.",
         "",
         "| dataset | n | " + " | ".join(headers) + " |",
         "| --- | --: | " + " | ".join("--:" for _ in headers) + " |",

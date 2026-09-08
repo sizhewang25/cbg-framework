@@ -1,7 +1,7 @@
 """`table-headline` — the row plan, the tie rule, and the reserved rows.
 
 Three things here are easy to get quietly wrong and expensive to notice late: a
-reserved row printing as `0.000` instead of `—`, a bolded argmax where the gap
+reserved row printing as `0.0%` instead of `—`, a bolded argmax where the gap
 is inside the noise, and a weighted run silently landing on the wrong dataset.
 Each gets a test.
 """
@@ -311,7 +311,7 @@ def _rendered(methods=(SHORTEST_PING, "vanilla_cbg")):
 def test_a_reserved_row_prints_the_pending_dash_never_a_number():
     text = _rendered()
     row = next(l for l in text.splitlines() if l.startswith("| AS01 TRAFFIC-WEIGHTED"))
-    assert "0.000" not in row
+    assert "%" not in row  # no rate of any value, not merely no zero
     assert row.count(H.PENDING) == 3  # the n column plus both method cells
 
 
@@ -323,21 +323,43 @@ def test_the_pending_rows_are_explained_under_the_table():
 def test_a_non_zero_fallback_rate_rides_in_its_own_cell():
     text = _rendered()
     mesh = next(l for l in text.splitlines() if l.startswith("| AS01 MESH"))
-    assert "(fb 0.25)" in mesh
+    assert "(fb 25.0%)" in mesh
     # and the five-sixths-zero column block is not printed
     assert "fallback" not in text.split("| dataset |")[1].splitlines()[0]
 
 
 def test_a_zero_fallback_rate_prints_nothing():
     text = _rendered()
-    assert "(fb 0.00)" not in text
+    assert "(fb 0.0%)" not in text
 
 
 def test_the_best_cell_is_bold_and_the_others_are_not():
     text = _rendered()
     mesh = next(l for l in text.splitlines() if l.startswith("| AS01 MESH"))
-    assert "**0.600**" in mesh
-    assert "**0.400**" not in mesh
+    assert "**60.0%**" in mesh
+    assert "**40.0%**" not in mesh
+
+
+def test_rates_print_as_percentages_to_one_decimal():
+    """The printed unit is the contract §8.1 and `plot-outcome-bars` share.
+
+    One decimal is `.3f` on the fraction, so this is a change of unit and not
+    of precision.
+    """
+    assert H.pct(0.6217) == "62.2%"
+    assert H.pct(0.0) == "0.0%"
+    assert H.pct(1.0) == "100.0%"
+
+    mesh = next(l for l in _rendered().splitlines() if l.startswith("| AS01 MESH"))
+    # every rate in the row wears its unit; no bare fraction survives
+    assert "0.60" not in mesh and "0.40" not in mesh
+    assert mesh.count("%") == 3  # two accuracies plus vanilla's fallback
+
+
+def test_the_caption_names_the_printed_unit():
+    """A caption that omits it leaves `47.6` beside `0.476` in the CSV."""
+    # the caption is hard-wrapped, so match on the unwrapped text
+    assert "percentage to one decimal" in " ".join(_rendered().split())
 
 
 def test_the_caption_states_the_tie_rule():
@@ -463,9 +485,11 @@ def test_a_breakdown_rows_accuracy_is_the_csv_value_verbatim_never_reconstructed
 
     `table-accuracy` prints the verbatim value, and the module's premise is that
     the two tables cannot disagree; recomputing a breakdown row from counts
-    would move as01's Spotter cell from 0.389 to 0.388.
+    would move as01's Spotter cell from 38.9% to 38.8%. Printing percentages to
+    one decimal is `.3f` on the fraction, so the switch of units does not widen
+    the rounding interval these three cells sit inside.
     """
-    cases = [(399, 0.3885, "0.389"), (412, 0.3665, "0.366"), (412, 0.2985, "0.298")]
+    cases = [(399, 0.3885, "38.9%"), (412, 0.3665, "36.6%"), (412, 0.2985, "29.8%")]
     for n, rate, printed in cases:
         frame = _accuracy_frame(
             [
@@ -484,9 +508,14 @@ def test_a_breakdown_rows_accuracy_is_the_csv_value_verbatim_never_reconstructed
         row = long[long["scope"] == H.DATASET].iloc[0]
         assert row["accuracy"] == rate
         assert not row["accuracy_is_reconstructed"]
-        assert f"{row['accuracy']:.3f}" == printed
+        assert H.pct(row["accuracy"]) == printed
         # and the reconstruction really would have differed
-        assert f"{round(rate * n) / n:.3f}" != printed
+        assert H.pct(round(rate * n) / n) != printed
+        # all three sit exactly on a half at four decimals, where percent and
+        # fraction rounding can part ways; on these they do not, so switching
+        # the printed unit moved no digit `table-accuracy` also prints
+        as_fraction = float(f"{row['accuracy']:.3f}")
+        assert f"{as_fraction * 100:.1f}%" == printed
 
 
 def test_the_count_reconstruction_is_the_unique_integer_for_that_rate():
