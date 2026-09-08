@@ -95,12 +95,12 @@ Prior work rarely reports either. Published CBG results are stated as accuracy o
 
 If operators know so much about their own peers, why not just read the canonical records? Each signal fails in a way that is structural rather than incidental.
 
-| Signal                                        | Why it does not suffice for the operator                                                                                                                                                                                                                                                                                            |
-| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Large-scale active probing / traceroute**   | Highest-accuracy prior work depends on it. At millions of IPs, continuously, the measurement cost is prohibitive; not all routers/hosts are traceable.                                                                                                                                                                               |
-| **Commercial geolocation DBs / services**     | Black-box: when a result is wrong the operator cannot troubleshoot *why*, which is disqualifying for a signal feeding traffic-engineering decisions. Also cost and privacy exposure of shipping query streams to a third party.                                                                                                       |
+| Signal                                        | Why it does not suffice for the operator                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Large-scale active probing / traceroute**   | Highest-accuracy prior work depends on it. At millions of IPs, continuously, the measurement cost is prohibitive; not all routers/hosts are traceable.                                                                                                                                                                                   |
+| **Commercial geolocation DBs / services**     | Black-box: when a result is wrong the operator cannot troubleshoot *why*, which is disqualifying for a signal feeding traffic-engineering decisions. Also cost and privacy exposure of shipping query streams to a third party.                                                                                                          |
 | **Self-published data (rDNS PTR, Geofeed)**   | Coverage holes (entire ASNs publish nothing) · fragmented ingestion (WHOIS remarks vs. idiosyncratic self-hosted URLs, so *finding* the data is itself an engineering project) · staleness (not re-published on relocation) · inconsistent location naming conventions · self-reported, therefore manipulable in the publisher's favour. |
-| **Public measurement platforms (RIPE Atlas)** | Coverage does not reach the ASNs and target sets the operator cares about; VP device/network types are heterogeneous and uncontrolled.                                                                                                                                                                                               |
+| **Public measurement platforms (RIPE Atlas)** | Coverage does not reach the ASNs and target sets the operator cares about; VP device/network types are heterogeneous and uncontrolled.                                                                                                                                                                                                   |
 
 That residual is what the paper addresses. When canonical signals are absent, stale, or suspect, the operator still needs an estimate, and latency measurement is the only lever that runs entirely on the operator's own infrastructure and requires no cooperation from the target organization. (Assumption: connectivity between ISP and hypergiant/CDN networks is well connected by cables)
 
@@ -139,7 +139,7 @@ Neither side can validate the other's results, and no dataset exists on which th
 
 ## 5. Contributions
 
-1. **The first operator-perspective benchmark of latency-based geolocation.** Three things make it operator-perspective rather than another accuracy table. (i) *Data:* two datasets with structurally different composition, a proprietary single-target-ASN operator dataset (VPs = user planes / mobile cores) and a public mixed-ASN RIPE-based dataset. We do *not* claim an apples-to-apples match; we claim, and test, generalization across differing topologies (see §7). (ii) *Criterion:* a bounded, metro-granular answer space whose class count is fixed by a 45 km hexagonal grid shared by both datasets, each class seeded at the centroid of the targets it merges, scored by classification accuracy alongside conventional error distance, including region-vs-region scoring so that CBG's native output (an intersection region) is judged as a region. (iii) *Cost:* runtime and memory reported per pipeline phase with accuracy-vs-cost trade-off curves, so every result is an (accuracy, runtime, memory) triple rather than a single number.
+1. **The first operator-perspective benchmark of latency-based geolocation.** Three things make it operator-perspective rather than another accuracy table. (i) *Data:* two datasets with structurally different composition, a proprietary single-target-ASN operator dataset (VPs = user planes / mobile cores) and a public mixed-ASN RIPE-based dataset. We do *not* claim an apples-to-apples match; we claim, and test, generalization across differing topologies (see §7). (ii) *Criterion:* a bounded, metro-granular answer space whose class count is fixed by an equal-area 51 km grid shared by both datasets, each class seeded at the centroid of the targets it merges, scored by classification accuracy alongside conventional error distance, including region-vs-region scoring so that CBG's native output (an intersection region) is judged as a region. (iii) *Cost:* runtime and memory reported per pipeline phase with accuracy-vs-cost trade-off curves, so every result is an (accuracy, runtime, memory) triple rather than a single number.
 2. **A unified, composable CBG framework with an open-source implementation.** The framework (latency-to-distance × multilateration constraint shape × centroid selection) spans SoI CBG / Vanilla / Octant-Hull / Octant-Spline / Spotter, which turns variant comparison into phase attribution and makes RQ3's root-cause analysis possible. The implementation lets downstream work state *which* CBG it used.
 3. **Actionable characterization and when-to-use-what guidance.** Where each variant and each phase wins or loses, tied to the peering regime and VP geometry that produced the result, and stated as a deployment recommendation per operator scenario relative to a stated budget rather than as a leaderboard.
 
@@ -244,40 +244,54 @@ Two things follow from the decomposition. Variant comparison becomes phase attri
 **Cost is measured per phase and per stage.** Fit cost and apply cost are reported separately, because they scale differently and are paid on different schedules. Fit cost grows with the number of (VP, peer ASN) pairs and the labels available per pair, and is paid once per recalibration. Apply cost grows with the number of targets, and at million-IP scale it is paid on every run. Separating them is also what lets the per-ASN vs. pooled ablation report a trade-off rather than a winner, since per-ASN calibration multiplies fit cost by the peer count.
 
 ### 7.3 Datasets and experimental setup
-
-Two datasets go through the same pipeline under the same metrics.
-
-**Proprietary operator dataset.** VPs are the operator's core infrastructure (e..g, mobile cores at Mobile Operators), at sites whose coordinates the operator owns exactly. Targets are restricted to a single peer ASN, for example a hypergiant the operator peers with, so calibration is per-ASN by construction with no inter-ASN mixing. RTT is either actively collected by mesh ping from the UPs or passively observed at the UPs on production traffic. The operator also knows how much traffic each target cell receives, which no public dataset carries. 【TODO: VP count · target count · collection window · active vs. passive split. Description pending operator and legal approval, including whether the target ASN is named or anonymized.】
-
-**Public RIPE-based dataset.** VPs are RIPE Atlas probes inside a single ASN; targets are RIPE Atlas anchors in other ASNs, excluding the probe ASN. Probe device and network types range from cloud hosts to home connections, so the VP side is heterogeneous in a way the operator side is not. 【TODO: probe and anchor counts · measurement window.】
-
-These two cannot be compared head to head, for the reasons given in §3.2. A public platform cannot reproduce operator VP placement, target selection, network-type control, or the peering relationship that shapes the path, and no dataset exists in which both settings coexist. We therefore do not report a controlled contrast. What we claim, and test, is generalization: whether a variant's ranking and its failure behavior hold across two topologies that differ in physical and network connectivity. Agreement across datasets points to an effect driven by variant choice; divergence points to an effect driven by data composition. Telling those apart is what the characterization of §8.2 is for.
+- **Proprietary Mesh Unicast IP dataset** 
+	- VPs: Mobile cores of AS7018
+	- Targets: Top-ASN servers (3 ASNs)
+	- Measurements: Mesh-ping RTT from VPs to Targets
+	- Properties: 
+		- In-network active measurement: mobile cores/targets are used in real traffic.
+		- Known peering locations for each ASN (support RTT root cause analysis)
+		- VP-Target bipartite graph of 3 ASNs are geographically & topologically different
+		- Clean ASN separation, allow data training and testing on each ASN individually, thus cleaner RTT-distance modeling for routing topology
+		- p5 RTTs from weekly tests that avoid congestion impact
+- **Proprietary Traffic-Weighted Unicast IP dataset**
+	- VPs: Mobile cores of AS7018
+	- Targets: Top-ASN servers that serve top 95% of Unicast traffic (3 ASNs)
+	- Measurements: Passive RTT of real traffic flows from VPs to Targets
+	- Properties:
+		- In-network passive measurement, reflecting real-world traffic patterns and important target locations
+		- Fewer VPs have RTT measurements to targets compared to mesh-ping.
+- **Public Mesh Unicast IP dataset**
+	- VPs: RIPE probes of AS7018 (need reciprocal filtering)
+	- Targets: RIPE anchors of mixed ASNs
+	- Measurements: Mesh-ping RTT from VPs to Targets
+	- Properties:
+		- Best-effort active measurement that relies on crowd-source infrastructure 
+		- Vantage points' network types are heterogeneous and locations are not always correct.
+		- Mixture of ASNs in training, which could impact accuracy of RTT-distance modeling
+		- Unknown peering locations for the ASNs
+- **Proprietary Traffic-Weighted Anycast IP dataset**
+	- VPs: Mobile cores of AS7018
+	- Targets: Top-ASN servers that serve top 95% of Anycast traffic
+	- Measurements: Passive RTT of real traffic flows from VPs to Targets
+	- Properties:
+		- In-network passive measurement
+		- Multiple location labels per IP, where exact location depends on input of regional VPs
 
 **The datasets are described as a bipartite graph.** VPs and individual targets are the two measured node sets, and an edge exists wherever a (VP, target) pair carries a measurement. The same grid quantizes both node sets, and the Voronoi partition it seeds is the answer space. Both are defined immediately below. Everything in this subsection is geometry and structure only, with no RTT entering and no variant running, which is what makes these numbers the fixed reference that the RTT-dependent characterization of §8.2 and the per-variant results of §8.3 are read against.
-
-**The grid is a quantizer, not the answer space.** An H3 hexagonal grid at resolution 4 gives 288,122 cells averaging 1,770 km², 45 km centre to centre, as prior work shows metro level granularity is around 40 km. Its only job is to merge points that sit close enough to count as one place. Each occupied cell yields one class, so the grid fixes how many classes exist and roughly where. Cell membership is an equivalence relation. The grid is also identical across datasets, so the operator and RIPE class sets come from one frame and their footprints can be intersected instead of only compared in aggregate.
-
-H3 is the grid an operator already has: hexagons give a uniform neighbour distance with no ambiguous edge-versus-corner adjacency, which is why the tessellation is standard in RF planning, and it is native to ClickHouse, BigQuery, Snowflake and Spark, so an operator can reproduce the quantization in the warehouse the measurements already live in. Two properties are given up for that and we report both rather than assume them away. H3 cells are not exactly equal-area: across the cells our targets occupy, the largest is 1.33 times the smallest, so a single quoted area is a mean and every area-derived quantity carries that spread. And a hexagon's pitch is its centre-to-centre distance, $\text{edge} \times \sqrt{3}$, not $\sqrt{\text{area}}$, which understates the spacing by about 7%; the pitch quoted above and used throughout is the former, because it is the distance that seed pairs are actually compared against. Every number in this paper is also reproducible on an equal-area HEALPix grid at `nside=128` (51 km), which is the exactly-equal-area and exactly-nested alternative; where the two grids disagree we say so.
-
-**The seeds and the partition they induce.** Each occupied target cell contributes one seed, the centroid of the targets inside it, so the answer space is $K$ real locations rather than $K$ grid squares. A coordinate is labelled by its nearest seed, and that one rule scores ground truth. Error distance is measured to the seed, which is where targets actually are.
-
-The cost of the grid is stated rather than claimed away. Grid lines fall where the grid falls, not where targets are sparse, so a facility group straddling a line yields two seeds and two classes. The Voronoi step then places the boundary between those two seeds in the gap between them, which is sensible, but it cannot undo a split the grid already made. For a group of extent $e$ against pitch $w$ the straddle probability is about $1-(1-e/w)^2$, which at $w = 45$ km is 21% at 5 km and 39% at 10 km. §10 carries this as the principal threat to the classification metric.
-
-What the cost is *not* is a resolution to be tuned, and we can state that from measurement rather than as an expectation. Coarsening cannot repair a split on a nested grid, because a boundary at a coarse level is also a boundary at every finer one: on the public single-ASN probes-to-anchors set the ten targets in the New York metro occupy three HEALPix classes at 51 km, two at 102 km, and still two at 407 km, a cell nine times the 44 km extent of the group it is splitting. Changing tessellation does move the answer, but not in the direction scale would predict. H3 at 45 km is *finer* than HEALPix at 51 km, and it places all ten of those New York targets in a single class; across the whole of that set it nevertheless yields fewer classes, 22 against 27, with singleton classes falling from 11 to 6 and the best variant's top-1 accuracy rising from 0.397 to 0.500. A finer grid producing coarser classes is the whole point: what decides whether a facility group survives quantization is where the boundaries fall relative to it, not how far apart they are. Three consequences follow. Any reported accuracy must name its grid *and* its resolution, since two grids at nominally the same scale differ here by ten points of top-1. A grid choice cannot be justified by the class counts it happens to produce on one dataset, because that is a fact about alignment and will not transfer; we therefore fix the grid in advance and report both tessellations rather than selecting on the outcome. And if grouping co-located facilities were a requirement rather than a tendency, no grid would deliver it at any resolution and a radius-capped linkage would be the right instrument; what the grid buys instead is a class set that depends on no clustering run, no input ordering, and no dataset, which is precisely what makes the operator and RIPE footprints comparable at all.
 
 **Latent and observed geometry are reported as a pair.** Because an edge records a measurement, the edge set is an artifact of the campaign rather than a property of the deployment, and every distance quantity therefore has two values: the latent one over all VP × target pairs, which describes where the infrastructure sits, and the observed one over measured edges only, which describes what the dataset can actually deliver. The pairing applies to distances and not to degree, whose latent value is the VP count for every target and so carries nothing. The gap between the two is a property of the campaign, and reporting only one of them is what allows sampling bias to be misread as an algorithmic result.
 
 **Degree is a precision covariate, and no feasibility gate arises.** Every CBG constraint is a distance upper bound, so the feasible region is an intersection of disks: bounded, convex, and nonempty with a well-defined centroid at any degree of one or more. There is no threshold at three constraints. A target also enters either dataset only by having been measured, so degree is at least one everywhere by construction and degree zero is not a case that occurs. That guarantee is a property of how the datasets are assembled rather than of the method, and it does not extend to deployment, where an unmeasured target is an ordinary case; §10 takes that up. Precision degrades continuously as degree falls, and it degrades far more sharply under a poor angular arrangement than under a low count, since two landmarks on opposite sides of a target constrain it better than five clustered in one metro. Degree is therefore carried forward purely as a covariate that §8.3 regresses error and region area against, jointly with the angular statistics, and the expectation to be tested is that the angular term dominates the count term.
 
 **Best-effort VP-topology matching.** Where the public dataset allows it, we select probes to approximate the operator's VP count, geographic spread, and pairwise distance distribution, so that a cross-dataset accuracy difference is less likely to be an artifact of VP placement alone. This is a mitigation rather than a control, and we report the residual mismatch instead of claiming it away. 【TODO: operationalize the matching criteria.】
-
 #### Metric List:
 *Node-set geometry, computed identically for VPs and for targets, printed side by side.*
 - Count, plus ASN count on the target side only, since each VP set is single-ASN by construction as described above.
 - **Geographic diameter** (max pairwise great-circle distance), reported with **p95 pairwise distance** alongside it, since a diameter is a maximum and one near-antipodal node sets it single-handedly. Diameter 19,400 km with p95 8,100 km is a regional cloud plus an outlier, not a global deployment. The full pairwise distance CDF is the figure behind those two scalars.
-- **Occupied cell count**, on the resolution-4 grid defined above, so "location" here is exactly the merge scale that generates the classes. This is what is left after near-coincident points collapse: on the VP side, how many distinct constraint disks the set can produce, and on the target side, $K$ itself. "60 VPs in 31 occupied cells" is the honest denominator for any claim resting on independent observations. 
-	- Reported up the hierarchy at H3 resolutions 5, 4, 3 and 2 (17, 45, 120 and 316 km). The shape of that curve is a multi-scale concentration diagnostic: a steep climb toward fine cells means the set only separates at intra-metro scales, while a flat curve means genuinely distinct metros.
-	- Each rung is computed by re-binning the coordinates, not by coarsening the cell identifiers, because H3's hierarchy is aperture-7 and hexagons cannot tile hexagons: a parent's six outer children each straddle its boundary, so the parent identifier is exact as an index but is not a geometric container. The two routes genuinely disagree, on 1% to 8% of targets at resolution 3 and 3% to 10% at resolution 2 across the four RIPE-derived sets we have, so the cheaper route would report a partition that no resolution actually produces. On HEALPix the coarsening is a bit shift and the two routes coincide exactly; we re-bin on both grids so the diagnostic means the same thing regardless of which is in use.
+- **Occupied cell count**, on the resolution-4 grid defined above, so "location" here is exactly the merge scale that generates the classes. This is what is left after near-coincident points collapse: on the VP side, how many distinct constraint disks the set can produce, and on the target side, $K$ itself. "60 VPs in 31 occupied cells" is the honest denominator for any claim resting on independent observations.
+- Reported up the hierarchy at H3 resolutions 5, 4, 3 and 2 (17, 45, 120 and 316 km). The shape of that curve is a multi-scale concentration diagnostic: a steep climb toward fine cells means the set only separates at intra-metro scales, while a flat curve means genuinely distinct metros.
+- Each rung is computed by re-binning the coordinates, not by coarsening the cell identifiers, because H3's hierarchy is aperture-7 and hexagons cannot tile hexagons: a parent's six outer children each straddle its boundary, so the parent identifier is exact as an index but is not a geometric container. The two routes genuinely disagree, on 1% to 8% of targets at resolution 3 and 3% to 10% at resolution 2 across the four RIPE-derived sets we have, so the cheaper route would report a partition that no resolution actually produces. On HEALPix the coarsening is a bit shift and the two routes coincide exactly; we re-bin on both grids so the diagnostic means the same thing regardless of which is in use.
 - **Degree distributions, both sides**, as median/IQR/p90 rather than bare means, since both are heavily skewed. VP degree is measurement effort spent; target degree is constraints available.
 - 【Optional appendix: Clark-Evans index · anisotropy ratio and major-axis bearing · CV of nearest-neighbour distances.】
 
@@ -298,8 +312,22 @@ What the cost is *not* is a resolution to be tuned, and we can state that from m
 ---
 
 ### 7.4 Answer space construction
-
+We transform the geolocation task into Voronoi cell classification problem.
+#### 7.4.1 Why?
+Error distance as a metric is useful to reflect the capability of a geolocation method, but not necessarily reflecting the effective geolocation accuracy for operators' needs based on different target answer space.
+Example: two methods who vary in geolocation error distance in continuous space might point to the same coarse region where only one possible location candidate reside. In this case, they both correctly identify the target region. So for benchmarking the effectiveness of a geolocation method, the goal is classification accuracy, annotated with error distance.
+Cicalese et al. firstly point out geolocation can be viewed as a classification problem about city selection in an estimated region. 
+Operators care about regional classification as the way of their infrastructure deployment and service operation.
+Instead of focusing on city-level granularity, we group target cities by H3 cell geospatial partition with size 4 (~50 km granularity) to find effective regions, then construct geolocation answer space by Voronoi tessellation with candidate regions as seeds.
+#### 7.4.2 Method
 Voronoi tessellation based on occupied cell centroids as seeds, as classification is evaluated based on nearest-site snapping for the estimated coordinates.
+
+**The grid is a quantizer, not the answer space.** An H3 hexagonal grid at resolution 4 gives 288,122 cells averaging 1,770 km², 45 km centre to centre, as prior work shows metro level granularity is around 40 km. Its only job is to merge points that sit close enough to count as one place. Each occupied cell yields one class, so the grid fixes how many classes exist and roughly where.
+> H3 is the grid an operator already has: hexagons give a uniform neighbour distance with no ambiguous edge-versus-corner adjacency, which is why the tessellation is standard in RF planning.
+
+**The seeds and the partition they induce.** Each occupied target cell contributes one seed, the centroid of the targets inside it, so the answer space is $K$ real locations rather than $K$ grid squares. A coordinate is labelled by its nearest seed, and that one rule scores ground truth. Error distance is measured to the seed, which is where targets actually are.
+
+The cost of the grid is stated rather than claimed away. Grid lines fall where the grid falls, not where targets are sparse, so a facility group straddling a line yields two seeds and two classes. The Voronoi step then places the boundary between those two seeds in the gap between them, which is sensible, but it cannot undo a split the grid already made.
 
 *Answer-space geometry, over the $K$ seeds.*
 - Seed count $K$, which equals the occupied target cell count · targets per seed · **intra-seed target spread**, the max pairwise distance among targets sharing a seed. This says how well one centroid represents what it stands for, and it is the floor under any error-distance figure.
@@ -309,19 +337,84 @@ Voronoi tessellation based on occupied cell centroids as seeds, as classificatio
 
 ## 8. Evaluations
 
-Three steps, in order. §8.1 reports what every method achieved, on each dataset and under each deployment goal. §8.2 explains the baseline's number, since a relative gain is uninterpretable until the reader knows what limited the reference point. §8.3 explains the variants' numbers and attributes each gain or loss to a phase of §7.2. Neither §8.2 nor §8.3 introduces a new outcome measure; both explain quantities §8.1 has already reported, using diagnostics of their own.
+### 8.1 RQ1: What accuracy achievable by latency-based geolocation with different datasets?
 
-### 8.1 Classification results
+![[Pasted image 20260903160833.png]]
+Show weighted-average accuracy/failure rate over dataset types (mesh, weighted, ripe) in the appendix. All results with Top-1 accuracy & failure rate across all datasets【NEED table】
+- Proprietary Mesh Unicast IP dataset
+	- Proprietary Traffic-weighted Unicast IP dataset
+- Public Mesh Unicast IP dataset
+	- VP&TG topology-paired proprietary Mesh Unicast IP dataset
+##### Traffic-weighted targets vs MESH targets: where peering and optimal content routing matter
+🎯 Show stack bars per method with dataset types as hatch types (mesh - solid, weighted - hatched).
+First readout weighted-average accuracy of methods over MESH and TRAFFIC-WEIGHTED datasets, showcasing the overall achievable accuracy per method.
 
-**One table carries the headline.** Every method, both datasets, and each deployment goal fed to the framework, reported as the accuracy, runtime and memory triple that §7.1 forces every run to emit. Shortest-Ping sits in that table beside the five variants rather than in a paragraph of its own, since it runs through the same runtime, the same folds and the same scorer (§5).
+Explain traffic-weighted dataset formation: traffic-weighting preserves heavy flows and target location where peering resides. Mention properties of geometry and routing proximity, and define VP proximity of target, VP discrimination power of target, shortest-ping VP of target AND min-RTT inflation. Then show correlation between the shortest-ping distance to seed vs min-RTT inflation among targets for two datasets, with mesh being gray dots and weighted being red dots. Try to see clustering and overlaps.
 
-**Two outcome measures, which can disagree.** Classification accuracy is the fraction of targets whose estimate lands in the right class under the nearest-seed rule of §7.4. Error distance is the great-circle distance from the estimate to the true target's seed, reported as a distribution rather than a mean, since the tail decides whether a method is deployable at all. A method can win on accuracy and lose on error distance when its misses are far misses, and the intra-seed target spread of §7.4 is the floor beneath any error-distance figure. Fallbacks count as failures throughout (§7.2), and accuracy is given both with and without fallback cases included.
+Show bar plots of method accuracy with paired breakdown datasets.
+> Traffic-weighted dataset is a subset of mesh dataset where only VP-target flows and target locations that contribute to the major 95% traffic get preserved. Therefore we are comparing datasets that **differ in closeness of targets to peering locations** where VPs co-locate with targets.
 
-**Traffic weighting decides which targets matter.** An operator does not carry flows to target cells uniformly, so a cell that receives a large share of traffic is worth more than a cell that receives almost none, and both accuracy and error distance change once that weight is applied. The two views can disagree in either direction, and a variant that wins uniformly can lose on the cells that actually receive flows. Since §7.1 makes the deployment goal an input to the framework, traffic weight is the form that goal takes in the reported numbers, which is why it belongs in the headline table rather than in a sensitivity appendix. We report the uniform view alongside the view restricted to the top-weighted target cells. The public dataset has no traffic to weight by, so this is an operator-side view only, and the cross-dataset generalization claim of §7.3 stays on the unweighted numbers. §8.2 applies the same weight to coverage. 【TODO: traffic weight source and granularity, and whether weights are per prefix or per cell.】
+**Story line:**
+- Observe Top-3 method ranking:
+	- In Proprietary Mesh Unicast: Octant Hull, Octant Spline, SoI CBG (show spread)
+	- In Proprietary Traffic-weighted Unicast: Shortest ping, SoI CBG, Octant Hull (show spread between previous one, very small difference)
+- Introduce VP proximity and min-RTT inflation metrics to showcase the closeness of targets to peering locations and the derived impact on min-RTT
+	- Show correlation of each to target classification accuracy
+- Point out that with good peering and content routing, targets in traffic-weighted datasets can be well geolocated with shortest-ping, SoI CBG, and Octant.
+##### **Targets without shortest-ping VP proximate to peering location are the difficulties**
+> Traffic-weighted datasets with good peering and content routing happen to include targets that are benefiting from both geography and routing wellness. We need to prove that only with one wellness is not enough to boost all latency-geolocation methods.
 
-*[This subsection describes and does not explain. Why the baseline's number came out that way is §8.2, and why each variant's did is §8.3.]*
+Show accuracy breakdown of splitting mesh targets per method by distinguishing whether shortest-ping VP is at peering location (both geography and routing wellness) , vs by purely VP proximity  (geography wellness), vs by purely min-RTT inflation  (routing wellness)
 
-### 8.2 Shortest-Ping characterization
+**Story line:**
+- Point out that with only good peering and content routing simultaneously can all latency-based geolocation perform well.
+- Targets without proximate VP to Peering locations are the difficulties.
+
+##### Targets that reside in dense answer regions are prone to misclassification by CBG
+> This is an artificial error due to nearest-site snapping. Showing the percentage of targets confused by this factor by defining region with close nearest-site distance.
+
+Show wrong target distribution in crossed voronoi boundary count. (1=adjencent, n=n cells away)
+
+
+##### **Datasets with clean network topology also matters**
+Then show curated similar topology of proprietary vs public RIPE dataset consisting of the same VP ASN. (with sparser VP footprint and different ASN mixture)
+
+**Story line:**
+- We show that CBG RTT-latency modeling could be skewed by fitting with mixed-ASN targets, hence degrading the accuracy.
+
+				### 8.2 RQ2: What method outperform another under what scenarios? Why?
+
+#### With shortest-ping VPs proximate to peering, which one succeed or fail? Why?
+
+#### Without shortest-ping VPs proximate to peering, which one succeed or fail? Why?
+
+
+#### **Takeaways:**
+1. Octant family are the most robust and accurate across datasets
+2. Traffic-weighted dataset: shortest-ping is the most cost-effective option, SoI CBG add more robustness without training;
+3. Mesh dataset: Octant family & SoI CBG
+#### Target Resolvability (Mesh datasets only)
+![[Pasted image 20260903164111.png]]
+![[Pasted image 20260903171829.png]]
+
+**Story line**:
+- Solution Diversity: No single method resolves all targets that are geolocated
+	- Only X% of target can be geolocated by all targets
+	- Together they resolve 85.1% targets, 25% higher than the top single method.
+	- Each CBG method has its own geolocateable targets
+- Fully resolvable target distribution & Unresolvable target distribution【Add figure】
+	- Characterizing dataset-specific properties: 
+		- Geography: VP proximity
+		- Routing: min-RTT inflation
+		- Voronoi partition density (Confusion, use top-3 classification to resolve)
+	- Error distance characterization
+	- Success & Failure patterns (category with examples)
+		- Shortest Ping 
+		- SoI CBG
+		- Vanilla CBG
+		- Octant family
+		- Spotter CBG
+- Extrapolation of Success/failure mode on variant-specific scenarios (how many targets are explainable per CBG?)
 
 **Why the baseline gets its own section.** Every CBG result in §8.1 is stated relative to Shortest-Ping, so the baseline's number is the denominator of every claim in the paper. Shortest-Ping is correct for a target exactly when the lowest-RTT VP is discriminative for that target, and that sentence carries two independent conditions. Some VP has to be discriminative for the target at all, which is a question about geometry. The RTT ranking then has to select that VP rather than another, which is a question about latency. Every statistic below answers one of the two. Where both hold is the accuracy already reported in §8.1, and what is left over is the room the variants of §8.3 had to win.
 
@@ -329,28 +422,32 @@ Three steps, in order. §8.1 reports what every method achieved, on each dataset
 
 **Does the RTT ranking pick it?** Where it does not, the target is reachable but unreached, and that gap is the CBG opportunity. We report the Shortest-Ping failure rate decomposed into two classes, alongside the RTT distribution behind it, because the two classes are two different rooms:
 - *Selection failures.* The target is VP-proximate, but the lowest-RTT VP sits in a neighboring cell. One VP could have pinned the target, so nothing here requires multilateration. Three causes separate cleanly, and they do not point at the same fix:
-	- *Answer-space geometry.* Even the geometrically nearest VP has a different nearest seed, because some other seed sits closer to it. RTT is not implicated, and no latency model repairs it, because Shortest-Ping can only ever return a class that some VP is discriminative for. CBG is not restricted to VP coordinates, so this is recoverable, and recovery is attributable to multilateration itself (Phases 1 and 2a) rather than to constraint handling. It is also the clearest deployment signal in the section, since a VP in that metro would remove the failure outright.
-	- *Indirect peering.* The winning VP wins because the shorter path is routed the long way around, so RTT ranks VPs in an order distance does not. This is stable per (VP, peer ASN) pair, and absorbing it is what per-ASN calibration in Phase 1 exists for, so its rate is the concrete evidence behind §2.2(a).
-	- *Congestion and measurement noise.* The RTT ordering flips between measurements instead of staying wrong. This is what constraint filtering and weighting (Phases 2b and 2c) act on. However, the impact of this is negligible in our dataset as we measure RTT over weeks and take P5 RTTs among them for each (VP, target) pair.
+- *Answer-space geometry.* Even the geometrically nearest VP has a different nearest seed, because some other seed sits closer to it. RTT is not implicated, and no latency model repairs it, because Shortest-Ping can only ever return a class that some VP is discriminative for. CBG is not restricted to VP coordinates, so this is recoverable, and recovery is attributable to multilateration itself (Phases 1 and 2a) rather than to constraint handling. It is also the clearest deployment signal in the section, since a VP in that metro would remove the failure outright.
+- *Indirect peering.* The winning VP wins because the shorter path is routed the long way around, so RTT ranks VPs in an order distance does not. This is stable per (VP, peer ASN) pair, and absorbing it is what per-ASN calibration in Phase 1 exists for, so its rate is the concrete evidence behind §2.2(a).
+- *Congestion and measurement noise.* The RTT ordering flips between measurements instead of staying wrong. This is what constraint filtering and weighting (Phases 2b and 2c) act on. However, the impact of this is negligible in our dataset as we measure RTT over weeks and take P5 RTTs among them for each (VP, target) pair.
 - *Structural failures.* The target has no discriminative VP at all, so no VP coordinate is the right answer no matter which VP wins the RTT ranking. Multilateration is strictly necessary here, and a gain is attributable to latency-to-distance and constraint shape (Phases 1 and 2a).
 
 Both classes are fixed before any method runs, so every variant in §8.3 is reported against them separately. That is what turns "CBG beats the baseline" into a claim about which phase produced the gain. It also exposes regression, since the targets the baseline already solves are targets a variant can lose, and an aggregate accuracy number hides that trade.
 
 The coverage ceiling and the two failure rates are settled by geometry and RTT rather than by any modeling choice, which is what makes this section an explanation of §8.1's baseline number instead of a rationalization of it. It is also what makes a cross-dataset difference attributable: where the operator and RIPE datasets report different baseline accuracies, these three numbers say which structural property is responsible, and that is the generalization claim of §7.3 restated as something testable.
 
-### 8.3 Variant results
+### 8.3 RQ3: Pros and Cons of  Latency-based methods?
 
-**What the variants had to work with.** §8.2 sizes the opportunity; it does not say whether the opportunity can be taken. Two dataset properties decide that, and neither is a property of the baseline, which is why they belong here rather than in §8.2:
-- **Min-RTT inflation**: the measured min or P5 RTT divided by what the same path would cost at the assumed propagation speed over the great-circle VP-to-target distance. One is the physical floor, and larger values mean every constraint disk is drawn looser. Inflation therefore sets how much of the answer space an intersection can exclude. Shortest-Ping is indifferent to it, since an argmin over RTT is unchanged by any monotone rescaling of RTT, which is the reason it appears in this section and not the previous one.
-- **Labels per (VP, peer ASN) pair**: this decides whether Phase 1 can be fit per ASN at all, and therefore whether the per-ASN vs. pooled ablation is feasible on a given dataset rather than only stated. 【TODO: minimum labels per ASN for a viable per-ASN fit.】
+##### Accuracy wise
+- Shortest Ping: excel when good peering exists between network operators and hypergiants/CDN providers.
+- SoI CBG: similar to shortest ping, adding more robustness to non-VP proximity. Shortest-ping VP contributes to the final accuracy.
+- Vanilla CBG: oversimplified linear RTT-distance model, which cause tight constraints and thus inaccurate prediction or failures.
+- Octant Hull: Loose Piece-wise Convex Hull modeling. Loose constraint, generating areas with good balance between area size and accuracy. 
+- Octant Spline: Tighter Piece-wise spline modeling, could over constraints such that negative excludes truth. But still accurate and robust in general. Couldn't compete with shortest-ping/SoI when RTT is small.
+- Spotter CBG: Oversimplified assumption on RTT-distance modeling using normal distribution, could create tight/inaccurate constraint for close/far-range targets, but good at mid-range targets.
+##### Resource Consumption wise
+Memory
 
-**Region area is the explanatory variable.** The intersection region is reported as an equivalent radius $\sqrt{A/\pi}$, which puts it in the same units as the error distance of §8.1, and the empty-intersection rate is reported beside it, since an empty intersection becomes a fallback and a fallback is a failure (§7.2). Region area is what connects the geometry of §7.3 to the accuracy of §8.1, because a variant succeeds by producing a region that is both small and correct, and the two ways to fail are a region too large to be useful and a region small but in the wrong place.
+Runtime
 
-**The covariates are regressed, not just tabulated.** Error distance and region area are regressed on target degree, circular variance of bearings, min-RTT inflation, and the answer-space margin of §7.4, per variant and per dataset. The expectation to be tested is the one stated in §7.3: the angular term dominates the count term.
+Data requirement: Shortest ping / SoI CBG do not need training data
 
-
----
-
+TODO: error distance
 ## 9. Practical Insights · 10. Limitations · 11. Conclusion
 
 *[Pending. v1 §7 to §9 hold the current material; migrate after §8 is settled. Limitations must name the XGBoost candidate classifier as the designated follow-up.]*
