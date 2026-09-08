@@ -346,18 +346,128 @@ Show weighted-average accuracy/failure rate over dataset types (mesh, weighted, 
 - Public Mesh Unicast IP dataset
 	- VP&TG topology-paired proprietary Mesh Unicast IP dataset
 ##### Traffic-weighted targets vs MESH targets: where peering and optimal content routing matter
-🎯 Show stack bars per method with dataset types as hatch types (mesh - solid, weighted - hatched).
+Show stack bars per method with dataset types as hatch types (mesh - solid, weighted - hatched).
+> Traffic-weighted dataset is a subset of mesh dataset where only VP-target flows and target locations that contribute to the major 95% traffic get preserved. Therefore we are comparing datasets that **differ in closeness of targets to peering locations** where VPs co-locate with targets.
+![[Pasted image 20260907210513.png]]
 First readout weighted-average accuracy of methods over MESH and TRAFFIC-WEIGHTED datasets, showcasing the overall achievable accuracy per method.
 
-Explain traffic-weighted dataset formation: traffic-weighting preserves heavy flows and target location where peering resides. Mention properties of geometry and routing proximity, and define VP proximity of target, VP discrimination power of target, shortest-ping VP of target AND min-RTT inflation. Then show correlation between the shortest-ping distance to seed vs min-RTT inflation among targets for two datasets, with mesh being gray dots and weighted being red dots. Try to see clustering and overlaps.
 
-Show bar plots of method accuracy with paired breakdown datasets.
-> Traffic-weighted dataset is a subset of mesh dataset where only VP-target flows and target locations that contribute to the major 95% traffic get preserved. Therefore we are comparing datasets that **differ in closeness of targets to peering locations** where VPs co-locate with targets.
+
+Observations:
+1. Top-4 rank candidates do not change: Octant family, SoI and shortest ping.
+2. Shortest-ping and SoI near perfect classification.
+
+###### How the traffic-weighted set is formed, and why it should be easier
+
+The traffic-weighted dataset is not an independent campaign. It is the mesh
+dataset filtered to the (VP, target) flows and target locations that carry the
+top 95% of unicast traffic, so every traffic-weighted target is a mesh target and
+the two share one answer space. The filter is by traffic volume, but traffic
+volume is not distributed at random over the target set: an operator's heavy
+flows are the ones it has built interconnection for, so the surviving targets are
+disproportionately those served from a site the operator peers at, reached over
+the interconnect that peering established. Filtering by demand therefore selects,
+indirectly, for two structural properties at once — and both of them help
+latency-based geolocation, for reasons that are independent of each other.
+
+***(a) Geometric proximity: is a vantage point in a position to answer at all?***
+
+- **VP proximity of a target.** The distance from the target's class seed to the
+  nearest vantage point that measured it. Distance is measured VP → *seed* rather
+  than VP → target throughout, because classification labels a coordinate by its
+  nearest seed, so the seed is the object a guarantee can be stated about; a
+  target sits away from its own seed by the answer space's intra-cell offset
+  (p50 16-20 km at resolution 4), which is the same order as the margin below.
+- **VP discrimination power of a target.** A VP is *discriminative* for a target
+  when it lies within that seed's **margin**, half the geodesic distance from the
+  seed to its nearest neighbouring seed. Inside the margin the triangle
+  inequality forces the VP's own nearest seed to be the target's, so any method
+  that returns that VP's coordinate is guaranteed to land on the right class.
+  Discrimination is therefore a joint property of VP placement *and* answer-space
+  density, not of distance alone: the same 80 km VP is discriminative in a sparse
+  region and not in a dense one, which is why the threshold is per target rather
+  than one number for the dataset.
+
+***(b) Routing proximity: does latency behave like distance on the path taken?***
+
+- **Shortest-ping VP of a target.** The vantage point with the lowest RTT to that
+  target among those that measured it — the vantage point the baseline answers
+  with, and the one every method's constraint set is anchored on. Its distance to
+  the target's seed is *how wrong the baseline's answer is in kilometres* before
+  any snapping, and it is the second of the two x axes below. Note that it is
+  **not** a measure of geometry alone: RTT chose that VP, so the quantity already
+  carries the routing behaviour of the path.
+- **min-RTT inflation of a target.** The smallest ratio, over the target's
+  measured VPs, of observed RTT to the speed-of-internet RTT for that pair's
+  great-circle distance (slope 2 / (⅔c) ≈ 0.01 ms/km). It is 1.0 when some path
+  is as fast as ⅔c allows and 1.5 when the best-routed VP still spends half again
+  as long as its distance requires, so it measures routing efficiency with
+  proximity divided out. Being a **minimum over VPs**, it describes the best path
+  available to the target rather than a typical one — and it need not be attained
+  at the shortest-ping VP, which is what keeps the two axes from being one
+  statistic twice.
+
+The two are separable in principle. A target can have a VP in its own metro that
+reaches it only through another country (small VP proximity, large inflation), and
+a target 800 km from every VP can be reached over a near-geodesic path (large VP
+proximity, inflation near 1). Whether they are separable *in the data* is what the
+scatter answers, and the answer decides whether traffic-weighting's two expected
+effects are one effect counted twice.
+
+【FIGURE: `_cross/target-geometry/as01+as02+as03/proximity_inflation.closest.h3-4.png`
+— VP proximity of the target (nearest measured VP to its seed, log km) against
+min-RTT inflation, one dot per target, mesh grey and traffic-weighted red.
+Vertical band = the p25-p75 of the per-target seed margin; the dashed rule at 1.0
+= the speed-of-internet floor. The `.sping.` twin puts the shortest-ping VP's
+distance on x instead, and `..._by_dataset...` splits either per AS.】
+
+**Reading the mesh cloud (traffic-weighted pending).** The weighted campaign is
+not collected yet, so only the grey series is drawn, and the following describes
+the mesh baseline the weighted set will be read against.
+
+1. **Geometric opportunity is close to saturated, so it is not what is failing.**
+   The median target's nearest measured VP sits 21.5 km from its seed (23.6 /
+   27.5 / 18.8 km on AS01 / AS02 / AS03), and 95.3% of targets have one inside
+   their own seed margin — 96.8% under the weaker argmin rule. That 96.8% is the
+   ceiling on any method that answers with a VP's own coordinate, and it is
+   nearly one. On the mesh set, a vantage point in a position to give the right
+   answer almost always exists.
+2. **Selection is what fails.** The shortest-ping VP lands in the right class for
+   only 47.6% of targets (0.637 / 0.369 / 0.432), which is Shortest-Ping's pooled
+   top-1 accuracy by construction. Against the 96.8% ceiling, roughly half of all
+   mesh targets are **selection misses**: a discriminative VP was measured and
+   the RTT ranking returned a different one. That gap — not a shortage of nearby
+   VPs — is the room CBG has to win, and it is what §8.2 decomposes.
+3. **The two axes are independent once geometry is measured cleanly.** Spearman ρ
+   between VP proximity and min-RTT inflation is **-0.02** pooled, and -0.35 /
+   0.18 / 0.02 per AS: knowing how close the nearest VP is tells you nothing
+   about how well the best path is routed. Measured instead against the
+   *shortest-ping* VP's distance, ρ is 0.54 — but that axis is partly reading its
+   own y, since inflation is precisely what decides which VP the RTT ranking
+   hands over, so the apparent co-occurrence is the selection mechanism showing
+   through rather than a property of the targets. Geometric and routing wellness
+   are therefore two conditions and not one, which is what makes the next
+   subsection's split of the mesh set by each condition separately a real
+   decomposition.
+4. **Nothing approaches the speed-of-internet floor.** Inflation runs 1.183 to
+   2.037 with a median of 1.502, and only 8.9% of mesh targets fall below 1.30.
+   Even the best-routed path available to the median target spends half again
+   what geography alone would — which is the headroom the traffic-weighted set is
+   expected to claim, and the reason SoI CBG's calibration-free circles stay
+   loose enough to remain feasible here.
+
+The expectation this figure sets up, to be confirmed or refused when the weighted
+campaign lands, is therefore about **y** rather than about both axes: the red
+cloud should sit low on inflation, near 1, while x is already near-saturated on
+the mesh set. If it does, §8.1's traffic-weighted ranking (Shortest-Ping = SoI
+first) is a statement about how those targets are *routed* — the selection misses
+of point 2 disappear because RTT starts ranking VPs the way distance does — rather
+than about the methods, or about where the operator put its vantage points.
 
 **Story line:**
 - Observe Top-3 method ranking:
-	- In Proprietary Mesh Unicast: Octant Hull, Octant Spline, SoI CBG (show spread)
-	- In Proprietary Traffic-weighted Unicast: Shortest ping, SoI CBG, Octant Hull (show spread between previous one, very small difference)
+	- Mesh rank: **Octant Hull > Octant Spline > SoI ~= Shortest Ping** > Spotter > Vanilla
+	- Traffic-weighted rank: S**hortest-Ping = SoI > Octant Hull > Octant Spline** > Vanilla > Spotter
 - Introduce VP proximity and min-RTT inflation metrics to showcase the closeness of targets to peering locations and the derived impact on min-RTT
 	- Show correlation of each to target classification accuracy
 - Point out that with good peering and content routing, targets in traffic-weighted datasets can be well geolocated with shortest-ping, SoI CBG, and Octant.
