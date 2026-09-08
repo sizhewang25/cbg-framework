@@ -113,6 +113,11 @@ analysis:
     target_size: 7.0
     # no_voronoi: false               # true drops the decision-boundary overlay
 
+  plot-mtl-map:
+    # method: []                      # combos to render; default = all + shortest_ping
+    # no_regions: false               # true drops the MTL feasible-region layer
+    workers: 8                        # processes for the region replay (the slow part)
+
   plot-pareto:
     top_n: 1
     cost: runtime                     # runtime | memory_alloc | memory_rss

@@ -193,6 +193,19 @@ class RunPaths:
             "target-proximity", grid_slug(grid, resolution), root=root
         )
 
+    def mtl_map_dir(
+        self, root: Path | None = None, *, grid: str, resolution: int
+    ) -> Path:
+        """Interactive per-method MTL maps — its own tree, like `proximity_dir`.
+
+        `plot-mtl-map` recomputes the answer space, the seed scoring and the
+        proximity labels in-process rather than reading them, so it runs on a
+        bare benchmark run. Writing into `target-cls-accuracy/` would imply
+        `classify` had already run and make that directory's provenance
+        ambiguous.
+        """
+        return self.analysis_dir("mtl-map", grid_slug(grid, resolution), root=root)
+
 
 def grid_slug(grid: str, resolution: int) -> str:
     """`("h3", 4)` -> `"h3-4"`; `("healpix", 128)` -> `"healpix-128"`.

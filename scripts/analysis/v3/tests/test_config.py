@@ -231,6 +231,7 @@ def test_path_params_are_detected_from_the_live_signatures():
         "bipartite_dir",
         "outputs_root",
     ]
+    assert found["plot-mtl-map"] == ["analysis_root", "outputs_root"]
 
 
 # ---- the shipped configs ----------------------------------------------------

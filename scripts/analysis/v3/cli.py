@@ -39,6 +39,7 @@ from scripts.analysis.v3.modules import (
     headline_table,
     map_answer_space,
     map_bipartite,
+    map_mtl,
     pareto,
     proximity,
     venn,
@@ -67,6 +68,7 @@ _COMMAND_MODULES = (
     venn,
     map_answer_space,
     map_bipartite,
+    map_mtl,
     pareto,
 )
 

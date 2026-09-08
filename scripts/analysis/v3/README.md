@@ -32,6 +32,7 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/diagram/](modules/diagram/) | lib · the overlap figures `plot-venn` assembles |
 | [modules/map_answer_space.py](modules/map_answer_space.py) | cmd · `plot-answer-space` |
 | [modules/map_bipartite.py](modules/map_bipartite.py) | cmd · `plot-bipartite-graph` |
+| [modules/map_mtl.py](modules/map_mtl.py) | cmd · `plot-mtl-map` |
 | [modules/pareto.py](modules/pareto.py) | cmd · `plot-pareto` |
 
 [modules/diagram/](modules/diagram/) is the one package here, split from
@@ -157,6 +158,13 @@ python -m scripts.analysis.v3.cli plot-venn \
 
 # 5. Static map of the answer space
 python -m scripts.analysis.v3.cli plot-answer-space --all-runs --us-only
+
+# 5b. The case viewer: one interactive HTML per method, for looking at a single
+#     target's MTL result against the answer space. Self-contained -- open the
+#     file directly, no web server. Slow the first time (see below).
+python -m scripts.analysis.v3.cli plot-mtl-map --run-id as01-260728-260802
+python -m scripts.analysis.v3.cli plot-mtl-map --run-id as01-260728-260802 \
+    -m octant_cbg_hull --no-regions        # seconds, minus the region layer
 
 # 6. Accuracy vs cost across datasets (colour = variant, symbol = dataset)
 python -m scripts.analysis.v3.cli plot-pareto \
@@ -1705,6 +1713,140 @@ boundaries that are visible — an off-frame seed still shapes an on-frame line.
 Rendering both grids is the quickest way to see the previous section's point: the
 `as7018` map shows touching cell pairs at LA, Dallas, New York and DC on either
 one.
+
+## The MTL case viewer
+
+`plot-mtl-map` is the only interactive artifact in this layer. Everything else
+here answers "how does this method do?"; this one answers "why did it do *that*,
+on *this* target?" — which is the question the paper's §8.2 root-cause claims
+have to survive being asked one case at a time.
+
+One self-contained HTML per method, written to
+`mtl-map/<grid>-<resolution>/mtl_map.<method>.html`. Plotly comes from a CDN and
+the payload is inlined, so the file opens over `file://`. That is a deliberate
+break from `scripts/visualization/benchmark/v2/`, whose viewers lazy-fetch a
+per-target polygon JSON and therefore need `python -m http.server`; at ~400
+targets the whole payload is 3-4 MB, which is small enough to embed.
+
+Layers, bottom to top: the CONUS Voronoi partition (red dashed — the top-1
+decision boundary); every occupied cell as a **seed region**, with the
+prediction's top-1/top-2/top-3 in red/orange/yellow; the **margin** circle; each
+VP's LTD constraint; the MTL feasible region; the VPs; and the prediction and
+truth joined by the error. Clicking the star, the triangle or any VP pins a
+popup with the numbers behind that mark.
+
+### Nothing here is read from a v3 artifact
+
+The answer space, the seed scoring, the crossing matrix and the proximity labels
+are rebuilt in-process by calling the functions that write them —
+`answer_space.build_for_run`, `classify.score_combo`, `seed_crossing_matrix`,
+`proximity.build_proximity`. On a 400-target run that costs ~0.2 s in total,
+which is cheaper than the staleness it removes: the map runs on a bare benchmark
+run with no pipeline prerequisites, and it cannot disagree with
+`topn_accuracy.csv` because it calls the same code.
+
+### One quantity called margin
+
+`margin_km` is half the geodesic between the prediction's **top-1 and top-2**
+seed, and it is used twice: it is the length the grey dotted top1↔top2 connector
+halves, and it is the radius of the dashed red circle. Inside that circle any
+coordinate snaps to top-1, which is why the circle is the discriminative range
+in §8.1's sense. The per-seed `margin_km` in `seeds.csv` is a different cut of
+the same idea (half the distance to the seed's own nearest neighbour) and is
+deliberately not shown, so the page has one definition rather than two.
+
+### The region layer is the expensive part, by three orders of magnitude
+
+The benchmark records `mtl_intersection_kind` but never serializes the geometry,
+so every feasible region has to be recomputed — and that is a full re-run of the
+planar face decomposition. On `as01/octant_cbg_hull` the benchmark's own
+`mtl_ms` averages **7.0 s per target** (median 0.9 s, max 78 s): ~47 minutes
+serial for one method. Two things make that liveable, and neither is a shortcut
+that changes the answer:
+
+- **A process pool.** `--workers/-j` (default 8). The replay is per target and
+  shares nothing.
+- **An on-disk cache**, `mtl-map/<grid>-<res>/regions/<method>/<target_id>.json`.
+  A second render — after a template edit, or after an interrupt — is free, and
+  an empty result is memoized as `{}` so it is not recomputed forever.
+
+`--no-regions` drops the layer and makes the command a few seconds. Use it while
+iterating on anything else.
+
+Replay is faithful rather than approximate: `mtl_participants[]` is the
+post-filter constraint set with `vp_lat`/`vp_lon`/`rtt_ms` inline, which is
+exactly what an `LTDResult` carries, so re-running
+`MTL_REGISTRY[run.json["mtl"]](**mtl_kwargs)` over it reproduces the bench-time
+`mtl_intersection_kind` and `n_mtl_participants`.
+
+### CONUS is built here because the repo has no CONUS
+
+`resolve_landmass("US")` returns Natural Earth's whole United States, Alaska and
+the Aleutians included, and the one import that sounds like a mainland filter
+(`scripts/processing/source/filter_mainland_and_min_pair_observations.py`) names
+a module that does not exist in this checkout. `conus_boundary()` therefore
+keeps only the parts whose representative point falls inside
+`mapping.US_MAINLAND_EXTENT`. The partition itself is computed in an
+azimuthal-equidistant frame and unprojected afterwards, for the reason
+`mapping.seed_voronoi` records: a diagram built in raw lon/lat misassigns ~10.5%
+of frame area at these latitudes.
+
+### Every filled ring must be clockwise
+
+Plotly's scattergeo `fill: "toself"` treats a closed lat/lon path as a
+*spherical* polygon and fills the side to the right of the walk. A
+counter-clockwise ring therefore fills the antipodal complement — the whole
+globe minus the shape. H3's `cell_to_boundary` emits vertices counter-clockwise,
+so the first version drew all K seed hexagons as world-sized fills stacked on
+each other and the map came out as one flat wash of colour; the JS
+great-circle sampler had the same problem on the margin circle.
+
+`_cw_ring` normalizes on the Python side and the ring sampler walks negative
+angles on the JS side — the same fix, and the same reason, as
+`mtl_world_map._polygon_to_ring`. The outline is identical either way, which is
+what makes this invisible to every assertion about the payload, so
+`tests/test_map_mtl_viewer.js` rejects any filled trace whose ring has positive
+shoelace area.
+
+### The inclusion filter decides what is worth drawing
+
+A disk that fully contains another is not the binding constraint — the contained
+one is strictly tighter — so every MTL drops it through
+`geometry.filter_redundant_outer_disks` before intersecting, and records the
+survivors as `MTLResult.participating_vp_ids`. The benchmark persists that as
+`mtl_participants[]`, so the map reads the verdict back rather than recomputing
+it; `mtl_world_map` mirrors the heuristic client-side instead, which is a second
+implementation that can drift from the geometry it claims to describe, and both
+versions would still draw a plausible-looking set of circles.
+
+The filter is not cosmetic at this scale. On as01 the kept fraction is:
+
+| method | kept / admitted | median kept per target |
+| --- | --- | --- |
+| `million_scale_cbg` | 4.5 / 133 (3%) | 2 |
+| `vanilla_cbg` | 16.2 / 133 (12%) | — |
+| `spotter_cbg` | 23.8 / 128 (19%) | — |
+| `octant_cbg_hull` | 27.7 / 133 (21%) | — |
+
+Drawing the unfiltered set buries the handful of constraints that decide the
+answer under a hundred that cannot. **`post-filter only` is therefore on by
+default**; unchecking it redraws the dropped constraints in a receding grey
+beneath the binding ones, and each VP's popup names which side of the filter its
+own constraint fell on.
+
+### Hovering a VP lifts its own constraint
+
+With 130 constraints on one target, the bundle reads as texture rather than as
+geometry. Hovering any VP marker restyles two pre-allocated empty traces into
+that VP's own disk (and its inner bound, on an annulus method) and dims the rest
+of the bundle, so a single constraint can be followed without unchecking
+anything. The highlight is drawn even when `post-filter only` is hiding that
+constraint — a VP that sits close to the target and contributed nothing is
+exactly the case worth looking at — and turns rust-coloured rather than blue to
+say the disk was dropped.
+
+Restyle rather than redraw: the traces are allocated once per draw and only
+their coordinates change, which keeps `Plotly.react` off the hover path.
 
 ## Accuracy vs cost
 

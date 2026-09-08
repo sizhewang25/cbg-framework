@@ -1,0 +1,236 @@
+// Headless smoke test for templates/mtl_map.js.
+//
+// The viewer is the one artifact in this layer that Python cannot check: a
+// typo in draw() renders a blank page, and every Python-side assertion about
+// the payload still passes. So this stubs just enough DOM and Plotly to
+// actually execute the IIFE, then drives every target, projection, layer
+// toggle, status filter and clickable trace.
+//
+// Driven by tests/test_map_mtl.py, which renders the fixture HTML first and
+// skips when node is unavailable. Run directly with:
+//   node scripts/analysis/v3/tests/test_map_mtl_viewer.js <rendered.html>
+
+const fs = require("fs");
+const path = require("path");
+
+const htmlPath = process.argv[2];
+const jsPath = process.argv[3] ||
+  path.join(__dirname, "..", "modules", "templates", "mtl_map.js");
+const html = fs.readFileSync(htmlPath, "utf8");
+const payload = html.match(
+  /<script id="data" type="application\/json">([\s\S]*?)<\/script>/
+)[1];
+const js = fs.readFileSync(jsPath, "utf8");
+
+// Initial control state is read out of the shell's own markup rather than
+// invented here, so the harness exercises the real default view.
+const checkedIds = new Set(
+  [...html.matchAll(/id="([A-Za-z0-9_]+)"[^>]*checked/g)].map((m) => m[1])
+);
+const store = {};
+function el(id) {
+  if (store[id]) return store[id];
+  store[id] = {
+    id, value: "", checked: checkedIds.has(id), innerHTML: "", textContent: "",
+    style: {}, options: [], firstChild: { nodeValue: "" },
+    appendChild(o) { this.options.push(o); },
+    addEventListener() {},
+    querySelector() { return { addEventListener() {} }; },
+    removeAllListeners() {}, on() {},
+  };
+  return store[id];
+}
+el("data").textContent = payload;
+for (const [, id, v] of html.matchAll(
+  /<select id="([A-Za-z0-9_]+)"[\s\S]*?<option value="([^"]*)"[^>]*selected/g
+)) el(id).value = v;
+
+// `null` separators split one trace into several rings.
+function splitRings(lats, lons) {
+  const rings = [];
+  let cur = [];
+  for (let i = 0; i < lats.length; i++) {
+    if (lats[i] === null) { if (cur.length > 2) rings.push(cur); cur = []; continue; }
+    cur.push([lats[i], lons[i]]);
+  }
+  if (cur.length > 2) rings.push(cur);
+  return rings;
+}
+
+// Shoelace in (lon, lat): > 0 is counter-clockwise.
+function signedArea(ring) {
+  let a = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const [laA, loA] = ring[i];
+    const [laB, loB] = ring[(i + 1) % ring.length];
+    a += loA * laB - loB * laA;
+  }
+  return a / 2;
+}
+
+function isTransparent(color) {
+  if (!color) return true;
+  const m = /rgba\([^,]+,[^,]+,[^,]+,\s*([0-9.]+)\s*\)/.exec(color);
+  return m ? parseFloat(m[1]) === 0 : false;
+}
+
+let reactCalls = 0;
+let lastTraces = null;
+const restyleCalls = [];
+const HIGHLIGHT_NAMES = new Set([
+  "vp-constraint-highlight", "vp-constraint-highlight-inner",
+]);
+// Union over every draw, so layers that only appear under a non-default
+// control state (a dropped-constraint ring, an empty-list message) are
+// still observable to the caller.
+const allLayers = new Set();
+global.window = { scrollX: 0, innerWidth: 1400 };
+global.document = {
+  getElementById: el,
+  addEventListener() {},
+  createElement: () => ({ value: "", textContent: "" }),
+};
+global.Plotly = {
+  react(div, traces, layout) {
+    reactCalls++;
+    lastTraces = traces;
+    for (const t of traces) allLayers.add(t.name || "(unnamed)");
+    if (!layout.geo) throw new Error("no geo layout");
+    for (const t of traces) {
+      if (t.lat && t.lon && t.lat.length !== t.lon.length) {
+        throw new Error(`trace "${t.name}" has a lat/lon length mismatch`);
+      }
+      // A NaN slips through as a silently dropped point rather than an error,
+      // so the ring simply disappears; catch it here instead.
+      for (const v of (t.lat || [])) {
+        if (v !== null && (typeof v !== "number" || !isFinite(v))) {
+          throw new Error(`trace "${t.name}" has a non-finite lat: ${v}`);
+        }
+      }
+      // Winding. `fill: "toself"` on scattergeo fills the side to the right of
+      // the walk on a spherical path, so a counter-clockwise ring fills the
+      // antipodal complement -- the whole globe minus the shape. Stack a few
+      // and the map is one flat wash of colour. The outline is identical
+      // either way, so nothing else here would notice.
+      if (t.fill === "toself" && !isTransparent(t.fillcolor)) {
+        for (const [k, ring] of splitRings(t.lat, t.lon).entries()) {
+          if (signedArea(ring) > 0) {
+            throw new Error(
+              `trace "${t.name}" ring ${k} is counter-clockwise and filled ` +
+              `with ${t.fillcolor}; it will fill the whole globe`
+            );
+          }
+        }
+      }
+    }
+  },
+  restyle(div, update, indices) {
+    restyleCalls.push({ update, indices });
+    // Mirror the restyle onto the trace list so a hover highlight can be
+    // observed the way the browser would render it.
+    for (const [k, idx] of (indices || []).entries()) {
+      const t = lastTraces[idx];
+      if (!t) continue;
+      for (const [key, vals] of Object.entries(update)) {
+        const v = Array.isArray(vals) ? vals[Math.min(k, vals.length - 1)] : vals;
+        if (key === "lat") t.lat = v;
+        else if (key === "lon") t.lon = v;
+        else if (key === "line.color") t.line = Object.assign({}, t.line, { color: v });
+      }
+    }
+  },
+};
+
+const module_ = { exports: {} };
+const api = (function () {
+  const module = module_;
+  eval(js);
+  return module.exports;
+})();
+
+const targetSel = el("target");
+const statusSel = el("status");
+const nOpts = targetSel.options.length;
+if (nOpts === 0) throw new Error("no targets in the dropdown");
+if (!lastTraces || lastTraces.length === 0) throw new Error("first draw produced no traces");
+const firstLayers = lastTraces.map((t) => t.name || "(unnamed)");
+
+for (let i = 0; i < nOpts; i++) { targetSel.value = String(i); api.redraw(); }
+
+targetSel.value = "0";
+for (const proj of ["albers usa", "natural earth", "orthographic", "equirectangular", "robinson"]) {
+  el("proj").value = proj;
+  api.redraw();
+}
+el("proj").value = "albers usa";
+
+const layers = ["showVoronoi", "showSeeds", "showMargin", "showRings", "keptOnly",
+                "showRegion", "showLatent"];
+for (const id of layers) el(id).checked = false;
+api.redraw();
+for (const id of layers) { el(id).checked = true; api.redraw(); }
+
+for (const v of ["all", "fail", "correct", "wrong", "failed"]) {
+  statusSel.value = v;
+  api.repopulate();
+  api.redraw();
+}
+
+statusSel.value = "all";
+api.repopulate();
+targetSel.value = "0";
+api.redraw();
+let clicks = 0;
+for (const [curve, kind] of Object.entries(api.clickKind())) {
+  const trace = lastTraces[+curve];
+  const cd = trace.customdata ? trace.customdata[0] : undefined;
+  el("popup").innerHTML = "";
+  api.dispatchClick({
+    points: [{ curveNumber: +curve, customdata: cd }],
+    event: { pageX: 10, pageY: 10 },
+  });
+  if (!el("popup").innerHTML) throw new Error(`a click on the ${kind} trace produced no popup`);
+  clicks++;
+}
+if (clicks === 0) throw new Error("no clickable traces were registered");
+
+// Hover a VP marker: its own LTD constraint must be pulled out of the bundle
+// into the highlight trace, and the bundle must dim. Both are Plotly.restyle
+// calls on traces that are empty at draw time, so nothing above would notice
+// if the handler stopped firing.
+let hovers = 0;
+let highlighted = 0;
+for (const [curve, kind] of Object.entries(api.clickKind())) {
+  if (kind !== "vp") continue;
+  const trace = lastTraces[+curve];
+  for (const vpId of (trace.customdata || [])) {
+    const before = restyleCalls.length;
+    api.dispatchHover({
+      points: [{ curveNumber: +curve, customdata: vpId }],
+      event: { pageX: 10, pageY: 10 },
+    });
+    hovers++;
+    if (restyleCalls.length === before) throw new Error(`hover on ${vpId} restyled nothing`);
+    // Match the highlight traces by name; other `showlegend: false` traces
+    // (the error connector, the region's holes) are not highlights.
+    const drawnHighlights = () => lastTraces.filter(
+      (t) => HIGHLIGHT_NAMES.has(t.name) && t.lat && t.lat.length > 3
+    ).length;
+    if (drawnHighlights()) highlighted++;
+    api.dispatchUnhover();
+    const left = drawnHighlights();
+    if (left) throw new Error(`unhover left ${left} highlight ring(s) drawn`);
+  }
+}
+if (hovers === 0) throw new Error("no VP markers to hover");
+// The Shortest-Ping baseline emits no LTD constraints, so there is nothing for
+// a hover to lift out; only demand a highlight where rings actually exist.
+const anyRings = JSON.parse(payload).targets.some((t) => (t.rings || []).length > 0);
+if (anyRings && highlighted === 0) {
+  throw new Error("hovering a VP never populated a highlight ring");
+}
+
+console.log(JSON.stringify({
+  targets: nOpts, draws: reactCalls, clicks, hovers, highlighted, anyRings,
+  layers: firstLayers, allLayers: [...allLayers],
+}));

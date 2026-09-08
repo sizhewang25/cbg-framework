@@ -39,6 +39,9 @@ analysis:
   plot-answer-space:
     us_only: true                     # every target is a US anchor
 
+  plot-mtl-map:
+    workers: 8                        # region replay is the slow part; see --no-regions
+
   plot-pareto:
     top_n: 1
     cost: runtime
