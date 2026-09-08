@@ -153,8 +153,11 @@ python -m scripts.analysis.v3.cli plot-error-vs-rank \
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 3
 # pooled across the three operator datasets -> _cross/venn-diagram/
+# --rescue-view adds a second set over the CBG variants alone, restricted to the
+# targets Shortest-Ping got wrong
 python -m scripts.analysis.v3.cli plot-venn \
-  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
+  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802 \
+  --rescue-view
 
 # 5. Static map of the answer space
 python -m scripts.analysis.v3.cli plot-answer-space --all-runs --us-only
@@ -199,6 +202,7 @@ target-cls-accuracy/
                            overlap_{membership,intersections,pairwise}.top<N>.csv
                            overlap_venn_spec.top<N>.json
                            overlap_venn.top<N>.png  overlap_upset.top<N>.png
+                           rescue_overlap_*.top<N>.*   (--rescue-view)
 ```
 
 e.g. `h3-4/`, `h3-3/`, `healpix-128/` side by side.
@@ -218,7 +222,7 @@ _cross/target-geometry/<dataset-set>/ proximity_inflation.<x-metric>.<grid>.png
                                       proximity_inflation.<grid>.{points,summary}.csv
                                       proximity_inflation.<grid>.manifest.json
 _cross/cost-accuracy/<dataset-set>/   pareto_<cost>.<grid>.top<N>.{csv,png,json}
-_cross/venn-diagram/<dataset-set>/    overlap_*.<grid>.top<N>.*
+_cross/venn-diagram/<dataset-set>/    {overlap,rescue_overlap}_*.<grid>.top<N>.*
 _cross/error-vs-class/<dataset-set>/  error_vs_{cells,rank}.<grid>.png
                                       error_vs_{cells,rank}_by_dataset.<grid>.png
                                       <stem>_{points,bands}.<grid>.csv
@@ -1520,6 +1524,7 @@ _cross/venn-diagram/as01+as02+as03/
   overlap_{venn,upset}.<grid>-<res>.top<N>.png
   overlap_{membership,intersections,pairwise}.<grid>-<res>.top<N>.csv
   overlap_venn_spec.<grid>-<res>.top<N>.json
+  rescue_overlap_*.<grid>-<res>.top<N>.*        (--rescue-view; no rescue_overlap_venn)
   manifest.<grid>-<res>.top<N>.json
 ```
 
@@ -1558,6 +1563,51 @@ every non-empty intersection with a `drawn` flag, and its drawn rows sum to what
 the figure's labels sum to. Targets no method solved are not in it — they sit
 outside the union rather than in an undrawable region — and are reported as
 `n_targets_none_correct` in the manifest.
+
+### The rescue view
+
+`--rescue-view` writes a second artifact set, `rescue_overlap_*`, over a
+restricted population: **only the targets Shortest-Ping got wrong**, and only
+the CBG variants as sets. The headline collapse above can say that CBG rescues
+what the baseline loses; it cannot say *which* variants do it, because the
+baseline is still one of the sets and the denominator is still every target.
+
+Both changes come from one filter. Dropping the baseline column is not a second
+decision — over those rows it is all-False by construction, so as a set it is
+empty, as a circle it is a circle with nothing in it, and as an UpSet row it is
+a row of blanks. That is also why this pass omits exactly one artifact,
+`overlap_venn`: the Shortest-Ping-vs-≥1-CBG collapse would draw a figure whose
+left set is empty by definition. Everything else the mode already writes is
+written, so the pooled directory gets the ring and the Euler layout here too.
+
+**Every percentage in that set is a share of the baseline's failures, not of the
+population.** On as01+as02+as03 at top-1 that denominator is 665 of the 1,269
+pooled targets, and the view is not a restatement of the headline: CBG rescues
+495 of them (74.4%), 170 are missed by every variant, and **no target is rescued
+by all five** — where the full-population ring puts 13.2% (167 targets) in its
+six-way centre, the rescue ring's five-way centre reads 0.0%. Per variant the ordering also
+separates far more than the aggregate does: Octant-Hull 335, Octant-Spline 253,
+Spotter 224, Vanilla 131, SoI 13. Five circles realize 21 of 31 combinations, so
+4 observed combinations (93 targets, 18.8% of the 495 rescued) have no region;
+`rescue_overlap_ring_coverage.csv` names them, as ever.
+
+The manifest's `rescue_view` block carries the same numbers plus `population`
+and `denominator: "restricted"` — the two entries that stop a reader comparing a
+share in there against a full-population share in the same file.
+
+A variant that rescues **nothing** has a zero-radius circle. The ring draws it
+as a deliberate `0.0%`, but `fit_euler_layout` refuses it, and its own remedy
+("drop them with `--method`") would change the question being asked when the
+empty set is one of the variants under comparison — so the Euler figure is
+skipped rather than the command aborted, with `euler_drawn: false` and
+`euler_skipped_methods` naming it. That guard applies to the full population
+too; it changes no artifact on any current dataset, where every method is
+correct on at least 13 targets.
+
+`--rescue-view` needs the baseline among the scored methods and at least two CBG
+variants besides it, and it refuses a population the baseline solved entirely.
+All three are checked before the full pass writes anything, so a refused
+invocation cannot leave a half-written artifact set behind.
 
 ### The Euler diagram
 

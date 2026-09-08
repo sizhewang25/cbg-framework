@@ -52,9 +52,31 @@ counts are checkable without reading a figure. Every artifact is suffixed with
 its top-N, so top-1 and top-3 coexist rather than overwriting; cross-run
 artifacts carry the grid slug too, since that directory is not grid-scoped.
 
+**The rescue view.** `--rescue-view` writes a second artifact set,
+`rescue_overlap_*`, over a *restricted* population: only the targets
+Shortest-Ping got wrong, and only the CBG variants as sets. The headline
+collapse can say that CBG rescues what the baseline loses; it cannot say which
+variants do it, because the baseline is still one of the sets and the
+denominator is still every target. Restricting the rows fixes both at once — the
+baseline column is dropped because over those rows it is all-False, so as a set
+it is empty, which is also why this pass omits the Shortest-Ping collapse and
+nothing else.
+
+Every percentage in that set is a share of **the baseline's failures**, not of
+the population. On the pooled operator runs at top-1 that denominator is 665 of
+1,269 targets: CBG rescues 495 of them (74.4%), 170 are missed by every variant,
+and **no target is rescued by all five** — Octant-Hull 335, Octant-Spline 253,
+Spotter 224, Vanilla 131, SoI 13. Five sets is inside the ring's arity range, so
+the pooled directory draws the ring and the Euler layout here too; a variant
+that rescues nothing has a zero-radius circle, which the ring prints as a
+deliberate "0.0%" and the Euler fit refuses, so that figure is skipped with the
+manifest naming why.
+
 **Where the code lives.** This module is the `plot-venn` command and the two
-`render_*` functions that assemble an artifact set. The figures themselves are
-in `diagram/`, split by the bargain each makes: `diagram/venn/` fixes the
+`render_*` functions that assemble an artifact set. Both delegate the writing to
+one `_write_artifact_set`, so the four passes — two modes against two views —
+cannot drift into disagreeing about what an artifact set contains. The figures
+themselves are in `diagram/`, split by the bargain each makes: `diagram/venn/` fixes the
 geometry and prints the numbers (classic Venn, ring template, UpSet),
 `diagram/euler/` fits the geometry to the numbers, and `diagram/common/` holds
 what both need — labels, palette, the membership matrix and the count tables.
@@ -68,6 +90,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import NamedTuple
 
 import pandas as pd
 import typer
@@ -111,6 +134,7 @@ from scripts.analysis.v3.modules.diagram.common import (
     pairwise_table,
     pooled_membership,
     region_key,
+    restrict_to_baseline_failures,
     ring_letter_map,
     venn_spec,
 )
@@ -201,6 +225,7 @@ __all__ = [
     "register",
     "render_cross_overlap",
     "render_overlap",
+    "restrict_to_baseline_failures",
     "ring_centres",
     "ring_coverage_table",
     "ring_letter_map",
@@ -212,6 +237,321 @@ __all__ = [
 ]
 
 
+#: Filename stem for the full-population artifact set, and for the rescue
+#: view's. Paired here because the `written` dict's `rescue_` key prefix and the
+#: files' `rescue_overlap` stem have to move together — a reader matching a
+#: logged key to a file on disk is relying on exactly that.
+_STEM = "overlap"
+_RESCUE_STEM = "rescue_overlap"
+
+
+class _RingFit(NamedTuple):
+    """What the ring/Euler pass produced, for the manifest to report.
+
+    `layout` is None when the Euler fit was skipped, with `euler_skipped` naming
+    the methods that caused it. The ring still draws in that case, so the two
+    figures cannot be reported by one flag.
+    """
+
+    order: list[str]
+    coverage: pd.DataFrame
+    layout: EulerLayout | None
+    euler_skipped: list[str]
+
+
+def _write_artifact_set(
+    membership: pd.DataFrame,
+    out_dir: Path,
+    *,
+    stem: str,
+    top_n: int,
+    slug: str | None = None,
+    title: str,
+    subtitle: str = "",
+    euler_title: str | None = None,
+    origin: pd.Series | None = None,
+    run_ids: list[str] | None = None,
+    ring: bool = False,
+    ring_order: list[str] | None = None,
+) -> tuple[dict[str, Path], _RingFit | None]:
+    """Membership matrix, both count tables, the spec, and the figures the arity allows.
+
+    The one place an overlap artifact is written, so the passes — two modes
+    (per-run, pooled) against two views (full population, rescue) — cannot drift
+    into disagreeing about what an artifact set contains. *Which* figures appear
+    is a function of the frame rather than of a flag: the Shortest-Ping collapse
+    needs the baseline column, the UpSet needs three methods.
+
+    `ring` is the exception, and a real mode difference rather than a data one:
+    the per-run directory deliberately carries no ring or Euler figure even at
+    six methods.
+
+    Titles and the filename `stem` are passed in rather than built here, so that
+    extracting this function moved no format string and the artifacts stay
+    byte-identical to the two functions it was lifted out of.
+    """
+    def _out(name: str, ext: str) -> Path:
+        return out_dir / artifact_name(name, ext, top_n, slug)
+
+    written: dict[str, Path] = {}
+    chosen = list(membership.columns)
+    n = len(membership)
+
+    labelled = membership.rename(columns={m: label_for(m) for m in chosen})
+    if origin is not None:
+        labelled.insert(0, "run_id", origin)
+    labelled.to_csv(_out(f"{stem}_membership", "csv"))
+    written["membership"] = _out(f"{stem}_membership", "csv")
+
+    intersection_table(membership).to_csv(
+        _out(f"{stem}_intersections", "csv"), index=False
+    )
+    written["intersections"] = _out(f"{stem}_intersections", "csv")
+    pairwise_table(membership).to_csv(_out(f"{stem}_pairwise", "csv"), index=False)
+    written["pairwise"] = _out(f"{stem}_pairwise", "csv")
+
+    # Skipped rather than raised past the letter cap, the way the ring is: the
+    # spec is an input document for a drawing tool, and at as7018's 17 methods
+    # it would carry 131,054 relations for a figure no tool will draw.
+    if len(chosen) <= len(SET_IDS):
+        spec = venn_spec(membership)
+        if run_ids is not None:
+            spec["run_ids"] = run_ids
+        _out(f"{stem}_venn_spec", "json").write_text(json.dumps(spec, indent=2))
+        written["venn_spec"] = _out(f"{stem}_venn_spec", "json")
+
+    # Same arity guard as the UpSet below: under three methods there is no ring
+    # to lay out, and `plot_venn` already draws two or three sets exactly.
+    fit: _RingFit | None = None
+    if ring and RING_MIN_SETS <= len(chosen) <= RING_MAX_SETS:
+        order = ring_order_for(membership, ring_order)
+        coverage = ring_coverage_table(membership, order)
+        coverage.to_csv(_out(f"{stem}_ring_coverage", "csv"), index=False)
+        written["ring_coverage"] = _out(f"{stem}_ring_coverage", "csv")
+
+        written["ring_venn"] = plot_ring_venn(
+            membership,
+            _out(f"{stem}_ring_venn", "png"),
+            title=title,
+            subtitle=subtitle,
+            ring_order=order,
+            coverage_ref=artifact_name(f"{stem}_ring_coverage", "csv", top_n, slug),
+        )
+        # The other half of the pair: the ring prints every number on a
+        # template that means nothing, this fits the geometry to the numbers and
+        # prints none of them. Neither is sufficient alone — the ring cannot show
+        # that Shortest-Ping is contained in SoI CBG, and the Euler layout cannot
+        # tell you the six-way region is 12.7%.
+        #
+        # A method correct on no target in this population has a zero-radius
+        # circle, and `fit_euler_layout` refuses to draw one. Skip the figure
+        # rather than let that abort the command: the ring renders such a set
+        # correctly — it prints a deliberate "0.0%" — and the fit's own remedy
+        # ("drop them with --method") would change the question being asked
+        # wherever the empty set is one of the variants under comparison. The
+        # manifest names what was skipped so the gap is never silent.
+        dead = [m for m in order if not membership[m].any()]
+        layout = None if dead else fit_euler_layout(membership, order)
+        if layout is not None:
+            euler_fit_table(layout, n).to_csv(
+                _out(f"{stem}_euler_fit", "csv"), index=False
+            )
+            written["euler_fit"] = _out(f"{stem}_euler_fit", "csv")
+            written["euler"] = plot_euler(
+                layout,
+                _out(f"{stem}_euler", "png"),
+                title=euler_title or title,
+                subtitle=subtitle,
+                fit_ref=artifact_name(f"{stem}_euler_fit", "csv", top_n, slug),
+            )
+        fit = _RingFit(
+            order=order, coverage=coverage, layout=layout, euler_skipped=dead
+        )
+    elif ring and ring_order:
+        raise ValueError(
+            f"--ring-order was given but the ring takes {RING_MIN_SETS}-"
+            f"{RING_MAX_SETS} methods and this view has {len(chosen)}"
+        )
+
+    # The headline is always Shortest-Ping vs "≥1 CBG works" — the
+    # rescue-vs-regression trade RQ2 rests on.
+    if SHORTEST_PING in chosen and len(chosen) >= 2:
+        written["venn"] = plot_sp_vs_cbg_venn(
+            membership, _out(f"{stem}_venn", "png"), title=title
+        )
+
+    if len(chosen) >= 3:
+        written["upset"] = plot_upset(
+            membership, _out(f"{stem}_upset", "png"), title=title
+        )
+    return written, fit
+
+
+def _ring_manifest_fields(fit: _RingFit | None) -> dict[str, object]:
+    """The ring/Euler half of a manifest, or all-None when neither was drawn."""
+    coverage = None if fit is None else fit.coverage
+    layout = None if fit is None else fit.layout
+    return {
+        "ring_order": None if fit is None else fit.order,
+        "ring_drawn": fit is not None,
+        # Position-keyed, so it follows --ring-order rather than the method
+        # identity; this is what names the Euler figure's circles.
+        "ring_letters": (
+            None if fit is None
+            else {v: label_for(k) for k, v in ring_letter_map(fit.order).items()}
+        ),
+        # The one thing a reader of the figure must not assume: the
+        # circles are a template, so size and position carry nothing.
+        "ring_venn_encoding": "fixed-template circles; every quantity is "
+                              "a printed region count, never an area",
+        "n_regions_drawn": (
+            None if coverage is None else int(coverage["drawn"].sum())
+        ),
+        "n_regions_undrawn": (
+            None if coverage is None else int((~coverage["drawn"]).sum())
+        ),
+        "n_targets_undrawn": (
+            None if coverage is None
+            else int(coverage.loc[~coverage["drawn"], "n_targets"].sum())
+        ),
+        "euler_drawn": fit is not None and layout is not None,
+        # Names the skip above rather than leaving a missing figure unexplained.
+        "euler_skipped_methods": (
+            None if fit is None else (fit.euler_skipped or None)
+        ),
+        # The Euler figure's honesty number: the rest of the targets
+        # are in a region its circles could not realize.
+        "euler_placed_share": (
+            None if layout is None else round(layout.placed, 4)
+        ),
+        "euler_max_pair_error": (
+            None if layout is None else round(layout.pair_error(), 4)
+        ),
+    }
+
+
+def _guard_rescue(chosen: list[str], *, baseline: str = SHORTEST_PING) -> None:
+    """Refuse a rescue view that cannot be drawn — before anything is written.
+
+    Checked up front rather than at the filter, so a `--method`/`--rescue-view`
+    combination that cannot work fails before the full pass has left half an
+    artifact set on disk.
+    """
+    if baseline not in chosen:
+        raise ValueError(
+            f"--rescue-view needs the {baseline!r} baseline among the scored "
+            f"methods, since the rescue view is defined relative to the "
+            f"baseline's failures. Got: {chosen}"
+        )
+    cbg = [m for m in chosen if m != baseline]
+    if len(cbg) < 2:
+        raise ValueError(
+            f"--rescue-view needs >= 2 CBG variants besides {baseline}, got "
+            f"{cbg}; with one there is no overlap left to show"
+        )
+
+
+def _write_rescue_view(
+    membership: pd.DataFrame,
+    out_dir: Path,
+    *,
+    top_n: int,
+    slug: str | None,
+    name: str,
+    suffix: str,
+    origin: pd.Series | None = None,
+    run_ids: list[str] | None = None,
+    ring: bool = False,
+    ring_order: list[str] | None = None,
+) -> tuple[dict[str, Path], _RingFit | None, pd.DataFrame]:
+    """The second artifact pass: CBG variants over the baseline's failures alone.
+
+    The full-population figures can say that CBG rescues what Shortest-Ping
+    loses; they cannot say *which* variants do it, because the baseline is still
+    one of the sets and the denominator is still every target. Restricting the
+    population answers that, and costs no new figure code — every table and
+    layout in `diagram/` is a pure function of the membership frame.
+
+    Returns the `rescue_`-prefixed paths, the ring fit, and the restricted frame
+    itself: the caller needs the frame for the manifest, since every count in
+    that block is denominated in it rather than in the full population.
+    """
+    rescue = restrict_to_baseline_failures(membership)
+    # `intersection_table` sorts an empty frame by a column it never built, so
+    # an unrestricted-away population surfaces as a bare KeyError otherwise.
+    if rescue.empty:
+        raise ValueError(
+            f"--rescue-view: {SHORTEST_PING} was correct on all "
+            f"{len(membership)} targets, so there is nothing left to rescue"
+        )
+    origin = None if origin is None else origin.loc[rescue.index]
+    per_run = None if origin is None else origin.value_counts().sort_index()
+    n = len(rescue)
+    baseline = LABELS[SHORTEST_PING]
+    written, fit = _write_artifact_set(
+        rescue,
+        out_dir,
+        stem=_RESCUE_STEM,
+        top_n=top_n,
+        slug=slug,
+        title=(
+            f"{name} — CBG rescues of {baseline} failures "
+            f"({n} of {len(membership)} targets{suffix})"
+        ),
+        subtitle=(
+            "" if per_run is None
+            else " · ".join(
+                f"{cross.short_dataset(r)} {int(c)}" for r, c in per_run.items()
+            )
+        ),
+        euler_title=(
+            f"{name} — where the CBG variants agree on {baseline}'s failures "
+            f"({n} targets{suffix})"
+        ),
+        origin=origin,
+        run_ids=run_ids,
+        ring=ring,
+        # The clockwise sequence the caller asked for, minus the baseline.
+        # `ring_order_for` demands a permutation of the frame's columns, so the
+        # full order cannot be reused verbatim; filtering keeps their intent and
+        # satisfies that requirement by construction.
+        ring_order=(
+            None if ring_order is None
+            else [m for m in ring_order if m != SHORTEST_PING]
+        ),
+    )
+    return {f"rescue_{k}": v for k, v in written.items()}, fit, rescue
+
+
+def _rescue_manifest_fields(
+    rescue: pd.DataFrame, fit: _RingFit | None, *, origin: pd.Series | None = None
+) -> dict[str, object]:
+    """The manifest's `rescue_view` block.
+
+    `population` and `denominator` are the load-bearing entries: they are the
+    only thing stopping a reader from comparing a share in here against a
+    full-population share elsewhere in the same file.
+    """
+    per_run = None if origin is None else origin.value_counts().sort_index()
+    correct = rescue.any(axis=1)
+    return {
+        "baseline": SHORTEST_PING,
+        "population": "targets the baseline classified incorrectly",
+        "denominator": "restricted",
+        "n_targets": int(len(rescue)),
+        "n_targets_per_run": (
+            None if per_run is None else {r: int(c) for r, c in per_run.items()}
+        ),
+        "methods": list(rescue.columns),
+        "labels": {m: label_for(m) for m in rescue.columns},
+        "n_rescued_by_any": int(correct.sum()),
+        "share_rescued_by_any": round(float(correct.mean()), 4),
+        "n_targets_none_correct": int((~correct).sum()),
+        "n_correct_per_method": {m: int(rescue[m].sum()) for m in rescue.columns},
+        **_ring_manifest_fields(fit),
+    }
+
+
 def render_overlap(
     run: RunPaths,
     cls_dir: Path,
@@ -219,54 +559,25 @@ def render_overlap(
     methods: list[str] | None = None,
     venn_methods: list[str] | None = None,
     top_n: int = 1,
+    rescue_view: bool = False,
 ) -> dict[str, Path]:
     """Write the membership matrix, both count tables, and the figure(s)."""
     cls_dir = Path(cls_dir)
     chosen = methods or available_methods(cls_dir)
     if len(chosen) < 2:
         raise ValueError(f"need >= 2 methods to show overlap, got {chosen}")
+    if rescue_view:
+        _guard_rescue(chosen)
 
     membership = build_membership(cls_dir, chosen, top_n=top_n)
-    written: dict[str, Path] = {}
-
-    def _out(stem: str, ext: str) -> Path:
-        return cls_dir / artifact_name(stem, ext, top_n)
-
-    out = membership.rename(columns={m: label_for(m) for m in membership.columns})
-    out.to_csv(_out("overlap_membership", "csv"))
-    written["membership"] = _out("overlap_membership", "csv")
-
-    intersection_table(membership).to_csv(
-        _out("overlap_intersections", "csv"), index=False
-    )
-    written["intersections"] = _out("overlap_intersections", "csv")
-    pairwise_table(membership).to_csv(_out("overlap_pairwise", "csv"), index=False)
-    written["pairwise"] = _out("overlap_pairwise", "csv")
-
-    # Skipped rather than raised past the letter cap, the way the ring is: the
-    # spec is an input document for a drawing tool, and at as7018's 17 methods
-    # it would carry 131,054 relations for a figure no tool will draw.
-    if len(chosen) <= len(SET_IDS):
-        _out("overlap_venn_spec", "json").write_text(
-            json.dumps(venn_spec(membership), indent=2)
-        )
-        written["venn_spec"] = _out("overlap_venn_spec", "json")
 
     n = len(membership)
     suffix = "" if top_n == 1 else f", top-{top_n}"
     base_title = f"{run.run_id} — correct classifications ({n} targets{suffix})"
 
-    # The headline is always Shortest-Ping vs "≥1 CBG works" — the
-    # rescue-vs-regression trade RQ2 rests on.
-    if SHORTEST_PING in chosen and len(chosen) >= 2:
-        written["venn"] = plot_sp_vs_cbg_venn(
-            membership, _out("overlap_venn", "png"), title=base_title
-        )
-
-    if len(chosen) >= 3:
-        written["upset"] = plot_upset(
-            membership, _out("overlap_upset", "png"), title=base_title
-        )
+    written, _ = _write_artifact_set(
+        membership, cls_dir, stem=_STEM, top_n=top_n, title=base_title
+    )
 
     # Per-method Venn only on explicit request. There is no useful automatic
     # triple: the sets nest, so a "baseline plus the two most accurate" pick
@@ -277,9 +588,20 @@ def render_overlap(
             raise ValueError(f"--venn-method names unscored methods: {missing}")
         written["venn_methods"] = plot_venn(
             membership[list(venn_methods)].rename(columns=label_for),
-            _out("overlap_venn_methods", "png"),
+            cls_dir / artifact_name("overlap_venn_methods", "png", top_n),
             title=base_title,
         )
+
+    if rescue_view:
+        rescue_written, _, _ = _write_rescue_view(
+            membership,
+            cls_dir,
+            top_n=top_n,
+            slug=None,
+            name=run.run_id,
+            suffix=suffix,
+        )
+        written.update(rescue_written)
     return written
 
 
@@ -293,6 +615,7 @@ def render_cross_overlap(
     methods: list[str] | None = None,
     top_n: int = 1,
     ring_order: list[str] | None = None,
+    rescue_view: bool = False,
 ) -> dict[str, Path]:
     """Pool several runs into one artifact set under `_cross/venn-diagram/`.
 
@@ -315,28 +638,8 @@ def render_cross_overlap(
         methods=methods,
     )
     chosen = list(membership.columns)
-    written: dict[str, Path] = {}
-
-    def _out(stem: str, ext: str) -> Path:
-        return out_dir / artifact_name(stem, ext, top_n, slug)
-
-    labelled = membership.rename(columns={m: label_for(m) for m in chosen})
-    labelled.insert(0, "run_id", origin)
-    labelled.to_csv(_out("overlap_membership", "csv"))
-    written["membership"] = _out("overlap_membership", "csv")
-
-    intersection_table(membership).to_csv(
-        _out("overlap_intersections", "csv"), index=False
-    )
-    written["intersections"] = _out("overlap_intersections", "csv")
-    pairwise_table(membership).to_csv(_out("overlap_pairwise", "csv"), index=False)
-    written["pairwise"] = _out("overlap_pairwise", "csv")
-
-    if len(chosen) <= len(SET_IDS):
-        spec = venn_spec(membership)
-        spec["run_ids"] = sorted(runs)
-        _out("overlap_venn_spec", "json").write_text(json.dumps(spec, indent=2))
-        written["venn_spec"] = _out("overlap_venn_spec", "json")
+    if rescue_view:
+        _guard_rescue(chosen)
 
     n = len(membership)
     per_run = origin.value_counts().sort_index()
@@ -347,54 +650,37 @@ def render_cross_overlap(
         f"{cross.short_dataset(r)} {int(c)}" for r, c in per_run.items()
     )
 
-    # Same arity guard as the UpSet below: under three methods there is no ring
-    # to lay out, and `plot_venn` already draws two or three sets exactly.
-    order: list[str] | None = None
-    coverage: pd.DataFrame | None = None
-    layout: EulerLayout | None = None
-    if RING_MIN_SETS <= len(chosen) <= RING_MAX_SETS:
-        order = ring_order_for(membership, ring_order)
-        coverage = ring_coverage_table(membership, order)
-        coverage.to_csv(_out("overlap_ring_coverage", "csv"), index=False)
-        written["ring_coverage"] = _out("overlap_ring_coverage", "csv")
+    written, fit = _write_artifact_set(
+        membership,
+        out_dir,
+        stem=_STEM,
+        top_n=top_n,
+        slug=slug,
+        title=base_title,
+        subtitle=subtitle,
+        euler_title=f"{names} — where the methods agree ({n} targets{suffix})",
+        origin=origin,
+        run_ids=sorted(runs),
+        ring=True,
+        ring_order=ring_order,
+    )
 
-        written["ring_venn"] = plot_ring_venn(
+    rescue: pd.DataFrame | None = None
+    rescue_fit: _RingFit | None = None
+    if rescue_view:
+        rescue_written, rescue_fit, rescue = _write_rescue_view(
             membership,
-            _out("overlap_ring_venn", "png"),
-            title=base_title,
-            subtitle=subtitle,
-            ring_order=order,
-            coverage_ref=artifact_name("overlap_ring_coverage", "csv", top_n, slug),
+            out_dir,
+            top_n=top_n,
+            slug=slug,
+            name=names,
+            suffix=suffix,
+            origin=origin,
+            run_ids=sorted(runs),
+            ring=True,
+            ring_order=ring_order,
         )
-        # The other half of the pair: the ring prints every number on a
-        # template that means nothing, this fits the geometry to the numbers and
-        # prints none of them. Neither is sufficient alone — the ring cannot show
-        # that Shortest-Ping is contained in SoI CBG, and the Euler layout cannot
-        # tell you the six-way region is 12.7%.
-        layout = fit_euler_layout(membership, order)
-        euler_fit_table(layout, n).to_csv(_out("overlap_euler_fit", "csv"), index=False)
-        written["euler_fit"] = _out("overlap_euler_fit", "csv")
-        written["euler"] = plot_euler(
-            layout,
-            _out("overlap_euler", "png"),
-            title=f"{names} — where the methods agree ({n} targets{suffix})",
-            subtitle=subtitle,
-            fit_ref=artifact_name("overlap_euler_fit", "csv", top_n, slug),
-        )
-    elif ring_order:
-        raise ValueError(
-            f"--ring-order was given but the ring takes {RING_MIN_SETS}-"
-            f"{RING_MAX_SETS} methods and {len(chosen)} were scored"
-        )
-
-    if SHORTEST_PING in chosen:
-        written["venn"] = plot_sp_vs_cbg_venn(
-            membership, _out("overlap_venn", "png"), title=base_title
-        )
-    if len(chosen) >= 3:
-        written["upset"] = plot_upset(
-            membership, _out("overlap_upset", "png"), title=base_title
-        )
+        written.update(rescue_written)
 
     manifest = out_dir / artifact_name("manifest", "json", top_n, slug)
     manifest.write_text(
@@ -409,38 +695,19 @@ def render_cross_overlap(
                 "grid": grid,
                 "resolution": int(resolution),
                 "top_n": int(top_n),
-                "ring_order": order,
-                "ring_drawn": order is not None,
-                # Position-keyed, so it follows --ring-order rather than the
-                # method identity; this is what names the Euler figure's circles.
-                "ring_letters": (
-                    None if order is None
-                    else {v: label_for(k) for k, v in ring_letter_map(order).items()}
-                ),
-                # The one thing a reader of the figure must not assume: the
-                # circles are a template, so size and position carry nothing.
-                "ring_venn_encoding": "fixed-template circles; every quantity is "
-                                      "a printed region count, never an area",
-                "n_regions_drawn": (
-                    None if coverage is None else int(coverage["drawn"].sum())
-                ),
-                "n_regions_undrawn": (
-                    None if coverage is None else int((~coverage["drawn"]).sum())
-                ),
-                "n_targets_undrawn": (
-                    None if coverage is None
-                    else int(coverage.loc[~coverage["drawn"], "n_targets"].sum())
-                ),
-                # The Euler figure's honesty number: the rest of the targets
-                # are in a region its circles could not realize.
-                "euler_placed_share": (
-                    None if order is None else round(layout.placed, 4)
-                ),
-                "euler_max_pair_error": (
-                    None if order is None else round(layout.pair_error(), 4)
-                ),
+                **_ring_manifest_fields(fit),
                 "n_targets_none_correct": int(
                     len(membership) - membership.any(axis=1).sum()
+                ),
+                # Nested rather than flattened: every count in here is
+                # denominated in the restricted population, so mixing it into a
+                # top level that means "all targets" would invite exactly the
+                # comparison the block's own `denominator` warns against.
+                "rescue_view": (
+                    None if rescue is None
+                    else _rescue_manifest_fields(
+                        rescue, rescue_fit, origin=origin.loc[rescue.index]
+                    )
                 ),
             },
             indent=2,
@@ -505,6 +772,14 @@ def register(app: typer.Typer) -> None:
                  "Default: display order, so the figure means the same thing in "
                  "every run. Cross-run mode only.",
         ),
+        rescue_view: bool = typer.Option(
+            False, "--rescue-view",
+            help="Also write a second artifact set (rescue_overlap_*) over the "
+                 "CBG variants alone, restricted to the targets Shortest-Ping "
+                 "got wrong — which variants rescue what the baseline loses. "
+                 "Percentages there are shares of the baseline's failures, not "
+                 "of the whole population. Both modes.",
+        ),
         out_dir: Path = typer.Option(
             None, help="Override the pooled output directory (cross-run mode only)."
         ),
@@ -559,6 +834,7 @@ def register(app: typer.Typer) -> None:
                     methods=methods,
                     top_n=top_n,
                     ring_order=list(ring_order) if ring_order else None,
+                    rescue_view=rescue_view,
                 )
                 kinds = ", ".join(f"{k}={v.name}" for k, v in written.items())
                 typer.echo(
@@ -586,6 +862,7 @@ def register(app: typer.Typer) -> None:
                 methods=methods,
                 venn_methods=list(venn_method) if venn_method else None,
                 top_n=top_n,
+                rescue_view=rescue_view,
             )
             kinds = ", ".join(f"{k}={v.name}" for k, v in written.items())
             typer.echo(

@@ -13,6 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from scripts.analysis.v3.modules import io
+from scripts.analysis.v3.modules.classify import SHORTEST_PING
 from scripts.analysis.v3.modules.diagram.common.labels import PREFERRED_ORDER
 from scripts.analysis.v3.modules.paths import MissingArtifactError, RunPaths
 
@@ -60,6 +61,42 @@ def build_membership(
             f"overlaps over a common denominator"
         )
     return membership.astype(bool)
+
+
+def restrict_to_baseline_failures(
+    membership: pd.DataFrame, *, baseline: str = SHORTEST_PING
+) -> pd.DataFrame:
+    """The rows `baseline` got **wrong**, with the baseline column dropped.
+
+    The rescue view's population, and the answer to a question the full matrix
+    cannot put: not "does CBG beat the baseline" but "of the targets the baseline
+    loses, which variants get them back". On the pooled operator runs at top-1
+    that is 665 of 1,269 targets.
+
+    Restricting the rows is what **re-denominates every percentage downstream**.
+    A share is now a share of what there was to rescue rather than of the whole
+    population, and no caller has to divide by a total other than the
+    `len(membership)` it already reports — which is the only reason the ring, the
+    Euler fit and both count tables need no changes to read correctly here.
+
+    Dropping the column *follows from* the same filter rather than being a second
+    decision: over these rows the baseline is all-False by construction, so as a
+    set it is empty, as a Venn circle it is a circle with nothing in it, and as
+    an UpSet row it is a row of blanks. Keeping it would also make the
+    Shortest-Ping-vs-CBG collapse draw a figure whose left set is empty by
+    definition, which is why the rescue pass omits that one artifact.
+
+    Raises if `baseline` is absent: without it there is no definition of the
+    targets to restrict to. Callers holding a parallel per-row series (the pooled
+    `run_id`) restrict it themselves with `.loc[result.index]`; keeping that out
+    of here is what leaves this a frame-in/frame-out function.
+    """
+    if baseline not in membership.columns:
+        raise ValueError(
+            f"membership has no {baseline!r} column; the rescue view is defined "
+            f"relative to the baseline's failures. Got: {list(membership.columns)}"
+        )
+    return membership.loc[~membership[baseline]].drop(columns=[baseline])
 
 
 #: Separator between the run id and the target id in a pooled membership index.

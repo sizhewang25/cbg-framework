@@ -21,6 +21,7 @@ from scripts.analysis.v3.modules.diagram.common.membership import (
     available_methods,
     build_membership,
     pooled_membership,
+    restrict_to_baseline_failures,
 )
 from scripts.analysis.v3.modules.diagram.common.palette import method_colors
 from scripts.analysis.v3.modules.diagram.common.tables import (
@@ -48,6 +49,7 @@ __all__ = [
     "pairwise_table",
     "pooled_membership",
     "region_key",
+    "restrict_to_baseline_failures",
     "ring_letter_map",
     "short_label",
     "venn_spec",

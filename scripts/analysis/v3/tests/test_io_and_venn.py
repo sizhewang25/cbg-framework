@@ -963,6 +963,361 @@ def test_pooled_render_draws_the_ring_once_there_are_enough_methods(tmp_path):
     )
 
 
+# ---- rescue view (the baseline's failures only) ------------------------------
+#
+# Two changes at once, and neither alone answers the question: drop the baseline
+# column, and keep only the rows the baseline got wrong. The full matrix can say
+# that CBG rescues what Shortest-Ping loses; only this population can say which
+# variants do it, and in shares of what there was to rescue.
+
+
+_SIX_METHODS = [
+    venn.SHORTEST_PING, "million_scale_cbg", "vanilla_cbg",
+    "octant_cbg_hull", "octant_cbg_spl", "spotter_cbg",
+]
+
+
+def _rescue_flags():
+    """Two runs whose restricted population exercises every branch.
+
+    Hand-set rather than generated: the assertions below name exact counts, so
+    the flags have to be readable as the answer. Shortest-Ping is right on 3 of
+    the 9 targets, leaving 6; `t4` is rescued by nobody, so the "none correct"
+    region is non-empty; and all five variants rescue at least one target, so
+    the Euler fit has no zero-radius circle to refuse.
+    """
+    as01 = {
+        venn.SHORTEST_PING: [True, False, False, False, False],
+        "million_scale_cbg": [False, True, False, False, False],
+        "vanilla_cbg": [False, True, True, False, False],
+        "octant_cbg_hull": [False, False, True, True, False],
+        "octant_cbg_spl": [True, True, False, True, False],
+        "spotter_cbg": [False, False, True, False, False],
+    }
+    as02 = {
+        venn.SHORTEST_PING: [True, True, False, False],
+        "million_scale_cbg": [False, False, True, False],
+        "vanilla_cbg": [False, False, False, True],
+        "octant_cbg_hull": [True, False, True, False],
+        "octant_cbg_spl": [False, False, False, True],
+        "spotter_cbg": [False, False, True, True],
+    }
+    return as01, as02
+
+
+def _rescue_runs(tmp_path):
+    as01, as02 = _rescue_flags()
+    return {
+        "as01": _make_cls_dir(tmp_path, "as01", as01, ["t0", "t1", "t2", "t3", "t4"]),
+        "as02": _make_cls_dir(tmp_path, "as02", as02, ["t0", "t1", "t2", "t3"]),
+    }
+
+
+def _rescue_single_run(tmp_path, flags=None, targets=None):
+    """One run, plus the cls_dir `render_overlap` writes into."""
+    as01, _ = _rescue_flags()
+    run = _make_cls_dir(
+        tmp_path, "as01", flags or as01, targets or ["t0", "t1", "t2", "t3", "t4"]
+    )
+    return run, run.cls_accuracy_dir(
+        root=tmp_path / "analysis", grid="h3", resolution=4
+    )
+
+
+def _rescue_membership():
+    """Six methods, Shortest-Ping right on `t0` alone.
+
+    `_ring_membership` is unusable here: Shortest-Ping is a member of every one
+    of its patterns, so the restricted population would be empty and each
+    assertion below would hold vacuously.
+    """
+    as01, _ = _rescue_flags()
+    return pd.DataFrame(
+        {m: as01[m] for m in _SIX_METHODS}, index=[f"t{i}" for i in range(5)]
+    )
+
+
+def test_the_rescue_population_is_exactly_the_baselines_failures():
+    m = _rescue_membership()
+    rescue = venn.restrict_to_baseline_failures(m)
+    assert list(rescue.index) == ["t1", "t2", "t3", "t4"]
+    assert list(rescue.index) == list(m.index[~m[venn.SHORTEST_PING]])
+    assert len(rescue) == len(m) - int(m[venn.SHORTEST_PING].sum())
+
+
+def test_the_rescue_filter_drops_the_baseline_because_its_set_is_empty():
+    """Not a second decision — over these rows the baseline is all-False."""
+    m = _rescue_membership()
+    rescue = venn.restrict_to_baseline_failures(m)
+    assert venn.SHORTEST_PING not in rescue.columns
+    assert len(rescue) == 4  # not vacuous: there are rows to check
+    # The column it dropped would have contributed nothing but an empty circle.
+    kept = m.loc[rescue.index, venn.SHORTEST_PING]
+    assert not kept.any()
+
+
+def test_rescue_shares_are_denominated_in_the_restricted_population():
+    """The partition invariant, over the smaller total."""
+    rescue = venn.restrict_to_baseline_failures(_rescue_membership())
+    table = venn.intersection_table(rescue)
+    assert table["n_targets"].sum() == len(rescue)
+    assert table["share"].sum() == pytest.approx(1.0, abs=5e-4)
+
+
+def test_the_rescue_filter_requires_the_baseline():
+    m = _rescue_membership().drop(columns=[venn.SHORTEST_PING])
+    with pytest.raises(ValueError, match="rescue view is defined"):
+        venn.restrict_to_baseline_failures(m)
+
+
+def test_render_overlap_writes_the_full_artifact_set(tmp_path):
+    """The per-run path had no test; this is the baseline for the shared writer."""
+    pytest.importorskip("upsetplot")
+    run, cls_dir = _rescue_single_run(tmp_path)
+    written = venn.render_overlap(run, cls_dir, top_n=1)
+    assert {"membership", "intersections", "pairwise",
+            "venn_spec", "venn", "upset"} <= set(written)
+    assert all(p.exists() for p in written.values())
+    # Per-run names carry the top-N but never the grid slug: the directory
+    # they land in is already `target-cls-accuracy/h3-4/`.
+    assert all("top1" in p.name and "h3-4" not in p.name for p in written.values())
+    # No ring or Euler in the per-run directory, even at six methods.
+    assert not {"ring_venn", "euler"} & set(written)
+
+
+def test_rescue_view_is_off_by_default(tmp_path):
+    pytest.importorskip("upsetplot")
+    run, cls_dir = _rescue_single_run(tmp_path)
+    written = venn.render_overlap(run, cls_dir, top_n=1)
+    assert not [k for k in written if k.startswith("rescue_")]
+    assert not list(cls_dir.glob("rescue_*"))
+
+
+def test_render_overlap_adds_the_rescue_set_under_prefixed_keys(tmp_path):
+    pytest.importorskip("upsetplot")
+    run, cls_dir = _rescue_single_run(tmp_path)
+    written = venn.render_overlap(run, cls_dir, top_n=1, rescue_view=True)
+    assert {"rescue_membership", "rescue_intersections", "rescue_pairwise",
+            "rescue_venn_spec", "rescue_upset"} <= set(written)
+    # No baseline column survives the filter, so the Shortest-Ping collapse is
+    # the one artifact the rescue pass drops — its left set would be empty by
+    # construction.
+    assert "rescue_venn" not in written
+    assert all(
+        p.name.startswith("rescue_overlap")
+        for k, p in written.items() if k.startswith("rescue_")
+    )
+    assert written["rescue_upset"].stat().st_size > 5_000
+    rescue = pd.read_csv(written["rescue_membership"], index_col=0)
+    assert venn.LABELS[venn.SHORTEST_PING] not in rescue.columns
+    assert len(rescue) == 4  # 5 targets, Shortest-Ping right on t0
+
+
+def test_the_rescue_pass_never_touches_the_full_population_files(tmp_path):
+    """New filenames, not an overwrite: the full view must be bit-for-bit equal."""
+    pytest.importorskip("upsetplot")
+    run_a, dir_a = _rescue_single_run(tmp_path / "plain")
+    plain = venn.render_overlap(run_a, dir_a, top_n=1)
+    baseline = {k: p.read_bytes() for k, p in plain.items()}
+
+    run_b, dir_b = _rescue_single_run(tmp_path / "withrescue")
+    both = venn.render_overlap(run_b, dir_b, top_n=1, rescue_view=True)
+    for key, blob in baseline.items():
+        assert both[key].read_bytes() == blob, key
+    assert len(pd.read_csv(both["rescue_membership"], index_col=0)) < len(
+        pd.read_csv(both["membership"], index_col=0)
+    )
+
+
+def test_cross_rescue_drops_the_sp_collapse_and_keeps_everything_else(tmp_path):
+    pytest.importorskip("upsetplot")
+    out_dir = tmp_path / "cross"
+    out_dir.mkdir()
+    written = venn.render_cross_overlap(
+        _rescue_runs(tmp_path),
+        out_dir,
+        analysis_root=tmp_path / "analysis",
+        grid="h3",
+        resolution=4,
+        rescue_view=True,
+    )
+    assert {"rescue_membership", "rescue_intersections", "rescue_pairwise",
+            "rescue_venn_spec", "rescue_upset", "rescue_ring_coverage",
+            "rescue_ring_venn", "rescue_euler_fit",
+            "rescue_euler"} <= set(written)
+    assert "rescue_venn" not in written
+    assert all(p.exists() for p in written.values())
+    assert all("h3-4.top1" in p.name for p in written.values())
+
+
+def test_the_rescue_membership_csv_still_says_which_run_each_row_came_from(tmp_path):
+    pytest.importorskip("upsetplot")
+    out_dir = tmp_path / "cross"
+    out_dir.mkdir()
+    written = venn.render_cross_overlap(
+        _rescue_runs(tmp_path),
+        out_dir,
+        analysis_root=tmp_path / "analysis",
+        grid="h3",
+        resolution=4,
+        rescue_view=True,
+    )
+    frame = pd.read_csv(written["rescue_membership"])
+    assert "run_id" in frame.columns
+    # The restricted rows, split by origin: as01 loses t0, as02 loses t0 and t1.
+    assert frame["run_id"].value_counts().to_dict() == {"as01": 4, "as02": 2}
+
+
+def test_the_rescue_ring_order_is_the_full_order_minus_the_baseline(tmp_path):
+    """A 6-method --ring-order cannot be reused verbatim on 5 columns."""
+    pytest.importorskip("upsetplot")
+    out_dir = tmp_path / "cross"
+    out_dir.mkdir()
+    reversed_order = list(reversed(_SIX_METHODS))
+    written = venn.render_cross_overlap(
+        _rescue_runs(tmp_path),
+        out_dir,
+        analysis_root=tmp_path / "analysis",
+        grid="h3",
+        resolution=4,
+        ring_order=reversed_order,
+        rescue_view=True,
+    )
+    manifest = json.loads(written["manifest"].read_text())
+    assert manifest["ring_order"] == reversed_order
+    # Filtered, not revalidated — the caller's clockwise sequence is preserved.
+    assert manifest["rescue_view"]["ring_order"] == [
+        m for m in reversed_order if m != venn.SHORTEST_PING
+    ]
+
+
+def test_rescue_coverage_partitions_the_restricted_population(tmp_path):
+    pytest.importorskip("upsetplot")
+    out_dir = tmp_path / "cross"
+    out_dir.mkdir()
+    written = venn.render_cross_overlap(
+        _rescue_runs(tmp_path),
+        out_dir,
+        analysis_root=tmp_path / "analysis",
+        grid="h3",
+        resolution=4,
+        rescue_view=True,
+    )
+    coverage = pd.read_csv(written["rescue_ring_coverage"])
+    block = json.loads(written["manifest"].read_text())["rescue_view"]
+    assert (
+        coverage["n_targets"].sum() + block["n_targets_none_correct"]
+        == block["n_targets"]
+    )
+    assert block["n_regions_drawn"] == int(coverage["drawn"].sum())
+
+
+def test_the_manifest_names_the_rescue_denominator(tmp_path):
+    """The block's own strings are what stop a cross-denominator comparison."""
+    pytest.importorskip("upsetplot")
+    out_dir = tmp_path / "cross"
+    out_dir.mkdir()
+    written = venn.render_cross_overlap(
+        _rescue_runs(tmp_path),
+        out_dir,
+        analysis_root=tmp_path / "analysis",
+        grid="h3",
+        resolution=4,
+        rescue_view=True,
+    )
+    manifest = json.loads(written["manifest"].read_text())
+    block = manifest["rescue_view"]
+    assert block["denominator"] == "restricted"
+    assert block["baseline"] == venn.SHORTEST_PING
+    assert venn.SHORTEST_PING not in block["methods"]
+    # 9 pooled targets, Shortest-Ping right on 3 of them.
+    assert block["n_targets"] == 6 == manifest["n_targets_total"] - 3
+    assert block["n_targets_per_run"] == {"as01": 4, "as02": 2}
+    assert block["n_rescued_by_any"] == 5  # t4 is rescued by nobody
+    assert block["n_targets_none_correct"] == 1
+    assert block["share_rescued_by_any"] == round(5 / 6, 4)
+    assert block["n_correct_per_method"] == {
+        "million_scale_cbg": 2, "vanilla_cbg": 3, "octant_cbg_hull": 3,
+        "octant_cbg_spl": 3, "spotter_cbg": 3,
+    }
+
+
+def test_rescue_view_refuses_a_population_the_baseline_solved_entirely(tmp_path):
+    run, cls_dir = _rescue_single_run(
+        tmp_path,
+        flags={m: [True, True] for m in _SIX_METHODS},
+        targets=["t0", "t1"],
+    )
+    with pytest.raises(ValueError, match="nothing left to rescue"):
+        venn.render_overlap(run, cls_dir, top_n=1, rescue_view=True)
+
+
+def test_rescue_view_needs_two_cbg_variants_to_overlap(tmp_path):
+    run, cls_dir = _rescue_single_run(tmp_path)
+    with pytest.raises(ValueError, match=">= 2 CBG variants"):
+        venn.render_overlap(
+            run, cls_dir, methods=[venn.SHORTEST_PING, "vanilla_cbg"],
+            top_n=1, rescue_view=True,
+        )
+
+
+def test_rescue_view_requires_the_baseline_among_the_chosen_methods(tmp_path):
+    """`--method` can exclude the very column the view is defined against."""
+    run, cls_dir = _rescue_single_run(tmp_path)
+    with pytest.raises(ValueError, match="needs the .* baseline"):
+        venn.render_overlap(
+            run, cls_dir,
+            methods=["vanilla_cbg", "spotter_cbg", "octant_cbg_hull"],
+            top_n=1, rescue_view=True,
+        )
+
+
+def test_the_guards_fire_before_any_artifact_is_written(tmp_path):
+    """A refused rescue view must not leave a half-written full pass behind."""
+    run, cls_dir = _rescue_single_run(tmp_path)
+    with pytest.raises(ValueError, match=">= 2 CBG variants"):
+        venn.render_overlap(
+            run, cls_dir, methods=[venn.SHORTEST_PING, "vanilla_cbg"],
+            top_n=1, rescue_view=True,
+        )
+    assert not list(cls_dir.glob("overlap_*"))
+
+
+def test_euler_is_skipped_rather_than_crashing_when_a_variant_rescues_nothing(
+    tmp_path,
+):
+    """A zero-radius circle is refused by the fit; the ring draws it as 0.0%."""
+    pytest.importorskip("upsetplot")
+    as01, as02 = _rescue_flags()
+    # Spotter now only ever agrees with the baseline, so it rescues nothing.
+    as01["spotter_cbg"] = list(as01[venn.SHORTEST_PING])
+    as02["spotter_cbg"] = list(as02[venn.SHORTEST_PING])
+    runs = {
+        "as01": _make_cls_dir(tmp_path, "as01", as01, ["t0", "t1", "t2", "t3", "t4"]),
+        "as02": _make_cls_dir(tmp_path, "as02", as02, ["t0", "t1", "t2", "t3"]),
+    }
+    out_dir = tmp_path / "cross"
+    out_dir.mkdir()
+    written = venn.render_cross_overlap(
+        runs,
+        out_dir,
+        analysis_root=tmp_path / "analysis",
+        grid="h3",
+        resolution=4,
+        rescue_view=True,
+    )
+    assert "rescue_ring_venn" in written
+    assert "rescue_euler" not in written and "rescue_euler_fit" not in written
+    block = json.loads(written["manifest"].read_text())["rescue_view"]
+    assert block["ring_drawn"] is True
+    assert block["euler_drawn"] is False
+    assert block["euler_skipped_methods"] == ["spotter_cbg"]
+    assert block["euler_placed_share"] is None
+    # The full population still has its Euler figure: only the restricted one
+    # has an empty set.
+    assert "euler" in written
+
+
 # ---- venn spec (generic Venn-tool input) ------------------------------------
 
 
