@@ -115,12 +115,13 @@ def test_config_supplies_defaults_and_the_cli_overrides_them(tmp_path):
 # ---- the common block -------------------------------------------------------
 
 def test_common_applies_only_where_the_param_exists(tmp_path):
-    """`top_n` is a param of two of the seven commands, `grid` of all seven."""
+    """`top_n` is a param of some commands, `grid` of all of them."""
     dm = _dm(tmp_path, {"analysis": {"common": {"grid": "healpix", "top_n": 3}}})
     assert all(b["grid"] == "healpix" for b in dm.values())
     assert {name for name, b in dm.items() if "top_n" in b} == {
         "plot-venn",
         "plot-pareto",
+        "plot-outcome-bars",
     }
     assert "top_n" not in dm["classify"]
 

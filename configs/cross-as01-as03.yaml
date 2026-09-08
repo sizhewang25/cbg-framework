@@ -26,11 +26,20 @@ analysis:
     grid: h3
     resolution: [4]
 
-  # §8.1's headline table: datasets down the rows, methods across the columns.
-  # The three operator datasets in one table; the WEIGHTED row under each is
-  # reserved and prints as `-` until a weighted run exists to pair to it with
-  # `--weighted-run-id <dataset>=<run_id>`.
+  # §8.1's headline table: dataset types down the rows, methods across the
+  # columns. Each type is led by a row pooling its datasets' targets (a
+  # target-count micro-average), with the per-AS breakdown beneath it. The
+  # TRAFFIC-WEIGHTED group is reserved and prints as `-` until a weighted run
+  # exists to pair to it with `--weighted-run-id <dataset>=<run_id>`.
   table-headline: {}
+
+  # The same numbers as bars: each is one method's whole target set split into
+  # correct / wrong / fallback / error, so top-1 accuracy is the bottom segment
+  # and the failure rate is the top one. Fill is the method, hatch is the
+  # dataset type. `compare` breaks the pooled panel out per dataset.
+  plot-outcome-bars:
+    top_n: 1
+    layout: [pooled, compare]
 
   plot-pareto:
     top_n: 1

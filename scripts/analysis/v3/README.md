@@ -17,6 +17,7 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/h3grid.py](modules/h3grid.py) | lib · H3 hexagons (**default**) |
 | [modules/healpix.py](modules/healpix.py) | lib · HEALPix equal-area quads, nesting |
 | [modules/mapping.py](modules/mapping.py) | lib · shared cartopy layers, the seed Voronoi, great-circle polylines |
+| [modules/cross.py](modules/cross.py) | lib · cross-run directories, dataset-set slugs, the setup and disjoint-target guards |
 | [modules/answer_space.py](modules/answer_space.py) | cmd · `build-answer-space` |
 | [modules/bipartite.py](modules/bipartite.py) | cmd · `build-bipartite-graph` |
 | [modules/classify.py](modules/classify.py) | cmd · `classify` |
@@ -24,6 +25,8 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/breakdown.py](modules/breakdown.py) | cmd · `breakdown-accuracy` |
 | [modules/confusion.py](modules/confusion.py) | cmd · `confusion-density` |
 | [modules/accuracy_table.py](modules/accuracy_table.py) | cmd · `table-accuracy` |
+| [modules/headline_table.py](modules/headline_table.py) | cmd · `table-headline` |
+| [modules/figure_outcome_bars.py](modules/figure_outcome_bars.py) | cmd · `plot-outcome-bars` |
 | [modules/venn.py](modules/venn.py) | cmd · `plot-venn` |
 | [modules/diagram/](modules/diagram/) | lib · the overlap figures `plot-venn` assembles |
 | [modules/map_answer_space.py](modules/map_answer_space.py) | cmd · `plot-answer-space` |
@@ -108,10 +111,17 @@ python -m scripts.analysis.v3.cli table-accuracy \
   --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
 python -m scripts.analysis.v3.cli table-accuracy --run-id as7018_us_test01
 
-# 3e. The same numbers as the paper prints them: datasets down the rows, methods
-#     across the columns, best-in-row marked. Each dataset gets a reserved
-#     WEIGHTED row (no weighted run exists yet).
+# 3e. The same numbers as the paper prints them: dataset *types* down the rows,
+#     methods across the columns, best-in-row marked. Each type is led by a row
+#     pooling its datasets' targets, with the per-AS breakdown beneath it. The
+#     TRAFFIC-WEIGHTED group is reserved (no weighted run exists yet).
 python -m scripts.analysis.v3.cli table-headline \
+  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
+
+# 3e2. The same numbers as bars: each is one method's whole target set split
+#      into correct / wrong / fallback / error. Fill is the method, hatch is the
+#      dataset type. `compare` breaks the pooled panel out per dataset.
+python -m scripts.analysis.v3.cli plot-outcome-bars --layout pooled --layout compare \
   --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
 
 # 3f. Error-distance CDF per method, log x, fallbacks excluded
@@ -183,6 +193,8 @@ _cross/accuracy-table/<dataset-set>/  accuracy_table.<grid>.{csv,md,manifest.jso
                                       dataset_context.<grid>.csv
                                       headline_top{1,3}.<grid>.{csv,md}
                                       headline.<grid>.manifest.json
+                                      outcome_bars[_by_dataset].<grid>.top<N>.{png,csv}
+                                      outcome_bars.<grid>.top<N>.manifest.json
 _cross/cost-accuracy/<dataset-set>/   pareto_<cost>.<grid>.top<N>.{csv,png,json}
 _cross/venn-diagram/<dataset-set>/    overlap_*.<grid>.top<N>.*
 _cross/error-vs-class/<dataset-set>/  error_vs_{cells,rank}.<grid>.png
@@ -963,13 +975,43 @@ a tie. That is what happens on as03 at top-3, where Shortest-Ping and SoI both
 reach 0.926 and *beat* Octant-Hull — the ranking flip top-1 alone would hide,
 which is why the appendix table exists.
 
-**A reserved row per dataset variant the section compares.** §8.1 sets each
-mesh campaign against its traffic-weighted subset, so the rows are `AS01 MESH`,
-`AS01 WEIGHTED`, `AS02 MESH`, … Every WEIGHTED row is empty: `has_weight` is
-false on all three operator runs and the canonical source CSVs carry no weight
-column, so that campaign is **uncollected rather than unanalyzed**. The rows
-print as `—` rather than being omitted, because a table missing half its rows
-reads as though the mesh numbers were the whole comparison.
+**Dataset types own the rows, with the per-AS breakdown beneath.** §8.1's story
+line compares the two campaigns at *dataset-type* granularity, so the rows run
+`MESH (3 ASes)`, `· AS01`, `· AS02`, `· AS03`, `TRAFFIC-WEIGHTED (0 of 3 ASes)`,
+… An earlier shape interleaved the kinds per dataset (`AS01 MESH`,
+`AS01 WEIGHTED`, `AS02 MESH`, …) so a weighted row read as a filter on the row
+above it; that optimized for a per-AS comparison the paper does not make, and
+left the fleet-wide number for the reader to average in their head. With one
+dataset the aggregate is suppressed and the breakdown rows carry the kind
+themselves, since an indent needs something to indent under.
+
+**The pooled row is a micro-average, and only it is computed.** It sums the
+datasets' targets and scores once — "pick a target at random from the fleet" —
+rather than averaging the three rates; on as01/02/03 the two differ by at most
+0.0064 and the manifest's `weighting` block reports both. Breakdown rows print
+`accuracy_topN` verbatim, because three of the thirty-six cells round
+differently the two ways (as01's Spotter reads 0.389 verbatim and 0.388
+reconstructed) and agreeing with `table-accuracy` to the printed digit is the
+invariant the module exists under. `accuracy_is_reconstructed` marks the split
+per cell.
+
+Two things the pooling forces the table to say out loud. A pooled winner can
+lead the population while leading one dataset in it — at top-3 Octant-Hull takes
+the pooled row at 0.891 having led only as02, with as01 going to Octant-Spline
+and as03 to Shortest-Ping and SoI — so that cell gets a `†` and a footnote
+naming what it lost. And a method absent from one run is pooled over the runs
+that carry it, so its denominator is under the row's `n`; that cell gets a `‡`
+and its own count. Because an average now exists, `cross.guard_one_setup` and
+`cross.guard_disjoint_targets` both apply here (they are skipped when the
+aggregate is suppressed); `table-accuracy`'s exemption rested on there being no
+averaging to protect.
+
+**A reserved row per dataset variant the section compares.** Every
+TRAFFIC-WEIGHTED row is empty: `has_weight` is false on all three operator runs
+and the canonical source CSVs carry no weight column, so that campaign is
+**uncollected rather than unanalyzed**. The rows print as `—` rather than being
+omitted, because a table missing half its rows reads as though the mesh numbers
+were the whole comparison.
 
 The pairing is stated, not inferred: `--weighted-run-id as01=<run_id>`.
 `short_dataset` supplies the dataset key everywhere else in this layer, but it
@@ -983,9 +1025,108 @@ because Vanilla CBG is the only variant that ever falls back; a parallel
 six-column block would be five-sixths zeros with the one number that matters
 hardest to find.
 
-Nothing is recomputed — both tables read `topn_accuracy.csv` through
-`accuracy_table.accuracy_rows`, and their 18 shared cells agree exactly at both
-top-1 and top-3.
+Both tables read `topn_accuracy.csv` through `accuracy_table.accuracy_rows`,
+and their 18 shared cells agree exactly at both top-1 and top-3. The pooled
+counts are reconstructed as `round(accuracy_topN * n_targets)`, which is exact
+rather than nearly so — at four decimals and these denominators exactly one
+integer maps to a published rate — and is confirmed against
+`overlap_membership.top{1,3}.csv`, a per-target correctness matrix whose column
+sums match on all thirty-six cells. That file is a `plot-venn` output, so it
+checks this table and never computes it.
+
+### The same numbers as bars
+
+`plot-outcome-bars` draws what the table states, plus the third quantity that
+completes it: each bar is one method's whole target set partitioned into
+**correct · wrong · failed**, labelled with its own percentage to one decimal, so
+top-N accuracy is the bottom segment, the failure rate is the top one, and their
+complement is visible instead of implied. `n_fallback` and `n_error` merge into
+`failed` — a give-up and a crash are both failures to answer — but they stay
+separate in the CSV, and neither may merge into `wrong`, where a crash would
+read as a scoring miss. `guard_partition` asserts
+`n_correct + n_wrong + n_failed == n_targets` per bar.
+
+**This is the one figure where hue does not mean the variant.** Green right, red
+wrong, grey never answered; the method is the x position. The departure is
+deliberate — the question here is what happened to the targets, and a reader
+holding "green = Octant-Hull" while reading a green segment meaning "correct" is
+doing the figure's work for it. Nothing in the bars is variant-hued, so there is
+no second meaning inside this figure to collide with, and the tick labels stay
+neutral rather than reintroducing one an inch below the bars.
+
+The three fills were picked against checks, not by eye, because red-vs-green is
+the classic colour-blind pair: lightness is **monotone** up the stack
+(L\* 34 / 54 / 73), the worst pairwise ΔE under simulated deuteranopia and
+protanopia is 16.8 (above the 8 that would oblige a secondary encoding), and the
+nearest variant hue is ΔE 11.8 away. Label ink is chosen per fill by luminance,
+which is what frees the fills to be picked for their own separation instead of
+for hosting white text.
+
+Hatch is the **dataset type**, the comparison §8.1 hands off to, so no segment
+may carry a texture of its own. Every traffic-weighted bar is a dashed outline
+rather than a zero-height bar, for the same reason the table prints `—`, and its
+legend swatch is dashed to match — the key shows the mark the reader will meet,
+while *why* it is empty is a fact about the data and lives in the caption and the
+manifest.
+
+Bars run **best first** by pooled correct rate, ranked on the mesh rows over
+every dataset in the figure rather than per panel — in `compare` that is what
+keeps an x position meaning the same method in all three panels, so AS03's
+degradation is a straight-line scan instead of a search. Ties fall back to
+`PUBLISHED_METHODS` order.
+
+The figure carries **no prose and no legend titles**. Two legends share one row
+tight under the title — two rather than one because a single key would read as
+five alternatives on one scale, when every bar is in fact one outcome stack
+*and* one dataset type. Filled swatches are outcomes and outlines are dataset
+types, and the gap between the groups is wider than the gap inside either, which
+is what tells them apart without a pair of words above the row.
+
+Both are placed by **measurement**: `_place_legend` renders each at x = 0 and the
+caller centres the pair once it knows their widths, because the widths depend on
+the figure size and this module draws at two of them. The comparison grid keeps
+its own band (`COMPARE_LEGEND_Y` / `COMPARE_AXES_TOP`) since its panels carry
+`AS01 · n=399` titles above the axes that the pooled panel does not.
+
+### The traffic-weighted placeholder
+
+`headline_table.PROVISIONAL_WEIGHTED` holds **hard-coded top-1 rates from an
+earlier run** so §8.1's mesh-vs-traffic-weighted comparison can be laid out
+before the weighted campaign is collected. It is gated on the row having no run
+of its own, so pairing a real `--weighted-run-id` supersedes it with no flag to
+remember, and deleting the constant is then a cleanup.
+
+Two things it does not come with, and which are therefore not invented. It has
+**no denominator**, so `n_targets` stays NaN — which propagates honestly, since
+`best_in_row` cannot compute a standard error without an `n` and a provisional
+row is therefore never marked best. And it has **no top-3**, so the appendix
+table's weighted row stays reserved; keying the constant on the top-N is what
+stops a top-1 figure printing under a top-3 heading.
+
+**The figure does not mark it.** A bar drawn from a constant and a bar drawn from
+the pipeline are identical once rendered, so the caveat lives in the table's `§`
+footnote, the `provisional` column of the figure's CSV twin, and the manifest's
+`provisional_rows` block — and any caption reusing the PNG has to carry it.
+
+The manifest carries the encoding, the partition and the ordering rule in full.
+
+Bars run **best first** by pooled correct rate, ranked on the mesh rows over
+every dataset in the figure rather than per panel — in `compare` that is what
+keeps an x position meaning the same method in all three panels, so AS03's
+degradation is a straight-line scan instead of a search. Ties fall back to
+`PUBLISHED_METHODS` order.
+
+The figure carries **no prose**: two legends instead, one per channel, because a
+single combined key would read as six alternatives on one scale when every bar
+is in fact one outcome stack *and* one dataset type. What the removed footnote
+said now lives where it is actionable — the uncollected campaign names itself in
+its own legend entry (`traffic-weighted (not collected)`), and the manifest
+carries the encoding, the partition and the ordering rule in full.
+
+Counts and pooling are imported from `headline_table`, not reimplemented, so the
+figure's CSV twin and the table's long CSV are the same numbers by construction
+rather than by agreement. `--layout compare` breaks the pooled panel out per
+dataset, each keeping its own denominator.
 
 ## The error half
 

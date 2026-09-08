@@ -81,6 +81,12 @@ _METRIC_COLUMNS = (
     "error_km_p90",
 )
 
+#: The counts behind those rates. Kept out of the default projection because
+#: `table-accuracy`'s CSV is a published artifact and its column set is its
+#: schema. `table-headline` opts in, because a pooled row has to add counts —
+#: averaging the rates would weight a 399-target dataset like a 458-target one.
+_COUNT_COLUMNS = ("n_solved", "n_fallback", "n_error")
+
 
 def _method_order(methods) -> list[str]:
     known = [m for m in PREFERRED_ORDER if m in set(methods)]
@@ -94,6 +100,7 @@ def accuracy_rows(
     grid: str,
     resolution: int,
     methods: list[str] | None = None,
+    include_counts: bool = False,
 ) -> pd.DataFrame:
     """One row per (run, method), read straight out of each run's `topn_accuracy.csv`."""
     frames = []
@@ -113,7 +120,8 @@ def accuracy_rows(
         df.insert(1, "dataset", short_dataset(run_id))
         frames.append(df)
     out = pd.concat(frames, ignore_index=True)
-    missing = [c for c in _METRIC_COLUMNS if c not in out.columns]
+    wanted_columns = _METRIC_COLUMNS + (_COUNT_COLUMNS if include_counts else ())
+    missing = [c for c in wanted_columns if c not in out.columns]
     if missing:
         raise ValueError(
             f"topn_accuracy.csv lacks {missing}; re-run `classify` with those Ns "
@@ -124,7 +132,7 @@ def accuracy_rows(
     out = out.sort_values(
         ["run_id", "method"], key=lambda s: s.map(order) if s.name == "method" else s
     ).reset_index(drop=True)
-    return out[["run_id", "dataset", "method", "method_label", *_METRIC_COLUMNS]]
+    return out[["run_id", "dataset", "method", "method_label", *wanted_columns]]
 
 
 def dataset_context(
