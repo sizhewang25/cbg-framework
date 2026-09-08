@@ -660,9 +660,21 @@ def build_payload(
             }
         )
 
-    # Failures first, then largest error: the interesting cases open by default.
-    order = {"failed": 0, "wrong": 1, "correct": 2}
-    targets.sort(key=lambda t: (order[t["status"]], -(t["error_km"] or 0.0)))
+    # Error ascending over the answered targets — `correct` and `wrong`
+    # interleaved, since the ordering is the distance and not the verdict — then
+    # every `failed` target after them. So the list reads best to worst and a
+    # position in it means the same thing as a percentile of error does.
+    #
+    # A fallback does carry a coordinate and an `error_km`, but they are the
+    # Shortest-Ping VP's rather than the method's, so that number is not on the
+    # same scale as the rest of the column and cannot be ranked against it.
+    # Sorting the failed block by it is still the useful order *within* the
+    # block; `None` (no prediction at all) sorts to the very end.
+    def _order(t: dict[str, Any]) -> tuple[int, int, float]:
+        err = t["error_km"]
+        return (1 if t["status"] == "failed" else 0, 1 if err is None else 0, err or 0.0)
+
+    targets.sort(key=_order)
 
     return {
         "run_id": run.run_id,

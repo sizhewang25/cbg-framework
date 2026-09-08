@@ -176,10 +176,9 @@ for (const v of ["all", "fail", "correct", "wrong", "failed"]) {
   api.redraw();
 }
 
-// Percentiles run over the error distribution, not over the dropdown -- which
-// is ordered failures-first, so indexing it directly reads the scale backwards
-// and p5 lands on the worst case. Both ends select a real target and the
-// direction is monotone.
+// Percentiles run over the error distribution of the answered targets, with
+// the fallbacks excluded. Both ends must select a real target and the
+// direction must be monotone increasing: p5 the near-miss, p95 the disaster.
 statusSel.value = "all";
 api.repopulate();
 const pctSel = el("pct");

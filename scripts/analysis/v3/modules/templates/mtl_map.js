@@ -169,10 +169,10 @@
     return rows.map((r) => r.t);
   }
   // pN means "the target at the Nth percentile of error distance", so p5 is a
-  // near-miss and p95 is a disaster. The dropdown is deliberately ordered
-  // failures-first, so indexing *it* by percentile reads the scale backwards --
-  // which is what this used to do. Rank on error instead, then map back to the
-  // dropdown position.
+  // near-miss and p95 is a disaster. The ranking is recomputed here rather than
+  // read off the dropdown's positions: the two agree while the list is in its
+  // payload order, but a Status filter can leave a prefix that is no longer the
+  // whole distribution, and the percentile must follow the list on screen.
   //
   // `failed` rows are excluded rather than pooled. On a fallback the benchmark
   // fills `error_km` with the *Shortest-Ping VP's* error, not the method's, so
@@ -535,7 +535,7 @@
       `filter, ${shown} drawn${dropped ? `, ${dropped} dropped` : ""} · ` +
       `region=${t.region ? t.region.kind : "none"} · ` +
       `top-3 seeds ${(t.top_seeds || []).map((s) => "#" + s).join(", ") || "—"} · ` +
-      `rank ${tIdx + 1}/${currentList.length} by severity` +
+      `rank ${tIdx + 1}/${currentList.length} by error` +
       (pctSel.value !== "" ? ` (p${pctSel.value} by error, solved only)` : "") + hiddenNote;
 
     Plotly.react(plotDiv, traces, layout, { responsive: true });

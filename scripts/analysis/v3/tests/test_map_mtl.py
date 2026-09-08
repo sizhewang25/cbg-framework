@@ -294,20 +294,59 @@ def test_seeds_crossed_is_null_rather_than_zero_when_the_matrix_is_skipped():
     assert all(t["seeds_crossed"] is None for t in pl["targets"])
 
 
-def test_failures_sort_first_so_the_page_opens_on_a_bad_case():
+def test_targets_sort_by_error_with_the_failures_after_them():
+    """Best to worst over the answered targets, then every fallback.
+
+    `correct` and `wrong` interleave, because the ordering is the distance and
+    not the verdict — a 12 km miss that crossed a boundary belongs next to a
+    12 km hit, not in a separate block. That is also what makes a position in
+    the list mean the same thing as a percentile of error.
+    """
     space = _space()
     n = len(space.assignments)
     scores = _scores(space)
-    scores.loc[scores.index[-1], "status"] = "FALLBACK"
+    # Spread the errors so the sort has something to do, and make the *first*
+    # assignment the fallback so a stable sort alone could not produce the
+    # expected order.
+    scores["error_to_target_km"] = [40.0, 10.0, 30.0, 20.0][:n]
+    scores.loc[scores.index[0], "status"] = "FALLBACK"
     pl = build_payload(
         _Run(), space, "test_cbg", scores=scores, labels=_labels(space),
         edges=_edges(space), crossing=None, rings=seed_rings(space.seeds),
         voronoi=[], vps=_vps(),
     )
-    order = [t["status"] for t in pl["targets"]]
-    assert order[0] == "failed"
-    assert order == sorted(order, key=lambda s: {"failed": 0, "wrong": 1, "correct": 2}[s])
-    assert len(order) == n
+    assert len(pl["targets"]) == n
+    statuses = [t["status"] for t in pl["targets"]]
+    errors = [t["error_km"] for t in pl["targets"]]
+
+    assert statuses[-1] == "failed"
+    assert "failed" not in statuses[:-1], "fallbacks belong at the end, not interleaved"
+    answered = errors[:-1]
+    assert answered == sorted(answered), answered
+    assert answered == [10.0, 20.0, 30.0]
+    assert errors[-1] == 40.0, "the fallback keeps its error, it is just not ranked on"
+
+
+def test_a_target_with_no_prediction_sorts_last_of_all():
+    """`error_km` is None only when there is no predicted coordinate at all.
+
+    Such a row has nothing to sort on, so it goes behind even the fallbacks
+    rather than being treated as a zero-kilometre error.
+    """
+    space = _space()
+    scores = _scores(space)
+    scores["error_to_target_km"] = [40.0, 10.0, 30.0, 20.0][:len(scores)]
+    scores.loc[scores.index[0], ["status", "pred_lat", "pred_lon", "error_to_target_km"]] = [
+        "FALLBACK", np.nan, np.nan, np.nan,
+    ]
+    scores.loc[scores.index[1], "status"] = "FALLBACK"
+    pl = build_payload(
+        _Run(), space, "test_cbg", scores=scores, labels=_labels(space),
+        edges=_edges(space), crossing=None, rings=seed_rings(space.seeds),
+        voronoi=[], vps=_vps(),
+    )
+    last = pl["targets"][-1]
+    assert last["status"] == "failed" and last["pred"] is None and last["error_km"] is None
 
 
 def test_the_baseline_renders_without_constraint_or_region_layers():
@@ -466,8 +505,8 @@ def test_the_viewer_executes_against_a_real_payload(tmp_path):
         edges=_edges(space), crossing=np.zeros((space.n_seeds, space.n_seeds), dtype=int),
         rings=seed_rings(space.seeds), voronoi=conus_voronoi_rings(space.seeds),
         vps=_vps(),
-        # Every target, because the payload sorts failures first — pinning the
-        # region to assignment 0 would leave it off the target the page opens on.
+        # Every target: the payload reorders by error, so pinning the region
+        # to assignment 0 would leave it off whichever target opens first.
         regions={
             tid: {
                 "kind": "polygon",
@@ -518,9 +557,8 @@ def test_the_viewer_executes_against_a_real_payload(tmp_path):
 
     # Hovering a VP lifts its own constraint out of the bundle, and unhovering
     # puts it back; the harness fails outright if either half stops firing.
-    # p5 must be the near-miss and p95 the disaster. The dropdown is ordered
-    # failures-first, so a percentile taken over *it* reads the scale backwards;
-    # the harness fails outright if the sequence stops being monotone.
+    # p5 must be the near-miss and p95 the disaster; the harness fails outright
+    # if the sequence stops being monotone.
     errs = report["percentileErrors"]
     assert errs == sorted(errs), errs
 
