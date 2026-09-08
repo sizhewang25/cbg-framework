@@ -27,6 +27,7 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/accuracy_table.py](modules/accuracy_table.py) | cmd · `table-accuracy` |
 | [modules/headline_table.py](modules/headline_table.py) | cmd · `table-headline` |
 | [modules/figure_outcome_bars.py](modules/figure_outcome_bars.py) | cmd · `plot-outcome-bars` |
+| [modules/figure_proximity_inflation.py](modules/figure_proximity_inflation.py) | cmd · `plot-proximity-inflation` |
 | [modules/venn.py](modules/venn.py) | cmd · `plot-venn` |
 | [modules/diagram/](modules/diagram/) | lib · the overlap figures `plot-venn` assembles |
 | [modules/map_answer_space.py](modules/map_answer_space.py) | cmd · `plot-answer-space` |
@@ -124,6 +125,15 @@ python -m scripts.analysis.v3.cli table-headline \
 python -m scripts.analysis.v3.cli plot-outcome-bars --layout pooled --layout compare \
   --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
 
+# 3e3. Why the dataset types differ, drawn on the targets rather than on any
+#      method's result. y = min-RTT inflation (routing proximity); x is either
+#      the nearest measured VP to the seed (`closest`, geometry alone) or the
+#      one the lowest RTT picked (`sping`, geometry after routing has chosen).
+#      Needs `build-proximity` on every run named.
+python -m scripts.analysis.v3.cli plot-proximity-inflation \
+  --x-metric closest --x-metric sping --layout pooled --layout compare \
+  --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
+
 # 3f. Error-distance CDF per method, log x, fallbacks excluded
 python -m scripts.analysis.v3.cli plot-error-cdf \
   --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802
@@ -195,6 +205,10 @@ _cross/accuracy-table/<dataset-set>/  accuracy_table.<grid>.{csv,md,manifest.jso
                                       headline.<grid>.manifest.json
                                       outcome_bars[_by_dataset].<grid>.top<N>.{png,csv}
                                       outcome_bars.<grid>.top<N>.manifest.json
+_cross/target-geometry/<dataset-set>/ proximity_inflation.<x-metric>.<grid>.png
+                                      proximity_inflation_by_dataset.<x-metric>.<grid>.png
+                                      proximity_inflation.<grid>.{points,summary}.csv
+                                      proximity_inflation.<grid>.manifest.json
 _cross/cost-accuracy/<dataset-set>/   pareto_<cost>.<grid>.top<N>.{csv,png,json}
 _cross/venn-diagram/<dataset-set>/    overlap_*.<grid>.top<N>.*
 _cross/error-vs-class/<dataset-set>/  error_vs_{cells,rank}.<grid>.png
@@ -1127,6 +1141,101 @@ Counts and pooling are imported from `headline_table`, not reimplemented, so the
 figure's CSV twin and the table's long CSV are the same numbers by construction
 rather than by agreement. `--layout compare` breaks the pooled panel out per
 dataset, each keeping its own denominator.
+
+## Why the dataset types differ (§8.1's scatter)
+
+The table and the bars say how well each method did per dataset type.
+`plot-proximity-inflation` is the first artifact that says **what the targets
+were like**, which is what §8.1's traffic-weighted hand-off turns on: the
+weighted campaign is the mesh one filtered to the flows carrying the top 95% of
+traffic, so its targets should sit closer to a peering location *and* be reached
+over a better-routed path. Those are two claims, so they get an axis each.
+
+**y is routing proximity, and it is one column.** `min_inflation` — the smallest
+ratio of observed RTT to the speed-of-internet RTT for that geodesic, over the
+target's measured VPs, so 1.0 is a path as fast as ⅔c allows and 1.5 is one that
+spends half again as long as its distance requires. Being a minimum over VPs it
+describes the best path available to the target, not a typical one.
+
+**x is geometric proximity, and the column choice changes the claim.** Both are
+distances to the target's *seed*, for the reason the proximity diamond gives
+above, and both are emitted — `--x-metric` is repeatable and defaults to
+`closest`:
+
+| `--x-metric` | column | what it measures | ρ with inflation (pooled) |
+| --- | --- | --- | --: |
+| `closest` | `tg_seed_nearest_vp_km` | geometric opportunity, routing divided out | **-0.02** |
+| `sping` | `sping_vp_to_tg_seed_km` | geometry *after* routing has chosen the VP | 0.54 |
+
+The gap between those two correlations is the reason both exist. Against
+`closest` the two axes are **independent** on the operator runs (-0.35 / 0.18 /
+0.02 per AS), and 95.3% of mesh targets already have a VP inside their own seed
+margin — geometric opportunity is close to saturated, so it is not what is
+failing. Against `sping` the correlation is 0.54, but that axis is partly reading
+its own y: inflation is what decides which VP the RTT ranking hands over, so a
+small `sping` distance already implies a well-behaved path. **A claim about
+geometry has to be made on `closest`.**
+
+`sping` earns its place anyway, because its left mode *is* the baseline's
+accuracy. `share_proximate_sping_vp` in the summary reads 0.637 / 0.369 / 0.432
+and 0.476 pooled — cell for cell the headline table's Shortest-Ping column, since
+the flag and the score are the same computation on the same input. Read beside
+`share_proximate_vp` (0.968 pooled, the ceiling any VP-coordinate answer could
+reach) it says the mesh set's difficulty is **selection, not opportunity**: a
+discriminative VP exists for 96.8% of targets and RTT returns one for 47.6%.
+
+**Neither column is recomputed here.** `min_inflation` is `eval_source`'s, with
+v2's theoretical-slope constant behind it, carried through `build-proximity`;
+both x columns and the shortest-ping VP's identity are `build-proximity`'s, which
+takes that identity from the same place `classify` scores the baseline on.
+
+**One row per population, carrying both metrics.** The summary does not split by
+axis: the y quantiles and the four diamond flags are shared, so a second row
+would duplicate them and invite the copies to be read as two measurements. The
+pair that matters — `spearman_rho_closest` against `spearman_rho_sping` — is then
+the same targets and the same y with the axis choice as the only difference.
+`share_sping_is_closest_vp` sits beside them at 0.065 pooled: RTT almost never
+returns the geometrically nearest VP *by identity*, yet returns one in the right
+*class* 47.6% of the time, which is what VP co-location inside a metro looks
+like.
+
+**Two reference marks, both thresholds the paper already uses.** `y = 1` is the
+speed-of-internet floor — nothing can sit below it without beating ⅔c, and the
+y limit always includes it, since the axis is read as *how far above the bound*
+and a range cropped to the data rescales that reading per figure. The vertical
+band is the p25-p75 of `tg_seed_margin_km` over the panel's targets with p50
+ruled: half the distance from a seed to its nearest neighbour, so a VP inside
+its own target's margin is guaranteed to snap to the right class. It is a band
+and not a line because the threshold is **per target** — the answer space is
+denser in some metros than others — and one number would promise a sharp
+boundary the data does not have.
+
+**Colour is the dataset type and nothing else.** Mesh grey, traffic-weighted red,
+as §8.1 asks. No variant hue appears, because no variant runs in this figure:
+these are properties of the targets, fixed before any method is applied. Grey
+and red are dE 72.5 apart, both clear 3:1 on white (3.59 / 4.94), and the worst
+simulated deuteran/protan separation is dE 30.1. The weighted series draws
+**over** the mesh one and its marginals are density-normalised, since a subset
+will always carry fewer points and a count histogram would answer "how many were
+kept" when the question is "where do the kept ones sit".
+
+**The missing half keeps its legend entry.** An uncollected dataset type has no
+points, so it falls out of anything derived from the data — `legend_kinds` is
+what puts it back, and it prints as an outlined marker reading
+`traffic-weighted — not collected`. Grey dots with no key beside them would read
+as the whole comparison rather than half of it.
+
+**Three failures that would otherwise be silent.** A VP sitting exactly on a seed
+is a legal measurement and `log(0)` is not, so both x columns are clamped to a
+0.1 km floor and the clamp is counted in the manifest (zero on all three runs)
+rather than dropped. A row missing *either* x metric is dropped from both, so the
+two axes never describe two different denominators. And `min_inflation` is
+*carried*, so a `build-proximity` run that could not find its source CSV yields a
+column of NaN that would plot as an empty panel without complaint — an all-NaN y
+is refused by run id, naming `--source-csv`.
+
+`--layout compare` splits the joint panel per AS on shared axes, and the two x
+metrics write separate stems, so all four figures survive on disk.
 
 ## The error half
 

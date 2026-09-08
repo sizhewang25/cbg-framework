@@ -4,15 +4,16 @@
 #   python -m scripts.analysis.v3.cli --config configs/cross-as01-as03.yaml plot-pareto
 #   python -m scripts.analysis.v3.cli --config configs/cross-as01-as03.yaml plot-venn
 #
-# `plot-pareto`, `plot-venn`, `table-headline` and the two `plot-error-vs-*`
-# commands all take `--run-id` repeatably and consume the list as-is. The
+# `plot-pareto`, `plot-venn`, `table-headline`, `plot-outcome-bars`,
+# `plot-proximity-inflation` and the two `plot-error-vs-*` commands all take
+# `--run-id` repeatably and consume the list as-is. The
 # remaining commands score one run at a time and will reject this file by name
 # rather than fail on a type — use the per-run configs, or `--all-runs`, for
 # those.
 #
 # Each writes into its own sibling directory under `_cross/`:
-# `cost-accuracy/`, `venn-diagram/`, `accuracy-table/` and `error-vs-class/`,
-# all keyed `as01+as02+as03/`.
+# `cost-accuracy/`, `venn-diagram/`, `accuracy-table/`, `error-vs-class/` and
+# `target-geometry/`, all keyed `as01+as02+as03/`.
 
 run_id:
   - as01-260728-260802
@@ -39,6 +40,24 @@ analysis:
   # dataset type. `compare` breaks the pooled panel out per dataset.
   plot-outcome-bars:
     top_n: 1
+    layout: [pooled, compare]
+
+  # Why the dataset types differ, drawn on the targets themselves rather than on
+  # any method's result. y is min-RTT inflation, the best-routed measured VP's
+  # RTT over its speed-of-internet floor. x has two candidates and both are
+  # emitted, because they do not tell the same story:
+  #
+  #   closest -> tg_seed_nearest_vp_km, geometric opportunity with routing
+  #              divided out. rho with inflation is -0.02 pooled: on the mesh
+  #              set the two axes are independent.
+  #   sping   -> sping_vp_to_tg_seed_km, geometry after RTT has chosen the VP.
+  #              rho 0.54 — but that axis is partly reading its own y, since
+  #              inflation is what decides which VP the ranking returns.
+  #
+  # Mesh grey, traffic-weighted red once it exists. `compare` splits the joint
+  # panel per AS.
+  plot-proximity-inflation:
+    x_metric: [closest, sping]
     layout: [pooled, compare]
 
   plot-pareto:
