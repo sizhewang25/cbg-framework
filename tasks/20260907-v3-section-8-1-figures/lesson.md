@@ -307,3 +307,47 @@
   survives in three places — the table footnote, the CSV column, the manifest —
   and `provisional_kinds` stays as the single predicate they all query, with a
   docstring saying the figure deliberately does not mark it.
+
+## Phase 0j — the geometry-vs-routing scatter
+
+- **A carried column fails differently from a computed one.** `min_inflation`
+  comes from `eval_source` through `build-proximity`'s optional `context`, so a
+  run built without a source CSV it could find yields the column full of NaN
+  rather than missing. Plotted, that is an empty panel with no complaint; an
+  all-NaN axis is now refused by run id, naming `--source-csv`.
+- **An uncollected series falls out of every list derived from the data.** The
+  drawn kinds come from `points["kind"]`, which by definition cannot contain the
+  campaign that was never run — so the legend lost the traffic-weighted entry
+  and six grey dots read as the whole comparison. `legend_kinds(drawn, pending)`
+  is the union, kept separate from the drawing set on purpose.
+- **Set the axis limit *past* a reference line, not to it.** With
+  `ylim[0] == 1.0` the speed-of-internet rule landed exactly on the bottom spine
+  and vanished, leaving its annotation pointing at nothing. The floor now gets
+  4% of the span below it.
+- **A per-target threshold must not be drawn as a line.** The seed margin is
+  half the distance to the next seed, so it differs per target by a factor of
+  three across one dataset. It is drawn as the p25-p75 band with p50 ruled,
+  because one number would promise a sharp decision boundary the data has not
+  got.
+- **Density, not counts, when one series is a subset of the other.** The
+  traffic-weighted campaign is the mesh set filtered, so it will always carry
+  fewer points; a count marginal would answer "how many survived" when the
+  question the figure asks is "where do the survivors sit".
+- **A log decade brings eight minor gridlines.** At full strength they read as
+  data on a scatter. Kept at a third of the weight, because reading 300 off a
+  log axis needs them.
+- **An x axis chosen by y is not an independent variable.** The first version
+  plotted the *shortest-ping* VP's distance against min-RTT inflation and read
+  ρ 0.54 as "geometry and routing co-occur". RTT chooses that VP and inflation
+  is what RTT is ranking on, so the axis carried its own y. Against the nearest
+  *measured* VP the correlation is -0.02. Both metrics now ship, and the module
+  docstring says in as many words that a claim about geometry has to be made on
+  `closest`.
+- **A near-saturated covariate is a finding, not a boring axis.** 95.3% of mesh
+  targets have a VP inside their own seed margin, so the flat scatter is the
+  point: the mesh set's difficulty is selection, not opportunity. A figure whose
+  x explains nothing can be the one that tells you where to look next.
+- **Identity and class are different match rates.** RTT returns the
+  geometrically nearest VP by id for 6.5% of targets and one in the right class
+  for 47.6%. Quoting the first as a selection rate would understate the baseline
+  by a factor of seven; VPs co-locate inside a metro.

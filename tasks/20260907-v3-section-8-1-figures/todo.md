@@ -123,6 +123,26 @@
 - [x] Bars ordered best-first by pooled correct rate, one order shared across `compare` panels so an x position means the same method everywhere
 - [x] Prose removed (subtitle + footnote); two titled legends instead, one per encoding channel; the uncollected campaign names itself in its legend entry
 
+## Phase 0j: geometry-vs-routing scatter (2026-09-07)
+- [x] New `modules/figure_proximity_inflation.py` + `plot-proximity-inflation`: x = `sping_vp_to_tg_seed_km` (log), y = `min_inflation`, one dot per target
+- [x] Colour is the dataset type — mesh grey, traffic-weighted red — and no variant hue appears, since no method runs in this figure
+- [x] Both columns read from `build-proximity`, neither recomputed: `min_inflation` is `eval_source`'s constant, `sping_vp_to_tg_seed_km` is the VP `classify` scores the baseline on
+- [x] `share_proximate_sping_vp` in the summary CSV == the headline table's Shortest-Ping column (0.637 / 0.369 / 0.432, 0.476 pooled) — the seam is a number, not an assertion
+- [x] Reference marks: the `y = 1` speed-of-internet floor, and the seed margin as a p25-p75 band rather than a line, since the threshold is per target
+- [x] Marginal histograms on both axes, density-normalised so a subset series is comparable to the set it came from
+- [x] `legend_kinds` keeps the uncollected traffic-weighted series in the key, drawn as an outlined marker
+- [x] Guards: an all-NaN `min_inflation` refused by run id naming `--source-csv`; a VP on its seed clamped to a 0.1 km floor and counted, never `log(0)`
+- [x] `_spearman` without a scipy import, verified against `scipy.stats.spearmanr` to 12 dp on all four series
+- [x] `--layout pooled|compare`; `test_figure_proximity_inflation.py` (23) — suite 612 -> 635
+- [x] `configs/cross-as01-as03.yaml` gains `plot-proximity-inflation`; README module table, pipeline 3e3, `_cross/` tree and a "Why the dataset types differ" section
+- [x] §8.1 gets the four definitions (VP proximity · discrimination power · shortest-ping VP · min-RTT inflation), the formation paragraph, a figure slot and four numbered readouts
+- [ ] Flagged, not fixed: §8.2 uses "discriminative" for the argmin rule, where the code and the new §8.1 text use it for the half-margin guarantee
+- [x] Second pass: `--x-metric closest|sping` (repeatable, default `closest`) — the shortest-ping VP's distance is chosen *by* RTT, so it carries the y axis; against the nearest measured VP ρ falls from 0.54 to -0.02
+- [x] One points CSV and one summary carry both metrics, so `spearman_rho_closest` / `spearman_rho_sping` compare over the same targets and the same y
+- [x] `share_inside_margin_<metric>`, all four diamond flags, and `sping_is_closest_vp` (6.5% by id against 47.6% by class) in the summary
+- [x] A row missing either x metric is dropped from both, so the two axes never carry two denominators
+- [x] §8.1 readouts rewritten: opportunity is saturated (96.8% ceiling), selection is what fails (47.6%), the two axes are independent. The earlier "co-occur" claim is withdrawn as an axis artifact
+
 ## Phase 1: Figure D's data step (build first — most load-bearing)
 - [ ] Add `COVARIATES = ("tg_seed_nearest_vp_km", "min_inflation")` and `breakdown_by_covariate(membership, labels, *, weights=None)` to `breakdown.py`
 - [ ] Reuse `confusion.density_bins` for the quantile binning rather than re-deriving edges

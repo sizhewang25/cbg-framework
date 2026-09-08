@@ -385,3 +385,96 @@ the `fallback` swatch (both `_C_MUTED`), and the `error` swatch is the lightest
 ink step against white, which is a near-invisible box beside a word. The kind
 entries are outline-only and never-occurring segments are dropped from the
 legend, with the footnote still naming the full partition.
+
+## Phase 0j: the geometry-vs-routing scatter (2026-09-07)
+
+`plot-proximity-inflation` draws the target set itself, before any method runs:
+x = `sping_vp_to_tg_seed_km` on a log axis, y = `min_inflation`, one dot per
+target, mesh grey and traffic-weighted red. It is what §8.1's traffic-weighted
+hand-off needs in order to be a claim about *targets* rather than about methods.
+
+### Both columns already existed, and neither is recomputed
+
+`build-proximity` emits both: `sping_vp_to_tg_seed_km` is the distance from the
+VP `classify` scores the baseline on to the target's own seed, and
+`min_inflation` is carried verbatim from `eval_source`, whose theoretical-slope
+constant defines it. No new data step was needed, which is why this figure
+arrived without the `accuracy_by_covariate.csv` work Phase 1 still holds.
+
+### The seam to the headline table is a number, not an assertion
+
+`share_proximate_sping_vp` in the summary CSV reads 0.637 / 0.369 / 0.432 and
+0.476 pooled — cell for cell the headline table's Shortest-Ping column. The flag
+and the score are the same computation on the same input (`proximity.py` says so
+at length), so the scatter's near cluster *is* the baseline's accuracy rather
+than a quantity resembling it. The stricter margin flag reads 0.4728 pooled,
+0.003 below, which is the four as02 targets whose shortest-ping VP wins the
+argmin but sits outside its own seed's margin.
+
+### What the mesh cloud says
+
+| quantity | pooled (n = 1,269) | as01 | as02 | as03 |
+| --- | --: | --: | --: | --: |
+| shortest-ping VP to seed, p50 (km) | 126.3 | 50.7 | 400.7 | 157.1 |
+| min-RTT inflation, p50 | 1.502 | 1.444 | 1.540 | 1.522 |
+| Spearman ρ between the axes | 0.543 | 0.689 | 0.356 | 0.598 |
+| share inside the seed margin | 0.473 | 0.637 | 0.359 | 0.432 |
+| inflation p50, inside / outside the margin | 1.44 / 1.60 | 1.38 / 1.55 | 1.47 / 1.60 | 1.44 / 1.62 |
+
+Three findings the paper now states. The axes are **correlated but not
+redundant** (ρ 0.36 to 0.69, and the strength is itself dataset-dependent). The x
+distribution is **bimodal with the margin band in the gap** — 49.6% within
+100 km, 38.3% beyond 300 km, 12.1% between. And the two conditions **co-occur
+rather than trade off**: targets inside their margin are also better routed, on
+every AS. Nothing comes near the speed-of-internet floor: inflation runs 1.183
+to 2.037 and only 8.9% of targets fall below 1.30.
+
+### Verification
+
+* `_spearman` (Pearson on average ranks, no scipy import) agrees with
+  `scipy.stats.spearmanr` to 12 decimal places on all four series.
+* Config and explicit flags produce the same artifacts; suite 612 -> 635.
+* Both PNGs opened and read: the pooled panel's marginals are aligned to the
+  joint axes, the `y = 1` rule clears the bottom spine, and the pending
+  traffic-weighted series appears in the legend as an outlined marker.
+
+### Second iteration: the x axis was measuring the wrong thing
+
+`sping_vp_to_tg_seed_km` is not geometry. RTT picks that VP, and inflation is
+what the RTT ranking is ranking on, so the axis carries the y axis inside it.
+Swapping in `tg_seed_nearest_vp_km` — the nearest *measured* VP, routing divided
+out — changes the finding outright:
+
+| | pooled | as01 | as02 | as03 |
+| --- | --: | --: | --: | --: |
+| closest VP to seed, p50 (km) | 21.5 | 23.6 | 27.5 | 18.8 |
+| ρ(closest, inflation) | **-0.02** | -0.35 | 0.18 | 0.02 |
+| ρ(sping, inflation) | 0.54 | 0.69 | 0.36 | 0.60 |
+| share inside the seed margin, closest | 0.953 | 1.000 | 0.854 | 1.000 |
+| share inside the seed margin, sping | 0.473 | 0.637 | 0.359 | 0.432 |
+| `has_proximate_vp` (the ceiling) | 0.968 | 1.000 | 0.903 | 1.000 |
+| `has_proximate_sping_vp` (= Shortest-Ping top-1) | 0.476 | 0.637 | 0.369 | 0.432 |
+| `sping_is_closest_vp`, by VP id | 0.065 | 0.055 | 0.063 | 0.074 |
+
+The first report's claim that "geometrically easy targets are also routed
+better" was an artifact of the contaminated axis and has been withdrawn from the
+draft. What the clean axis says instead is stronger and feeds §8.2 directly:
+
+* **Geometric opportunity is nearly saturated** on the mesh set — 96.8% of
+  targets have a discriminative VP, so the ceiling on any VP-coordinate answer
+  is 0.968.
+* **Selection is what fails.** RTT returns a discriminative VP for 47.6%. The
+  ~49 point gap is the selection-miss population, and it is the room CBG has.
+* **The two axes are independent** (ρ -0.02), so geometric and routing wellness
+  are two conditions rather than one — which is what makes the next subsection's
+  split by each condition separately a real decomposition rather than a
+  restatement.
+* `sping_is_closest_vp` is 6.5% **by VP identity** while the class-level flag is
+  47.6%, which is what VP co-location inside a metro looks like. The identity
+  number must not be quoted as a selection rate on its own.
+
+Both metrics ship: `--x-metric closest|sping`, repeatable, default `closest`,
+separate stems so all four PNGs survive. One points CSV and one summary carry
+both, so `spearman_rho_closest` and `spearman_rho_sping` sit in one row over the
+same targets and the same y — the axis choice is the only difference between
+them. Suite 635 -> 643.
