@@ -20,15 +20,17 @@
   .badge { font-weight: 600; padding: 1px 6px; border-radius: 4px; color: #fff; }
   .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
             margin-right: 3px; vertical-align: -1px; }
-  /* Click popup. Plotly hover is transient and cannot hold several lines of
-     numbers while you read them, so detail is committed to a pinned panel. */
+  /* Hover panel. Replaces Plotly's own tooltip, which cannot hold this many
+     lines legibly. `pointer-events: none` is load-bearing: the panel is drawn
+     under the cursor, so if it could take the pointer it would steal the hover
+     from the mark that opened it and flicker. */
   #popup { position: absolute; z-index: 20; display: none; max-width: 340px;
+           pointer-events: none;
            background: #fff; border: 1px solid #bbb; border-radius: 6px;
            box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 10px;
            font-size: 12px; line-height: 1.55; color: #222; }
   #popup .ttl { font-weight: 600; margin-bottom: 4px; }
   #popup .k { color: #666; }
-  #popup .close { float: right; cursor: pointer; color: #999; margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -79,7 +81,7 @@
     <span class="swatch" style="background:#d62728"></span>top-1
     <span class="swatch" style="background:#ff8c00"></span>top-2
     <span class="swatch" style="background:#ffd700"></span>top-3
-    · hover a VP to isolate its constraint · click any marker for detail
+    · hover any marker for detail; a VP also isolates its constraint
   </span>
 </div>
 <div id="meta" class="meta"></div>

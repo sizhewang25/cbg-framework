@@ -214,49 +214,53 @@ statusSel.value = "all";
 api.repopulate();
 targetSel.value = "0";
 api.redraw();
-let clicks = 0;
-for (const [curve, kind] of Object.entries(api.clickKind())) {
-  const trace = lastTraces[+curve];
-  const cd = trace.customdata ? trace.customdata[0] : undefined;
-  el("popup").innerHTML = "";
-  api.dispatchClick({
-    points: [{ curveNumber: +curve, customdata: cd }],
-    event: { pageX: 10, pageY: 10 },
-  });
-  if (!el("popup").innerHTML) throw new Error(`a click on the ${kind} trace produced no popup`);
-  clicks++;
-}
-if (clicks === 0) throw new Error("no clickable traces were registered");
 
-// Hover a VP marker: its own LTD constraint must be pulled out of the bundle
-// into the highlight trace, and the bundle must dim. Both are Plotly.restyle
-// calls on traces that are empty at draw time, so nothing above would notice
-// if the handler stopped firing.
+// One gesture drives everything: hovering a mark opens its panel, a VP also
+// lifts its constraint, and unhovering undoes both. Walk every point of every
+// interactive trace.
 let hovers = 0;
+let popups = 0;
 let highlighted = 0;
-for (const [curve, kind] of Object.entries(api.clickKind())) {
-  if (kind !== "vp") continue;
+const kindsSeen = new Set();
+const drawnHighlights = () => lastTraces.filter(
+  (t) => HIGHLIGHT_NAMES.has(t.name) && t.lat && t.lat.length > 3
+).length;
+
+for (const [curve, kind] of Object.entries(api.markKind())) {
   const trace = lastTraces[+curve];
-  for (const vpId of (trace.customdata || [])) {
-    const before = restyleCalls.length;
+  if (!trace) continue;
+  const points = trace.customdata && trace.customdata.length
+    ? trace.customdata
+    : [undefined];
+  for (const cd of points) {
+    el("popup").innerHTML = "";
+    el("popup").style.display = "none";
     api.dispatchHover({
-      points: [{ curveNumber: +curve, customdata: vpId }],
+      points: [{ curveNumber: +curve, customdata: cd }],
       event: { pageX: 10, pageY: 10 },
     });
     hovers++;
-    if (restyleCalls.length === before) throw new Error(`hover on ${vpId} restyled nothing`);
-    // Match the highlight traces by name; other `showlegend: false` traces
-    // (the error connector, the region's holes) are not highlights.
-    const drawnHighlights = () => lastTraces.filter(
-      (t) => HIGHLIGHT_NAMES.has(t.name) && t.lat && t.lat.length > 3
-    ).length;
-    if (drawnHighlights()) highlighted++;
+    if (!el("popup").innerHTML) {
+      throw new Error(`hovering the ${kind} trace produced no panel`);
+    }
+    if (el("popup").style.display !== "block") {
+      throw new Error(`the ${kind} panel was filled but left hidden`);
+    }
+    popups++;
+    kindsSeen.add(kind);
+    if (kind === "vp" && drawnHighlights()) highlighted++;
+
     api.dispatchUnhover();
+    if (el("popup").style.display !== "none") {
+      throw new Error(`unhover left the ${kind} panel open`);
+    }
     const left = drawnHighlights();
     if (left) throw new Error(`unhover left ${left} highlight ring(s) drawn`);
   }
 }
-if (hovers === 0) throw new Error("no VP markers to hover");
+for (const kind of ["target", "pred", "vp"]) {
+  if (!kindsSeen.has(kind)) throw new Error(`no ${kind} mark was hoverable`);
+}
 // The Shortest-Ping baseline emits no LTD constraints, so there is nothing for
 // a hover to lift out; only demand a highlight where rings actually exist.
 const anyRings = JSON.parse(payload).targets.some((t) => (t.rings || []).length > 0);
@@ -265,11 +269,11 @@ if (anyRings && highlighted === 0) {
 }
 
 console.log(JSON.stringify({
-  targets: nOpts, draws: reactCalls, clicks, hovers, highlighted, anyRings,
+  targets: nOpts, draws: reactCalls, hovers, popups, highlighted, anyRings,
   percentileErrors: errs,
   tooltipTraces: [...tooltipTraces],
   // `hoverinfo: "none"` keeps hover events flowing; `"skip"` would not.
-  hoverableVpTraces: Object.entries(api.clickKind())
+  hoverableVpTraces: Object.entries(api.markKind())
     .filter(([c, k]) => k === "vp" && lastTraces[+c] && lastTraces[+c].hoverinfo === "none")
     .length,
   layers: firstLayers, allLayers: [...allLayers],

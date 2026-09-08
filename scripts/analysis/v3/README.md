@@ -1796,18 +1796,24 @@ constraints the inclusion filter dropped (several times more numerous than the
 binding ones) and the margin circle (an annotation on the answer space rather
 than part of the result).
 
-### One popup per mark
+### One panel per mark, on hover
 
-Hover and click do different jobs, and neither duplicates the other. Hovering a
-VP isolates its constraint (below); **clicking** any mark — the star, the
-triangle, the error line, any VP — pins a panel with the numbers behind it.
+There is one gesture. **Hovering** any mark — the star, the triangle, the error
+line, any VP — opens a panel with the numbers behind it, and a VP additionally
+lifts its own constraint out of the bundle. Moving off closes both. Nothing is
+click-driven.
 
 Plotly's own tooltips are suppressed everywhere, with `hoverinfo: "none"` rather
-than `"skip"` so hover *events* keep flowing to the highlight. Otherwise a
-click panel and a differently-styled Plotly box report the same mark at once,
-and the marks that carry two overlapping traces — the prediction and its error
-line, the truth and that same line — produced two or three boxes between them.
-`tests/test_map_mtl_viewer.js` fails if any trace regains a tooltip.
+than `"skip"`: `"skip"` would also stop the hover *event* that opens the panel.
+Leaving them on meant two boxes reporting the same mark in different styles, and
+three on the marks that carry overlapping traces — the prediction and its error
+line, the truth and that same line.
+
+The panel sets `pointer-events: none`, which is load-bearing rather than tidy:
+it is drawn under the cursor, so if it could take the pointer it would steal the
+hover from the mark that opened it and flicker.
+`tests/test_map_mtl_viewer.js` fails if any trace regains a tooltip, if a hover
+opens no panel, or if an unhover leaves one behind.
 
 The target's panel is the metadata one: id, fold, coordinates, its true seed and
 that seed's cell, the offset to it, measured VPs over the roster, the top-1

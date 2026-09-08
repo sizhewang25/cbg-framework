@@ -542,7 +542,7 @@ def test_the_viewer_executes_against_a_real_payload(tmp_path):
     assert proc.returncode == 0, proc.stderr
     report = json.loads(proc.stdout)
     assert report["targets"] == len(space.assignments)
-    assert report["clicks"] >= 3, "target, prediction and VP traces must all be clickable"
+    assert report["popups"] >= 3, "target, prediction and VP marks must all open a panel"
     layers = " | ".join(report["layers"])
     for expected in ("Voronoi cells", "seed regions", "top-1 seed",
                      "measured VPs", "latent VPs", "shortest-ping VP",
@@ -559,9 +559,10 @@ def test_the_viewer_executes_against_a_real_payload(tmp_path):
         assert off_by_default in every, f"{off_by_default!r} unreachable: {every!r}"
         assert off_by_default not in layers, f"{off_by_default!r} must be off by default"
 
-    # One popup per mark. Plotly tooltips are suppressed everywhere so the click
-    # panel is the single place detail is reported; VP traces keep
-    # `hoverinfo: "none"` rather than `"skip"` so the ring highlight still fires.
+    # One panel per mark, opened by hover. Plotly's own tooltips are suppressed
+    # everywhere so the panel is the single place detail is reported; every
+    # interactive trace keeps `hoverinfo: "none"` rather than `"skip"`, since
+    # `"skip"` would stop the hover event that opens it.
     assert report["tooltipTraces"] == [], report["tooltipTraces"]
     assert report["hoverableVpTraces"] > 0
 

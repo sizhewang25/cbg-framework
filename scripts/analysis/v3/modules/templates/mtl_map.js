@@ -60,8 +60,7 @@
   // Trace tags read back by the click handler. `curveNumber` is the only handle
   // Plotly gives, and the trace list is rebuilt every draw, so the mapping is
   // recorded per draw rather than assumed.
-  let clickKind = {};
-  let onPlotClick = () => {};
+  let markKind = {};
   let onPlotHover = () => {};
   let onPlotUnhover = () => {};
 
@@ -209,15 +208,12 @@
   function hidePopup() { popup.style.display = "none"; }
   function showPopup(ev, title, rows) {
     const body = rows.map(([k, v]) => `<span class="k">${esc(k)}:</span> ${v}`).join("<br>");
-    popup.innerHTML = `<span class="close" title="close">×</span>` +
-                      `<div class="ttl">${esc(title)}</div>${body}`;
+    popup.innerHTML = `<div class="ttl">${esc(title)}</div>${body}`;
     popup.style.display = "block";
     const mx = (ev && ev.event ? ev.event.pageX : 0) + 14;
     const my = (ev && ev.event ? ev.event.pageY : 0) + 14;
     popup.style.left = Math.max(8, Math.min(mx, window.scrollX + window.innerWidth - 360)) + "px";
     popup.style.top = my + "px";
-    const c = popup.querySelector(".close");
-    if (c) c.addEventListener("click", hidePopup);
   }
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hidePopup(); });
 
@@ -301,10 +297,10 @@
     const t = currentList[tIdx];
     const maxR = +maxRSel.value;
     const traces = [];
-    clickKind = {};
+    markKind = {};
     // `curveNumber` is the only handle Plotly hands back, and the trace list is
-    // rebuilt from scratch every draw, so the indices the hover handler needs
-    // are recorded here rather than assumed.
+    // rebuilt from scratch every draw, so what each trace *is* — and the
+    // indices the highlight restyles — are recorded here rather than assumed.
     let outerIdx = -1, innerIdx = -1, droppedIdx = -1, hlOuterIdx = -1, hlInnerIdx = -1;
 
     // 1) nearest-seed Voronoi partition over the continental US — the
@@ -460,14 +456,14 @@
       }
     }
     if (lLat.length) {
-      clickKind[traces.length] = "vp";
+      markKind[traces.length] = "vp";
       traces.push({ type: "scattergeo", mode: "markers", lat: lLat, lon: lLon,
         customdata: lIds, hoverinfo: "none",
         marker: { size: 6, symbol: "circle-open", color: VP_LATENT, line: { width: 1.1, color: VP_LATENT } },
         name: `latent VPs (${lLat.length})` });
     }
     if (mLat.length) {
-      clickKind[traces.length] = "vp";
+      markKind[traces.length] = "vp";
       traces.push({ type: "scattergeo", mode: "markers", lat: mLat, lon: mLon,
         customdata: mIds, hoverinfo: "none",
         marker: { size: 7, color: VP_MEASURED, line: { width: 0.8, color: "white" } },
@@ -475,7 +471,7 @@
     }
     if (spCoord) {
       // Same click popup as every other VP; only the marker colour differs.
-      clickKind[traces.length] = "vp";
+      markKind[traces.length] = "vp";
       traces.push({ type: "scattergeo", mode: "markers", lat: [spCoord[0]], lon: [spCoord[1]],
         customdata: [t.sping_vp_id], hoverinfo: "none",
         marker: { size: 10, color: VP_SPING, line: { width: 1.2, color: "white" } },
@@ -484,15 +480,15 @@
 
     // 7) the error itself, then the two endpoints on top of it.
     if (t.pred) {
-      clickKind[traces.length] = "pred";
+      markKind[traces.length] = "pred";
       traces.push(connectorTrace(t.pred, t.true, ERR_LINK));
     }
-    clickKind[traces.length] = "target";
+    markKind[traces.length] = "target";
     traces.push({ type: "scattergeo", mode: "markers", lat: [t.true[0]], lon: [t.true[1]],
       marker: { size: 13, color: "gold", symbol: "star", line: { color: "black", width: 1 } },
       hoverinfo: "none", name: "true target" });
     if (t.pred) {
-      clickKind[traces.length] = "pred";
+      markKind[traces.length] = "pred";
       traces.push({ type: "scattergeo", mode: "markers", lat: [t.pred[0]], lon: [t.pred[1]],
         marker: { size: 12, symbol: "triangle-up",
                   color: t.status === "correct" ? OK_GREEN : BAD_RED,
@@ -557,13 +553,22 @@
       Plotly.restyle(plotDiv, { lat: [[], []], lon: [[], []] }, [hlOuterIdx, hlInnerIdx]);
     }
 
+    // One gesture: hovering a mark opens its panel, and a VP additionally
+    // lifts its constraint. Unhover undoes both.
     onPlotHover = (ev) => {
       const pt = ev.points && ev.points[0];
-      if (!pt || clickKind[pt.curveNumber] !== "vp") return;
+      if (!pt) return;
+      const kind = markKind[pt.curveNumber];
+      if (kind === "target") { showPopup(ev, `Target ${t.target_id}`, targetPopupRows(t)); return; }
+      if (kind === "pred") { showPopup(ev, "Prediction", predPopupRows(t)); return; }
+      if (kind !== "vp") return;
+
       const vpId = pt.customdata;
+      showPopup(ev, `VP ${vpId}`, vpPopupRows(vpId, t, obsByVp.get(vpId)));
+
       const coord = vps[vpId];
       const ring = ringByVp.get(vpId);
-      // A latent VP, or one whose LTD failed, has no constraint to show.
+      // A latent VP, or one whose LTD failed, has no constraint to lift.
       if (!coord || !ring) { clearHighlight(); dimBundle(false); return; }
       const colour = ring[3] === 1 ? HL_RING : HL_RING_DROPPED;
       const o = ringLatLon(coord[0], coord[1], ring[1], 96);
@@ -576,27 +581,14 @@
       }
       dimBundle(true);
     };
-    onPlotUnhover = () => { clearHighlight(); dimBundle(false); };
+    onPlotUnhover = () => { hidePopup(); clearHighlight(); dimBundle(false); };
 
     // `Plotly.react` keeps existing handlers, so they must be cleared or every
     // redraw stacks another copy onto the same div.
     if (plotDiv.removeAllListeners) {
-      plotDiv.removeAllListeners("plotly_click");
       plotDiv.removeAllListeners("plotly_hover");
       plotDiv.removeAllListeners("plotly_unhover");
     }
-    onPlotClick = (ev) => {
-      const pt = ev.points && ev.points[0];
-      if (!pt) return;
-      const kind = clickKind[pt.curveNumber];
-      if (kind === "target") showPopup(ev, `Target ${t.target_id}`, targetPopupRows(t));
-      else if (kind === "pred") showPopup(ev, "Prediction", predPopupRows(t));
-      else if (kind === "vp") {
-        const vpId = pt.customdata;
-        showPopup(ev, `VP ${vpId}`, vpPopupRows(vpId, t, obsByVp.get(vpId)));
-      }
-    };
-    plotDiv.on("plotly_click", onPlotClick);
     plotDiv.on("plotly_hover", onPlotHover);
     plotDiv.on("plotly_unhover", onPlotUnhover);
   }
@@ -625,8 +617,7 @@
     module.exports = {
       redraw: draw,
       repopulate: populateTargets,
-      clickKind: () => clickKind,
-      dispatchClick: (ev) => onPlotClick(ev),
+      markKind: () => markKind,
       dispatchHover: (ev) => onPlotHover(ev),
       selected: () => currentList[+targetSel.value || 0],
       dispatchUnhover: () => onPlotUnhover(),
