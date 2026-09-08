@@ -164,3 +164,146 @@
   if the runs share targets. `guard_disjoint_targets` turns the worry into an
   assertion, and `weighting_check` turns the remaining caveat (micro vs macro
   average) into a number — max 0.6 pp here.
+
+- **A refactor that unifies two code paths can be the bug.** Rows and pooled rows
+  look like the same thing computed at two scales, and computing both from counts
+  is the obvious simplification. It moves three of thirty-six printed cells by a
+  digit, because a rate rounded to 4 dp and a rate recomputed from its own
+  rounded count are not the same number at 3 dp. The invariant worth protecting
+  was named in the module's first paragraph — "this table and `table-accuracy`'s
+  cannot disagree" — and the unification would have broken it silently, on three
+  cells, in a paper table.
+- **`groupby` drops null keys by default, and that is a silent row deletion.**
+  The new aggregate rows have no dataset, so `groupby(["dataset", "kind"])` would
+  have rendered exactly the old table with no error and no warning. Grouping on
+  the plan's own index removes the failure mode rather than guarding it, and
+  makes the ordering test a one-liner.
+- **Check whether an exemption's stated reason still holds after you change the
+  thing it was about.** `accuracy_table` skips the setup guard because "this
+  table puts each run on its own row where no such averaging can happen". Adding
+  a pooled row voided that sentence, and the comment was the only place it was
+  written down. Guards are inherited from a premise, not from a module.
+- **Pick the guard's input for the dependency graph, not for the read cost.**
+  `target_labels.csv` is 5× cheaper to read than a parquet and was the wrong
+  choice: it is a `build-proximity` artifact, so a proximity-unrelated check
+  would have made the table fail on a classified-but-not-proximity-analyzed run,
+  and it is regenerated on a different schedule than the numbers it guards. The
+  `classify` parquets sit in the directory the accuracies already come from.
+- **An indent needs something to indent under.** `· AS01` reads as subordinate
+  beneath a `MESH (3 ASes)` header and as nothing at all without one — and with
+  a single dataset the aggregate is suppressed, so two rows both read `· AS01`
+  and neither named its campaign. The label had to become a function of whether
+  the group header exists.
+- **A legend swatch can collide with a data mark.** The `mesh` entry was filled
+  with the same neutral as the `fallback` segment, so the legend's dataset-type
+  key was pixel-identical to one of its outcome keys. Outline-only kind entries
+  fix it, and the general rule is that a legend for a *texture* channel must not
+  borrow the colour channel to draw itself.
+- **Drop a legend entry for a category that never occurs.** `error` is zero on
+  every run and its ink is the lightest step, so its swatch was a near-invisible
+  box beside a word — worse than absent, because it implies the reader failed to
+  spot it. The footnote still names all four, so the partition is not hidden.
+- **`"nan" not in text` is not an assertion about NaN.** It passes and fails on
+  the word "unanalyzed". A test for "no cell rendered as NaN" has to look at the
+  cells.
+- **Two encodings spent means the third is not available.** Hue = method and
+  hatch = dataset type left the stack with only lightness, which sounds like a
+  constraint and was a gift: the figure needed no new palette entry and so did
+  not block on the ordinal-ramp groundwork it would otherwise have waited for.
+- **A semantic colour scheme has to displace the old one completely, or it
+  reintroduces the collision it was meant to avoid.** With green/red/grey meaning
+  the outcome, tinting the method tick labels in the variant hues put
+  "Octant-Hull" in green and "Spotter" in red an inch below green and red
+  segments — colour meaning outcome inside the bars and identity just outside
+  them. The half-measure was worse than either whole one.
+- **Red and green is the colour-blind pair, so the fix is lightness, not
+  labels.** Monotone L* up the stack (34 / 54 / 73) is what survives greyscale
+  and deuteranopia; the per-segment percentages are belt and braces. Picking the
+  three by eye would have landed on a green and red of near-identical lightness,
+  which is what the first candidate set did (ΔL* 4.6).
+- **Choose the label ink per fill, and the fills get chosen on their merits.**
+  Fixing on white text forces every fill dark, which killed the light grey the
+  stack needed at the top. One luminance test per fill removed the constraint
+  entirely.
+- **An axis in fractions beside labels in percent makes the reader convert.**
+  Adding `%` labels to the segments silently put two units on one figure; the
+  axis had to follow.
+- **Merge a category into the one it belongs to, not the one it is near.**
+  `error` sits next to `fallback` in the count list and next to `wrong` in the
+  stack. It is a failure to answer, so it merges into `failed`; merging it into
+  `wrong` would have reported a crash as a scoring miss. The CSV keeps the split
+  so the merge is a drawing decision rather than a loss.
+- **Sorting a small-multiple has to be a property of the figure, not of the
+  panel.** Ranking each `compare` panel on its own correct rate puts Octant-Hull
+  in a different column per dataset, and the cross-dataset comparison the figure
+  exists for becomes a search. One order, computed over every dataset in the
+  table, is what makes an x position mean the same thing in all three panels.
+- **Two independent encodings need two legends.** Merged into one list,
+  `failed` and `mesh` sit as though they were alternatives on one scale, and
+  nothing tells the reader a bar is one of each. Splitting them and titling each
+  with its channel costs four lines and removes the ambiguity entirely.
+- **When prose comes off a figure, check what it was carrying.** The footnote
+  was the only place saying the empty outlines were uncollected rather than
+  zero. Deleting it silently would have left a ghost bar meaning "scored
+  nothing"; the fact moved into the legend label, which is where a reader
+  actually looks for it.
+- **Sorting a small-multiple has to be a property of the figure, not of the
+  panel.** Ranking each `compare` panel on its own correct rate puts Octant-Hull
+  in a different column per dataset, and the cross-dataset comparison the figure
+  exists for becomes a search. One order, computed over every dataset in the
+  table, is what makes an x position mean the same thing in all three panels.
+- **Two independent encodings need two legends.** Merged into one list,
+  `failed` and `mesh` sit as though they were alternatives on one scale, and
+  nothing tells the reader a bar is one of each.
+- **A legend shows the mark, not a description of it.** "traffic-weighted (not
+  collected)" put a fact about the *data* into the key for the *encoding*. The
+  dashed swatch already says the bars are dashed; why they are empty is caption
+  material. The swatch matching the mark is the invariant worth keeping.
+- **`tight_layout` lays out axes and knows nothing about a figure-level
+  legend.** Moving the legends above the axes needed `rect=` to reserve the band
+  by hand, and the two constants (`LEGEND_TOP`, `AXES_TOP`) had to be tuned
+  against a render — the first pair left a third of the figure blank.
+- **A frameless legend still reserves its border padding.** `frameon=False`
+  hides the box, not the space, and that space was wide enough to make a title
+  look detached from its own first swatch. `borderpad=0, borderaxespad=0`.
+- **`tight_layout(rect=...)` reserves a band for the axes *and its
+  decorations*, so the axes box lands well below the band's top.** To put the
+  bars right under a figure-level legend you set the box directly with
+  `subplots_adjust(top=...)`; the `rect` version left a third of the figure
+  blank and looked like a legend placement bug.
+- **Inline legend titles have to be measured, not offset.** matplotlib puts a
+  legend title above its entries with no option to move it, so the title becomes
+  separate text and the legend anchors to its right — and the gap depends on the
+  rendered width of the word at that figure size. This module draws at two
+  widths, so a hard-coded offset would be right in one and overlapping in the
+  other. Draw once, measure, then shift.
+- **A shared layout constant across two figures is a collision waiting for the
+  one with more furniture.** The comparison grid carries per-panel titles the
+  pooled figure does not, so one `AXES_TOP` put the legend straight through
+  `AS01 · n=399`. Two named bands, and a test pinning that the grid's is the
+  wider of the two.
+- **A placeholder must not invent the numbers it was not given.** Rates arrived
+  without a denominator and without top-3. Back-computing an `n` to make the
+  counts line up would have produced a bolded "best" cell resting on a figure
+  nobody could reproduce; carrying `n = NaN` instead makes `best_in_row` decline
+  on its own, because it cannot form a standard error. Keying the constant on
+  the top-N does the same job for the appendix table.
+- **Gate a placeholder on the absence of the real thing, not on a flag.**
+  `provisional_for` returns `None` the moment the row has a run, so pairing a
+  real `--weighted-run-id` supersedes it automatically and deleting the constant
+  is a cleanup rather than a switch-over. A `--use-placeholder` flag would have
+  been one more thing to remember at exactly the moment it mattered most.
+- **Hatch drawn in the surface colour strikes through a label.** The white
+  hatch cut across white percentages on the weighted bars. A bbox of the
+  segment's own fill behind the text restores the contrast `label_ink` computed
+  for — and the hatch itself had to go sparse and half-transparent anyway, since
+  dense opaque hatching lightened a green enough to read as a *different colour*,
+  which is the one thing an encoding where colour means the outcome may not do.
+- **`hatch.linewidth` is an rcParam, not a Patch property.** At the 1.0 default
+  `//` renders as densely as `///`, so the pattern constant alone could not make
+  the hatch light.
+- **When the caveat comes off the figure, say where it went.** Removing the
+  provisional note leaves a PNG that cannot be told from a real result. The fact
+  survives in three places — the table footnote, the CSV column, the manifest —
+  and `provisional_kinds` stays as the single predicate they all query, with a
+  docstring saying the figure deliberately does not mark it.

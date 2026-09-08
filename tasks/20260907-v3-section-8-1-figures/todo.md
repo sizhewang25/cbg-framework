@@ -93,6 +93,36 @@
 - [x] Verified: pooled correct-band shares equal the target-weighted mean of the three runs' `accuracy_top1` to 5e-5 (the band CSV's rounding)
 - [x] 9 more tests; `configs/cross-as01-as03.yaml` asks for both layouts; README and module docstring rewritten around the two questions
 
+## Phase 0i: dataset-type headline table + outcome bars (2026-09-07)
+- [x] Row model grows a scope level: kind-major, each group led by its aggregate; rows carry a run *set*, so `pending` stays one rule (`n_runs == 0`) across both scopes
+- [x] Aggregate is a target-count micro-average; breakdown rows print `accuracy_topN` **verbatim** — recomputing moves 3 of 36 cells a digit (as01 Spotter 0.389→0.388) and breaks the "cannot disagree with table-accuracy" invariant
+- [x] Counts reconstructed as `round(acc * n)`, pinned as the *unique* integer for that rate, and cross-checked against `overlap_membership.top{1,3}.csv` — delta 0 on all 36 cells
+- [x] `†` on a pooled winner that does not lead every dataset it pools (top-3 Octant-Hull leads 1 of 3); `‡` on a cell pooled over fewer datasets than its row
+- [x] `render_markdown` groups on `row_index` — `groupby(["dataset", ...])` drops null keys, i.e. every aggregate row, silently
+- [x] Single dataset suppresses the aggregate, and its breakdown rows carry the kind themselves (`AS01 MESH`) since an indent needs something to indent under
+- [x] `guard_disjoint_targets` hoisted `figure_error_scatter` → `cross.py` with an `ids_by_run` + caller-supplied `remedy` signature; a table command must not import matplotlib
+- [x] `guard_one_setup` now applies here — the aggregate voids `table-accuracy`'s "no averaging can happen" exemption; `--allow-mixed-setups` overrides
+- [x] Target ids read from `*_seed_distances.parquet` (a `classify` output in the same dir), not `target_labels.csv` (a `build-proximity` one) — no new command dependency
+- [x] Two defects fixed: `cross_dir` leaked the dataset key and forked output on a weighted run; `row_plan` silently dropped a second run for one dataset; `n_reserved_rows` counted every aggregate
+- [x] `accuracy_rows(include_counts=True)` — opt-in, so `table-accuracy`'s published column set is unchanged
+- [x] New `modules/figure_outcome_bars.py` + `plot-outcome-bars`: correct/wrong/fallback/error stacks, hue = method, hatch = dataset type, ghost outlines for the uncollected weighted half
+- [x] Counts and pooling imported from `headline_table`, so figure CSV == table CSV by construction (verified delta 0)
+- [x] `--layout pooled|compare`; `guard_partition` asserts the four segments sum to `n_targets` per bar
+- [x] `test_cross.py` (8, first direct test of the guard), `test_figure_outcome_bars.py` (13), +15 in `test_headline_table.py` — suite 544 → 595
+- [x] `configs/cross-as01-as03.yaml` gains `plot-outcome-bars`; README pipeline 3e/3e2, module table, `_cross/` tree and "paper's own layout" rewritten
+- [x] §8.1 body gets the rendered top-1 table and the figure callout
+- [x] Per review: colour is the **outcome** (green correct / red wrong / grey failed), not the variant; `n_error` folds into `failed` (both are failures to answer) while the CSV keeps the split
+- [x] Fills picked against checks not by eye — monotone lightness L* 34/54/73, worst deuteran/protan dE 16.8, dE 11.8 from the nearest variant hue; label ink chosen per fill by luminance
+- [x] Every segment carries its own percentage to one decimal, y axis switched to percent to match; `MIN_LABEL_SHARE` guards a sliver too thin to hold one
+- [x] Tick labels left neutral — hueing them would put "Octant-Hull" in green and "Spotter" in red directly under green and red segments
+- [x] Bars ordered best-first by pooled correct rate, one order shared across `compare` panels so an x position means the same method everywhere
+- [x] Prose removed (subtitle + footnote); two horizontal untitled legends tight under the title, placed by measurement; pending kinds get a dashed swatch matching their bars
+- [x] `PROVISIONAL_WEIGHTED` — hard-coded top-1 rates from an earlier run so the mesh-vs-weighted layout can be reviewed now; gated on the row having no run, so a real `--weighted-run-id` supersedes it with no flag
+- [x] No denominator invented (n stays NaN → never marked best) and no top-3 invented (appendix weighted row stays reserved)
+- [x] Table marks it `§` with a footnote; figure CSV carries a `provisional` column; manifest gains `provisional_rows`. The PNG itself does **not** mark it — captions must
+- [x] Bars ordered best-first by pooled correct rate, one order shared across `compare` panels so an x position means the same method everywhere
+- [x] Prose removed (subtitle + footnote); two titled legends instead, one per encoding channel; the uncollected campaign names itself in its legend entry
+
 ## Phase 1: Figure D's data step (build first — most load-bearing)
 - [ ] Add `COVARIATES = ("tg_seed_nearest_vp_km", "min_inflation")` and `breakdown_by_covariate(membership, labels, *, weights=None)` to `breakdown.py`
 - [ ] Reuse `confusion.density_bins` for the quantile binning rather than re-deriving edges

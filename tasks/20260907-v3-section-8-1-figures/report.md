@@ -315,3 +315,73 @@ Suite: 553 passing, up 22.
 ## Conclusions
 
 To be filled when the figures land.
+
+
+## The dataset-type headline table, and the bars beside it
+
+§8.1 hands off to a subsection about *dataset types* ("Traffic-weighted targets
+vs MESH targets"), and the table it handed off from was per-AS. Regrouped so the
+type owns the row, led by a target-count micro-average with the breakdown
+beneath, plus `plot-outcome-bars` drawing the same numbers as correct / wrong /
+fallback compositions.
+
+### Verification
+
+| check | result |
+| --- | --- |
+| `pytest scripts/analysis/v3/tests/` | **595 passed** (544 before, +51) |
+| pooled counts vs `overlap_membership.top{1,3}.csv`, 36 cells | **delta 0** |
+| aggregate `n_correct` vs sum of its breakdown rows | **delta 0**, both top-Ns |
+| 18 breakdown cells vs `table-accuracy` | **delta 0** on accuracy and fallback |
+| figure CSV vs table long CSV, 6 methods | **delta 0** on share, count and fallback |
+| micro vs macro, max over methods | **0.0064** (top-1), matching the band figures |
+| weighted cells / bars | all `—` / all ghost outlines |
+
+### The pooled row says what §8.1 needs it to
+
+Top-1 micro over 1,269 targets: Octant-Hull **0.622**, Octant-Spline 0.552, SoI
+0.485, Shortest-Ping 0.476, Spotter 0.427, Vanilla 0.347 (fb 0.216). That
+ranking — Octant-Hull, Octant-Spline, SoI — is exactly the order the draft's
+story line asserts for the mesh campaign, and the 0.136 spread across the top
+three is the quantity it asks to "show". The same order holds at top-3.
+
+### Three things the review caught before they shipped
+
+**Recomputing the breakdown rows would have broken the module's premise.** The
+obvious simplification — one evaluation path, counts everywhere — moves three of
+the thirty-six printed cells by a digit (as01 Spotter 0.389 → 0.388, as02 SoI
+0.366 → 0.367, as02 Vanilla 0.298 → 0.299), so `table-accuracy` and
+`table-headline` would print different numbers for the same measurement. Only
+the pooled row, which has no published rate, recomputes.
+
+**`groupby(["dataset", "kind"])` would have deleted every pooled row.** Aggregate
+rows have `dataset = None` and pandas drops null group keys by default — no
+exception, no warning, just the old table back. The render key is `row_index`.
+
+**The pooled top-3 winner leads one dataset in three.** Octant-Hull takes the
+pooled row at 0.891 having led only as02; as01 goes to Octant-Spline (0.957) and
+as03 to Shortest-Ping and SoI (0.926). A bare bold there is a target-weighting
+artifact stated as a fleet-wide result, so it carries a `†` and a footnote
+naming what it lost. Top-1 is unanimous, which is why this would have shipped
+unnoticed on the body table alone.
+
+### The aggregate row changed which guards apply
+
+`accuracy_table` documents why it skips `guard_one_setup`: "this table puts each
+run on its own row where no such averaging can happen." A pooled row *is* that
+averaging, so the exemption lapsed — `--run-id as01 --run-id as7018_us_test01`
+would have micro-averaged a 134-VP fleet with a 53-VP one, and the target-id
+guard would not have caught it, because those target sets are disjoint. Both
+guards now run, and both are skipped when the aggregate is suppressed.
+
+### Encoding budget, and what it cost the figure
+
+Hue is the method and hatch is the dataset type, which spends both free
+channels. So no stack segment may carry a texture, and the segments separate by
+lightness in neutral ink instead — which also means the figure needs no palette
+entry that does not already exist, and does not block on Phase 0's ramp work.
+Two collisions found by rendering it: a filled `mesh` legend swatch is exactly
+the `fallback` swatch (both `_C_MUTED`), and the `error` swatch is the lightest
+ink step against white, which is a near-invisible box beside a word. The kind
+entries are outline-only and never-occurring segments are dropped from the
+legend, with the footnote still naming the full partition.
