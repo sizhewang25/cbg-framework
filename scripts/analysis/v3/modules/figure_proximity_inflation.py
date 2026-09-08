@@ -211,6 +211,18 @@ MIN_X_KM = 0.1
 #: is what the y axis is for and an axis cropped to the data hides it.
 SOI_FLOOR = 1.0
 
+Y_LINEAR = "linear"
+Y_LOG = "log"
+Y_SCALES: tuple[str, ...] = (Y_LINEAR, Y_LOG)
+
+#: `linear` stays the default so the published §8.1 panels keep the shape they
+#: were read in. `log` exists because inflation is a *ratio* with a hard floor
+#: at 1 and no ceiling, and on real operator data it reaches ~200x: a linear
+#: axis then spends 99% of its height on an empty upper region and packs the
+#: mass every claim is about into the bottom 5%. Both are honest views of the
+#: same column, so the choice is the caller's and it is recorded in the manifest
+#: and the filename rather than being inferred from the data's range — an axis
+#: that silently rescales itself per run makes two panels incomparable.
 DPI = 200
 POINT_SIZE = 13
 POINT_ALPHA = 0.55
@@ -481,7 +493,10 @@ def _margin_band(ax, points: pd.DataFrame) -> None:
     ax.axvline(mid, color=_C_AXIS, linestyle=":", linewidth=1.2, zorder=1)
 
 
-def _draw_panel(ax, points: pd.DataFrame, *, kinds: list[str], y_lim, x_metric: str) -> None:
+def _draw_panel(
+    ax, points: pd.DataFrame, *, kinds: list[str], y_lim, x_metric: str,
+    y_scale: str = Y_LINEAR,
+) -> None:
     """The scatter itself. Shared by both layouts so they cannot drift."""
     column = x_column(x_metric)
     _margin_band(ax, points)
@@ -499,6 +514,13 @@ def _draw_panel(ax, points: pd.DataFrame, *, kinds: list[str], y_lim, x_metric: 
     # `%g` rather than ScalarFormatter, which renders the sub-kilometre decade
     # as a bare "0" — see `figure_error_cdf` for the same fix.
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+    if y_scale == Y_LOG:
+        ax.set_yscale("log")
+        # Same `%g` as the x axis rather than the log default, which prints
+        # these decades as 10^0 / 10^1 / 10^2. The reader is comparing a ratio
+        # against the floor at 1, and "1, 10, 100" is that comparison written
+        # out; an exponent makes them do it.
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
     ax.set_ylim(*y_lim)
     ax.grid(True, which="major", color=_C_GRID, linewidth=0.7, alpha=0.9, zorder=0)
     # A log decade carries eight minor lines, and at full strength they read as
@@ -513,8 +535,23 @@ def _draw_panel(ax, points: pd.DataFrame, *, kinds: list[str], y_lim, x_metric: 
     ax.tick_params(colors=_C_MUTED, labelsize=9)
 
 
+def n_above_cap(points: pd.DataFrame, y_max: float | None) -> int:
+    """Targets the cap puts off-panel.
+
+    Reported rather than assumed harmless. Capping is the one option here that
+    removes observations from view, and this figure's whole subject is a tail —
+    so the count goes in the manifest and the console line, next to the number
+    of targets drawn, instead of leaving a reader to infer that the axis simply
+    ends where the data does.
+    """
+    if y_max is None:
+        return 0
+    return int((points["y_inflation"] > float(y_max)).sum())
+
+
 def _limits(
-    points: pd.DataFrame, x_metric: str
+    points: pd.DataFrame, x_metric: str, *, y_scale: str = Y_LINEAR,
+    y_max: float | None = None,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
     """Axis ranges shared by every panel, so two panels compare by position.
 
@@ -527,13 +564,28 @@ def _limits(
     x = points[x_column(x_metric)]
     y = points["y_inflation"]
     floor = min(SOI_FLOOR, float(y.min()))
-    span = float(y.max()) - floor
+    # An explicit cap is honoured exactly, with none of the headroom the
+    # data-driven bound gets: the caller picked 4 because they want to read
+    # against 4, and quietly drawing to 4.12 would put the gridline they
+    # chose somewhere other than the top of the panel.
+    top = float(y.max()) if y_max is None else float(y_max)
+    x_lim = (max(MIN_X_KM, float(x.min()) * 0.7), float(x.max()) * 1.4)
+    if y_scale == Y_LOG:
+        # Multiplicative margins, because on a log axis the additive ones below
+        # are not merely ugly: `floor - 0.04 * span` is -6.96 once a single
+        # target inflates 200x, and a negative bound is not a coordinate the
+        # transform has. The floor is also clamped positive — inflation is
+        # RTT over a positive slope so it cannot legally be <= 0, but a
+        # degenerate labels file should lose the axis, not the whole figure.
+        safe_floor = floor if floor > 0 else SOI_FLOOR
+        return x_lim, (safe_floor / 1.08, top if y_max is not None else top * 1.12)
+    span = top - floor
     # The floor gets its own margin below it: with `ylim` set *to* it, the
     # `y = 1` rule lands exactly on the bottom spine and disappears into it,
     # leaving the annotation pointing at nothing.
-    return (
-        (max(MIN_X_KM, float(x.min()) * 0.7), float(x.max()) * 1.4),
-        (floor - 0.04 * span, float(y.max()) + 0.03 * span),
+    return x_lim, (
+        floor - 0.04 * span,
+        top if y_max is not None else top + 0.03 * span,
     )
 
 
@@ -547,24 +599,37 @@ def _axis_labels(ax, x_metric: str) -> None:
 
 
 def _marginal(ax, points: pd.DataFrame, *, kinds: list[str], bins, orientation: str,
-              column: str) -> None:
-    """A density-normalised histogram per dataset type.
+              column: str, uniform_bins: bool = True) -> None:
+    """A histogram per dataset type, normalised within its own series.
 
-    Density and not counts: the weighted campaign is the mesh one filtered, so
+    Normalised and not counts: the weighted campaign is the mesh one filtered, so
     it will always carry fewer targets, and a count histogram would answer "how
     many were kept" when the question is "where do the kept ones sit".
+
+    Which normalisation depends on the bins. `density=True` divides by bin
+    *width*, which is right for the equal-width bins the linear axes use and
+    wrong for the log-spaced ones a log y axis needs: there the widest bins are
+    the high-inflation ones, so dividing by width would shrink exactly the tail
+    the log axis was chosen to show. With non-uniform bins each bar is therefore
+    the share of that series' targets falling in it, which is the quantity the
+    eye reads off a histogram anyway.
     """
     for kind in kinds:
         series = points.loc[points["kind"] == kind, column]
         if series.empty:
             continue
         values = np.log10(series) if orientation == "vertical" else series
+        shared = dict(bins=bins, orientation=orientation)
+        if uniform_bins:
+            shared["density"] = True
+        else:
+            shared["weights"] = np.full(len(values), 1.0 / len(values))
         ax.hist(
-            values, bins=bins, density=True, orientation=orientation,
+            values, **shared,
             color=KIND_INK[kind], alpha=0.35, zorder=KIND_Z[kind],
         )
         ax.hist(
-            values, bins=bins, density=True, orientation=orientation,
+            values, **shared,
             histtype="step", color=KIND_INK[kind], linewidth=1.1,
             zorder=KIND_Z[kind] + 2,
         )
@@ -576,10 +641,11 @@ def _marginal(ax, points: pd.DataFrame, *, kinds: list[str], bins, orientation: 
 
 def plot_scatter(
     points: pd.DataFrame, out_path: Path, *, kinds: list[str], pending: list[str],
-    title: str, x_metric: str = CLOSEST,
+    title: str, x_metric: str = CLOSEST, y_scale: str = Y_LINEAR,
+    y_max: float | None = None,
 ) -> Path:
     """Pooled: one joint panel over every dataset, with both marginals."""
-    x_lim, y_lim = _limits(points, x_metric)
+    x_lim, y_lim = _limits(points, x_metric, y_scale=y_scale, y_max=y_max)
     fig = plt.figure(
         figsize=(PANEL_WIDTH_INCHES, PANEL_HEIGHT_INCHES), dpi=DPI, facecolor=_SURFACE
     )
@@ -593,7 +659,9 @@ def plot_scatter(
     ax_right = fig.add_subplot(gs[1, 1], sharey=ax)
     ax.set_facecolor(_SURFACE)
 
-    _draw_panel(ax, points, kinds=kinds, y_lim=y_lim, x_metric=x_metric)
+    _draw_panel(
+        ax, points, kinds=kinds, y_lim=y_lim, x_metric=x_metric, y_scale=y_scale
+    )
     ax.set_xlim(*x_lim)
     _axis_labels(ax, x_metric)
 
@@ -601,9 +669,18 @@ def plot_scatter(
     _marginal(ax_top, points, kinds=kinds, bins=x_bins, orientation="vertical",
               column=x_column(x_metric))
     ax_top.set_xlim(np.log10(x_lim[0]), np.log10(x_lim[1]))
-    y_bins = np.linspace(y_lim[0], y_lim[1], MARGINAL_BINS)
+    # `ax_right` shares the main y axis, so its bins live in data coordinates
+    # and have to follow whatever scale that axis is on — log-spaced under
+    # `Y_LOG`, or the histogram would put 26 equal-width bins on a log axis and
+    # leave every one above the first decade unreadably thin.
+    log_y = y_scale == Y_LOG
+    y_bins = (
+        np.logspace(np.log10(y_lim[0]), np.log10(y_lim[1]), MARGINAL_BINS)
+        if log_y
+        else np.linspace(y_lim[0], y_lim[1], MARGINAL_BINS)
+    )
     _marginal(ax_right, points, kinds=kinds, bins=y_bins, orientation="horizontal",
-              column="y_inflation")
+              column="y_inflation", uniform_bins=not log_y)
     ax_right.set_ylim(*y_lim)
 
     legend = ax.legend(
@@ -625,11 +702,12 @@ def plot_scatter(
 
 def plot_compare(
     points: pd.DataFrame, out_path: Path, *, kinds: list[str], pending: list[str],
-    title: str, x_metric: str = CLOSEST,
+    title: str, x_metric: str = CLOSEST, y_scale: str = Y_LINEAR,
+    y_max: float | None = None,
 ) -> Path:
     """One panel per dataset, both axes shared, so a cloud's position compares."""
     datasets = sorted(points["dataset"].unique())
-    x_lim, y_lim = _limits(points, x_metric)
+    x_lim, y_lim = _limits(points, x_metric, y_scale=y_scale, y_max=y_max)
     fig, axes = plt.subplots(
         1, len(datasets),
         figsize=(PANEL_WIDTH_INCHES * len(datasets) * 0.56, PANEL_HEIGHT_INCHES * 0.86),
@@ -639,7 +717,9 @@ def plot_compare(
     for ax, dataset in zip(axes, datasets):
         panel = points[points["dataset"] == dataset]
         ax.set_facecolor(_SURFACE)
-        _draw_panel(ax, panel, kinds=kinds, y_lim=y_lim, x_metric=x_metric)
+        _draw_panel(
+            ax, panel, kinds=kinds, y_lim=y_lim, x_metric=x_metric, y_scale=y_scale
+        )
         ax.set_xlim(*x_lim)
         ax.set_title(
             f"{dataset.upper()}  ·  n={len(panel):,}", fontsize=10, color=_C_INK, pad=8
@@ -752,6 +832,22 @@ def register(app: typer.Typer) -> None:
             help=f"{POOLED} (one joint panel with marginals) or {COMPARE} (one "
             f"panel per dataset). Repeatable; default {POOLED}.",
         ),
+        y_scale: str = typer.Option(
+            Y_LINEAR,
+            "--y-scale",
+            help=f"Inflation axis: {Y_LINEAR} (default) or {Y_LOG}. Use {Y_LOG} "
+            f"when the tail reaches tens or hundreds of x — a linear axis then "
+            f"packs the bulk into the bottom few percent. {Y_LOG} adds `.y{Y_LOG}` "
+            f"to the filename so both views can coexist.",
+        ),
+        y_max: float = typer.Option(
+            None,
+            "--y-max",
+            help="Cap the inflation axis at this value instead of the data's own "
+            "maximum, to zoom on the bulk. Targets above it go off-panel and are "
+            "counted in the manifest and the console line. Adds `.ymax<v>` to the "
+            "filename.",
+        ),
         grid: str = typer.Option(DEFAULT_GRID, "--grid", help=GRID_HELP),
         resolution: list[int] = typer.Option(
             [], "--resolution", "-r", help=RESOLUTION_HELP
@@ -789,6 +885,16 @@ def register(app: typer.Typer) -> None:
                 f"unknown --x-metric {unknown_metric}; pick from {list(X_METRICS)}"
             )
         metrics = tuple(dict.fromkeys(x_metric)) or (CLOSEST,)
+        if y_scale not in Y_SCALES:
+            raise typer.BadParameter(
+                f"unknown --y-scale {y_scale!r}; pick from {list(Y_SCALES)}"
+            )
+        if y_max is not None and y_max <= SOI_FLOOR:
+            raise typer.BadParameter(
+                f"--y-max {y_max} is at or below the speed-of-internet floor "
+                f"({SOI_FLOOR}); inflation cannot go below it, so the panel would "
+                "be empty. Pick a value above 1."
+            )
 
         g, resolutions = resolve_cli_grid(grid, resolution, sweep=False)
         mesh_runs = {rid: resolve_run(rid, outputs_root) for rid in run_id}
@@ -810,6 +916,12 @@ def register(app: typer.Typer) -> None:
             # directory the moment a weighted run is passed.
             out_dir = cross_dir(analysis_root, sorted(mesh_runs), kind=CROSS_KIND)
             slug = grid_slug(g.name, res)
+            # Render-time, so it is set here rather than in `build`: the CSVs
+            # are scale-free and one manifest covers every PNG of this grid.
+            manifest["y_scale"] = y_scale
+            manifest["y_max"] = y_max
+            clipped = n_above_cap(points, y_max)
+            manifest["n_targets_above_y_max"] = clipped
             stem = f"proximity_inflation.{slug}"
             # One points and one summary CSV per grid, not per metric: both x
             # columns are in every row, so a second copy would only differ in
@@ -830,16 +942,28 @@ def register(app: typer.Typer) -> None:
                         if name == POOLED
                         else "proximity_inflation_by_dataset"
                     )
-                    png = out_dir / f"{base}.{spec['stem']}.{slug}.png"
+                    # The default keeps its historical name; only the opt-in
+                    # scale is marked, so `--y-scale log` adds a figure beside
+                    # the published one instead of overwriting it with a
+                    # differently-shaped panel under the same filename.
+                    y_tag = "" if y_scale == Y_LINEAR else f".y{y_scale}"
+                    # `.` is this scheme's field separator, so a fractional cap
+                    # would read as one: 4.5 -> `ymax4p5`.
+                    if y_max is not None:
+                        y_tag += ".ymax" + f"{y_max:g}".replace(".", "p")
+                    png = out_dir / f"{base}.{spec['stem']}{y_tag}.{slug}.png"
                     renderer = plot_scatter if name == POOLED else plot_compare
                     written.append(
                         renderer(
                             points, png, kinds=kinds, pending=pending,
                             title=spec["title"], x_metric=metric,
+                            y_scale=y_scale, y_max=y_max,
                         )
                     )
             typer.echo(
                 f"{len(points):,} targets over {len(mesh_runs)} dataset(s) at {slug} "
-                f"· x {', '.join(metrics)} · layouts {', '.join(layouts)} -> "
+                f"· x {', '.join(metrics)} · y {y_scale}"
+                + (f" capped at {y_max:g} ({clipped} off-panel)" if y_max else "")
+                + f" · layouts {', '.join(layouts)} -> "
                 f"{', '.join(p.name for p in written)}"
             )

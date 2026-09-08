@@ -318,6 +318,69 @@ def test_the_y_axis_always_includes_the_soi_floor_and_leaves_it_off_the_spine(tm
     assert top > points["y_inflation"].max()
 
 
+def test_a_log_y_axis_keeps_the_floor_positive_where_a_linear_one_goes_negative(tmp_path):
+    """The reason `--y-scale log` exists. `floor - 0.04 * span` is fine while the
+    tail is small and lands at -7 once one target inflates 200x, which is not a
+    coordinate a log transform has."""
+    labels = _labels()
+    labels.loc[0, "min_inflation"] = 200.0
+    runs = {"as01-260728-260802": _write(tmp_path, "as01-260728-260802", labels)}
+    points, _ = P.load_points(_plan(runs), grid="h3", resolution=4)
+
+    _, (linear_bottom, _) = P._limits(points, P.CLOSEST, y_scale=P.Y_LINEAR)
+    _, (log_bottom, log_top) = P._limits(points, P.CLOSEST, y_scale=P.Y_LOG)
+
+    assert linear_bottom < 0
+    assert log_bottom > 0
+    assert log_bottom < P.SOI_FLOOR < log_top
+
+
+def test_an_explicit_cap_is_the_exact_upper_bound_on_either_scale(tmp_path):
+    """The caller picked the number to read against it, so the data-driven
+    headroom is not added on top of it."""
+    points, _ = _points(tmp_path)
+    for scale in P.Y_SCALES:
+        _, (bottom, top) = P._limits(points, P.CLOSEST, y_scale=scale, y_max=4.0)
+        assert top == 4.0
+        assert bottom < P.SOI_FLOOR
+
+
+def test_the_cap_counts_what_it_puts_off_panel(tmp_path):
+    """Capping is the one option that removes observations from view, and this
+    figure's subject is a tail — so the loss is reported, not assumed harmless."""
+    labels = _labels()
+    inflations = np.full(len(labels), 1.5)
+    inflations[-2:] = [90.0, 200.0]
+    labels["min_inflation"] = inflations
+    runs = {"as01-260728-260802": _write(tmp_path, "as01-260728-260802", labels)}
+    points, _ = P.load_points(_plan(runs), grid="h3", resolution=4)
+
+    assert P.n_above_cap(points, None) == 0
+    assert P.n_above_cap(points, 4.0) == 2
+    assert P.n_above_cap(points, 1000.0) == 0
+
+
+def test_the_log_marginal_bins_follow_the_axis_it_shares(tmp_path):
+    """`ax_right` shares the main y axis, so equal-width bins on a log scale
+    would leave every bin above the first decade unreadably thin."""
+    from scripts.analysis.v3.modules.diagram.common.draw import plt
+
+    points, _ = _points(tmp_path)
+    fig, ax = plt.subplots()
+    # Non-uniform bins take the share-per-bin path; density would divide by
+    # width and shrink exactly the tail the log axis was chosen to show.
+    P._marginal(
+        ax, points, kinds=[H.MESH], bins=np.logspace(0, 2, 8),
+        orientation="horizontal", column="y_inflation", uniform_bins=False,
+    )
+    from matplotlib.patches import Rectangle
+
+    heights = [p.get_width() for p in ax.patches if isinstance(p, Rectangle)]
+    assert heights, "no bars drawn"
+    assert sum(heights) == pytest.approx(1.0, abs=1e-6)
+    plt.close(fig)
+
+
 def test_each_metric_gets_its_own_x_range(tmp_path):
     """`closest` spans two decades and `sping` nearly four; one shared range
     would squeeze the first into a stripe."""
