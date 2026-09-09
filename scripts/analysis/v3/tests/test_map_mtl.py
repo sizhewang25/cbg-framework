@@ -688,3 +688,141 @@ def test_the_baseline_reports_no_kept_constraints():
         voronoi=[], vps=_vps(),
     )
     assert all(t["n_kept"] == 0 and t["rings"] == [] for t in pl["targets"])
+
+
+# ---- the Shortest-Ping classification view ----------------------------------
+
+
+def _run_harness(html_path):
+    """Execute the viewer over a rendered page, or skip when node is absent."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available")
+    harness = Path(__file__).with_name("test_map_mtl_viewer.js")
+    proc = subprocess.run(
+        [node, str(harness), str(html_path)], capture_output=True, text=True, timeout=120
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _baseline_payload(space):
+    """A `shortest_ping` payload: scored, but with no folds and no regions.
+
+    Mirrors what `build_for_run` passes for the baseline — `folds=None`,
+    `regions={}` — which is the whole of the difference on the Python side.
+    """
+    return build_payload(
+        _Run(), space, SHORTEST_PING, scores=_scores(space), labels=_labels(space),
+        edges=_edges(space), crossing=np.zeros((space.n_seeds, space.n_seeds), dtype=int),
+        rings=seed_rings(space.seeds), voronoi=conus_voronoi_rings(space.seeds),
+        vps=_vps(),
+    )
+
+
+def test_is_baseline_is_set_only_for_the_shortest_ping_method():
+    """The flag is a statement about the *method*, decided on its name.
+
+    Sniffing it from the data instead — "no target produced a region" — would
+    render an ordinary CBG run that happened to fail everywhere as the
+    baseline, hiding the very controls that would show why it failed.
+    """
+    space = _space()
+    assert _baseline_payload(space)["is_baseline"] is True
+    assert _payload(space)["is_baseline"] is False
+
+
+def test_the_baseline_heading_does_not_claim_a_multilateration_stage():
+    space = _space()
+    assert "Classification map" in render_html(_baseline_payload(space))
+    assert "MTL map" in render_html(_payload(space))
+
+
+def test_the_baseline_view_hides_what_the_method_cannot_have(tmp_path):
+    """The four constraint controls and both `failed` filters come off.
+
+    Shortest-Ping emits no LTD constraint and no region, and `io.solved_mask`
+    reads its all-`BASELINE` frame as wholly solved, so `failed` is not a
+    verdict it can reach. Leaving those affordances on the page invites a
+    reader to conclude the layers are empty rather than inapplicable.
+    """
+    space = _space()
+    out = tmp_path / "baseline.html"
+    out.write_text(render_html(_baseline_payload(space)), encoding="utf-8")
+    report = _run_harness(out)
+
+    assert sorted(report["hiddenControls"]) == ["keptOnly", "maxR", "showRegion", "showRings"]
+    assert report["statusOptions"] == ["all", "correct", "wrong"]
+
+    layers = " | ".join(report["allLayers"])
+    # The prediction stands in for the shortest-ping VP: same coordinate, so
+    # drawing both would stack two marks on one point.
+    assert "shortest-ping VP" not in report["layers"], report["layers"]
+    assert "prediction · shortest-ping VP" in layers, layers
+    for still_there in ("Voronoi cells", "seed regions", "top-1 seed",
+                        "measured VPs", "latent VPs", "true target"):
+        assert still_there in layers, f"{still_there!r} missing from {layers!r}"
+    for gone in ("LTD disks", "outer bounds", "feasible region",
+                 "dropped by inclusion filter"):
+        assert gone not in layers, f"{gone!r} should not be drawn: {layers!r}"
+
+    assert report["anyRings"] is False
+    assert report["popups"] == report["hovers"] > 0
+
+
+def test_the_baseline_prediction_panel_carries_the_vp_facts(tmp_path):
+    """One mark, so one panel has to answer for both.
+
+    The inflation shown is that VP's own, not the target's `min_inflation`,
+    which is a minimum over every measured VP and need not be attained here.
+    """
+    space = _space()
+    out = tmp_path / "baseline.html"
+    out.write_text(render_html(_baseline_payload(space)), encoding="utf-8")
+    panel = _run_harness(out)["panels"]["pred"]
+
+    assert "Prediction · shortest-ping VP" in panel, panel
+    for row in ("shortest-ping VP:", "RTT:", "RTT inflation at this VP:",
+                "error distance:", "seeds crossed:", "margin"):
+        assert row in panel, f"{row!r} missing from {panel!r}"
+    # The VP's own coordinate is the prediction, so a second `coords` row
+    # repeating it would be noise.
+    assert panel.count("coords:") == 1, panel
+
+    out_cbg = tmp_path / "cbg.html"
+    out_cbg.write_text(render_html(_payload(space)), encoding="utf-8")
+    cbg_panel = _run_harness(out_cbg)["panels"]["pred"]
+    assert "shortest-ping VP" not in cbg_panel, cbg_panel
+    assert "error distance:" in cbg_panel
+
+
+def test_the_cbg_view_keeps_every_control(tmp_path):
+    """The reduced shell is the baseline's alone; nothing else may lose a switch."""
+    space = _space()
+    out = tmp_path / "cbg.html"
+    out.write_text(render_html(_payload(space)), encoding="utf-8")
+    report = _run_harness(out)
+    assert report["hiddenControls"] == []
+    assert report["statusOptions"] == ["all", "fail", "correct", "wrong", "failed"]
+
+
+def test_the_two_inflation_rows_are_named_apart(tmp_path):
+    """A VP's own ratio and the target's minimum are different quantities.
+
+    `min_inflation` is a minimum over every measured VP, so it is a statement
+    about the target's best available path; `obs[2]` is one VP's. Labelling
+    both "min-RTT inflation" invited reading a single VP's number as the
+    target's routing statistic — and they diverge sharply at the shortest-ping
+    VP, which is near-colocated often enough for its ratio to run into the
+    hundreds while the target's minimum sits near 1.5.
+    """
+    space = _space()
+    out = tmp_path / "cbg.html"
+    out.write_text(render_html(_payload(space)), encoding="utf-8")
+    panels = _run_harness(out)["panels"]
+    assert "min-RTT inflation:" in panels["target"]
+    assert "RTT inflation at this VP:" in panels["vp"]
+    assert "min-RTT inflation:" not in panels["vp"], panels["vp"]

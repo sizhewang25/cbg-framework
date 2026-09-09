@@ -1932,6 +1932,43 @@ say the disk was dropped.
 Restyle rather than redraw: the traces are allocated once per draw and only
 their coordinates change, which keeps `Plotly.react` off the hover path.
 
+### Shortest-Ping gets a reduced shell
+
+The baseline is a classification method with no multilateration stage, and
+rendering it as a CBG map with everything switched off was misleading: four
+controls that did nothing, a Status filter offering a verdict it cannot reach,
+and a meta line reading `LTD constraints 0/0 kept by the inclusion filter, 0
+drawn · region=none`. Two facts drive what the page drops.
+
+**`failed` is structurally impossible.** `classify.score_shortest_ping` stamps
+`status="BASELINE"` unconditionally, and `io.solved_mask` reads an all-`BASELINE`
+frame as wholly solved, so `_status_of` can only return `correct`/`wrong`. The
+`failed` and `wrong + failed` options come off the Status filter — the first
+would always be empty, the second is `wrong` under another name.
+
+**The prediction *is* the shortest-ping VP's coordinate**, on 399/399 as01
+targets and 78/78 as7018 ones. Drawing both the blue VP dot and the verdict
+triangle stacks two marks on one point and lets Plotly decide which the hover
+reaches, so on this map the triangle stands for both and its panel carries the
+VP's identity, RTT and inflation alongside the error and the seeds crossed.
+
+`showRings`, `keptOnly`, `showRegion` and `maxR` are hidden. Hidden means
+`display: none` **plus** `disabled` — never removed from the DOM: all seven
+checkbox handles are dereferenced at load and re-read on every draw, so deleting
+one throws and blanks the page, and the node harness's `el()` auto-vivifies
+missing elements, so it would not catch that. Disabling is also what makes the
+state assertable and keeps the control off the tab order.
+
+The switch is `data.is_baseline`, decided in Python as `method == SHORTEST_PING`.
+Deliberately the method name and not the payload's shape: a CBG run that
+happened to produce no region anywhere would otherwise render as the baseline,
+hiding the controls that would show why it produced nothing.
+
+Everything that is a *classification* fact rather than an MTL one stays — the
+Voronoi partition, the seed regions and their top-1/2/3 ramp, the margin circle,
+the measured and latent VPs, the truth star, and the error connector, which for
+this method is exactly "how wrong the baseline's answer is in kilometres" (§8.1).
+
 ## Accuracy vs cost
 
 `plot-pareto` joins `topn_accuracy.csv` to the per-target cost the benchmark

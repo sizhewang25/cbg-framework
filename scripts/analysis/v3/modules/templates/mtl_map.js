@@ -5,6 +5,11 @@
   const seeds = data.seeds || [];
   const voronoiCells = data.voronoi || [];
   const isAnnulus = data.mtl_kind === "annulus";
+  // Shortest-Ping emits no LTD constraint and no feasible region, and its
+  // prediction *is* the shortest-ping VP's own coordinate. Set in Python off
+  // the method name rather than sniffed from the data here, so a CBG run that
+  // happened to produce nothing is not mistaken for the baseline.
+  const isBaseline = data.is_baseline === true;
 
   const statusSel = document.getElementById("status");
   const pctSel = document.getElementById("pct");
@@ -144,6 +149,36 @@
     return -1;
   }
 
+  // ---- shape the control bar to what the method can actually have ----
+  //
+  // The control is hidden *and* disabled, never removed: all seven checkbox
+  // handles are dereferenced at load and re-read on every draw, so deleting one
+  // from the shell throws and blanks the page. Disabling is also what makes the
+  // state observable to a test and stops the control being reached by keyboard.
+  function hideControl(id) {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.disabled = true;
+    const label = node.closest ? node.closest("label") : null;
+    (label || node).style.display = "none";
+  }
+  function dropStatusOption(value) {
+    const opt = statusSel.querySelector
+      ? statusSel.querySelector(`option[value="${value}"]`)
+      : null;
+    if (opt && opt.remove) opt.remove();
+  }
+  if (isBaseline) {
+    for (const id of ["showRings", "keptOnly", "showRegion", "maxR"]) hideControl(id);
+    // `failed` means a fallback, and Shortest-Ping has no pipeline to fall back
+    // in: `io.solved_mask` reads its all-`BASELINE` frame as wholly solved, so
+    // the filter would always come back empty and `wrong + failed` is just
+    // `wrong` under another name.
+    for (const value of ["fail", "failed"]) dropStatusOption(value);
+    const hint = document.getElementById("hoverHint");
+    if (hint) hint.textContent = "· hover any marker for detail";
+  }
+
   // ---- target list ----
   let currentList = data.targets;
   function activeList() {
@@ -243,6 +278,23 @@
       ["coords", t.pred ? `${t.pred[0]}, ${t.pred[1]}` : "—"],
     ];
   }
+  // Shortest-Ping's estimate is the shortest-ping VP's own coordinate, so the
+  // triangle and that VP are one mark and report as one panel. The inflation
+  // here is this VP's, not `t.min_inflation` — that is a minimum over every
+  // measured VP and belongs to the target's panel.
+  function baselinePredPopupRows(t) {
+    const vpId = t.sping_vp_id;
+    const meta = vps[vpId] || [];
+    const obs = (t.obs || []).find((o) => o[0] === vpId);
+    return [
+      ["shortest-ping VP", `<b>${esc(vpId || "—")}</b>`],
+      ["coords", meta.length ? `${meta[0]}, ${meta[1]}` : "—"],
+      ["asn", esc(meta[2] || "—")],
+      ["country", esc(meta[3] || "—")],
+      ["RTT", obs ? num(obs[1], 2, "ms") : "—"],
+      ["RTT inflation at this VP", obs ? num(obs[2], 2, "×") : "—"],
+    ].concat(predPopupRows(t).filter(([k]) => k !== "coords"));
+  }
   function vpPopupRows(vpId, t, obs) {
     const meta = vps[vpId] || [];
     const ring = (t.rings || []).find((r) => r[0] === vpId);
@@ -251,16 +303,24 @@
       : (ring[3] === 1
           ? `kept · upper ${ring[1].toFixed(0)} km` + (ring[2] > 0 ? ` · inner ${ring[2].toFixed(0)} km` : "")
           : `dropped by the inclusion filter · upper ${ring[1].toFixed(0)} km`);
-    return [
+    const rows = [
       ["vp", `<b>${esc(vpId)}</b>`],
       ["coords", meta.length ? `${meta[0]}, ${meta[1]}` : "—"],
       ["asn", esc(meta[2] || "—")],
       ["country", esc(meta[3] || "—")],
       ["RTT", obs ? num(obs[1], 2, "ms") : "— (latent: no observation for this target)"],
-      ["shortest_ping", `<b>${vpId === t.sping_vp_id}</b>`],
-      ["min-RTT inflation", obs ? num(obs[2], 2, "×") : "—"],
-      ["constraint", constraint],
+      // This VP's own ratio. `min-RTT inflation` is the minimum over every
+      // measured VP and belongs to the target's panel; naming both the same
+      // invited reading a per-VP number as the target's routing statistic.
+      ["RTT inflation at this VP", obs ? num(obs[2], 2, "×") : "—"],
     ];
+    // On the baseline map the shortest-ping VP is drawn as the prediction and
+    // is not in this bucket at all, so both of these would be constant.
+    if (!isBaseline) {
+      rows.splice(5, 0, ["shortest_ping", `<b>${vpId === t.sping_vp_id ? "yes" : "no"}</b>`]);
+      rows.push(["constraint", constraint]);
+    }
+    return rows;
   }
 
   // ---- trace builders ----
@@ -469,8 +529,11 @@
         marker: { size: 7, color: VP_MEASURED, line: { width: 0.8, color: "white" } },
         name: `measured VPs (${mLat.length})` });
     }
-    if (spCoord) {
-      // Same click popup as every other VP; only the marker colour differs.
+    // On the baseline the prediction sits on this exact coordinate — it *is*
+    // this VP — so drawing both stacks two marks on one point and lets Plotly
+    // decide which one the hover reaches. The triangle stands for both there.
+    if (spCoord && !isBaseline) {
+      // Same panel as every other VP; only the marker colour differs.
       markKind[traces.length] = "vp";
       traces.push({ type: "scattergeo", mode: "markers", lat: [spCoord[0]], lon: [spCoord[1]],
         customdata: [t.sping_vp_id], hoverinfo: "none",
@@ -493,7 +556,8 @@
         marker: { size: 12, symbol: "triangle-up",
                   color: t.status === "correct" ? OK_GREEN : BAD_RED,
                   line: { color: "white", width: 1.4 } },
-        hoverinfo: "none", name: "prediction" });
+        hoverinfo: "none",
+        name: isBaseline ? "prediction · shortest-ping VP" : "prediction" });
     }
 
     const layout = {
@@ -521,9 +585,11 @@
       ` &nbsp;|&nbsp; VP proximity=<b>${esc(t.proximity || "—")}</b>` +
       ` &nbsp;|&nbsp; min-RTT infl=<b>${num(t.min_inflation, 2, "×")}</b><br>` +
       `measured VPs ${t.n_measured}/${t.n_total} (${pct}%) · ` +
-      `LTD constraints ${t.n_kept}/${(t.rings || []).length} kept by the inclusion ` +
-      `filter, ${shown} drawn${dropped ? `, ${dropped} dropped` : ""} · ` +
-      `region=${t.region ? t.region.kind : "none"} · ` +
+      (isBaseline
+        ? ""
+        : `LTD constraints ${t.n_kept}/${(t.rings || []).length} kept by the inclusion ` +
+          `filter, ${shown} drawn${dropped ? `, ${dropped} dropped` : ""} · ` +
+          `region=${t.region ? t.region.kind : "none"} · `) +
       `top-3 seeds ${(t.top_seeds || []).map((s) => "#" + s).join(", ") || "—"} · ` +
       `rank ${tIdx + 1}/${currentList.length} by error` +
       (pctSel.value !== "" ? ` (p${pctSel.value} by error, solved only)` : "") + hiddenNote;
@@ -560,7 +626,14 @@
       if (!pt) return;
       const kind = markKind[pt.curveNumber];
       if (kind === "target") { showPopup(ev, `Target ${t.target_id}`, targetPopupRows(t)); return; }
-      if (kind === "pred") { showPopup(ev, "Prediction", predPopupRows(t)); return; }
+      if (kind === "pred") {
+        showPopup(
+          ev,
+          isBaseline ? "Prediction · shortest-ping VP" : "Prediction",
+          isBaseline ? baselinePredPopupRows(t) : predPopupRows(t),
+        );
+        return;
+      }
       if (kind !== "vp") return;
 
       const vpId = pt.customdata;

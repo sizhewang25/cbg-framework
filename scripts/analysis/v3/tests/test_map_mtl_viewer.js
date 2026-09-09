@@ -27,19 +27,38 @@ const js = fs.readFileSync(jsPath, "utf8");
 const checkedIds = new Set(
   [...html.matchAll(/id="([A-Za-z0-9_]+)"[^>]*checked/g)].map((m) => m[1])
 );
+// Status options come out of the shell too: the viewer removes the ones a
+// constraint-free method cannot produce, and the sweep below must follow it
+// rather than assert a fixed vocabulary.
+const statusOptions = [
+  ...(html.match(/<select id="status">[\s\S]*?<\/select>/) || [""])[0]
+    .matchAll(/<option value="([^"]*)"/g),
+].map((m) => m[1]);
+
 const store = {};
 function el(id) {
   if (store[id]) return store[id];
-  store[id] = {
-    id, value: "", checked: checkedIds.has(id), innerHTML: "", textContent: "",
+  const node = {
+    id, value: "", checked: checkedIds.has(id), disabled: false,
+    innerHTML: "", textContent: "",
     style: {}, options: [], firstChild: { nodeValue: "" },
     appendChild(o) { this.options.push(o); },
     addEventListener() {},
-    querySelector() { return { addEventListener() {} }; },
+    // The viewer walks input -> enclosing <label> to hide a control; the stub
+    // returns the input itself so `style.display` still lands somewhere real.
+    closest() { return node; },
+    querySelector(sel) {
+      const m = /option\[value="([^"]*)"\]/.exec(sel);
+      if (!m) return { addEventListener() {} };
+      if (!statusOptions.includes(m[1])) return null;
+      return { remove() { removedStatusOptions.add(m[1]); } };
+    },
     removeAllListeners() {}, on() {},
   };
-  return store[id];
+  store[id] = node;
+  return node;
 }
+const removedStatusOptions = new Set();
 el("data").textContent = payload;
 for (const [, id, v] of html.matchAll(
   /<select id="([A-Za-z0-9_]+)"[\s\S]*?<option value="([^"]*)"[^>]*selected/g
@@ -170,13 +189,18 @@ for (const proj of ["albers usa", "natural earth", "orthographic", "equirectangu
 }
 el("proj").value = "albers usa";
 
-const layers = ["showVoronoi", "showSeeds", "showMargin", "showRings", "keptOnly",
-                "showRegion", "showLatent"];
+// A control the viewer disabled is one the method cannot use; toggling it
+// would assert a layer that is not supposed to exist.
+const allLayerIds = ["showVoronoi", "showSeeds", "showMargin", "showRings", "keptOnly",
+                     "showRegion", "showLatent"];
+const hiddenControls = [...allLayerIds, "maxR"].filter((id) => el(id).disabled);
+const layers = allLayerIds.filter((id) => !el(id).disabled);
 for (const id of layers) el(id).checked = false;
 api.redraw();
 for (const id of layers) { el(id).checked = true; api.redraw(); }
 
-for (const v of ["all", "fail", "correct", "wrong", "failed"]) {
+const liveStatusOptions = statusOptions.filter((v) => !removedStatusOptions.has(v));
+for (const v of liveStatusOptions) {
   statusSel.value = v;
   api.repopulate();
   api.redraw();
@@ -222,6 +246,7 @@ let hovers = 0;
 let popups = 0;
 let highlighted = 0;
 const kindsSeen = new Set();
+const panels = {};
 const drawnHighlights = () => lastTraces.filter(
   (t) => HIGHLIGHT_NAMES.has(t.name) && t.lat && t.lat.length > 3
 ).length;
@@ -248,6 +273,9 @@ for (const [curve, kind] of Object.entries(api.markKind())) {
     }
     popups++;
     kindsSeen.add(kind);
+    // Keep one rendered panel per kind so the caller can assert on what a
+    // hover actually says, not merely that something was said.
+    if (!panels[kind]) panels[kind] = el("popup").innerHTML;
     if (kind === "vp" && drawnHighlights()) highlighted++;
 
     api.dispatchUnhover();
@@ -270,6 +298,7 @@ if (anyRings && highlighted === 0) {
 
 console.log(JSON.stringify({
   targets: nOpts, draws: reactCalls, hovers, popups, highlighted, anyRings,
+  hiddenControls, statusOptions: liveStatusOptions, panels,
   percentileErrors: errs,
   tooltipTraces: [...tooltipTraces],
   // `hoverinfo: "none"` keeps hover events flowing; `"skip"` would not.

@@ -548,6 +548,12 @@ def build_payload(
 
     # The Shortest-Ping baseline has no `targets.parquet`, so it contributes
     # neither constraints nor a region; the caller passes empty frames for it.
+    #
+    # The viewer needs to know that as a *fact about the method* rather than
+    # infer it from the data: an ordinary CBG run whose every target happened to
+    # produce no region would otherwise be rendered as a baseline. Deciding it
+    # here keeps the method name in the one module that owns the constant.
+    is_baseline = method == SHORTEST_PING
     if folds is None:
         folds = pd.DataFrame(columns=["target_id", "ltd_predictions", "mtl_participants"])
     regions = regions or {}
@@ -685,6 +691,7 @@ def build_payload(
         "resolution": int(seeds["grid_resolution"].iloc[0]),
         "earth_radius_km": EARTH_RADIUS_KM,
         "mtl_kind": mtl_kind,
+        "is_baseline": is_baseline,
         "n_seeds": int(len(seeds)),
         "vps": {
             str(r.vp_id): [
@@ -725,7 +732,10 @@ def render_html(payload: dict[str, Any]) -> str:
     early, and `allow_nan=False` makes a stray NaN fail here rather than produce
     JSON the browser silently rejects.
     """
-    title = f"{payload['run_id']} · {payload['method']}"
+    # "MTL map" is a misnomer for a method with no multilateration stage, so the
+    # heading is built here in full rather than half-prefixed in the shell.
+    kind = "Classification map" if payload["is_baseline"] else "MTL map"
+    title = f"{kind} — {payload['run_id']} · {payload['method']}"
     html = _HTML_TEMPLATE_PATH.read_text(encoding="utf-8")
     js = _JS_TEMPLATE_PATH.read_text(encoding="utf-8")
     html = html.replace("__SCRIPT__", js).replace("__TITLE__", title)
