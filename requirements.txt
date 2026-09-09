@@ -1,3 +1,6 @@
+# Generated from pyproject.toml by scripts/utils/sync_requirements.py -- do not edit.
+# Poetry is the source of truth; run `python -m scripts.utils.sync_requirements`
+# after changing [project].dependencies.
 numpy>=1.26.4,<2.0.0
 pandas>=2.2.3,<3.0.0
 pyarrow>=16.0.0

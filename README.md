@@ -28,6 +28,7 @@ Our code performs measurements on RIPE Atlas, so be sure to have an account if y
   - [Clone the repository](#clone-the-repository)
   - [Installer](#installer)
   - [Install source files](#install-source-files)
+  - [Install with pip](#install-with-pip)
   - [Clickhouse](#clickhouse)
   - [Settings](#settings)
   - [Further notice](#further-notice)
@@ -38,8 +39,8 @@ Our code performs measurements on RIPE Atlas, so be sure to have an account if y
 
 ### [Requirements](#requirements)
 
-- [Python3.9](https://www.python.org/downloads/) (or above)
-- [Poetry](https://python-poetry.org/docs/)
+- [Python](https://www.python.org/downloads/) >=3.11,<3.13 (tested on 3.12)
+- [Poetry](https://python-poetry.org/docs/) (optional -- see [pip](#install-with-pip))
 - [Docker](https://docs.docker.com/engine/install/)
 
 
@@ -76,6 +77,28 @@ poetry shell
 poetry lock
 poetry install
 ```
+
+### [Install with pip](#install-with-pip)
+
+If you would rather not use Poetry, [requirements.txt](requirements.txt) mirrors the
+dependencies declared in [pyproject.toml](pyproject.toml):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Run commands from the repository root (e.g. `python -m scripts.analysis.cli`) so the
+`scripts` package is importable. Alternatively, `pip install -e .` installs the
+project itself along with the same dependencies.
+
+> **Note:** requirements.txt is generated -- do not edit it by hand. Poetry remains the
+> source of truth, so after changing `[project].dependencies` in pyproject.toml, run:
+> ```bash
+> python -m scripts.utils.sync_requirements          # regenerate
+> python -m scripts.utils.sync_requirements --check  # verify it is in sync (exits 1 on drift)
+> ```
 
 ### [Clickhouse](#clickhouse)
 

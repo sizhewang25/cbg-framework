@@ -19,15 +19,10 @@ cd "$REPO_ROOT"
 
 command -v "$PYTHON" >/dev/null || { echo "ERROR: $PYTHON not on PATH"; exit 1; }
 
-# 1. Extract runtime deps from [project.dependencies] in pyproject.toml.
-"$PYTHON" - <<'PY' > requirements.txt
-import tomllib
-with open("pyproject.toml", "rb") as f:
-    pyproject = tomllib.load(f)
-for dep in pyproject["project"]["dependencies"]:
-    print(dep.replace(" (", "").rstrip(")").replace(" ", ""))
-PY
-echo "✔ requirements.txt written ($(wc -l < requirements.txt) deps)"
+# 1. Regenerate requirements.txt from [project.dependencies] in pyproject.toml.
+# Delegates to the shared generator so the bundled requirements.txt is identical
+# to the tracked one (a second inline extractor here would silently drift).
+"$PYTHON" -m scripts.utils.sync_requirements
 
 # 2. Materialize .venv/. By default, build a fresh venv with --copies (so the
 #    python binary is a real file, not a symlink to the host's system python)
