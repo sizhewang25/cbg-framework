@@ -203,7 +203,15 @@ def default_map(
                 )
             merged[key] = value
 
-        if "run_id" not in merged and cfg.get("run_id") is not None:
+        # Guarded on `cmd_params` for the same reason the `common:` filter above
+        # is: a command need not declare `run_id` at all (`plot-pni-delay` reads
+        # a standalone `--csv`). Injecting it unconditionally made every shipped
+        # config raise `KeyError` at the `_run_id_for` call below.
+        if (
+            "run_id" not in merged
+            and cfg.get("run_id") is not None
+            and "run_id" in cmd_params
+        ):
             merged["run_id"] = cfg["run_id"]
         # `--run-id` XOR `--all-runs`, so a config asking for every run cannot
         # also carry a run_id -- from either the CLI flag or its own block.
