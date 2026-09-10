@@ -181,6 +181,24 @@ def load_points(
     return df.reset_index(drop=True), n_in - len(df)
 
 
+#: The two path definitions the x axis can carry: column, axis label, and the
+#: name of the floor the `y = x` line represents. Both fits are always computed
+#: and reported under fixed `via_pni_*` / `direct_*` keys, so switching the axis
+#: changes what is *drawn*, never what a stat is called.
+X_AXES = {
+    "via-pni": (
+        "prop_rtt_via_pni_ms",
+        "propagation delay of d(VP,PNI) + d(PNI,TG) at 2/3 c  [ms]",
+        "VP→PNI→TG",
+    ),
+    "direct": (
+        "prop_rtt_direct_ms",
+        "propagation delay of d(VP,TG) at 2/3 c  [ms]",
+        "direct VP→TG",
+    ),
+}
+
+
 def plot(
     df: pd.DataFrame,
     out_png: Path,
@@ -188,11 +206,25 @@ def plot(
     n_dropped: int = 0,
     log_axes: bool = False,
     title: str | None = None,
+    x_axis: str = "via-pni",
 ) -> dict[str, float]:
-    """Draw the scatter and return the fit statistics it reports."""
-    x = df["prop_rtt_via_pni_ms"].to_numpy()
+    """Draw the scatter and return the fit statistics it reports.
+
+    `x_axis` selects the path whose propagation delay goes on x. `direct`
+    ignores the PNI entirely, which makes the same figure the control: the
+    great-circle line every CBG variant's latency-to-distance model assumes.
+    """
+    if x_axis not in X_AXES:
+        raise typer.BadParameter(
+            f"--x-axis must be one of {sorted(X_AXES)} (got {x_axis!r})"
+        )
+    x_col, x_label, floor_name = X_AXES[x_axis]
+    other = "direct" if x_axis == "via-pni" else "via-pni"
+    other_col, _, other_name = X_AXES[other]
+
+    x = df[x_col].to_numpy()
     y = df["min_rtt_ms"].to_numpy()
-    xd = df["prop_rtt_direct_ms"].to_numpy()
+    xd = df[other_col].to_numpy()
 
     slope, intercept, r, r2 = _ols(x, y)
     d_slope, d_intercept, d_r, d_r2 = _ols(xd, y)
@@ -204,7 +236,7 @@ def plot(
     hi = float(max(x.max(), y.max())) if len(df) else 1.0
     span = np.array([max(lo, 1e-3) if log_axes else 0.0, hi * 1.05])
     ax.plot(span, span, ls="--", lw=1.1, color=_C_INK_2, zorder=2,
-            label="y = x  (2/3 c floor of the VP→PNI→TG path)")
+            label=f"y = x  (2/3 c floor of the {floor_name} path)")
     if np.isfinite(slope):
         ax.plot(span, slope * span + intercept, lw=1.4, color=_C_FIT, zorder=4,
                 label=f"OLS: y = {slope:.2f}x + {intercept:.2f} ms  (r={r:.3f}, r²={r2:.3f})")
@@ -213,7 +245,7 @@ def plot(
         ax.set_xscale("log")
         ax.set_yscale("log")
 
-    ax.set_xlabel("propagation delay of d(VP,PNI) + d(PNI,TG) at 2/3 c  [ms]")
+    ax.set_xlabel(x_label)
     ax.set_ylabel("observed min-RTT (VP → TG)  [ms]")
     ax.set_title(title or "min-RTT vs two-leg propagation delay", color=_C_INK)
     ax.grid(True, color=_C_GRID, lw=0.6, zorder=0)
@@ -223,12 +255,15 @@ def plot(
         ax.spines[side].set_color(_C_AXIS)
     ax.legend(loc="upper left", fontsize=7.5, frameon=False)
 
-    below = int((df["residual_ms"] < 0).sum())
+    below = int((y < x).sum())
+    below_note = (
+        "PNI not on that path" if x_axis == "via-pni" else "RTT beats 2/3 c on the geodesic"
+    )
     note = (
         f"n = {len(df)} triples"
         + (f"  ({n_dropped} dropped: missing coords or rtt ≤ 0)" if n_dropped else "")
-        + f"\n{below} below the floor ({below / max(len(df), 1):.1%}) — PNI not on that path"
-        + f"\nstraight-line control (ignoring PNI): r={d_r:.3f}, r²={d_r2:.3f}, slope={d_slope:.2f}"
+        + f"\n{below} below the floor ({below / max(len(df), 1):.1%}) — {below_note}"
+        + f"\ncontrol ({other_name}): r={d_r:.3f}, r²={d_r2:.3f}, slope={d_slope:.2f}"
     )
     ax.annotate(note, xy=(0.98, 0.02), xycoords="axes fraction", ha="right", va="bottom",
                 fontsize=7, color=_C_MUTED)
@@ -238,18 +273,20 @@ def plot(
     fig.savefig(out_png)
     plt.close(fig)
 
+    primary = {
+        "slope": slope, "intercept_ms": intercept, "pearson_r": r, "r2": r2,
+    }
+    control = {
+        "slope": d_slope, "intercept_ms": d_intercept, "pearson_r": d_r, "r2": d_r2,
+    }
+    keyed = {x_axis.replace("-", "_"): primary, other.replace("-", "_"): control}
     return {
         "n": float(len(df)),
         "n_dropped": float(n_dropped),
         "n_below_floor": float(below),
-        "via_pni_slope": slope,
-        "via_pni_intercept_ms": intercept,
-        "via_pni_pearson_r": r,
-        "via_pni_r2": r2,
-        "direct_slope": d_slope,
-        "direct_intercept_ms": d_intercept,
-        "direct_pearson_r": d_r,
-        "direct_r2": d_r2,
+        "x_axis": x_axis,
+        **{f"via_pni_{k}": v for k, v in keyed["via_pni"].items()},
+        **{f"direct_{k}": v for k, v in keyed["direct"].items()},
         "median_residual_ms": float(np.median(df["residual_ms"])) if len(df) else float("nan"),
     }
 
@@ -272,6 +309,13 @@ def register(app: typer.Typer) -> None:
             help="Restrict to rows where this boolean column is true, e.g. "
             "`--where is_sping_vp` for one point per target on the VP the "
             "shortest-ping baseline picked.",
+        ),
+        x_axis: str = typer.Option(
+            "via-pni",
+            "--x-axis",
+            help="Path whose propagation delay goes on x: `via-pni` for "
+            "d(VP,PNI)+d(PNI,TG), or `direct` for d(VP,TG) — the same figure as "
+            "the no-PNI control. Both fits are reported either way.",
         ),
         log_axes: bool = typer.Option(
             False, "--log-axes", help="Log-log axes, for RTTs spanning orders of magnitude."
@@ -298,14 +342,20 @@ def register(app: typer.Typer) -> None:
 
         dest = out_dir or csv.parent
         dest.mkdir(parents=True, exist_ok=True)
-        suffix = f"_pni_delay{'.' + where if where else ''}"
+        suffix = f"_pni_delay.{x_axis}{'.' + where if where else ''}"
         out_png = dest / f"{csv.stem}{suffix}.png"
         out_csv = dest / f"{csv.stem}{suffix}_points.csv"
 
-        stats = plot(df, out_png, n_dropped=n_dropped, log_axes=log_axes, title=title)
+        stats = plot(
+            df, out_png, n_dropped=n_dropped, log_axes=log_axes, title=title,
+            x_axis=x_axis,
+        )
         df.to_csv(out_csv, index=False)
 
         typer.echo(f"wrote {out_png}")
         typer.echo(f"wrote {out_csv}")
         for key, value in stats.items():
-            typer.echo(f"  {key:24s} {value:.4g}")
+            typer.echo(
+                f"  {key:24s} {value}" if isinstance(value, str)
+                else f"  {key:24s} {value:.4g}"
+            )

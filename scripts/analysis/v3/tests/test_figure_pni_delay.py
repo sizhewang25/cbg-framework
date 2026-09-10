@@ -143,8 +143,10 @@ def test_command_is_registered_and_writes_both_outputs(tmp_path):
     result = CliRunner().invoke(app, ["plot-pni-delay", "--csv", str(csv)])
 
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "pairs_pni_delay.png").exists()
-    assert (tmp_path / "pairs_pni_delay_points.csv").exists()
+    # The stem records the x-axis choice, so a via-pni and a direct run of the
+    # same input cannot overwrite each other.
+    assert (tmp_path / "pairs_pni_delay.via-pni.png").exists()
+    assert (tmp_path / "pairs_pni_delay.via-pni_points.csv").exists()
     assert "via_pni_pearson_r" in result.output
 
 
@@ -206,3 +208,49 @@ def test_an_unknown_where_column_is_named(tmp_path):
     ).to_csv(csv, index=False)
     with pytest.raises(typer.BadParameter, match="nope"):
         F.load_points(csv, where="nope")
+
+
+def test_the_x_axis_can_be_the_direct_geodesic_instead(tmp_path):
+    """`--x-axis direct` draws the no-PNI control as the figure itself. Both fits
+    keep their own key names, so a stat never changes meaning with the axis."""
+    from typer.testing import CliRunner
+
+    from scripts.analysis.v3.cli import app
+
+    rng = np.random.default_rng(2)
+    rows = [
+        _triple(
+            (float(rng.uniform(40, 55)), float(rng.uniform(-8, 18))),
+            (50.11, 8.68),
+            (float(rng.uniform(40, 55)), float(rng.uniform(-8, 18))),
+            float(rng.uniform(5, 40)),
+            f"t{i}",
+        )
+        for i in range(20)
+    ]
+    csv = _write(tmp_path, rows)
+    df, _ = F.load_points(csv)
+
+    via = F.plot(df, tmp_path / "via.png", x_axis="via-pni")
+    direct = F.plot(df, tmp_path / "direct.png", x_axis="direct")
+
+    # Same two fits either way; only which is drawn moves.
+    for key in ("via_pni_r2", "direct_r2", "via_pni_slope", "direct_slope"):
+        assert via[key] == pytest.approx(direct[key])
+    assert via["x_axis"] == "via-pni" and direct["x_axis"] == "direct"
+    # The below-floor count follows the axis on screen, so it differs.
+    assert direct["n_below_floor"] == float((df.min_rtt_ms < df.prop_rtt_direct_ms).sum())
+    assert via["n_below_floor"] == float((df.min_rtt_ms < df.prop_rtt_via_pni_ms).sum())
+
+    result = CliRunner().invoke(app, ["plot-pni-delay", "--csv", str(csv), "--x-axis", "direct"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "pairs_pni_delay.direct.png").exists()
+
+
+def test_an_unknown_x_axis_is_refused_by_name(tmp_path):
+    df = pd.DataFrame(
+        {"prop_rtt_via_pni_ms": [1.0], "prop_rtt_direct_ms": [1.0], "min_rtt_ms": [2.0],
+         "residual_ms": [1.0]}
+    )
+    with pytest.raises(typer.BadParameter, match="sideways"):
+        F.plot(df, tmp_path / "x.png", x_axis="sideways")
