@@ -101,13 +101,24 @@ def test_fit_recovers_a_planted_slope_and_beats_the_no_pni_control(tmp_path):
     df["min_rtt_ms"] = 1.4 * df["prop_rtt_via_pni_ms"] + 3.0
     df["residual_ms"] = df["min_rtt_ms"] - df["prop_rtt_via_pni_ms"]
 
-    stats = F.plot(df, tmp_path / "fig.png")
+    # The slope was planted in delay space, so it is dimensionless there.
+    stats = F.plot(df, tmp_path / "fig.png", x_unit="ms")
 
     assert stats["via_pni_slope"] == pytest.approx(1.4, abs=1e-6)
     assert stats["via_pni_intercept_ms"] == pytest.approx(3.0, abs=1e-6)
     assert stats["via_pni_r2"] == pytest.approx(1.0, abs=1e-9)
     assert stats["direct_r2"] < stats["via_pni_r2"]
     assert (tmp_path / "fig.png").exists()
+
+    # In km the same fit is the same line in other units: the slope carries
+    # ms/km, the intercept and r2 are untouched, and 2/slope is a speed.
+    km = F.plot(df, tmp_path / "fig_km.png", x_unit="km")
+    assert km["via_pni_slope"] == pytest.approx(1.4 * THEORETICAL_SLOPE, rel=1e-9)
+    assert km["via_pni_intercept_ms"] == pytest.approx(3.0, abs=1e-6)
+    assert km["via_pni_r2"] == pytest.approx(stats["via_pni_r2"], rel=1e-12)
+    assert km["implied_km_per_ms"] == pytest.approx(2 / (1.4 * THEORETICAL_SLOPE), rel=1e-9)
+    # The below-floor set is a property of the points, not of the units.
+    assert km["n_below_floor"] == stats["n_below_floor"]
 
 
 def test_degenerate_input_yields_nan_fit_rather_than_raising(tmp_path):
@@ -145,8 +156,8 @@ def test_command_is_registered_and_writes_both_outputs(tmp_path):
     assert result.exit_code == 0, result.output
     # The stem records the x-axis choice, so a via-pni and a direct run of the
     # same input cannot overwrite each other.
-    assert (tmp_path / "pairs_pni_delay.via-pni.png").exists()
-    assert (tmp_path / "pairs_pni_delay.via-pni_points.csv").exists()
+    assert (tmp_path / "pairs_pni_delay.via-pni.km.png").exists()
+    assert (tmp_path / "pairs_pni_delay.via-pni.km_points.csv").exists()
     assert "via_pni_pearson_r" in result.output
 
 
@@ -244,7 +255,7 @@ def test_the_x_axis_can_be_the_direct_geodesic_instead(tmp_path):
 
     result = CliRunner().invoke(app, ["plot-pni-delay", "--csv", str(csv), "--x-axis", "direct"])
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "pairs_pni_delay.direct.png").exists()
+    assert (tmp_path / "pairs_pni_delay.direct.km.png").exists()
 
 
 def test_an_unknown_x_axis_is_refused_by_name(tmp_path):
