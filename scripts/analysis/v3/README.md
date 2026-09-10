@@ -22,6 +22,8 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/bipartite.py](modules/bipartite.py) | cmd · `build-bipartite-graph` |
 | [modules/classify.py](modules/classify.py) | cmd · `classify` |
 | [modules/proximity.py](modules/proximity.py) | cmd · `build-proximity` |
+| [modules/pni.py](modules/pni.py) | cmd · `build-pni-graph` |
+| [modules/figure_pni_delay.py](modules/figure_pni_delay.py) | cmd · `plot-pni-delay` |
 | [modules/breakdown.py](modules/breakdown.py) | cmd · `breakdown-accuracy` |
 | [modules/confusion.py](modules/confusion.py) | cmd · `confusion-density` |
 | [modules/accuracy_table.py](modules/accuracy_table.py) | cmd · `table-accuracy` |
@@ -149,6 +151,16 @@ python -m scripts.analysis.v3.cli plot-error-vs-rank \
   --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802 \
   --layout pooled --layout compare
 
+# 3h. Assign each measured pair the PNI it most plausibly crossed, and price the
+#     hairpin. Grid-free, so no <grid>-<resolution> leaf; --pni-csv is required
+#     and there is no --all-runs, because one run is one peer ASN.
+python -m scripts.analysis.v3.cli build-pni-graph \
+  --run-id as01-260728-260802 --pni-csv datasets/pni/as01.csv --peer-asn <asn>
+# the scatter reads that artifact directly -- no adapter, no second file
+python -m scripts.analysis.v3.cli plot-pni-delay \
+  --csv outputs/analysis/v3/as01-260728-260802/pni-graph/pni_edges.csv \
+  --pni-prefix sel_pni --tg-prefix target --rtt-col rtt_ms
+
 # 4. Set overlap of correct classifications (repeat per top-N)
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 3
@@ -195,6 +207,7 @@ bipartite-graph/
                            distance_cdf.png
 target-proximity/
   <grid>-<resolution>/     target_labels.csv  meta.json
+pni-graph/                 pni_edges.csv  target_nodes.csv  pni_nodes.csv  meta.json
 target-cls-accuracy/
   <grid>-<resolution>/     <method>_seed_distances.parquet  topn_accuracy.csv  manifest.json
                            accuracy_by_flag.csv  accuracy_by_taxonomy.csv
@@ -875,6 +888,54 @@ flags in `zero_variance`, and the CLI prints the warning inline.
 as02 and as7018 do vary (`372/412` and `49/78` proximate), so the left column is
 not dead — it separates on exactly the runs where VP placement is the binding
 constraint.
+
+## PNI sites and the hairpin (§7.3)
+
+`build-bipartite-graph` excludes RTT; `build-proximity` lets it in only to name
+the shortest-ping VP. This adds the third node type. §7.3 argues that a packet
+from a user plane to a hypergiant server crosses a private interconnect on the
+way, so the distance an RTT is evidence about is not `d(VP, TG)` but
+`d(VP, PNI) + d(PNI, TG)`.
+
+**The assignment is an argmin, not a measurement.** Each pair takes the site
+minimizing `d(VP, p) + d(p, TG)` — parameter-free, and a lower bound on the
+routed path, hence an upper bound on how much inflation geometry can account
+for. It deliberately does *not* assume the target is served through its own
+nearest site: that is §7.3's good-peering claim, and defining the assignment by
+it would make the claim unfalsifiable. The two rules are compared instead, as
+`sel_pni_is_tg_nearest` per pair and `agreement.sel_pni_is_tg_nearest_share` in
+`meta.json`. Every column says `sel_pni_` so the inference stays visible.
+
+**Three quantities and one identity.** With `direct = d(VP,TG)` and
+`via = d(VP,PNI) + d(PNI,TG)`:
+
+    vp_to_tg_air_inflation == vp_to_tg_detour_ratio * vp_to_tg_routing_inflation
+
+exactly, because both inflations divide by `THEORETICAL_SLOPE`. That is the
+point of the module: the air inflation `eval_source` already computes is a
+*product* of a geometric term the interconnect topology explains and a residual
+it does not, and only the product was previously observable. `gc_km` and the air
+inflation are **carried** from `build_pairs`, never recomputed, so one constant
+sits behind one name. The identity is **per-pair only** — the per-target minima
+are attained by different VPs, so no min detour-ratio column is emitted.
+
+**Routing SOI violations check the assignment, not the network.** A routing
+inflation below 1 says the pair cannot have crossed the site it was assigned, so
+a large `soi.routing_soi_violation_share` means these metrics should not be
+believed. The air-side share sits beside it because `detour >= 1` implies
+`routing <= air`, so the routing violation set strictly contains the air one.
+It is also the same number as `plot-pni-delay`'s below-the-floor share, by
+construction.
+
+**No grid, and a per-run site list.** Nothing here reads a seed or a cell, so
+the output carries no `<grid>-<resolution>` leaf and the command declares no
+`--grid`/`--resolution`/`--sweep`. `n_unique_target_asns == 1` on the operator
+runs, so one run is one peer ASN: `--pni-csv` is required, `pni_asn` is a
+required column checked against the run's `target_asn` where the source CSV
+still has it, and there is no `--all-runs`. The operator runs lost `target_asn`
+to the parquet reconstruction, so `--peer-asn` asserts it and the result is
+otherwise recorded as explicitly unverified rather than silently blessed.
+
 
 ## Crossing accuracy with the strata
 

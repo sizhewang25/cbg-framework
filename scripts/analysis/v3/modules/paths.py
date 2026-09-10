@@ -193,6 +193,20 @@ class RunPaths:
             "target-proximity", grid_slug(grid, resolution), root=root
         )
 
+    def pni_graph_dir(self, root: Path | None = None) -> Path:
+        """PNI site characterization — the one tree here with no grid slug.
+
+        `grid_slug`'s docstring states the premise every other accessor rests
+        on: the answer space "is a *parameter* of every number downstream of
+        it", so an artifact is filed under the quantization that produced it.
+        That premise is false here. Nothing in `pni-graph/` reads a seed, a cell
+        or an answer space; the artifact is a pure function of (canonical CSV,
+        PNI CSV). Filing it under `<grid>-<resolution>/` would make `--sweep`
+        write N byte-identical copies and invite a consumer to diff two rungs
+        expecting a difference.
+        """
+        return self.analysis_dir("pni-graph", root=root)
+
     def mtl_map_dir(
         self, root: Path | None = None, *, grid: str, resolution: int
     ) -> Path:
