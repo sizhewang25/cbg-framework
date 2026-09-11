@@ -106,7 +106,7 @@ META_JSON = "meta.json"
 #: distance CDF" as the figure behind the diameter and p95 scalars; 101 points is
 #: enough to draw it and small enough to read, and it fixes a grid so two
 #: datasets' CDFs can be differenced row by row.
-_CDF_QUANTILES = np.round(np.linspace(0.0, 1.0, 101), 3)
+CDF_QUANTILES = np.round(np.linspace(0.0, 1.0, 101), 3)
 
 #: Above this node count a full pairwise matrix is subsampled rather than built.
 #: The four runs here are 53-134 VPs and 78-458 targets, so this never fires; it
@@ -226,13 +226,127 @@ def describe_p90(values, *, digits: int = 3) -> dict:
     }
 
 
-def _cdf_column(values, *, digits: int = 3) -> np.ndarray:
-    """`_CDF_QUANTILES` of `values`, or all-NaN when there is nothing to rank."""
+def cdf_column(values, *, digits: int = 3) -> np.ndarray:
+    """`CDF_QUANTILES` of `values`, or all-NaN when there is nothing to rank."""
     v = np.asarray(values, dtype=float)
     v = v[np.isfinite(v)]
     if v.size == 0:
-        return np.full(_CDF_QUANTILES.size, np.nan)
-    return np.round(np.quantile(v, _CDF_QUANTILES), digits)
+        return np.full(CDF_QUANTILES.size, np.nan)
+    return np.round(np.quantile(v, CDF_QUANTILES), digits)
+
+
+def quantile_bins(values, *, n_bins: int = 3) -> tuple[pd.Series, list[float]]:
+    """Quantile-bin `values`; return `(bin_index, edges)`.
+
+    The generic form of `confusion.density_bins`, which now delegates here. Two
+    properties the callers rely on and a naive `pd.qcut` does not give. Ties
+    collapse bins rather than raising: a quantity with fewer distinct quantiles
+    than requested is a fact about the data worth reporting, not a failure — and
+    on `h3` at one resolution many seeds sit at exactly the same pitch, so the
+    fully degenerate case is normal. And `edges` always has at least two entries
+    whenever anything is finite, so a caller can label bin `b` with
+    `edges[b]`/`edges[b + 1]` with no special case; in the degenerate case both
+    are the same number, which is the honest label for a bin spanning no range.
+
+    Quantile edges rather than fixed ones because every stratification in this
+    layer is over a quantity whose scale is a property of the dataset, so a
+    hard-coded km list would be a tuned threshold wearing a constant's name.
+    Callers therefore have to report the edges alongside the bins.
+    """
+    v = pd.Series(values)
+    a = v.to_numpy(dtype=float)
+    finite = a[np.isfinite(a)]
+    if finite.size == 0:
+        return pd.Series(0, index=v.index, name="bin"), [np.nan, np.nan]
+    edges = list(np.unique(np.nanquantile(a, np.linspace(0, 1, n_bins + 1))))
+    if len(edges) < 2:
+        return pd.Series(0, index=v.index, name="bin"), [edges[0], edges[0]]
+    idx = np.clip(np.searchsorted(edges, a, side="right") - 1, 0, len(edges) - 2)
+    return pd.Series(idx, index=v.index, name="bin"), edges
+
+
+def group_corr(frame: pd.DataFrame, key: str, a: str, b: str) -> pd.Series:
+    """Pearson correlation of `a` against `b` within each `key` group.
+
+    The sums form rather than a `groupby.apply`, which costs a Python-level call
+    per group. Feeding it rank columns gives Spearman, which is how the two
+    per-unit correlations in `pni_strategy` and `pni_linearity` share one
+    implementation and therefore one tie convention.
+
+    NaN for a group with no spread on either side, via the `den > 0` mask, so a
+    degenerate unit produces a row that says so instead of a divide warning.
+    """
+    g = frame.groupby(key, sort=True)
+    da = frame[a] - g[a].transform("mean")
+    db = frame[b] - g[b].transform("mean")
+    num = (da * db).groupby(frame[key], sort=True).sum()
+    den = np.sqrt(
+        (da * da).groupby(frame[key], sort=True).sum()
+        * (db * db).groupby(frame[key], sort=True).sum()
+    )
+    return num.divide(den.where(den > 0))
+
+
+def spearman(x, y) -> float:
+    """Spearman rho as Pearson on ranks, without scipy.
+
+    Lives here rather than in a figure module because the table commands need it
+    and `figure_proximity_inflation` — which had the only v3 copy — imports
+    matplotlib at module scope. `cross.py`'s docstring documents that exact
+    coupling as the reason a guard moved rather than being imported across, so
+    the shared definition has to sit in a matplotlib-free module.
+
+    NaN rather than an exception when either side has no spread or fewer than
+    two finite pairs, so a degenerate target still produces a row that says so.
+    v2's `eval_source._spearman` (scipy) stays where it is: that is a layer
+    boundary, and agreement is pinned by a test rather than by sharing code.
+    """
+    a = np.asarray(x, dtype=float)
+    b = np.asarray(y, dtype=float)
+    ok = np.isfinite(a) & np.isfinite(b)
+    a, b = a[ok], b[ok]
+    if a.size < 2:
+        return float("nan")
+    ra = pd.Series(a).rank(method="average").to_numpy()
+    rb = pd.Series(b).rank(method="average").to_numpy()
+    if np.ptp(ra) == 0 or np.ptp(rb) == 0:
+        return float("nan")
+    return float(np.corrcoef(ra, rb)[0, 1])
+
+
+def ols(x, y) -> tuple[float, float, float, float]:
+    """`(slope, intercept, pearson_r, r2)` for `y ~ x`, non-finite rows dropped.
+
+    Shared by `figure_pni_delay`, which draws the fit, and `pni_linearity`,
+    which tabulates it — the two have to agree by construction, since the paper
+    quotes one r-squared and shows the other. NaNs rather than an exception when
+    x or y has no spread or fewer than two usable rows, so a degenerate
+    population still produces a row that says so instead of killing the run.
+    """
+    a = np.asarray(x, dtype=float)
+    b = np.asarray(y, dtype=float)
+    ok = np.isfinite(a) & np.isfinite(b)
+    a, b = a[ok], b[ok]
+    if a.size < 2 or np.ptp(a) == 0 or np.ptp(b) == 0:
+        return (float("nan"),) * 4
+    slope, intercept = np.polyfit(a, b, 1)
+    r = float(np.corrcoef(a, b)[0, 1])
+    return float(slope), float(intercept), r, r * r
+
+
+def truthy(col: pd.Series) -> pd.Series:
+    """A boolean column, whether pandas inferred it as one or left it a string.
+
+    `to_csv` writes `True`/`False`, and a round trip infers `bool` only when the
+    column has no missing values; one NaN makes it `object` and the naive
+    `df[col]` mask then selects the string `"False"` as truthy. Every module that
+    reads `is_sping_vp` back off a CSV needs this, so it lives here rather than
+    behind `figure_pni_delay`'s matplotlib import — that module's `_truthy`
+    delegates.
+    """
+    if col.dtype == bool:
+        return col
+    return col.astype(str).str.strip().str.lower().isin({"true", "1", "yes", "t"})
 
 
 # ---- angular geometry -------------------------------------------------------
@@ -844,17 +958,17 @@ def build_bipartite(
 
     edge_cdf = pd.DataFrame(
         {
-            "quantile": _CDF_QUANTILES,
-            "observed_edge_km": _cdf_column(edges["length_km"]),
-            "latent_pair_km": _cdf_column(latent_pairs),
-            "measured_nearest_vp_ratio": _cdf_column(eff, digits=_RATIO_DIGITS),
+            "quantile": CDF_QUANTILES,
+            "observed_edge_km": cdf_column(edges["length_km"]),
+            "latent_pair_km": cdf_column(latent_pairs),
+            "measured_nearest_vp_ratio": cdf_column(eff, digits=_RATIO_DIGITS),
         }
     )
     pairwise_cdf = pd.DataFrame(
         {
-            "quantile": _CDF_QUANTILES,
-            "vp_pairwise_km": _cdf_column(vp_pw),
-            "target_pairwise_km": _cdf_column(tg_pw),
+            "quantile": CDF_QUANTILES,
+            "vp_pairwise_km": cdf_column(vp_pw),
+            "target_pairwise_km": cdf_column(tg_pw),
         }
     )
     return BipartiteGraph(

@@ -657,3 +657,99 @@ def test_an_explicit_override_wins_and_is_checked(tmp_path):
     assert bp.resolve_source_csv(run, csv) == csv
     with pytest.raises(MissingArtifactError, match="does not exist"):
         bp.resolve_source_csv(run, tmp_path / "nope.csv")
+
+
+# ---- shared helpers promoted out of the figure modules ----------------------
+# Four small functions moved here because the table commands need them and the
+# modules that had them import matplotlib at module scope -- the coupling
+# `cross.py`'s docstring documents avoiding. Each test pins the delegation, so a
+# future edit to one copy cannot silently fork the definition.
+
+
+def test_ols_agrees_with_the_figure_that_draws_it():
+    """The paper quotes `compare-pni-linearity`'s r-squared and shows
+    `plot-pni-delay`'s fit. If these ever differ, one of the two is wrong and
+    nothing in either artifact would say which."""
+    from scripts.analysis.v3.modules import figure_pni_delay
+
+    x = np.array([10.0, 250.0, 900.0, 1500.0, 3000.0])
+    y = np.array([2.0, 5.5, 16.0, 24.0, 47.0])
+    assert bp.ols(x, y) == figure_pni_delay._ols(x, y)
+
+
+def test_ols_returns_nans_rather_than_raising_on_a_degenerate_population():
+    """A single distinct x still has to produce a row that says so."""
+    assert all(np.isnan(v) for v in bp.ols(np.array([1.0, 1.0]), np.array([2.0, 3.0])))
+    assert all(np.isnan(v) for v in bp.ols(np.array([1.0]), np.array([2.0])))
+
+
+def test_spearman_agrees_with_the_figure_modules_definition():
+    """`figure_proximity_inflation._spearman` now delegates here, and its own
+    `len(x) < 3` floor stays local because two points always give |rho| == 1."""
+    from scripts.analysis.v3.modules import figure_proximity_inflation as fpi
+
+    x = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
+    y = pd.Series([2.0, 1.0, 4.0, 3.0, 5.0])
+    assert bp.spearman(x, y) == pytest.approx(fpi._spearman(x, y), abs=1e-12)
+    # Ties get average ranks, which is scipy's convention and therefore v2's.
+    tied = pd.Series([1.0, 1.0, 2.0, 2.0])
+    assert bp.spearman(tied, pd.Series([1.0, 1.0, 2.0, 2.0])) == pytest.approx(1.0)
+
+
+def test_spearman_is_nan_when_either_side_has_no_spread():
+    """A constant column has no ranking, so a correlation would be invented."""
+    assert np.isnan(bp.spearman([1.0, 1.0, 1.0], [1.0, 2.0, 3.0]))
+    assert np.isnan(bp.spearman([1.0], [2.0]))
+
+
+def test_cdf_column_uses_the_quantiles_the_cdf_csvs_are_written_at():
+    """The quantile grid and the values have to stay the same length, or a
+    consumer joining them silently shifts every row."""
+    values = np.arange(101, dtype=float)
+    out = bp.cdf_column(values)
+    assert out.size == bp.CDF_QUANTILES.size
+    assert bp.CDF_QUANTILES[0] == 0.0 and bp.CDF_QUANTILES[-1] == 1.0
+    assert out[0] == 0.0 and out[-1] == 100.0
+    assert np.isnan(bp.cdf_column([])).all()
+
+
+def test_truthy_reads_a_round_tripped_boolean_column():
+    """`to_csv` writes True/False, and one NaN makes the round trip `object`;
+    the naive mask then selects the string "False" as truthy."""
+    from scripts.analysis.v3.modules import figure_pni_delay
+
+    col = pd.Series(["True", "False", "true", "FALSE", np.nan], dtype=object)
+    got = bp.truthy(col)
+    assert got.tolist() == [True, False, True, False, False]
+    assert got.tolist() == figure_pni_delay._truthy(col).tolist()
+    native = pd.Series([True, False])
+    assert bp.truthy(native).tolist() == [True, False]
+
+
+def test_quantile_bins_collapse_ties_rather_than_raising():
+    """A quantity with fewer distinct quantiles than requested is a fact about
+    the data, and `edges` must still have two entries so a caller can label a
+    bin with `edges[b]`/`edges[b + 1]` with no special case."""
+    idx, edges = bp.quantile_bins(pd.Series([5.0] * 10), n_bins=4)
+    assert idx.unique().tolist() == [0]
+    assert edges == [5.0, 5.0]
+
+    idx, edges = bp.quantile_bins(pd.Series([np.nan] * 3), n_bins=3)
+    assert idx.unique().tolist() == [0]
+    assert len(edges) == 2
+
+    idx, edges = bp.quantile_bins(pd.Series(np.arange(100.0)), n_bins=4)
+    assert sorted(idx.unique()) == [0, 1, 2, 3]
+    assert len(edges) == 5
+
+
+def test_confusion_density_bins_still_names_its_column_density_bin():
+    """`density_bins` delegates to `quantile_bins` but keeps its own column
+    name, which `confusion_by_density` writes out."""
+    from scripts.analysis.v3.modules.confusion import density_bins
+
+    idx, edges = density_bins(pd.Series(np.arange(30.0)), n_bins=3)
+    generic, generic_edges = bp.quantile_bins(pd.Series(np.arange(30.0)), n_bins=3)
+    assert idx.name == "density_bin"
+    assert edges == generic_edges
+    assert idx.tolist() == generic.tolist()

@@ -67,6 +67,7 @@ import numpy as np
 import pandas as pd
 import typer
 
+from scripts.analysis.v3.modules.bipartite import ols, truthy
 from scripts.analysis.v3.modules.diagram.common.draw import plt
 from scripts.analysis.v3.modules.diagram.common.palette import (
     _C_AXIS,
@@ -103,27 +104,22 @@ def _haversine_km(
 def _ols(x: np.ndarray, y: np.ndarray) -> tuple[float, float, float, float]:
     """`(slope, intercept, pearson_r, r2)` for `y ~ x`.
 
-    Returns NaNs rather than raising when x has no spread (a single distinct
-    value, or fewer than two rows), so a degenerate input still produces a
-    figure and a report that says so.
+    Delegates to `bipartite.ols`. Shared rather than local because
+    `compare-pni-linearity` tabulates the same fit this figure draws, and the
+    paper quotes one and shows the other — they cannot be allowed to drift.
     """
-    if x.size < 2 or np.ptp(x) == 0 or np.ptp(y) == 0:
-        return (float("nan"),) * 4
-    slope, intercept = np.polyfit(x, y, 1)
-    r = float(np.corrcoef(x, y)[0, 1])
-    return float(slope), float(intercept), r, r * r
+    return ols(x, y)
 
 
 def _truthy(col: pd.Series) -> pd.Series:
     """A boolean column, whether pandas inferred it as one or left it a string.
 
-    `to_csv` writes `True`/`False`, and a round trip infers `bool` only when the
-    column has no missing values; one NaN makes it `object` and the naive
-    `df[col]` mask then selects the string "False" as truthy.
+    Delegates to `bipartite.truthy`; kept as a name here because `--where` is
+    this module's flag and its tests pin the behaviour. Three modules now read
+    `is_sping_vp` back off a CSV, so the definition moved to a matplotlib-free
+    module rather than being imported out of a figure.
     """
-    if col.dtype == bool:
-        return col
-    return col.astype(str).str.strip().str.lower().isin({"true", "1", "yes", "t"})
+    return truthy(col)
 
 
 def load_points(

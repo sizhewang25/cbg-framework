@@ -59,6 +59,7 @@ import numpy as np
 import pandas as pd
 import typer
 
+from scripts.analysis.v3.modules.bipartite import quantile_bins
 from scripts.analysis.v3.modules import io
 from scripts.analysis.v3.modules.answer_space import (
     load_answer_space,
@@ -100,33 +101,14 @@ def density_bins(
 ) -> tuple[pd.Series, list[float]]:
     """Quantile-bin targets by their true seed's distance to the nearest other seed.
 
-    Returns `(bin_index, edges)`. Ties collapse bins rather than erroring: a run
-    whose seeds are evenly spaced can genuinely have fewer distinct quantiles
-    than requested, and that is a fact about the grid worth reporting instead of
-    a failure worth raising. `h3` at one resolution puts many seeds at exactly
-    the same pitch, so the fully degenerate case — every target sharing one
-    `nearest_seed_km` — is normal rather than exotic.
-
-    `edges` always has **at least two entries** whenever any value is finite, so
-    a caller can label bin `b` with `edges[b]`/`edges[b+1]` without a special
-    case. In the degenerate case both are the same number, which is the honest
-    label for a bin spanning no range.
+    The binning itself is `bipartite.quantile_bins`, which this delegates to now
+    that three modules stratify on a distance quantile. Kept as a named wrapper
+    because the column it produces is `density_bin` and the docstring above is
+    what §8.1's confusion table means by density; the generic helper documents
+    the tie-collapse and two-edge guarantees the callers rely on.
     """
-    v = nearest_seed_km.to_numpy(dtype=float)
-    finite = v[np.isfinite(v)]
-    if finite.size == 0:
-        return pd.Series(0, index=nearest_seed_km.index, name="density_bin"), [
-            np.nan,
-            np.nan,
-        ]
-    edges = list(np.unique(np.nanquantile(v, np.linspace(0, 1, n_bins + 1))))
-    if len(edges) < 2:
-        return (
-            pd.Series(0, index=nearest_seed_km.index, name="density_bin"),
-            [edges[0], edges[0]],
-        )
-    idx = np.clip(np.searchsorted(edges, v, side="right") - 1, 0, len(edges) - 2)
-    return pd.Series(idx, index=nearest_seed_km.index, name="density_bin"), edges
+    idx, edges = quantile_bins(nearest_seed_km, n_bins=n_bins)
+    return idx.rename("density_bin"), edges
 
 
 def _percentiles(values: np.ndarray, prefix: str) -> dict:

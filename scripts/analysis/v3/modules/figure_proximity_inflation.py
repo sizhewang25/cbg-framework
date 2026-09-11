@@ -97,6 +97,7 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
 
 from scripts.analysis.v3.modules import headline_table as H
+from scripts.analysis.v3.modules.bipartite import spearman
 from scripts.analysis.v3.modules.cross import cross_dir
 from scripts.analysis.v3.modules.diagram.common.draw import plt
 from scripts.analysis.v3.modules.diagram.common.palette import (
@@ -362,16 +363,17 @@ def _quantiles(values: pd.Series, prefix: str) -> dict:
 def _spearman(x: pd.Series, y: pd.Series) -> float:
     """Rank correlation between two series, without a scipy dependency.
 
-    Pearson on the ranks is Spearman's definition; `rank(method="average")` is
-    the tie handling scipy uses, so this agrees with `spearmanr` to floating
-    point on these frames (checked against it while the module was written).
+    Delegates to `bipartite.spearman`, which is the shared definition now that
+    the table commands need it too and cannot import this module (it pulls
+    matplotlib at module scope). The `len(x) < 3` floor stays here rather than
+    moving down: two points always give |rho| == 1, which is meaningless for
+    *this* figure's per-population clouds but is a legitimate answer for a
+    per-target correlation over two VPs, where the caller flags it as
+    underpowered instead.
     """
     if len(x) < 3:
         return float("nan")
-    rx, ry = x.rank(), y.rank()
-    if rx.std(ddof=0) == 0 or ry.std(ddof=0) == 0:
-        return float("nan")
-    return float(np.corrcoef(rx, ry)[0, 1])
+    return spearman(x, y)
 
 
 def summarize(points: pd.DataFrame) -> pd.DataFrame:

@@ -491,3 +491,120 @@ def test_the_routing_soi_share_is_the_figures_below_floor_share(tmp_path):
     assert stats["n_below_floor"] / stats["n"] == pytest.approx(
         g.meta["soi"]["routing_soi_violation_share"], abs=1e-6
     )
+
+
+def test_site_leg_frames_returns_the_matrices_assign_pni_reduces():
+    """The two-leg matrices are shared with `pni_feasibility` and
+    `pni_linearity`, so they had to come out of `assign_pni`.
+
+    The tie rule is a property of the site frame's *order*, so a consumer that
+    rebuilt these itself and sorted differently would silently pick different
+    winners while every artifact still looked plausible. This pins that the
+    factored function is the one `assign_pni` actually uses.
+    """
+    pairs = _pairs(
+        [
+            ("vp-a", DEN, "tg-1", NYC, 30.0),
+            ("vp-b", SJC, "tg-1", NYC, 60.0),
+            ("vp-a", DEN, "tg-2", MIA, 40.0),
+        ]
+    )
+    frames = pni.site_leg_frames(pairs, _SITES)
+    assign = pni.assign_pni(pairs, _SITES)
+
+    assert frames["d_vp_p"].shape == (pairs["vp_id"].nunique(), len(_SITES))
+    assert frames["d_tg_p"].shape == (pairs["target_id"].nunique(), len(_SITES))
+    assert frames["d_pp"].shape == (len(_SITES), len(_SITES))
+    # The reduction `assign_pni` performs, recomputed from the shared frames.
+    cost = frames["d_vp_p"][frames["e_vp"], :] + frames["d_tg_p"][frames["e_tg"], :]
+    assert np.array_equal(assign["sel"], cost.argmin(axis=1))
+    assert assign["via_km"] == pytest.approx(cost.min(axis=1))
+    np.testing.assert_array_equal(assign["e_vp"], frames["e_vp"])
+    np.testing.assert_array_equal(assign["e_tg"], frames["e_tg"])
+
+
+def test_site_leg_frames_are_stable_under_a_permutation_of_the_edges():
+    """Why both node frames are sorted by id.
+
+    The site axis carries `assign_pni`'s tie rule and every index a consumer
+    gathers with, so the frames must be a function of the edge *set* rather than
+    of its row order. Without the sort, feeding the same pairs in a different
+    order would renumber the node rows and silently repoint every gather.
+    """
+    rows = [
+        ("vp-b", SJC, "tg-2", MIA, 60.0),
+        ("vp-a", DEN, "tg-1", NYC, 30.0),
+        ("vp-a", DEN, "tg-2", MIA, 40.0),
+    ]
+    a_pairs, b_pairs = _pairs(rows), _pairs(list(reversed(rows)))
+    forward = pni.site_leg_frames(a_pairs, _SITES)
+    reverse = pni.site_leg_frames(b_pairs, _SITES)
+
+    pd.testing.assert_frame_equal(forward["vp"], reverse["vp"])
+    pd.testing.assert_frame_equal(forward["tg"], reverse["tg"])
+    np.testing.assert_allclose(forward["d_vp_p"], reverse["d_vp_p"])
+    np.testing.assert_allclose(forward["d_tg_p"], reverse["d_tg_p"])
+
+    # The index arrays follow their own frame's row order, so they are checked
+    # by what they resolve to rather than by position.
+    for frames, pairs in ((forward, a_pairs), (reverse, b_pairs)):
+        assert (
+            frames["vp"]["vp_id"].to_numpy()[frames["e_vp"]] == pairs["vp_id"].to_numpy()
+        ).all()
+        assert (
+            frames["tg"]["target_id"].to_numpy()[frames["e_tg"]]
+            == pairs["target_id"].to_numpy()
+        ).all()
+
+
+def test_a_pure_strategy_assigns_a_fixed_site_per_target_or_per_vp():
+    """`--strategy` is what makes the assignment a detected input rather than a
+    hardcoded rule, and every number downstream inherits it.
+
+    Under a pure rule the choice is a per-unit constant, so there is nothing to
+    tie and no chunked scan; the test pins both the selection and that `tied` is
+    empty, since a stray tie flag would misreport the assignment's confidence.
+    """
+    pairs = _pairs(
+        [
+            ("vp-a", DEN, "tg-1", NYC, 30.0),
+            ("vp-b", SJC, "tg-1", NYC, 60.0),
+            ("vp-a", DEN, "tg-2", MIA, 40.0),
+        ]
+    )
+    tg = pni.assign_pni(pairs, _SITES, strategy="tg_nearest")
+    vp = pni.assign_pni(pairs, _SITES, strategy="vp_nearest")
+
+    # Fixed per target: both VPs of tg-1 get the same site.
+    sel_tg = pd.Series(tg["sel"], index=pairs["target_id"].to_numpy())
+    assert sel_tg.groupby(level=0).nunique().max() == 1
+    # Fixed per VP: vp-a gets the same site for both its targets.
+    sel_vp = pd.Series(vp["sel"], index=pairs["vp_id"].to_numpy())
+    assert sel_vp.groupby(level=0).nunique().max() == 1
+
+    assert not tg["tied"].any() and not vp["tied"].any()
+    assert tg["strategy"] == "tg_nearest" and vp["strategy"] == "vp_nearest"
+    # The two-leg sum is still the sum of the two legs it reports.
+    assert tg["via_km"] == pytest.approx(
+        tg["vp_to_sel_pni_km"] + tg["sel_pni_to_tg_km"], abs=1e-9
+    )
+
+
+def test_an_unknown_strategy_is_refused():
+    """A typo must not fall through to the default and silently change the rule."""
+    pairs = _pairs([("vp-a", DEN, "tg-1", NYC, 30.0)])
+    with pytest.raises(ValueError, match="strategy must be one of"):
+        pni.assign_pni(pairs, _SITES, strategy="nearest")
+
+
+def test_a_partial_split_csv_is_refused_rather_than_defaulting_to_false():
+    """A pair missing from the split would silently be scored as detect-half,
+    re-denominating every study that filters on `is_holdout`."""
+    pairs = _pairs(
+        [("vp-a", DEN, "tg-1", NYC, 30.0), ("vp-b", SJC, "tg-1", NYC, 60.0)]
+    )
+    partial = pd.DataFrame(
+        {"vp_id": ["vp-a"], "target_id": ["tg-1"], "is_holdout": [True]}
+    )
+    with pytest.raises(ValueError, match="absent from it"):
+        pni.build_pni_graph(pairs, _SITES, pair_split=partial)

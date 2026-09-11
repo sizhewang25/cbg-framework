@@ -22,7 +22,11 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/bipartite.py](modules/bipartite.py) | cmd · `build-bipartite-graph` |
 | [modules/classify.py](modules/classify.py) | cmd · `classify` |
 | [modules/proximity.py](modules/proximity.py) | cmd · `build-proximity` |
+| [modules/pni_strategy.py](modules/pni_strategy.py) | cmd · `detect-pni-strategy` |
 | [modules/pni.py](modules/pni.py) | cmd · `build-pni-graph` |
+| [modules/pni_feasibility.py](modules/pni_feasibility.py) | cmd · `build-pni-feasibility` |
+| [modules/pni_linearity.py](modules/pni_linearity.py) | cmd · `compare-pni-linearity` |
+| [modules/pni_sping.py](modules/pni_sping.py) | cmd · `breakdown-sping-pni` |
 | [modules/figure_pni_delay.py](modules/figure_pni_delay.py) | cmd · `plot-pni-delay` |
 | [modules/breakdown.py](modules/breakdown.py) | cmd · `breakdown-accuracy` |
 | [modules/confusion.py](modules/confusion.py) | cmd · `confusion-density` |
@@ -151,15 +155,41 @@ python -m scripts.analysis.v3.cli plot-error-vs-rank \
   --run-id as01-260728-260802 --run-id as02-260728-260802 --run-id as03-260728-260802 \
   --layout pooled --layout compare
 
-# 3h. Assign each measured pair the PNI it most plausibly crossed, and price the
-#     hairpin. Grid-free, so no <grid>-<resolution> leaf; --pni-csv is required
-#     and there is no --all-runs, because one run is one peer ASN.
-python -m scripts.analysis.v3.cli build-pni-graph \
+# 3h. Detect which site-selection policy this peer's min-RTTs order by, before
+#     anything assumes one. Emits pair_split.csv, whose holdout half is what the
+#     correlation study in 3j must be scored on.
+python -m scripts.analysis.v3.cli detect-pni-strategy \
   --run-id as01-260728-260802 --pni-csv datasets/pni/as01.csv --peer-asn <asn>
+
+# 3i. Assign each measured pair the PNI it crossed, and price the hairpin.
+#     --strategy takes 3h's asn_verdict.strategy; leave it at argmin when that
+#     verdict is `mixed`. Grid-free, and no --all-runs: one run is one peer ASN.
+python -m scripts.analysis.v3.cli build-pni-graph \
+  --run-id as01-260728-260802 --pni-csv datasets/pni/as01.csv --peer-asn <asn> \
+  --strategy argmin \
+  --split-csv outputs/analysis/v3/as01-260728-260802/pni-strategy/pair_split.csv
 # the scatter reads that artifact directly -- no adapter, no second file
 python -m scripts.analysis.v3.cli plot-pni-delay \
   --csv outputs/analysis/v3/as01-260728-260802/pni-graph/pni_edges.csv \
   --pni-prefix sel_pni --tg-prefix target --rtt-col rtt_ms
+
+# 3j. Which sites a pair could *physically* have crossed, at 2/3 c. An exclusion
+#     rather than a fit, so it needs no model of routing policy. --decoy-trials
+#     is the permutation null; without it n_feasible has no effect size.
+python -m scripts.analysis.v3.cli build-pni-feasibility \
+  --run-id as01-260728-260802 --decoy-trials 200
+
+# 3k. Is min-RTT more linear in routing distance than in air distance? Pooled
+#     fits, a per-target paired difference, and the interaction with
+#     tg_to_nearest_pni_km, which is the form the claim is actually testable in.
+python -m scripts.analysis.v3.cli compare-pni-linearity \
+  --run-id as01-260728-260802 --holdout-only
+
+# 3l. Does Shortest-Ping fail where the target sits far from an interconnect?
+#     Grid-keyed, unlike 3h-3j: correctness is scored against seeds. Needs
+#     classify + build-proximity + build-pni-graph on the same quantization.
+python -m scripts.analysis.v3.cli breakdown-sping-pni \
+  --run-id as01-260728-260802 --grid h3 -r 4
 
 # 4. Set overlap of correct classifications (repeat per top-N)
 python -m scripts.analysis.v3.cli plot-venn --all-runs --top-n 1
@@ -207,11 +237,21 @@ bipartite-graph/
                            distance_cdf.png
 target-proximity/
   <grid>-<resolution>/     target_labels.csv  meta.json
+pni-strategy/              target_verdicts.csv  vp_verdicts.csv
+                           pair_split.csv  meta.json
 pni-graph/                 pni_edges.csv  target_nodes.csv  pni_nodes.csv  meta.json
+pni-feasibility/           feasible_pairs.csv  feasible_sites.csv
+                           feasible_null.csv  meta.json
+pni-linearity/             linearity_fits.csv  linearity_compare.csv
+                           target_linearity.csv  linearity_by_pni_distance.csv
+                           meta.json
 target-cls-accuracy/
   <grid>-<resolution>/     <method>_seed_distances.parquet  topn_accuracy.csv  manifest.json
                            accuracy_by_flag.csv  accuracy_by_taxonomy.csv
                            confusion_by_density.csv  confusion_pairs.csv
+                           sping_accuracy_by_pni_distance.csv
+                           sping_failure_strata.csv  sping_error_ecdf.csv
+                           sping_pni_manifest.json
                            overlap_{membership,intersections,pairwise}.top<N>.csv
                            overlap_venn_spec.top<N>.json
                            overlap_venn.top<N>.png  overlap_upset.top<N>.png
@@ -935,6 +975,154 @@ required column checked against the run's `target_asn` where the source CSV
 still has it, and there is no `--all-runs`. The operator runs lost `target_asn`
 to the parquet reconstruction, so `--peer-asn` asserts it and the result is
 otherwise recorded as explicitly unverified rather than silently blessed.
+
+
+## Detecting the assignment instead of assuming it (§7.3)
+
+`build-pni-graph` has to pick a rule for assigning each pair an interconnect,
+and every artifact below it inherits the choice. `detect-pni-strategy` makes
+that choice a measurement, so the chain runs
+**detect → assign → study** rather than assign-and-hope.
+
+**Three policies, scored in ranks.** `tg_nearest` (the target is served through
+its own nearest site), `vp_nearest` (the VP egresses at its own), and `argmin`
+(whichever site minimizes the two-leg path), with `air` alongside as the null.
+Each implies a different predictor of min-RTT, and the implication is cleanest
+in ranks: **an additive per-unit constant cannot reorder that unit's
+observations**, so both the fixed leg of the policy and the unit's access floor
+drop out with no floor model and nothing fitted. The price is that the same
+invariance makes the test blind to the constant leg's *magnitude* — that is a
+question for an intercept, not a correlation.
+
+**Three ways to abstain, none of them a tuned cutoff.** Too few observations;
+rules that never disagree, so the three routing predictors are literally one
+column; and an exact tie between the top two, where naming a winner would report
+the sort order rather than the data. The tie case is the interesting one: it
+fires when a target sits on its own nearest site, because `air` and
+`routing_tg_nearest` are then equal — the same collapse that makes the whole
+mechanism unobservable there. Measured on as02, abstention is 27% among targets
+within 25 km of a site and under 1% beyond 400 km, so the stratum where a site
+list is most trustworthy is the stratum where a verdict is least identifiable.
+
+**An ASN-level strategy needs two gates.** *Concentration*, an outright majority
+of determinate units, because a plurality on a 40/35/25 split is heterogeneous
+serving rather than a strategy. And *reproducibility*, that the verdict
+recomputed on the holdout half beats chance agreement — where chance is
+`sum(share**2)` over the observed class distribution, not a flat 1/4, since an
+uneven distribution agrees with itself by accident. The second gate is the one
+that bites: a share can be a clean majority while every per-unit verdict rests
+on a Spearman margin of 0.005, and a margin has no scale of its own to be judged
+against. Failing either gate the peer is `mixed` and `build-pni-graph` stays on
+`--strategy argmin` — defensible because argmin assumes no policy, **not**
+because mixedness implies it.
+
+**The split is a leakage guard, not a nicety.** The rule is chosen by agreement
+with min-RTT, so scoring `compare-pni-linearity` on the same pairs would make
+"min-RTT tracks routing distance" a fit evaluated on itself. Half of each
+target's VPs are held out by a seeded draw; `build-pni-graph --split-csv`
+carries the flag onto `pni_edges.csv` as `is_holdout`, and
+`compare-pni-linearity --holdout-only` spends it. Splitting *within* target
+means a sparse target cannot land wholly on one side. A partial split file is
+refused rather than defaulted to false, since a missing pair would silently
+re-denominate the study it gates.
+
+Because `sel_pni` is now whichever rule was in force, `compare-pni-linearity`'s
+axis is `routing_selected` rather than `routing_argmin`;
+`routing_tg_nearest` stays beside it as the fixed-site guard either way.
+
+
+## Testing the Shortest-Ping mechanism (§8.1)
+
+§8.1 explains the baseline's near-perfect classification with a three-link
+chain: traffic weighting keeps targets *at* PNI locations, min-RTT ranks VPs by
+proximity to the serving site, and nearest-answer snapping makes that VP's
+coordinate the right class. Three commands turn the links into columns.
+
+**The chain reduces to co-location, and the mechanism is invisible in the
+successes.** If the first link holds then `d(PNI,TG) ≈ 0`, so the detour ratio
+is 1 and the inflation machinery has nothing to decompose — the premise removes
+the phenomenon. And when the target sits at a site, `d(sping VP, PNI)` and
+`d(sping VP, TG)` are the same number, so the PNI account and the plain
+"closest VP is closest" account make identical predictions. Every test below is
+therefore built to read the **failures** and the far-from-PNI stratum; a pooled
+statistic is dominated by the cases that cannot discriminate.
+
+**`build-pni-feasibility` proves the near-site claim by exclusion.** Site `p` is
+feasible for a pair iff `THEORETICAL_SLOPE * [d(VP,p) + d(p,TG)] <= rtt_ms`,
+which is the sites inside an ellipse with foci VP and TG. `k` is 2/3 c and
+cannot be anything else: exclusion is sound only when `k` upper-bounds speed, so
+a calibrated speed — an average that half of all paths beat — would wrongly
+exclude the true site about half the time. The error direction is then
+favourable, because a per-target access floor inflates `rtt_ms`, enlarges the
+ellipse and admits *more* sites.
+
+Three reporting rules follow from failures this layer has already hit. The hard
+intersection across a target's VPs is emitted as `feasible_under_all_vps` and
+never used as a filter, because one anomalous constraint empties it — the same
+brittleness as `SphericalCircleMTL`. Results are stratified by `d(VP,TG)` and
+the headline is `is_sping_vp` only, because a far VP's ellipse elongates along
+the VP-target axis and admits sites near the *VP*, so its feasible ranks by
+proximity-to-target come out non-contiguous. And the empty set — the designated
+falsifier — is split by cause: since `via >= direct`, a pair beating 2/3 c on
+the direct geodesic is empty by arithmetic, so only
+`n_empty_unexplained_by_soi` is evidence of off-list serving. `empty_share`
+equals `build-pni-graph`'s `routing_soi_violation_share` by construction, and
+`meta.json` carries both so a drift between the two code paths is visible.
+
+`--decoy-trials` re-runs the identical pass against site lists of the same size
+drawn from the real sites' bounding box. With nine sites `n_feasible / n_pni`
+has 11% granularity, so a singleton feasible set says as much about the list's
+sparsity as about the network; the null is what turns it into an effect size.
+
+**`compare-pni-linearity` reduces the routing-vs-air comparison to a number.**
+Three x axes, not two: `air`, `routing_argmin`, and `routing_tg_nearest`. The
+third is the guard. `sel_pni` minimizes the two-leg sum *per pair*, so
+`routing_argmin` is a lower envelope over the site list and its linearity is
+partly self-fulfilling; fixing the site per target makes x a clean function of
+VP position, and the gap between the two axes is how much the argmin's freedom
+contributed.
+
+Pooled r-squared is the weaker half, because with ~134 VPs per target most of
+the spread is targets sitting at different access-latency floors — a model can
+win by ordering *targets* better while explaining nothing within one. So
+`target_linearity.csv` correlates **within** a target and reports the paired
+difference across targets. Pooled is still reported as
+`residual_variance_removed = 1 - (1 - r2_num) / (1 - r2_den)`, which is the
+legible form: 0.834 to 0.887 reads as 31.9%, not as 0.053. `bipartite.ols` is
+shared with `plot-pni-delay`, so the tabulated fit is the drawn one.
+
+Both are stratified by `tg_to_nearest_pni_km`, because where the target sits at
+a site the routing and air axes are *identical* and the difference is zero by
+construction. Under §7.3's own premise that is most targets, so the pooled
+paired difference is diluted by the very population the claim is about. The
+prediction is an interaction, and `meta.json`'s `interaction` block is that
+prediction as one rank correlation computed without reading the bins.
+
+**`breakdown-sping-pni` looks for the trend in the errors.** It crosses each
+method's correctness with `tg_to_nearest_pni_km` and reports, per method, the
+rank correlation of being wrong against that distance. Two controls make it
+falsifiable. **Every** method is scored over the same strata, so a trend present
+in all of them is target difficulty rather than a Shortest-Ping mechanism; and
+`sping_failure_strata.csv` carries `tg_seed_margin_km`,
+`tg_seed_nearest_vp_km` and the §8.2 taxonomy shares per stratum, because
+distance-to-interconnect correlates with rural, which correlates with VP
+sparsity.
+
+There is no kilometre threshold anywhere. Co-location is exact answer-region
+membership (`proximity.has_proximate_sping_vp`), and under nearest-seed snapping
+that quantity *is* Shortest-Ping's top-1 accuracy — so the manifest reports
+their disagreement count as a pipeline self-check, counted rather than raised.
+The bins are quantile-derived and presentation-only; the reported trend never
+reads them. Because the directory is shared with `classify` and
+`breakdown-accuracy`, every file is `sping_`-prefixed and the JSON is
+`sping_pni_manifest.json` rather than `meta.json`.
+
+**What these do not do.** No speed is calibrated here, so no artifact carries an
+estimate of the internet's propagation constant; `implied_km_per_ms` is emitted
+as a diagnostic and explicitly not as a calibration, because OLS trades slope
+against intercept (on as02 the routing fit came out *steeper* than the air fit
+despite a uniformly larger x, purely because its intercept fell 3.8 ms). A
+per-ASN low-quantile envelope with a per-target intercept is a separate command.
 
 
 ## Crossing accuracy with the strata

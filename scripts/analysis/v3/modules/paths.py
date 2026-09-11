@@ -207,6 +207,37 @@ class RunPaths:
         """
         return self.analysis_dir("pni-graph", root=root)
 
+    def pni_feasibility_dir(self, root: Path | None = None) -> Path:
+        """Speed-of-internet feasibility over the PNI sites — grid-free.
+
+        `pni_graph_dir`'s docstring holds the argument: nothing under here reads
+        a seed, a cell or an answer space, so filing it under
+        `<grid>-<resolution>/` would make `--sweep` write N byte-identical
+        copies and invite a consumer to diff two rungs expecting a difference.
+        The feasibility test is a pure function of (RTT, six coordinates, 2/3 c).
+        """
+        return self.analysis_dir("pni-feasibility", root=root)
+
+    def pni_strategy_dir(self, root: Path | None = None) -> Path:
+        """Detected site-selection policy for this run's peer — grid-free.
+
+        Grid-free for `pni_graph_dir`'s reason. Note this tree is *upstream* of
+        `pni-graph/` rather than derived from it: the verdict it holds is what
+        `build-pni-graph --strategy` consumes, so a stale directory here silently
+        parameterizes every artifact below it.
+        """
+        return self.analysis_dir("pni-strategy", root=root)
+
+    def pni_linearity_dir(self, root: Path | None = None) -> Path:
+        """min-RTT-vs-distance linearity across the three x axes — grid-free.
+
+        Grid-free for `pni_graph_dir`'s reason. Note the contrast with
+        `cls_accuracy_dir`: an r-squared here is a property of the measurement
+        campaign, not of the answer space, so the quantization that scores a
+        *prediction* is not a parameter of it.
+        """
+        return self.analysis_dir("pni-linearity", root=root)
+
     def mtl_map_dir(
         self, root: Path | None = None, *, grid: str, resolution: int
     ) -> Path:

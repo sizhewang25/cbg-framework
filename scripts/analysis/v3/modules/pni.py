@@ -179,7 +179,19 @@ _PNI_RENAME = {
     "capacity": "pni_capacity",
 }
 
-_ASSIGNMENT_RULE = "argmin_p [d(VP,p) + d(p,TG)]"
+#: The site-selection policies `build-pni-graph` can assign under. `argmin` is
+#: the default because it assumes no policy; the other two are the pure rules
+#: `detect-pni-strategy` scores, and are used only when that command declares
+#: one. A run's meta.json records which was in force, since every number below
+#: it inherits the choice.
+STRATEGIES = ("argmin", "tg_nearest", "vp_nearest")
+
+_ASSIGNMENT_RULES = {
+    "argmin": "argmin_p [d(VP,p) + d(p,TG)]",
+    "tg_nearest": "argmin_p d(p,TG)  -- the target's own nearest site, fixed per target",
+    "vp_nearest": "argmin_p d(VP,p)  -- the VP's own nearest site, fixed per VP",
+}
+_ASSIGNMENT_RULE = _ASSIGNMENT_RULES["argmin"]
 
 _ASSIGNMENT_NOTE = (
     "Geometric and parameter-free: no traceroute or BGP evidence enters. It is a "
@@ -350,14 +362,22 @@ def resolve_peer_asn(
 # ---- the assignment ---------------------------------------------------------
 
 
-def assign_pni(pairs: pd.DataFrame, pni: pd.DataFrame) -> dict:
-    """Assign every measured pair its argmin site; return the raw arrays.
+def site_leg_frames(pairs: pd.DataFrame, pni: pd.DataFrame) -> dict:
+    """The two-leg distance matrices, plus the pair -> node-row index arrays.
 
-    Chunked over pairs rather than over VP rows: the pair-indexed cost is
-    `n_pairs * n_pni` cells against `n_vps * n_targets * n_pni` for the tensor
-    form, which is never worse (`n_pairs <= n_vps * n_targets`), needs no second
-    gather to get back to pairs, and degrades gracefully on the sparse edge sets
-    a deployment has.
+    Factored out of `assign_pni` because three consumers need exactly these
+    frames: the argmin assignment below, `pni_feasibility`'s ellipse test, and
+    `pni_linearity`'s fixed-site axis. Rebuilding them per consumer would be
+    cheap in time and expensive in agreement — `assign_pni`'s tie rule is a
+    property of the site frame's *order*, so a second construction that sorted
+    differently would silently pick different winners while every artifact still
+    looked plausible.
+
+    Both node frames are sorted by id, so the returned index arrays are stable
+    under any permutation of `pairs`. `d_vp_p` is (unique VPs x sites), `d_tg_p`
+    is (unique targets x sites), `d_pp` is (sites x sites); the site axis is in
+    `pni`'s row order, which `load_pni_sites` and `build_pni_graph` both sort by
+    `pni_id`.
     """
     vp = (
         pairs.drop_duplicates("vp_id")[["vp_id", "vp_lat", "vp_lon"]]
@@ -377,11 +397,54 @@ def assign_pni(pairs: pd.DataFrame, pni: pd.DataFrame) -> dict:
 
     p_lat = pni["pni_lat"].to_numpy(float)
     p_lon = pni["pni_lon"].to_numpy(float)
-    d_vp_p = pairwise_km(vp["vp_lat"].to_numpy(float), vp["vp_lon"].to_numpy(float), p_lat, p_lon)
-    d_tg_p = pairwise_km(
-        tg["target_lat"].to_numpy(float), tg["target_lon"].to_numpy(float), p_lat, p_lon
-    )
-    d_pp = pairwise_km(p_lat, p_lon)
+    return {
+        "vp": vp,
+        "tg": tg,
+        "e_vp": e_vp,
+        "e_tg": e_tg,
+        "d_vp_p": pairwise_km(
+            vp["vp_lat"].to_numpy(float), vp["vp_lon"].to_numpy(float), p_lat, p_lon
+        ),
+        "d_tg_p": pairwise_km(
+            tg["target_lat"].to_numpy(float), tg["target_lon"].to_numpy(float), p_lat, p_lon
+        ),
+        "d_pp": pairwise_km(p_lat, p_lon),
+    }
+
+
+def assign_pni(
+    pairs: pd.DataFrame,
+    pni: pd.DataFrame,
+    *,
+    frames: dict | None = None,
+    strategy: str = "argmin",
+) -> dict:
+    """Assign every measured pair its argmin site; return the raw arrays.
+
+    `frames` accepts an already-built `site_leg_frames` result, so a caller that
+    needs the matrices for its own reduction as well -- `pni_strategy` scores
+    three selection rules over them -- does not build them a second time. At a
+    thousand sites that second build is hundreds of megabytes, not a rounding
+    error.
+
+    Chunked over pairs rather than over VP rows: the pair-indexed cost is
+    `n_pairs * n_pni` cells against `n_vps * n_targets * n_pni` for the tensor
+    form, which is never worse (`n_pairs <= n_vps * n_targets`), needs no second
+    gather to get back to pairs, and degrades gracefully on the sparse edge sets
+    a deployment has.
+
+    `strategy` selects the rule. `argmin` is the default and the only one that
+    assumes no policy; `tg_nearest` and `vp_nearest` are the pure rules, used
+    when `detect-pni-strategy` has declared one. Under those two the choice is a
+    per-target or per-VP constant, so no chunked scan and no tie-break arises
+    and `tied` is all-False -- there is nothing to tie.
+    """
+    if strategy not in STRATEGIES:
+        raise ValueError(f"strategy must be one of {list(STRATEGIES)}, got {strategy!r}")
+    frames = frames if frames is not None else site_leg_frames(pairs, pni)
+    vp, tg = frames["vp"], frames["tg"]
+    e_vp, e_tg = frames["e_vp"], frames["e_tg"]
+    d_vp_p, d_tg_p, d_pp = frames["d_vp_p"], frames["d_tg_p"], frames["d_pp"]
 
     n_e = int(len(pairs))
     n_p = int(len(pni))
@@ -389,6 +452,21 @@ def assign_pni(pairs: pd.DataFrame, pni: pd.DataFrame) -> dict:
     best = np.empty(n_e, dtype=float)
     tied = np.zeros(n_e, dtype=bool)
     chunk = max(_ARGMIN_CHUNK_CELLS // max(n_p, 1), 1)
+
+    tg_nearest = d_tg_p.argmin(axis=1).astype(np.intp)
+    if strategy != "argmin":
+        fixed = (
+            tg_nearest[e_tg]
+            if strategy == "tg_nearest"
+            else d_vp_p.argmin(axis=1).astype(np.intp)[e_vp]
+        )
+        sel = fixed
+        best = d_vp_p[e_vp, sel] + d_tg_p[e_tg, sel]
+        return _assignment(
+            vp, tg, e_vp, e_tg, sel, tied, best, d_vp_p, d_tg_p, d_pp,
+            tg_nearest, chunk, strategy,
+        )
+
     for start in range(0, n_e, chunk):
         stop = min(start + chunk, n_e)
         cost = d_vp_p[e_vp[start:stop], :] + d_tg_p[e_tg[start:stop], :]
@@ -406,9 +484,16 @@ def assign_pni(pairs: pd.DataFrame, pni: pd.DataFrame) -> dict:
         tied[start:stop] = within.sum(axis=1) > 1
         del cost, within
 
-    tg_nearest = d_tg_p.argmin(axis=1).astype(np.intp)
-    tg_nearest_km = d_tg_p[np.arange(len(tg)), tg_nearest]
+    return _assignment(
+        vp, tg, e_vp, e_tg, sel, tied, best, d_vp_p, d_tg_p, d_pp,
+        tg_nearest, chunk, strategy,
+    )
 
+
+def _assignment(
+    vp, tg, e_vp, e_tg, sel, tied, best, d_vp_p, d_tg_p, d_pp, tg_nearest, chunk, strategy
+) -> dict:
+    """The return contract, shared so every strategy emits the same keys."""
     return {
         "vp": vp,
         "tg": tg,
@@ -420,9 +505,10 @@ def assign_pni(pairs: pd.DataFrame, pni: pd.DataFrame) -> dict:
         "vp_to_sel_pni_km": d_vp_p[e_vp, sel],
         "sel_pni_to_tg_km": d_tg_p[e_tg, sel],
         "tg_nearest": tg_nearest,
-        "tg_nearest_km": tg_nearest_km,
+        "tg_nearest_km": d_tg_p[np.arange(len(tg)), tg_nearest],
         "sel_pni_to_tg_nearest_pni_km": d_pp[sel, tg_nearest[e_tg]],
         "chunk_pairs": int(chunk),
+        "strategy": strategy,
     }
 
 
@@ -583,6 +669,8 @@ def build_pni_graph(
     pairs: pd.DataFrame,
     pni: pd.DataFrame,
     *,
+    strategy: str = "argmin",
+    pair_split: pd.DataFrame | None = None,
     source_label: str | None = None,
     source_csv: Path | None = None,
     pni_csv: Path | None = None,
@@ -609,7 +697,7 @@ def build_pni_graph(
     # order. Trusting the caller to have sorted would make the assignment depend
     # on how the site list happened to arrive.
     pni = pni.sort_values("pni_id").reset_index(drop=True)
-    a = assign_pni(pairs, pni)
+    a = assign_pni(pairs, pni, strategy=strategy)
 
     rtt = pairs["rtt_ms"].to_numpy(float)
     direct = pairs["gc_km"].to_numpy(float)
@@ -659,6 +747,32 @@ def build_pni_graph(
     # reader `classify` and `proximity` use, rather than from re-minimizing RTT
     # here -- a second derivation would break ties differently and the flag
     # would stop naming the VP the baseline is actually scored on.
+    if pair_split is not None:
+        # Carried rather than recomputed so the split has exactly one
+        # definition. Every study downstream that must score on held-out pairs
+        # reads this column, and `plot-pni-delay --where is_holdout` works on it
+        # unchanged.
+        want = {
+            (str(v), str(t)): bool(h)
+            for v, t, h in zip(
+                pair_split["vp_id"], pair_split["target_id"], pair_split["is_holdout"]
+            )
+        }
+        missing = 0
+        flags = []
+        for v, t in zip(edges["vp_id"], edges["target_id"]):
+            key = (str(v), str(t))
+            if key not in want:
+                missing += 1
+            flags.append(want.get(key, False))
+        if missing:
+            raise ValueError(
+                f"--split-csv covers {len(want)} pairs but {missing} of this run's "
+                f"{len(edges)} edges are absent from it; a partial split would "
+                f"silently re-denominate every study scored on it"
+            )
+        edges["is_holdout"] = flags
+
     if sping is not None:
         want = set(
             zip(sping["target_id"].astype(str), sping["sping_vp_id"].astype(str))
@@ -705,7 +819,13 @@ def build_pni_graph(
             **asn_diag,
         },
         "assignment": {
-            "rule": _ASSIGNMENT_RULE,
+            "strategy": strategy,
+            "rule": _ASSIGNMENT_RULES[strategy],
+            "strategy_source": (
+                "argmin is the default and assumes no policy; a pure rule here "
+                "means detect-pni-strategy declared one, and every number "
+                "downstream of this artifact inherits the choice"
+            ),
             "n_ties": int(edges["sel_pni_is_tied"].sum()),
             "tie_share": round(float(edges["sel_pni_is_tied"].mean()), _RATIO_DIGITS),
             "tie_eps_km": _TIE_EPS,
@@ -825,6 +945,8 @@ def build_for_run(
     analysis_root: Path | None = None,
     source_csv: Path | None = None,
     peer_asn: int | None = None,
+    strategy: str = "argmin",
+    split_csv: Path | None = None,
 ) -> tuple[PniGraph, Path]:
     """Resolve this run's inputs, build, and say where the result belongs."""
     from scripts.benchmark.v2.eval_source import build_pairs, load_canonical_csv
@@ -843,6 +965,8 @@ def build_for_run(
     graph = build_pni_graph(
         pairs,
         pni,
+        strategy=strategy,
+        pair_split=pd.read_csv(split_csv) if split_csv else None,
         source_label=f"{run.run_id}/{run.source}/{run.setup}",
         source_csv=csv_path,
         pni_csv=Path(pni_csv),
@@ -896,6 +1020,23 @@ def register(app: typer.Typer) -> None:
             "check --pni-csv against (the operator runs lost that column). A "
             "mismatch is refused either way.",
         ),
+        strategy: str = typer.Option(
+            "argmin",
+            "--strategy",
+            help="Site-selection rule: `argmin` (default, assumes no policy), "
+            "`tg_nearest` or `vp_nearest`. Pass a pure rule only when "
+            "`detect-pni-strategy` has declared one; it records the verdict as "
+            "asn_verdict.strategy.",
+        ),
+        split_csv: Path = typer.Option(
+            None,
+            "--split-csv",
+            exists=True,
+            dir_okay=False,
+            help="pair_split.csv from `detect-pni-strategy`. Adds an "
+            "`is_holdout` column so a study downstream can be scored on pairs "
+            "the strategy was not chosen from.",
+        ),
         source_csv: Path = typer.Option(
             None,
             help="Canonical (vp_id, target_id, rtt_ms) CSV. Defaults to the path "
@@ -915,12 +1056,16 @@ def register(app: typer.Typer) -> None:
         answer space enters.
         """
         run = resolve_run(run_id, outputs_root)
+        if strategy not in STRATEGIES:
+            raise typer.BadParameter(f"--strategy must be one of {list(STRATEGIES)}")
         graph, out_dir = build_for_run(
             run,
             pni_csv=pni_csv,
             analysis_root=analysis_root,
             source_csv=source_csv,
             peer_asn=peer_asn,
+            strategy=strategy,
+            split_csv=split_csv,
         )
         graph.write(out_dir)
 
@@ -934,6 +1079,6 @@ def register(app: typer.Typer) -> None:
         agreement = graph.meta["agreement"]["sel_pni_is_tg_nearest_share"]
         typer.echo(
             f"{run.run_id}: {graph.meta['inputs']['n_pairs']} pairs over "
-            f"{graph.meta['inputs']['n_pni']} sites, "
+            f"{graph.meta['inputs']['n_pni']} sites under --strategy {strategy}, "
             f"{agreement:.1%} assigned the target's nearest site -> {out_dir}"
         )
