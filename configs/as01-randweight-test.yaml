@@ -1,0 +1,54 @@
+# Traffic-weighted materialization test on SYNTHETIC random weights.
+#
+#   .venv/bin/python -m scripts.processing.source.assign_random_weights \
+#       --input datasets/final/as01-20260728-20260802.mainland.sanitized.csv --seed 42
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile configs/as01-randweight-test.yaml -j 4 --until materialize
+#
+# The weights are uniform[0,1] i.i.d. per row, which is NOT what real traffic
+# looks like: it is flat rather than heavy-tailed, and independent per flow
+# rather than concentrated on targets. A 0.95 cut therefore keeps ~78% of flows
+# spread evenly over every target and eliminates NO VPs and NO targets. This
+# config validates the plumbing -- threshold derivation, the eval-side mask,
+# fold independence, parquet round-trip -- and deliberately not node loss.
+# See the module docstring of assign_random_weights.py.
+
+run_id: as01-randweight-test
+
+benchmark:
+  source: generic_csv
+  setup: anchors_to_probes
+  slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+  source_kwargs:
+    csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.randweight.csv
+    k: 5
+    seed: 42
+    asn_bucket_top_n: 20
+
+  # Traffic-weighted arm. Left unset because this mesh carries no `weight`
+  # column; setting it here is a hard error by design, since the synthesized
+  # 1.0 fill would make any threshold <= 1.0 retain 100% of flows and publish
+  # an unweighted run as the weighted arm. Point csv_path at a weight-bearing
+  # mesh and uncomment to enable.
+  eval_kept_traffic_fraction: 0.95
+
+  enable_fallback: true
+  seed: 42
+
+  combos:
+    # One cheap combo: this test is about the config -> inputs path, not about
+    # method coverage. See scripts/benchmark/v2/config/traffic_weighted.yaml
+    # for the full 14-combo grid.
+    - combo_id: vanilla_cbg
+      ltd: low_envelope
+      mtl: spherical_circle
+      ctr: boundary_vertex_mean
+      mtl_kwargs:
+        speed_ratio: 0.6667
+        enable_circle_filter: true
+
+analysis:
+  common:
+    grid: h3
+    resolution: [4]
