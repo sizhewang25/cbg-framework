@@ -11,7 +11,7 @@ post-hoc forensic analysis.
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [cli.py](cli.py)               | Typer commands: `materialize-inputs`, `run-combo`, `summarize`, `eval-source`, `build-airports`, `airport-eval`, `label-geo-for-targets`, `materialize-target-space`                                                                                                                      |
 | [Snakefile](Snakefile)         | Parameterizes the (source × slice × combo) grid                                                                                                                                                                                  |
-| [sources/](sources/)           | DataSource adapters — [generic_csv.py](sources/generic_csv.py), [generic_presplit.py](sources/generic_presplit.py), [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py). See [sources/README.md](sources/README.md) for the contract + how to add your own. |
+| [sources/](sources/)           | DataSource adapters — [generic_csv.py](sources/generic_csv.py), [traffic_weighted_csv.py](sources/traffic_weighted_csv.py), [generic_presplit.py](sources/generic_presplit.py), [vultr_csv.py](sources/vultr_csv.py), [ripe_atlas.py](sources/ripe_atlas.py). See [sources/README.md](sources/README.md) for the contract + how to add your own. |
 | [inputs.py](inputs.py)         | Materializes a DataSource into three parquets                                                                                                                                                                                    |
 | [runner.py](runner.py)         | Per-combo fit + geolocate loop with instrumentation                                                                                                                                                                              |
 | [checkpoint.py](checkpoint.py) | Picks LTD checkpoint snapshot (or `.stateless` marker)                                                                                                                                                                           |
@@ -134,7 +134,11 @@ outputs/<run_id>/<source>/<setup>/<slice>/<combo_id>/{run.json, targets.parquet,
 
 ## Traffic-weighted eval
 
-Eval targets and eval observations can be restricted to the flows that
+Handled by its own source, **`traffic_weighted_csv`** — `generic_csv` reads
+the `weight` column but never filters on it, and rejects the weighted-eval
+flags outright (exit 2, naming the source that accepts them).
+
+Eval targets and eval observations are restricted to the flows that
 actually carry traffic, while LTD training keeps the **full mesh**. This is
 the operator view: score the targets an operator cares about, on a model
 that saw everything.
@@ -148,6 +152,13 @@ weighted-eval threshold). Requesting a weighted eval against a CSV with
 **no** `weight` column is a hard error, because the 1.0 fill would make
 every threshold ≤ 1.0 retain 100% of flows — a "weighted" run byte-identical
 to the unweighted one.
+
+The subset is a **set of `(vp_id, target_id)` flows**, named either by a
+precomputed CSV (`weighted_csv_path`, produced by
+`scripts/processing/source/derive_traffic_weighted_cbg_data.smk`) or derived
+on the fly from a fraction. The two agree at the same fraction by
+construction. Precomputed mode needs no `weight` column on the mesh, since it
+consults none.
 
 There is no traffic-based *split*. The split stays the geo-stratified
 `fold_N` K-fold over the full ground-truth set (every target trains in K−1
@@ -181,8 +192,8 @@ a distinct `run_id` per threshold (inputs live under
 # k-fold + traffic-masked eval: full-mesh training, eval only the
 # targets/flows with weight >= 5.0 in each fold
 poetry run python -m scripts.benchmark.v2.cli materialize-inputs \
-    --source generic_csv --slice fold_0 --run-id ktraffic-001 \
-    --source-kwargs '{"csv_path": "path/to/weighted.csv"}' \
+    --source traffic_weighted_csv --slice fold_0 --run-id ktraffic-001 \
+    --source-kwargs '{"mesh_csv_path": "path/to/weighted.csv"}' \
     --eval-pair-weight-min 5.0
 ```
 
@@ -212,8 +223,8 @@ benchmark consumes the weight-bearing mesh and derives the threshold itself.
 ```bash
 # keep the flows carrying 95% of mesh traffic; full-mesh training
 poetry run python -m scripts.benchmark.v2.cli materialize-inputs \
-    --source generic_csv --slice fold_0 --run-id ktraffic-002 \
-    --source-kwargs '{"csv_path": "path/to/weighted.csv"}' \
+    --source traffic_weighted_csv --slice fold_0 --run-id ktraffic-002 \
+    --source-kwargs '{"mesh_csv_path": "path/to/weighted.csv"}' \
     --eval-kept-traffic-fraction 0.95
 ```
 

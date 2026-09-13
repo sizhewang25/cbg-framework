@@ -41,18 +41,40 @@
 
 from pathlib import Path
 
-SRC_KWARGS = config.get("source_kwargs", {}) or {}
-if "csv_path" in SRC_KWARGS:
+# Same nested-then-flat resolution as ./Snakefile's `bcfg`, so a key under a
+# unified config's `benchmark:` block is visible here too. Without this a
+# nested `eval_kept_traffic_fraction` is silently ignored and the precheck
+# scores a wider set than the benchmark evaluates.
+_BENCH = config.get("benchmark") or {}
+
+
+def bcfg(key, default=None):
+    return _BENCH[key] if key in _BENCH else config.get(key, default)
+
+
+SRC_KWARGS = bcfg("source_kwargs", {}) or {}
+
+# `weighted_csv_path` (traffic_weighted_csv, precomputed mode) IS the
+# traffic-weighted dataset, so score it directly and apply no further eval
+# filter. Every other source scores its mesh and mirrors the filters below.
+_PRECOMPUTED_WEIGHTED = "weighted_csv_path" in SRC_KWARGS
+if _PRECOMPUTED_WEIGHTED:
+    CSV_PATH = Path(SRC_KWARGS["weighted_csv_path"])
+elif "mesh_csv_path" in SRC_KWARGS:
+    CSV_PATH = Path(SRC_KWARGS["mesh_csv_path"])
+elif "csv_path" in SRC_KWARGS:
     CSV_PATH = Path(SRC_KWARGS["csv_path"])
 elif "test_path" in SRC_KWARGS:
     CSV_PATH = Path(SRC_KWARGS["test_path"])
 else:
     raise ValueError(
-        "inspect_dataset.smk needs source_kwargs.csv_path (generic_csv) or "
-        "source_kwargs.test_path (generic_presplit) in the config yaml"
+        "inspect_dataset.smk needs source_kwargs.csv_path (generic_csv), "
+        "source_kwargs.mesh_csv_path / weighted_csv_path "
+        "(traffic_weighted_csv), or source_kwargs.test_path "
+        "(generic_presplit) in the config yaml"
     )
 
-PRECHECK = config.get("precheck", {}) or {}
+PRECHECK = bcfg("precheck", {}) or {}
 
 CLUSTER_RADIUS_KM = float(PRECHECK.get("cluster_radius_km", 50.0))
 TOP_N_NEIGHBORS = int(PRECHECK.get("top_n_neighbors", 5))
@@ -64,8 +86,17 @@ LANDMASS = PRECHECK.get("landmass")
 # (not from `precheck:`) so the precheck can never drift from what
 # materialize-inputs would actually evaluate.
 MIN_OBS = SRC_KWARGS.get("min_obs")
-EVAL_PAIR_WEIGHT_MIN = config.get("eval_pair_weight_min")
-EVAL_KEPT_TRAFFIC_FRACTION = config.get("eval_kept_traffic_fraction")
+# In precomputed mode the CSV above is already the filtered subset, so
+# re-applying a threshold would cut it twice.
+EVAL_PAIR_WEIGHT_MIN = (
+    None if _PRECOMPUTED_WEIGHTED
+    else (bcfg("eval_pair_weight_min") or SRC_KWARGS.get("eval_pair_weight_min"))
+)
+EVAL_KEPT_TRAFFIC_FRACTION = (
+    None if _PRECOMPUTED_WEIGHTED
+    else (bcfg("eval_kept_traffic_fraction")
+          or SRC_KWARGS.get("eval_kept_traffic_fraction"))
+)
 if EVAL_PAIR_WEIGHT_MIN is not None and EVAL_KEPT_TRAFFIC_FRACTION is not None:
     raise ValueError(
         "config has both eval_pair_weight_min and eval_kept_traffic_fraction "

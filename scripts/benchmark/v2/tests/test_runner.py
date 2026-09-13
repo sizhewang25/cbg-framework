@@ -19,6 +19,7 @@ import pyarrow.parquet as pq
 from scripts.benchmark.v2.inputs import materialize_inputs, outputs_combo_dir
 from scripts.benchmark.v2.runner import ComboSpec, run_one_combo
 from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
+from scripts.benchmark.v2.sources.traffic_weighted_csv import TrafficWeightedCSVSource
 
 
 # Canonical-schema synth CSV: vp_* = anchor side (acting as VP),
@@ -316,8 +317,8 @@ class TestPairWeightEval(unittest.TestCase):
         only clearing obs (2001's 8.0 row), dropped targets are absent, the
         manifest counts reflect the mask — and fit_samples stay full-mesh,
         identical to the unfiltered materialization."""
-        src = GenericCSVSource(
-            slice="all", setup="anchors_to_probes", csv_path=self.csv_path,
+        src = TrafficWeightedCSVSource(
+            slice="all", setup="anchors_to_probes", mesh_csv_path=self.csv_path,
             eval_pair_weight_min=5.0,
         )
         inputs_dir = materialize_inputs(
@@ -340,8 +341,8 @@ class TestPairWeightEval(unittest.TestCase):
     def test_materialize_time_eval_kept_fraction_bakes_into_parquet(self) -> None:
         """eval_kept_traffic_fraction derives a threshold at materialize time,
         then applies eval-only filtering; fit_samples remain full-mesh."""
-        src = GenericCSVSource(
-            slice="all", setup="anchors_to_probes", csv_path=self.csv_path,
+        src = TrafficWeightedCSVSource(
+            slice="all", setup="anchors_to_probes", mesh_csv_path=self.csv_path,
             eval_kept_traffic_fraction=0.95,
         )
         inputs_dir = materialize_inputs(
@@ -365,8 +366,8 @@ class TestPairWeightEval(unittest.TestCase):
 
     def test_materialize_time_eval_kept_fraction_can_drop_a_target(self) -> None:
         """A tighter fraction drops the all-light target; fit stays full-mesh."""
-        src = GenericCSVSource(
-            slice="all", setup="anchors_to_probes", csv_path=self.csv_path,
+        src = TrafficWeightedCSVSource(
+            slice="all", setup="anchors_to_probes", mesh_csv_path=self.csv_path,
             eval_kept_traffic_fraction=0.8,
         )
         inputs_dir = materialize_inputs(

@@ -11,7 +11,7 @@ the whole dataset were the evaluation set", with every property made explicit.
 "Whole dataset" defaults to every row, but when the benchmark's own
 `source_kwargs.min_obs` or top-level `eval_pair_weight_min` /
 `eval_kept_traffic_fraction` yaml keys are set, the *actual* eval set a
-GenericCSVSource/GenericPresplitSource run would see is already a filtered
+TrafficWeightedCSVSource/GenericPresplitSource run would see is already a filtered
 subset — pass the matching `min_obs`/`eval_pair_weight_min`/
 `eval_kept_traffic_fraction` kwargs (see `apply_eval_target_filters`) so the
 precheck scores that subset instead of silently diverging from it. The
@@ -156,7 +156,7 @@ _REQUIRED = (
 
 # Kept alongside the required columns, when present, so the eval-side filters
 # below (min_obs / eval_pair_weight_min / eval_kept_traffic_fraction) can be
-# applied identically to how GenericCSVSource/GenericPresplitSource do it at
+# applied identically to how TrafficWeightedCSVSource/GenericPresplitSource do it at
 # materialize time. `_raw_str` opts target_city out of pandas' NA-sentinel
 # coercion, same reason as generic_csv.py's `_OPTIONAL_STR`.
 _OPTIONAL_FOR_FILTERS = ("weight", "target_city")
@@ -217,7 +217,7 @@ _PCTS = (5, 25, 50, 75, 95)
 
 def load_canonical_csv(csv_path: Path) -> pd.DataFrame:
     """Load the required canonical columns, case-insensitively, dropping rows
-    with missing values or non-positive RTTs (mirrors GenericCSVSource).
+    with missing values or non-positive RTTs (mirrors TrafficWeightedCSVSource).
 
     Also keeps `weight` (normalized to a numeric >=0 column, defaulting to
     1.0 when absent — same two-default convention as generic_csv.py) and
@@ -263,7 +263,7 @@ def apply_eval_target_filters(
     eval_kept_traffic_fraction: float | None = None,
 ) -> tuple[pd.DataFrame, float | None]:
     """Restrict `df` to the rows a real benchmark run's eval_observations.parquet
-    would actually contain, mirroring GenericCSVSource/GenericPresplitSource's
+    would actually contain, mirroring TrafficWeightedCSVSource/GenericPresplitSource's
     materialize-time eval-side filters (see sources/generic_csv.py's
     `_apply_min_obs_filter` / `_apply_eval_weight_filter` /
     `_derive_eval_weight_min_from_fraction`). Without this, the precheck
@@ -327,7 +327,7 @@ def apply_eval_target_filters(
 
 
 def _derive_eval_pair_weight_min(df: pd.DataFrame, frac: float) -> float:
-    """Same derivation as generic_csv.py's `_derive_eval_weight_min_from_fraction`:
+    """Same derivation as traffic_weighted_csv.py's `_derive_eval_weight_min_from_fraction`:
     KEYLESS (one `(vp_id, target_id)` flow = one row; no `(vp_id, target_city)`
     dedup, so no city column is needed) and computed over the WHOLE frame, then
     descending cumulative sum to the requested kept traffic fraction.

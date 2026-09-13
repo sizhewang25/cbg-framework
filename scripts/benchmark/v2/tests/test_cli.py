@@ -133,19 +133,35 @@ class TestCLI(unittest.TestCase):
         weighted.write_text(csv)
         result = self.runner.invoke(app, [
             "materialize-inputs",
-            "--source", "generic_csv", "--slice", "all",
+            "--source", "traffic_weighted_csv", "--slice", "all",
             "--setup", "anchors_to_probes",
             "--run-id", "frac-test",
             "--inputs-root", str(self.inputs_root),
-            "--source-kwargs", json.dumps({"csv_path": str(weighted)}),
+            "--source-kwargs", json.dumps({"mesh_csv_path": str(weighted)}),
             "--eval-kept-traffic-fraction", "0.95",
         ])
         self.assertEqual(result.exit_code, 0, msg=result.output)
         manifest = (
-            self.inputs_root / "generic_csv" / "frac-test" / "anchors_to_probes" / "all"
-            / "manifest.json"
+            self.inputs_root / "traffic_weighted_csv" / "frac-test"
+            / "anchors_to_probes" / "all" / "manifest.json"
         )
         self.assertTrue(manifest.exists())
+
+    def test_materialize_rejects_weight_flag_on_an_unsupported_source(self) -> None:
+        """generic_csv no longer takes the weighted kwargs. The CLI must say so
+        and name the source that does, rather than raising a bare TypeError out
+        of the constructor."""
+        result = self.runner.invoke(app, [
+            "materialize-inputs",
+            "--source", "generic_csv", "--slice", "all",
+            "--setup", "anchors_to_probes",
+            "--run-id", "reject-test",
+            "--inputs-root", str(self.inputs_root),
+            "--source-kwargs", json.dumps({"csv_path": "unused.csv"}),
+            "--eval-kept-traffic-fraction", "0.95",
+        ])
+        self.assertEqual(result.exit_code, 2, msg=result.output)
+        self.assertIn("traffic_weighted_csv", result.output)
 
     def test_materialize_rejects_eval_threshold_and_fraction_together(self) -> None:
         result = self.runner.invoke(app, [

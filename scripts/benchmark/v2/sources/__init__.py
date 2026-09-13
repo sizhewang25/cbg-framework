@@ -12,6 +12,7 @@ from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, VpConfig
 from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
 from scripts.benchmark.v2.sources.generic_presplit import GenericPresplitSource
 from scripts.benchmark.v2.sources.ripe_atlas import RipeAtlasSource
+from scripts.benchmark.v2.sources.traffic_weighted_csv import TrafficWeightedCSVSource
 from scripts.benchmark.v2.sources.ripe_atlas_asn_corpora import (
     RipeAtlasASNCorporaSource,
 )
@@ -21,6 +22,7 @@ SOURCES: dict[str, type[DataSource]] = {
     RipeAtlasASNCorporaSource.name: RipeAtlasASNCorporaSource,
     GenericCSVSource.name: GenericCSVSource,
     GenericPresplitSource.name: GenericPresplitSource,
+    TrafficWeightedCSVSource.name: TrafficWeightedCSVSource,
 }
 
 __all__ = [
@@ -31,5 +33,6 @@ __all__ = [
     "RipeAtlasASNCorporaSource",
     "GenericCSVSource",
     "GenericPresplitSource",
+    "TrafficWeightedCSVSource",
     "SOURCES",
 ]

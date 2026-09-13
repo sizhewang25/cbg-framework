@@ -1,48 +1,51 @@
 # Traffic-weighted arm — the operator view for paper §8.1.
 #
-# Identical to the unweighted (mesh) arm except for ONE top-level key:
-# `eval_kept_traffic_fraction`. That key is read at Snakefile top level, NOT
-# inside source_kwargs.
+# Identical to the unweighted (mesh) arm except that it uses the
+# `traffic_weighted_csv` source, which restricts the EVAL side to the
+# traffic-weighted subset while fit keeps the full mesh at full edge density.
 #
-# What it does: GenericCSVSource sums `weight` over EVERY row of the mesh,
-# ranks flows descending, and cuts at the smallest prefix holding >= that
-# fraction of total traffic. Eval targets are then fold_N ∩ {targets with >= 1
-# surviving flow}, scored on their surviving flows only. The fit side is
-# untouched — training always sees the full mesh at full edge density.
+# Two ways to name that subset; pick exactly one:
+#
+#   on-the-fly    eval_kept_traffic_fraction: 0.95   (below)
+#                 derives the cut from the mesh's own weights.
+#   precomputed   source_kwargs.weighted_csv_path: <stem>.traffic-weighted.csv
+#                 reads the subset off the file that
+#                 scripts/processing/source/derive_traffic_weighted_cbg_data.smk
+#                 emits beside the mesh. Needs no `weight` column on the mesh.
+#
+# They are equivalent at the same fraction — both run the identical keyless
+# whole-mesh derivation. Prefer precomputed when the CSV is also wanted for
+# plotting or dataset characterisation.
 #
 # Three constraints:
-#   1. `run_id` MUST differ from the mesh arm's. The flag changes the
-#      MATERIALIZED inputs, so reusing a run_id silently serves stale
-#      unweighted parquet.
-#   2. `csv_path`, `k`, `seed`, `asn_bucket_top_n` MUST match the mesh arm
-#      exactly, or the folds differ and the §8.1 comparison is unpaired.
-#   3. Do NOT also set `eval_pair_weight_min` — mutually exclusive (raises).
-#      It stays available as the raw-threshold escape hatch.
-#
-# The csv_path below must be the WEIGHT-BEARING mesh. It is NOT the
-# `.traffic-weighted.csv` that derive_traffic_weighted_cbg_data.smk emits —
-# that artifact is for dataset-characterisation figures only, and the
-# benchmark derives the identical threshold itself.
+#   1. `run_id` MUST differ from the mesh arm's. The weighted arm materializes
+#      under a separate source tree (inputs/<source>/<run_id>/...), and
+#      analysis/v3 `resolve_run` raises if one run_id holds two (source, setup)
+#      pairs.
+#   2. `mesh_csv_path`, `k`, `seed`, `asn_bucket_top_n` MUST match the mesh
+#      arm exactly, or the folds differ and the §8.1 comparison is unpaired.
+#   3. `eval_pair_weight_min` is the raw-threshold escape hatch; it is mutually
+#      exclusive with both of the above.
 #
 # Run with:
 #   snakemake -s scripts/benchmark/v2/Snakefile \
 #       --configfile scripts/benchmark/v2/config/traffic_weighted.yaml -j 4
 
 run_id: traffic-weighted-001
-source: generic_csv
+source: traffic_weighted_csv
 setup: anchors_to_probes
 slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
 
 source_kwargs:
-  csv_path: datasets/final/<stem>.csv    # REPLACE: the weight-bearing mesh
+  mesh_csv_path: datasets/final/<stem>.csv   # REPLACE: the full mesh (fit corpus)
+  # weighted_csv_path: datasets/final/<stem>.traffic-weighted.csv  # precomputed mode
   k: 5
   seed: 42
   asn_bucket_top_n: 20
 
-# The traffic gate. 0.95 keeps the flows carrying 95% of mesh traffic.
-# Cross-check the derived threshold against the summary.json emitted by
-# scripts/processing/source/derive_traffic_weighted_cbg_data.smk — they must
-# agree, since both run the same keyless whole-mesh derivation.
+# The traffic gate (on-the-fly mode). 0.95 keeps the flows carrying 95% of mesh
+# traffic. Comment this out and uncomment `weighted_csv_path` above to switch to
+# precomputed mode; the two agree by construction.
 eval_kept_traffic_fraction: 0.95
 
 enable_fallback: true

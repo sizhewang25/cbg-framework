@@ -4,9 +4,10 @@ Two things are load-bearing here and easy to regress:
 
   * the descending-cumsum boundary (`side="left"` plus the `min(idx, len-1)`
     clamp), and
-  * agreement with `GenericCSVSource._derive_eval_weight_min_from_fraction` —
-    if the two drift, the dataset-characterisation figures describe a different
-    subset than the benchmark actually scores.
+  * agreement with
+    `TrafficWeightedCSVSource._derive_eval_weight_min_from_fraction` — if the
+    two drift, this script's CSV (precomputed mode) stops matching what the
+    benchmark derives on the fly, and the two modes diverge.
 """
 
 from __future__ import annotations
@@ -233,11 +234,17 @@ class TestDefaultPaths(unittest.TestCase):
         self.assertNotEqual(summary.name, "as02.mainland.sanitized.summary.json")
 
 
-class TestAgreesWithGenericCSVSource(unittest.TestCase):
-    """The script and the benchmark must derive the same threshold."""
+class TestAgreesWithTrafficWeightedCSVSource(unittest.TestCase):
+    """The script and the benchmark must derive the same threshold.
+
+    They are two implementations of one kernel; if they drift, precomputed mode
+    (which reads this script's CSV) and on-the-fly mode stop agreeing.
+    """
 
     def test_thresholds_match(self) -> None:
-        from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
+        from scripts.benchmark.v2.sources.traffic_weighted_csv import (
+            TrafficWeightedCSVSource,
+        )
 
         df = _mesh([
             ("v1", "t1", 10.0), ("v2", "t1", 6.0), ("v3", "t1", 1.0),
@@ -248,8 +255,8 @@ class TestAgreesWithGenericCSVSource(unittest.TestCase):
             df.to_csv(path, index=False)
             for frac in (0.5, 0.75, 0.95, 1.0):
                 _, summary = filter_flows(df, kept_traffic_fraction=frac)
-                src = GenericCSVSource(
-                    slice="all", setup="anchors_to_probes", csv_path=path,
+                src = TrafficWeightedCSVSource(
+                    slice="all", setup="anchors_to_probes", mesh_csv_path=path,
                     eval_kept_traffic_fraction=frac,
                 )
                 list(src.iter_eval_targets())
@@ -260,7 +267,9 @@ class TestAgreesWithGenericCSVSource(unittest.TestCase):
                 )
 
     def test_surviving_targets_match_the_benchmarks_eval_roster(self) -> None:
-        from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
+        from scripts.benchmark.v2.sources.traffic_weighted_csv import (
+            TrafficWeightedCSVSource,
+        )
 
         df = _mesh([
             ("v1", "t1", 10.0), ("v2", "t1", 6.0),
@@ -270,8 +279,8 @@ class TestAgreesWithGenericCSVSource(unittest.TestCase):
             path = Path(tmp) / "mesh.csv"
             df.to_csv(path, index=False)
             _, summary = filter_flows(df, kept_traffic_fraction=0.9)
-            src = GenericCSVSource(
-                slice="all", setup="anchors_to_probes", csv_path=path,
+            src = TrafficWeightedCSVSource(
+                slice="all", setup="anchors_to_probes", mesh_csv_path=path,
                 eval_kept_traffic_fraction=0.9,
             )
             roster = {t.target_id for t in src.iter_eval_targets()}

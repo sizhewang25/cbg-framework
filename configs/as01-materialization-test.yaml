@@ -29,12 +29,12 @@ benchmark:
     seed: 42
     asn_bucket_top_n: 20
 
-  # Traffic-weighted arm. Left unset because this mesh carries no `weight`
-  # column; setting it here is a hard error by design, since the synthesized
-  # 1.0 fill would make any threshold <= 1.0 retain 100% of flows and publish
-  # an unweighted run as the weighted arm. Point csv_path at a weight-bearing
-  # mesh and uncomment to enable.
-  # eval_kept_traffic_fraction: 0.95
+  # This is the MESH arm. `generic_csv` reads and carries a `weight` column
+  # through to the parquet but never filters on it, and it no longer accepts
+  # the weighted-eval kwargs at all -- passing one exits 2. For the weighted
+  # arm use `source: traffic_weighted_csv`; see
+  # configs/as01-randweight-test.yaml (on-the-fly) and
+  # configs/as01-randweight-precomputed.yaml (precomputed).
 
   enable_fallback: true
   seed: 42

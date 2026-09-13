@@ -40,30 +40,13 @@ Source kwargs (defaults match the prior VultrCSVSource):
   seed               : int = 42     — DistGeo RNG seed.
   asn_bucket_top_n   : int = 20     — DistGeo bucket cap.
   min_obs            : int = None   — drop targets with fewer VP observations.
-  eval_pair_weight_min : float = None — traffic-weighted eval mask, applied
-                       AFTER the slice's fit/eval split (and after min_obs):
-                       an eval target survives iff >= 1 of its obs has
-                       weight >= this value, and surviving targets keep
-                       only those clearing obs in iter_eval_targets. The fit
-                       side is untouched — training always sees the full
-                       mesh; only the evaluated view is traffic-restricted.
-  eval_kept_traffic_fraction : float = None — derive `eval_pair_weight_min`
-                       from the flow weights so at least this fraction of the
-                       mesh's traffic is retained, then apply the same
-                       eval-only mask above. The derivation is KEYLESS and
-                       WHOLE-MESH: `total` sums `weight` over every row in the
-                       CSV (not just eval-side rows, and not deduped by any
-                       key), flows are ranked descending and cumulated, and the
-                       smallest prefix reaching `frac * total` fixes the
-                       threshold. Whole-mesh normalization is what makes the
-                       threshold FOLD-INDEPENDENT — every `fold_N` derives the
-                       same number, so folds stay comparable and "survived
-                       traffic filtering" is a property of the traffic rather
-                       than of the partition. Mesh weights are typically shares
-                       of a larger universe (the CSV itself samples top targets
-                       per location) and need not sum to 1; renormalizing by
-                       the mesh total is what makes the fraction meaningful.
-                       Requires a real `weight` column — see `_normalize_weight`.
+
+This source is weight-AWARE but never weight-FILTERING: it reads and validates
+an optional `weight` column and carries it into `obs_weights` (so the required
+`weight` field of `EVAL_OBSERVATIONS_SCHEMA` holds real traffic), but it never
+restricts the eval set by it. For traffic-weighted evaluation use
+`TrafficWeightedCSVSource` (`traffic_weighted_csv`), which subclasses this one
+and adds the eval-side flow mask.
 """
 
 from __future__ import annotations
@@ -73,7 +56,6 @@ import re
 from pathlib import Path
 from typing import Iterator, Optional
 
-import numpy as np
 import pandas as pd
 
 from scripts.benchmark.v2.sources.base import (
@@ -135,8 +117,6 @@ class GenericCSVSource(DataSource):
         seed: int = 42,
         asn_bucket_top_n: int = 20,
         min_obs: Optional[int] = None,
-        eval_pair_weight_min: Optional[float] = None,
-        eval_kept_traffic_fraction: Optional[float] = None,
     ) -> None:
         if setup not in DataSource.ALLOWED_SETUPS:
             raise ValueError(
@@ -145,26 +125,6 @@ class GenericCSVSource(DataSource):
         if csv_path is None:
             raise ValueError(
                 f"{self.name!r} requires `csv_path` (path to a canonical-schema CSV)"
-            )
-        if eval_pair_weight_min is not None and eval_pair_weight_min < 0:
-            raise ValueError(
-                f"eval_pair_weight_min must be >= 0, got {eval_pair_weight_min}"
-            )
-        if (
-            eval_pair_weight_min is not None
-            and eval_kept_traffic_fraction is not None
-        ):
-            raise ValueError(
-                "Pass only one of eval_pair_weight_min or "
-                "eval_kept_traffic_fraction"
-            )
-        if (
-            eval_kept_traffic_fraction is not None
-            and not (0 < eval_kept_traffic_fraction <= 1)
-        ):
-            raise ValueError(
-                "eval_kept_traffic_fraction must be in (0, 1], "
-                f"got {eval_kept_traffic_fraction}"
             )
         fold_match = _FOLD_SLICE_RE.match(slice)
         if fold_match is not None:
@@ -191,8 +151,10 @@ class GenericCSVSource(DataSource):
         self._seed = seed
         self._asn_bucket_top_n = asn_bucket_top_n
         self._min_obs = min_obs
-        self._eval_pair_weight_min = eval_pair_weight_min
-        self._eval_kept_traffic_fraction = eval_kept_traffic_fraction
+        # Set by `_normalize_weight`: whether the CSV carried a real `weight`
+        # column, as opposed to the synthesized 1.0 default. Subclasses that
+        # filter on traffic need this to refuse a weightless mesh.
+        self._weight_column_present: bool = False
 
         # Lazily populated by `_ensure_loaded`.
         self._df: Optional[pd.DataFrame] = None
@@ -268,10 +230,7 @@ class GenericCSVSource(DataSource):
             obs: list[tuple[VpId, Coord, Latency]] = []
             obs_weights: list[float] = []
             for r in group.itertuples(index=False):
-                if (
-                    self._eval_pair_weight_min is not None
-                    and float(r.weight) < self._eval_pair_weight_min
-                ):
+                if not self._keep_obs(r):
                     continue
                 obs.append((
                     VpId(str(r.vp_id)),
@@ -284,6 +243,14 @@ class GenericCSVSource(DataSource):
                 obs=obs, obs_weights=obs_weights,
             )
 
+    # ---- extension hooks -----------------------------------------------------
+
+    def _keep_obs(self, row) -> bool:
+        """Per-observation eval filter. Always True here — this source evaluates
+        every observation of an eval target. `TrafficWeightedCSVSource` overrides
+        it to keep only the flows in the traffic-weighted subset."""
+        return True
+
     # ---- internals -----------------------------------------------------------
 
     def _ensure_loaded(self) -> pd.DataFrame:
@@ -293,13 +260,6 @@ class GenericCSVSource(DataSource):
                 self._apply_stratification()
             if self._min_obs is not None:
                 self._apply_min_obs_filter()
-            # Eval weight mask runs LAST: the split defines the eval set,
-            # min_obs prunes sparse targets, and this only shrinks the eval
-            # side further. The fit side is never touched.
-            if self._eval_kept_traffic_fraction is not None:
-                self._derive_eval_weight_min_from_fraction()
-            if self._eval_pair_weight_min is not None:
-                self._apply_eval_weight_filter()
         assert self._df is not None
         return self._df
 
@@ -336,22 +296,10 @@ class GenericCSVSource(DataSource):
             traffic (e.g. 1 TB) among measured values.
         """
         if "weight" not in df.columns:
-            # A traffic-weighted eval over a synthesized all-1.0 weight column
-            # is a silent no-op: every threshold <= 1.0 retains 100% of flows,
-            # so the run would be published as the "weighted" arm while being
-            # byte-identical to the unweighted one. Refuse instead.
-            if (
-                self._eval_pair_weight_min is not None
-                or self._eval_kept_traffic_fraction is not None
-            ):
-                raise ValueError(
-                    f"CSV {self._csv_path} has no 'weight' column, but a "
-                    f"traffic-weighted eval was requested "
-                    f"(eval_pair_weight_min / eval_kept_traffic_fraction). "
-                    f"Columns present: {list(df.columns)}"
-                )
+            self._weight_column_present = False
             df["weight"] = 1.0
             return df
+        self._weight_column_present = True
         df["weight"] = pd.to_numeric(df["weight"], errors="coerce")
         n_missing = int(df["weight"].isna().sum())
         if n_missing:
@@ -430,89 +378,6 @@ class GenericCSVSource(DataSource):
             len(targets), self._k, self._fold_index,
             len(eval_targets), self._k - 1, len(fit_targets),
         )
-
-    def _apply_eval_weight_filter(self) -> None:
-        """Traffic-weighted eval mask (`eval_pair_weight_min`). An eval target
-        survives iff >= 1 of its obs has weight >= the threshold;
-        iter_eval_targets then emits only the clearing obs. Fit targets and
-        fit samples are untouched (full-mesh training)."""
-        assert self._df is not None and self._eval_pair_weight_min is not None
-        df = self._df
-        thr = self._eval_pair_weight_min
-        surviving = set(df.loc[df["weight"] >= thr, "target_id"].astype(str))
-        base = (
-            self._eval_targets
-            if self._eval_targets is not None
-            else set(df["target_id"].astype(str))
-        )
-        kept = base & surviving
-        if not kept:
-            raise ValueError(
-                f"eval_pair_weight_min={thr} left zero eval targets in slice "
-                f"{self._slice!r} — the threshold exceeds the data's weights"
-            )
-        logger.info(
-            "eval_pair_weight_min=%s: eval targets %d → %d (fit side untouched)",
-            thr, len(base), len(kept),
-        )
-        self._eval_targets = kept
-
-    def _derive_eval_weight_min_from_fraction(self) -> None:
-        """Derive `eval_pair_weight_min` from whole-mesh flow traffic retention.
-
-          * WHOLE-MESH — `total` sums `weight` over every row in the CSV, not
-            just the eval-side rows. This is what makes the threshold
-            FOLD-INDEPENDENT: every `fold_N` of the same CSV derives the same
-            number, so folds stay comparable and "survived traffic filtering"
-            is a property of the traffic rather than of the partition.
-            Normalizing over eval-side rows only would give each fold a
-            different cut.
-
-        Mesh weights are typically shares of a larger universe (the CSV itself
-        samples top targets per location) and need not sum to 1; renormalizing
-        by the mesh total is what makes `frac` meaningful.
-        """
-        assert self._df is not None and self._eval_kept_traffic_fraction is not None
-        df = self._df
-        frac = self._eval_kept_traffic_fraction
-
-        weights = df["weight"].to_numpy(dtype=float)
-        total = float(weights.sum())
-        if total <= 0:
-            raise ValueError(
-                f"eval_kept_traffic_fraction={frac} needs a traffic signal, but "
-                f"the total weight over {len(weights)} flows in "
-                f"{self._csv_path} is {total} — every flow is weightless"
-            )
-
-        weights_sorted = np.sort(weights)[::-1]
-        target = frac * total
-        cum = np.cumsum(weights_sorted)
-        idx = int(np.searchsorted(cum, target, side="left"))
-        # Load-bearing clamp: `cum` sums the sorted array while `total` sums the
-        # original, so at frac=1.0 float error can put cum[-1] one ULP below
-        # `total` and push searchsorted to len(weights_sorted).
-        idx = min(idx, len(weights_sorted) - 1)
-        threshold = float(weights_sorted[idx])
-
-        kept = weights >= threshold
-        kept_flows = int(kept.sum())
-        achieved = float(weights[kept].sum() / total)
-        self._eval_pair_weight_min = threshold
-        logger.info(
-            "eval_kept_traffic_fraction=%.3f: derived "
-            "eval_pair_weight_min=%.12g over %d whole-mesh flows "
-            "(total weight %.12g); kept_flows=%d (%.2f%% traffic)",
-            frac, threshold, len(weights), total, kept_flows, 100 * achieved,
-        )
-        if achieved - frac > 0.01:
-            logger.warning(
-                "  kept traffic overshoots target by %.2f pp: %d flows tie at "
-                "the threshold weight %.12g and all are kept (>= semantics)",
-                100 * (achieved - frac),
-                int((weights == threshold).sum()),
-                threshold,
-            )
 
     def _apply_min_obs_filter(self) -> None:
         assert self._df is not None and self._min_obs is not None

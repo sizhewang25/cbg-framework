@@ -1,11 +1,12 @@
 """Prune low-traffic (vp_id, target_id) flows from a weighted mesh CSV.
 
-Dataset-characterisation tool. The benchmark does NOT consume its output: with
-`eval_kept_traffic_fraction` fixed in `GenericCSVSource`, the benchmark derives
-the same threshold itself from the weight-bearing mesh. What this script adds is
-the filtered CSV (for dataset figures) and the node-loss statistics the
-benchmark does not report -- plus an independent cross-check that both
-derivations agree.
+Produces the traffic-weighted dataset as a file. Two consumers: dataset
+characterisation / plotting, and the benchmark's `traffic_weighted_csv` source
+in "precomputed" mode (`weighted_csv_path`), where the weighted subset is read
+off this output instead of being re-derived. Passing
+`eval_kept_traffic_fraction` to that source at the same fraction is equivalent,
+since both run the keyless whole-mesh derivation below. This script additionally
+reports the VP/target node loss the benchmark does not.
 
 Algorithm -- keyless, at flow level:
   1. `total` = sum of `weight` over every row. Mesh weights are typically shares

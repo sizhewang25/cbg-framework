@@ -13,6 +13,7 @@ the (source × slice × combo) cross product.
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -126,10 +127,30 @@ def cmd_materialize_inputs(
             err=True,
         )
         raise typer.Exit(code=2)
-    if eval_pair_weight_min is not None:
-        kwargs["eval_pair_weight_min"] = eval_pair_weight_min
-    if eval_kept_traffic_fraction is not None:
-        kwargs["eval_kept_traffic_fraction"] = eval_kept_traffic_fraction
+    # Capability check before construction. Without it a weight flag aimed at a
+    # source that no longer accepts it (e.g. generic_csv since the traffic logic
+    # moved to traffic_weighted_csv) surfaces as an uncaught TypeError traceback
+    # and an opaque Snakemake rule failure. Signature-based rather than a name
+    # list, so it stays correct as sources come and go.
+    _accepted = inspect.signature(source_cls.__init__).parameters
+    for flag, value in (
+        ("eval_pair_weight_min", eval_pair_weight_min),
+        ("eval_kept_traffic_fraction", eval_kept_traffic_fraction),
+    ):
+        if value is None:
+            continue
+        if flag not in _accepted:
+            supported = sorted(
+                name for name, cls in SOURCES.items()
+                if flag in inspect.signature(cls.__init__).parameters
+            )
+            typer.echo(
+                f"--{flag.replace('_', '-')} is not supported by source "
+                f"{source!r}. Sources that accept it: {supported}.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        kwargs[flag] = value
     src = source_cls(slice=slice, setup=setup, **kwargs)
     out_dir = inputs_dir_for(src, inputs_root, run_id=run_id)
     if (out_dir / "manifest.json").exists() and not force:
@@ -359,7 +380,7 @@ def cmd_eval_source(
         None,
         help=(
             "Drop targets with fewer than this many observations before "
-            "scoring — mirrors GenericCSVSource/GenericPresplitSource's "
+            "scoring — mirrors TrafficWeightedCSVSource/GenericPresplitSource's "
             "materialize-time source_kwargs.min_obs, so the precheck matches "
             "what the benchmark run would actually evaluate."
         ),

@@ -1,7 +1,7 @@
 """Attach SYNTHETIC random flow weights to a canonical mesh CSV.
 
 Test-fixture generator, not a data-processing step. It exists so the
-traffic-weighted path (filter_weighted_flows, GenericCSVSource's
+traffic-weighted path (filter_weighted_flows, TrafficWeightedCSVSource's
 `eval_kept_traffic_fraction`) can be exercised end to end before real per-flow
 traffic volume is available.
 

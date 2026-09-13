@@ -25,7 +25,7 @@ implements the contract against a fixed canonical schema:
 | `vp_asn`, `target_asn` | int | no |
 | `vp_country`, `vp_continent`, `vp_region`, `vp_city` | str | no |
 | `target_country`, `target_continent`, `target_region`, `target_city` | str | no |
-| `pair_weight` | float (≥ 0) | no — traffic weight of the (vp, target) pair in the dataset's unit (e.g. TB); column absent → 1.0 everywhere, NaN cell in a present column → 0.0 (unknown = weightless) |
+| `weight` | float (≥ 0) | no — traffic weight of the (vp, target) flow in the dataset's unit (e.g. TB); column absent → 1.0 everywhere, NaN cell in a present column → 0.0 (unknown = weightless) |
 
 Steps:
 
@@ -36,24 +36,53 @@ Steps:
 
 Slices: `all` (everything), `head<k>` (first k targets after a
 deterministic sort — a cheap smoke slice), or `fold_N` (DistGeo K-fold
-train/test partition). Traffic enters as an eval-side mask
-(`eval_pair_weight_min` / `eval_kept_traffic_fraction`), never as a
-split. Both setups (probes_to_anchors and anchors_to_probes)
-work out of the box; the same columns play the VP role under one setup
-and the target role under the other.
+train/test partition). Both setups (probes_to_anchors and
+anchors_to_probes) work out of the box; the same columns play the VP role
+under one setup and the target role under the other.
 
-Orthogonally to the slice, the `eval_pair_weight_min` source kwarg (CLI:
-`--eval-pair-weight-min`) applies a traffic mask to the eval side at
-materialize time: after the slice's fit/eval split (and after `min_obs`),
-an eval target survives only if ≥ 1 of its obs has `pair_weight >=` the
-threshold, and surviving targets keep only those clearing obs in
-`eval_observations.parquet`. Fit samples are untouched (full-mesh
-training). Use with `fold_N` for k-fold training with traffic-weighted
-evaluation.
+`GenericCSVSource` is weight-**aware** but never weight-**filtering**: it
+reads and validates the `weight` column and carries it into
+`eval_observations.parquet`, but it never restricts the eval set by it and
+it does not accept the weighted-eval kwargs (passing one exits 2, naming
+the source that does). For traffic-weighted evaluation use
+`traffic_weighted_csv` below.
 
 To benchmark several CSVs side-by-side, subclass `GenericCSVSource` and
 give each subclass a distinct `name` — that's the only thing that
 distinguishes them in the on-disk tree and the `SOURCES` registry.
+`TrafficWeightedCSVSource` is exactly this pattern.
+
+### `traffic_weighted_csv` — K-fold on a mesh, evaluated on traffic-heavy flows
+
+Subclasses `GenericCSVSource`, so the schema, slices, stratification and
+`min_obs` are identical. Fit sees the **full mesh** at full edge density;
+eval is the slice's targets intersected with the targets surviving traffic
+filtering, scored on their surviving flows only.
+
+The weighted subset is a **set of `(vp_id, target_id)` flows**, not a
+threshold, and there are two ways to name it:
+
+| mode | kwargs | when |
+|---|---|---|
+| precomputed | `mesh_csv_path` + `weighted_csv_path` | you also want the weighted CSV for plotting / characterisation |
+| on-the-fly | `mesh_csv_path` + `eval_kept_traffic_fraction` (or `eval_pair_weight_min`) | sweeps, where a file per fraction is wasteful |
+
+They agree at the same fraction by construction — both run the keyless
+whole-mesh derivation that
+`scripts/processing/source/derive_traffic_weighted_cbg_data.smk` uses to
+produce the CSV. Exactly one must be given; passing both is an error,
+since a weighted CSV already encodes a cut.
+
+`eval_kept_traffic_fraction` sums `weight` over **every row in the mesh**,
+not just eval-side rows. That whole-mesh normalization is what makes the
+threshold **fold-independent**: every `fold_N` of one mesh derives the same
+number, so folds stay comparable and "survived traffic filtering" is a
+property of the traffic rather than of the partition.
+
+Precomputed mode consults no weights at all, so the mesh needs no `weight`
+column in that mode. On-the-fly mode refuses a weightless mesh, because the
+synthesized 1.0 fill would make any threshold ≤ 1.0 retain 100% of flows —
+a "weighted" run byte-identical to the unweighted one.
 
 ## Pre-split data: GenericPresplitSource
 
@@ -82,10 +111,10 @@ python -m scripts.benchmark.v2.cli materialize-inputs \
   must set `setup: vp_to_target` for their paths to line up.
 - `min_obs` (applied per file), `eval_pair_weight_min`, and
   `eval_kept_traffic_fraction` carry over test-side-only; `fold_N` does
-  not exist here. Note the fraction's denominator differs: `generic_csv`
-  normalizes over its whole mesh to keep the threshold fold-independent,
-  while this source has no single mesh and sums the test file only, so the
-  same fraction is not comparable across the two.
+  not exist here. Note the fraction's denominator differs:
+  `traffic_weighted_csv` normalizes over its whole mesh to keep the
+  threshold fold-independent, while this source has no single mesh and sums
+  the test file only, so the same fraction is not comparable across the two.
 
 Read on if your data shape doesn't fit this schema (e.g. ClickHouse-backed,
 landmark/probe-coords come from separate files, custom slicing logic).

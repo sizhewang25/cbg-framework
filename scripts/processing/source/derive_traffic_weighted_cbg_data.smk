@@ -6,11 +6,18 @@ Single stage:
      and targets that lose all their flows disappear from the output; that node
      loss is reported in the summary JSON.
 
-The output CSV is for dataset characterisation (paper §8.1 figures), NOT for the
-benchmark. The benchmark consumes the WEIGHT-BEARING MESH plus a top-level
-`eval_kept_traffic_fraction:` yaml key, and derives the identical threshold
-itself -- see GenericCSVSource._derive_eval_weight_min_from_fraction. The
-`eval_pair_weight_min` reported here is the cross-check that the two agree.
+The output CSV has two consumers:
+
+  1. Dataset characterisation and plotting (paper §8.1 figures), which needs the
+     traffic-weighted dataset as an actual file.
+  2. The benchmark, as `weighted_csv_path` for the `traffic_weighted_csv`
+     source -- "precomputed" mode, where the weighted subset is read off this
+     file rather than re-derived.
+
+Precomputed mode is equivalent to passing `eval_kept_traffic_fraction` to that
+same source at the fraction used here ("on-the-fly" mode), because both run this
+identical keyless whole-mesh derivation. Prefer precomputed when you also want
+the CSV; prefer on-the-fly for sweeps where a file per fraction is wasteful.
 
 Usage (from repo root):
   snakemake -s scripts/processing/source/derive_traffic_weighted_cbg_data.smk \
@@ -18,7 +25,8 @@ Usage (from repo root):
 
 Override defaults via --config:
   mesh                  : REQUIRED weighted mesh CSV (must carry a weight column)
-  out_dir               : final output directory  (default: datasets/final)
+  out_dir               : final output directory  (default: the mesh's own
+                          directory, so the subset lands beside its mesh)
   outputs_dir           : audit directory root    (default: scripts/processing/source/outputs)
   kept_traffic_fraction : cumulative traffic target in (0, 1] (default: 0.95)
   vp_col / target_col / weight_col : column overrides (default: vp_id/target_id/weight)
@@ -29,7 +37,9 @@ from pathlib import Path
 # ── configurable inputs ───────────────────────────────────────────────────────
 MESH         = Path(config["mesh"])   # required: weight-bearing mesh CSV
 _stem        = MESH.stem              # dataset name; drives every derived path
-OUT_DIR      = Path(config.get("out_dir",     "datasets/final"))
+# Beside the mesh by default: the pairing is then obvious on disk, and
+# traffic_weighted_csv's mesh/weighted argument pair reads off the same dir.
+OUT_DIR      = Path(config.get("out_dir",     str(MESH.parent)))
 OUTPUTS_ROOT = Path(config.get("outputs_dir", "scripts/processing/source/outputs"))
 KEPT_FRAC    = float(config.get("kept_traffic_fraction", 0.95))
 VP_COL       = config.get("vp_col",     "vp_id")

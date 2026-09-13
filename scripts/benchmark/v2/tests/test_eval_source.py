@@ -666,7 +666,9 @@ class TestEvalKeptTrafficFraction(unittest.TestCase):
     def test_fraction_derives_threshold_matching_source(self) -> None:
         """The precheck and the benchmark must agree, or the §8.1 dataset
         figures describe a different subset than what was scored."""
-        from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
+        from scripts.benchmark.v2.sources.traffic_weighted_csv import (
+            TrafficWeightedCSVSource,
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "frac.csv"
@@ -676,8 +678,8 @@ class TestEvalKeptTrafficFraction(unittest.TestCase):
             threshold = _derive_eval_pair_weight_min(load_canonical_csv(path), 0.95)
             self.assertEqual(threshold, 1.0)
 
-            src = GenericCSVSource(
-                slice="all", setup="anchors_to_probes", csv_path=path,
+            src = TrafficWeightedCSVSource(
+                slice="all", setup="anchors_to_probes", mesh_csv_path=path,
                 eval_kept_traffic_fraction=0.95,
             )
             list(src.iter_eval_targets())

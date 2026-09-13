@@ -1,9 +1,11 @@
-# Traffic-weighted materialization test on SYNTHETIC random weights.
+# Traffic-weighted materialization test, PRECOMPUTED mode, on SYNTHETIC weights.
 #
 #   .venv/bin/python -m scripts.processing.source.assign_random_weights \
 #       --input datasets/final/as01-20260728-20260802.mainland.sanitized.csv --seed 42
+#   snakemake -s scripts/processing/source/derive_traffic_weighted_cbg_data.smk \
+#       -j 1 --config mesh=datasets/final/as01-…randweight.csv
 #   snakemake -s scripts/benchmark/v2/Snakefile \
-#       --configfile configs/as01-randweight-test.yaml -j 4 --until materialize
+#       --configfile configs/as01-randweight-precomputed.yaml -j 4 --until materialize
 #
 # The weights are uniform[0,1] i.i.d. per row, which is NOT what real traffic
 # looks like: it is flat rather than heavy-tailed, and independent per flow
@@ -13,7 +15,7 @@
 # fold independence, parquet round-trip -- and deliberately not node loss.
 # See the module docstring of assign_random_weights.py.
 
-run_id: as01-randweight-test
+run_id: as01-randweight-precomputed
 
 benchmark:
   source: traffic_weighted_csv
@@ -26,11 +28,11 @@ benchmark:
     seed: 42
     asn_bucket_top_n: 20
 
-  # ON-THE-FLY mode: the weighted subset is derived here from the mesh's own
-  # weights. Equivalent to precomputed mode at the same fraction -- see
-  # configs/as01-randweight-precomputed.yaml, which reads the subset off a file
-  # instead. Mutually exclusive with `weighted_csv_path`.
-  eval_kept_traffic_fraction: 0.95
+    # PRECOMPUTED mode: the weighted subset is exactly the flows in this file,
+    # produced by derive_traffic_weighted_cbg_data.smk. No weights are consulted,
+    # so the mesh needs no `weight` column in this mode. Mutually exclusive with
+    # eval_kept_traffic_fraction / eval_pair_weight_min.
+    weighted_csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.randweight.traffic-weighted.csv
 
   enable_fallback: true
   seed: 42
