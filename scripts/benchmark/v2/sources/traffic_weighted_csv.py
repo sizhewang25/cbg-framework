@@ -6,11 +6,14 @@ all inherited unchanged. The one thing added is an eval-side mask.
 
 WHAT IT DOES
 ------------
-Fit always sees the **full mesh** at full edge density. Eval is the slice's
-targets intersected with the targets that survive traffic filtering, scored on
-their surviving flows only. That is the §7.3 protocol: K-fold handles data
-scarcity, the fold boundary handles leakage, and traffic restricts only what is
-scored.
+The traffic mask touches the eval side only. Fit is whatever the slice's fit
+partition is -- under `fold_N`, the other K-1 folds' targets -- and those targets
+keep **every flow they have**: the mask never removes an edge from training.
+Eval is the slice's own targets intersected with the targets that survive
+traffic filtering, scored on their surviving flows only.
+
+That is the §7.3 protocol: K-fold handles data scarcity, the fold boundary
+handles leakage, and traffic restricts only what is scored.
 
 THE WEIGHTED SUBSET IS A SET OF FLOWS, NOT A THRESHOLD
 ------------------------------------------------------
@@ -39,7 +42,8 @@ Two consequences worth knowing:
     where materializing a file per fraction is wasteful.
 
 Source kwargs:
-  mesh_csv_path      : Path | str   — required; the full mesh (fit corpus).
+  mesh_csv_path      : Path | str   — required; the full mesh CSV. Fit draws
+                       from it, and it is the universe the subset lives in.
   weighted_csv_path  : Path | str   — precomputed subset. Mutually exclusive
                        with the two threshold kwargs.
   eval_pair_weight_min : float      — on-the-fly: keep flows with
@@ -306,8 +310,9 @@ class TrafficWeightedCSVSource(GenericCSVSource):
     def _apply_weighted_flow_filter(self) -> None:
         """Intersect the slice's eval targets with the weighted subset.
 
-        Fit targets and fit samples are untouched — training always sees the
-        full mesh; only the evaluated view is traffic-restricted."""
+        Fit targets and fit samples are untouched: a fit target keeps every flow
+        it has, and an eval target dropped here does NOT migrate into fit. Only
+        the evaluated view is traffic-restricted."""
         assert self._df is not None and self._weighted_flows is not None
         surviving = {t for _, t in self._weighted_flows}
         base = (

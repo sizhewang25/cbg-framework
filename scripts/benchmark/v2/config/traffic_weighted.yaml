@@ -2,7 +2,8 @@
 #
 # Identical to the unweighted (mesh) arm except that it uses the
 # `traffic_weighted_csv` source, which restricts the EVAL side to the
-# traffic-weighted subset while fit keeps the full mesh at full edge density.
+# traffic-weighted subset. Fit is untouched: the other K-1 folds' targets, each
+# keeping every flow it has.
 #
 # Two ways to name that subset; pick exactly one:
 #
@@ -37,7 +38,7 @@ setup: anchors_to_probes
 slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
 
 source_kwargs:
-  mesh_csv_path: datasets/final/<stem>.csv   # REPLACE: the full mesh (fit corpus)
+  mesh_csv_path: datasets/final/<stem>.csv   # REPLACE: the full mesh CSV
   # weighted_csv_path: datasets/final/<stem>.traffic-weighted.csv  # precomputed mode
   k: 5
   seed: 42

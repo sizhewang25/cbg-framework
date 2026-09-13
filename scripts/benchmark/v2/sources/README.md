@@ -55,9 +55,11 @@ distinguishes them in the on-disk tree and the `SOURCES` registry.
 ### `traffic_weighted_csv` — K-fold on a mesh, evaluated on traffic-heavy flows
 
 Subclasses `GenericCSVSource`, so the schema, slices, stratification and
-`min_obs` are identical. Fit sees the **full mesh** at full edge density;
-eval is the slice's targets intersected with the targets surviving traffic
-filtering, scored on their surviving flows only.
+`min_obs` are identical. The mask is **eval-side only**: fit is the slice's
+own fit partition — under `fold_N`, the other K−1 folds' targets — and those
+targets keep every flow they have. Eval is the slice's targets intersected
+with the targets surviving traffic filtering, scored on their surviving flows
+only.
 
 The weighted subset is a **set of `(vp_id, target_id)` flows**, not a
 threshold, and there are two ways to name it:

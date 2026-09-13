@@ -92,7 +92,7 @@ def cmd_materialize_inputs(
             "Traffic-weighted eval at materialize time: keep an eval target only "
             "if >= 1 obs has weight >= this value, and drop its "
             "below-threshold obs from eval_observations.parquet. Fit samples are "
-            "unaffected (full-mesh training). Applied after the slice's fit/eval "
+            "unaffected (fit targets keep every flow). Applied after the slice's fit/eval "
             "split and after --min-obs. Forwarded to the source constructor."
         ),
     ),
@@ -102,7 +102,7 @@ def cmd_materialize_inputs(
             "Traffic-weighted eval at materialize time: derive eval_pair_weight_min "
             "from this kept-traffic fraction over eval-side deduped (vp_id, "
             "target_city) pair weights, then filter eval obs by the derived "
-            "threshold. Fit samples are unaffected (full-mesh training). "
+            "threshold. Fit samples are unaffected (fit targets keep every flow). "
             "Applied after the slice's fit/eval split and after --min-obs. "
             "Forwarded to the source constructor."
         ),

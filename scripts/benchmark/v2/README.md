@@ -139,7 +139,8 @@ the `weight` column but never filters on it, and rejects the weighted-eval
 flags outright (exit 2, naming the source that accepts them).
 
 Eval targets and eval observations are restricted to the flows that
-actually carry traffic, while LTD training keeps the **full mesh**. This is
+actually carry traffic, while LTD training is left **untouched** — every fit
+target keeps every flow it has. This is
 the operator view: score the targets an operator cares about, on a model
 that saw everything.
 
@@ -174,8 +175,9 @@ traffic enter only as an eval-side mask, baked into the materialized
 inputs. Applied after stratification (and after `--min-obs`): a fold's
 eval target survives iff ≥ 1 of its obs has `weight >= X`, and
 surviving targets keep only those clearing obs in
-`eval_observations.parquet`. Fit samples are untouched — training always
-sees the full mesh, and the train/eval asymmetry is deliberate: the model
+`eval_observations.parquet`. Fit samples are untouched — a fit target keeps
+every flow it has, and a dropped eval target does not migrate into fit. The
+train/eval asymmetry is deliberate: the model
 is as well-fit as possible while the test-time observation is restricted
 to the VPs that actually carry traffic to the target (expect looser
 geometry and honest accuracy drops; that's operational fidelity, not
@@ -189,7 +191,8 @@ a distinct `run_id` per threshold (inputs live under
 `<root>/<source>/<run_id>/...`).
 
 ```bash
-# k-fold + traffic-masked eval: full-mesh training, eval only the
+# k-fold + traffic-masked eval: fit on the other 4 folds at full edge
+# density, eval only the
 # targets/flows with weight >= 5.0 in each fold
 poetry run python -m scripts.benchmark.v2.cli materialize-inputs \
     --source traffic_weighted_csv --slice fold_0 --run-id ktraffic-001 \
@@ -221,7 +224,7 @@ benchmark doesn't report. That CSV is for dataset characterisation; the
 benchmark consumes the weight-bearing mesh and derives the threshold itself.
 
 ```bash
-# keep the flows carrying 95% of mesh traffic; full-mesh training
+# keep the flows carrying 95% of mesh traffic; fit untouched
 poetry run python -m scripts.benchmark.v2.cli materialize-inputs \
     --source traffic_weighted_csv --slice fold_0 --run-id ktraffic-002 \
     --source-kwargs '{"mesh_csv_path": "path/to/weighted.csv"}' \
