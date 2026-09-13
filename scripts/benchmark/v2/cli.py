@@ -39,7 +39,12 @@ app = typer.Typer(
     help="v2 CBG benchmark CLI (LTD/MTL/CTR sweeps with per-stage instrumentation).",
 )
 
-DEFAULT_OUTPUTS_ROOT = Path(__file__).resolve().parent / "outputs"
+# Repo-root `outputs/benchmark/v2/`, which is where the runs already live and
+# where scripts/analysis/v3 looks (paths.DEFAULT_OUTPUTS_ROOT). The legacy
+# `scripts/benchmark/v2/outputs/` holds only `archived/`.
+DEFAULT_OUTPUTS_ROOT = (
+    Path(__file__).resolve().parents[3] / "outputs" / "benchmark" / "v2"
+)
 
 
 # ---- materialize-inputs ------------------------------------------------------

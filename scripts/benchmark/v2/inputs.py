@@ -33,7 +33,13 @@ from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, 
 from scripts.framework.v2 import FitSample
 
 
-DEFAULT_INPUTS_ROOT = Path(__file__).resolve().parent / "inputs"
+# Repo-root `outputs/benchmark/v2/inputs/`, beside the run outputs, so a
+# dataset's inputs and results live in one tree. NOT the legacy
+# `scripts/benchmark/v2/inputs/` — see scripts/analysis/v3/modules/paths.py,
+# which resolves the same repo-root tree.
+DEFAULT_INPUTS_ROOT = (
+    Path(__file__).resolve().parents[3] / "outputs" / "benchmark" / "v2" / "inputs"
+)
 
 
 def inputs_dir_for(

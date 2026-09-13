@@ -55,8 +55,9 @@ SETUP   = bcfg("setup", "probes_to_anchors")     # or "anchors_to_probes"
 SLICES  = bcfg("slices", [])
 SOURCE_KWARGS = bcfg("source_kwargs", {})
 COMBOS  = bcfg_required("combos")                # list of dicts
-INPUTS_ROOT  = Path(bcfg("inputs_root",  "scripts/benchmark/v2/inputs"))
-OUTPUTS_ROOT = Path(bcfg("outputs_root", "scripts/benchmark/v2/outputs"))
+# Repo-root tree, matching the CLI defaults and where analysis/v3 looks.
+INPUTS_ROOT  = Path(bcfg("inputs_root",  "outputs/benchmark/v2/inputs"))
+OUTPUTS_ROOT = Path(bcfg("outputs_root", "outputs/benchmark/v2"))
 ENABLE_FALLBACK = bool(bcfg("enable_fallback", True))
 
 # Build a name → combo dict so we can dispatch by combo_id in the run-combo rule.
