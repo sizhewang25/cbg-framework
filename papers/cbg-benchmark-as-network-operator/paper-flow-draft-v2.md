@@ -288,17 +288,37 @@ Two things follow from the decomposition. Variant comparison becomes phase attri
 	- Targets
 		- ASN separation with sufficient samples and known PNI locations, removing noise and enabling deep reasoning
 	- PNI
-		-  At every PNI location, there will be at least one VP (operator's infra) and one TG deployed (physical direct-connect) 
-		- Expectation: PNI enables packets flow from VP to TG mainly through TG PNI location in normal conditions (no failure, congestion)
-			- min-RTTs will have linear relationship to d(VP, PNI) + d(PNI, TG). Hence **min-RTT is a good proxy for routing distance**. 【 Show scatter of min-RTT vs propagation delay over d(VP, PNI) + d(PNI, TG) 】
-			- If there is hairpin routing, d(VP, PNI) + d(PNI, TG) / d(VP, TG) will be > 1 -> **minRTT inflation** (minRTT / propagation RTT between VP and TG) will be > 1; otherwise if it is direct routing, minRTT inflation will be close to 1.
-		- **Good peering** guarantees TG will choose the nearest PNI location for majority of the traffic, hence making d(PNI, TG) deterministic for measurements from any closeby VP to the target
-			- d(VP, PNI) becomes a deterministic factor for small min-RTT's magnitude. i.e., smaller min-RTT -> VP closer to PNI. 【Show d(sping VP, PNI) vs d(other VP, PNI) per target 】
+		- At every PNI location there is at least one VP (operator infrastructure) and at least one target (physical direct-connect), so the interconnect list is simultaneously a VP roster and a target roster.
+		- Expectation: in normal conditions (no failure, no congestion) a PNI makes packets flow VP → PNI → TG, so **the distance an RTT is evidence about is the routing distance `d(VP,PNI) + d(PNI,TG)`, not the air distance `d(VP,TG)`**.
+
+**The assignment is detected, not assumed.** Three site-selection policies are scored against the observed min-RTTs before any of them is adopted — the target's nearest site, the VP's nearest site, and the argmin — with the no-PNI null alongside. Each implies a different predictor, and the implication is cleanest in *ranks*: an additive per-unit constant cannot reorder that unit's observations, so the fixed leg of the policy and the unit's access floor both drop out with no floor model and nothing fitted. A peer is assigned a pure rule only when one verdict holds an outright majority of the units that can distinguish the rules at all *and* survives being recomputed on a held-out half of each target's VPs; otherwise it is `mixed` and the argmin is used as the parameter-free default. That the rule is chosen by agreement with min-RTT is exactly why the holdout exists: the linearity claims below are scored on pairs the rule was not selected from.
+
+Two limits are worth stating with it. The rules only disagree on some pairs, and where they agree the three predictors are one column, so a verdict is possible on a minority of units and abstention is reported beside every share. And the abstention is *highest* among targets sitting on a site — precisely where the interconnect list is most trustworthy — because `air` and the target's-nearest axis become equal there. Site-list quality and policy identifiability pull in opposite directions.
+
+**Under the argmin, the bound is conditional.** Each measured pair is assigned `argmin_p [d(VP,p) + d(p,TG)]` — parameter-free, with no traceroute or BGP evidence behind it, and deliberately *not* assuming the target is served through its own nearest site, since that is the good-peering hypothesis and defining the assignment by it would make the hypothesis unfalsifiable. The agreement between the two rules is measured instead.
+
+The bound this buys is conditional, and the conditional matters. When the true path does cross one of the listed sites, `via_argmin ≤ via_true`, so the argmin **understates** the detour and therefore understates how much of the inflation geometry accounts for. When the true path crosses no listed site — direct local serving, an unlisted facility, an off-net cache — then `detour_true = 1 ≤ detour_argmin` and geometry is **overstated**. No unconditional bound holds in either direction.
+
+**What is testable, stated as a constancy claim.** With `direct = d(VP,TG)`, `via = d(VP,PNI) + d(PNI,TG)` and one speed constant, the three quantities satisfy an exact identity, `air_inflation = detour_ratio × routing_inflation`. The claim worth testing is *not* that inflation exceeds 1 under hairpin routing: given `routing ≥ 1` that is arithmetic rather than a hypothesis, and only its magnitude is at stake. It is that
+
+> **`routing_inflation` is approximately constant across pairs** — independent of distance, of detour magnitude, and of which site was selected.
+
+If it is, then `air ≈ c₀ × detour`: inflation *is* geometry up to one scale factor, and `c₀` is the internet's speed constant rather than a failure. The **dispersion** of `routing_inflation`, not its mean, is what carries the claim.
+
+Two corrections to the naive version. Against ⅔ c the no-hairpin baseline is ≈ 1.6, not 1 — direct routing at exactly ⅔ c with zero queueing, zero serialization and geodesic fibre does not happen — so "inflation ≈ 1 under direct routing" holds only against the *measured* speed and only once a per-target additive access floor is removed. And the converse fails: `air > 1` does **not** imply `detour > 1`, because inflation can be entirely non-geometric. That is the direction §8's failure characterization leans on, which is why the two terms must be reported separately rather than as their product.
+
+**One decomposition, two consumers.** This is what makes §7.3 hand off to §8 rather than merely precede it. The CBG variants convert an RTT into a distance, so they inherit the inflation **level**: a systematic 1.6× becomes disks 1.6× too large. Shortest-Ping converts nothing; it needs only the RTT *ranking* to track the distance ranking, which any constant inflation leaves intact, so it is sensitive to the **dispersion** alone. Mean and variance of one quantity, answering two different questions.
+
+**Reporting rules, each forced by a way the naive version fails.**
+	- **Stratify by `d(VP,TG)`; do not truncate it.** A kilometre threshold selects on a variable correlated with the outcome — near VPs have both low detour and low inflation — so truncating makes the linearity look better without evidence. Where a subset is genuinely needed, define it topologically (VPs whose argmin site is the target's nearest) rather than by radius.
+	- **The argmin axis is partly self-fulfilling.** It minimizes the two-leg sum per pair, compressing it toward `d(VP,TG)` exactly where sites sit on the corridor. Linearity is therefore also reported against a **fixed** per-target site, where x is a clean function of VP position, and the gap between the two axes is how much the argmin's freedom contributed. 【`compare-pni-linearity` → `linearity_fits.csv`, three axes】
+	- **Pooled r² is the weaker half.** With ~134 VPs per target most of the pooled spread is targets sitting at different access-latency floors, so a model can win by ordering targets better while explaining nothing within one. The paired within-target difference is the statistic, reported as the proportional reduction in residual variance. 【`target_linearity.csv`, `linearity_by_pni_distance.csv`】
+	- **The baseline speed is a low-quantile envelope on the routing axis, not an OLS slope.** OLS trades slope against intercept: on as02 the routing fit came out *steeper* than the air fit despite a uniformly larger x, purely because its intercept fell 10.31 → 6.51 ms. A fitted slope is not a speed. 【NEEDS THE PER-ASN ENVELOPE COMMAND】
 	- Mesh dataset
 		- importance:【Weight design can be used for different weight metrics】capacity/traffic-weight/... create any sub dataset
 	- Traffic-weight filtering (95%) on top of mesh 
 		- show how good content routing is.
-		- **Good content routing** enables traffic weight filtering to preserve TGs mainly at peering locations【Show TG-PNI distance of TW/MESH datasets side-by-side box plots】
+		- **Good interconnect design and content routing strategy** means the topology and routing jointly ensure a TG having majority of the traffic between nearby VPs via TG's closest PNI location, which enables traffic weight filtering to preserve TGs mainly at peering locations【Show TG-PNI distance of TW/MESH datasets side-by-side box plots】
 
 **The datasets are described as a bipartite graph.** VPs and individual targets are the two measured node sets, and an edge exists wherever a (VP, target) pair carries a measurement. The same grid quantizes both node sets, and the Voronoi partition it seeds is the answer space. Both are defined immediately below. Everything in this subsection is geometry and structure only, with no RTT entering and no variant running, which is what makes these numbers the fixed reference that the RTT-dependent characterization of §8.2 and the per-variant results of §8.3 are read against.
 
@@ -370,8 +390,9 @@ Show weighted-average accuracy/failure rate over dataset types (mesh, weighted, 
 ##### Traffic-weighted targets vs MESH targets: where good peering and optimal content routing matter
 Show stack bars per method with dataset types as hatch types (mesh - solid, weighted - hatched).
 > Traffic-weighted dataset is a subset of mesh dataset where only VP-target flows and target locations that contribute to the major 95% traffic get preserved. Therefore we are comparing datasets that **differ in closeness of targets to peering locations** where VPs co-locate with targets.
-![[Pasted image 20260908172516.png]]
-![[Pasted image 20260908172500.png]]
+![[Pasted image 20260909162834.png]]
+
+![[Pasted image 20260909162918.png]]
 
 First readout weighted-average accuracy of methods over MESH and TRAFFIC-WEIGHTED datasets, showcasing the overall achievable accuracy per method.
 
@@ -381,11 +402,32 @@ Observations:
 3. Shortest-ping and SoI near perfect classification.
 
 **【Why shortest ping achieves near-perfect classification accuracy】**
-- **if good? (technical) interconnect design and good content routing exist simultaneously**, traffic weight filtering mostly preserves TGs mainly at PNI locations, and RTT measurements from nearby VPs 
-- Shortest-ping picks VP that are closest to PNI (min RTT -> VP closest to PNI), where TG colocate【Show scatter of SVP to PNI distance vs TG to PNI distance per TG, or spearsman】
-- Nearest-answer snapping makes shortest ping VP location correct
 
-Explain traffic-weighted dataset formation: traffic-weighting preserves heavy flows and target location where peering resides. Mention properties of geometry and routing proximity, and define VP proximity of target, VP discrimination power of target, shortest-ping VP of target AND min-RTT inflation. 
+The explanation is a three-link chain, and the third link is exact rather than approximate:
+
+1. **Co-location.** Where interconnect design and content routing are both good, traffic-weight filtering preserves targets sitting *at* PNI locations, measured by VPs that also sit there.
+2. **Ranking.** min-RTT ranks VPs by proximity to the serving site, so the argmin VP is one near that site — and by (1), near the target.
+3. **Snapping.** Under nearest-answer snapping the baseline is correct **iff** its VP shares an answer region with the target. This is an identity, not an approximation: Shortest-Ping's top-1 accuracy *is* the answer-region co-location rate.
+
+So the chain reduces to a claim about **three-way VP/TG/PNI co-location**, and the operative quantity is `d(sping VP, TG)` measured against answer-region membership rather than against a kilometre threshold. Note what this implies for §7.3's inflation machinery: if link 1 holds then `d(PNI,TG) ≈ 0`, the detour ratio is 1, and there is almost nothing left to decompose. Inflation is the *CBG* story — those methods convert an RTT into a distance and inherit its level — while Shortest-Ping is sensitive only to inflation's dispersion, which is what keeps the RTT ranking faithful.
+
+**The mechanism is invisible in the successes.** When the target sits at a site, `d(sping VP, PNI)` and `d(sping VP, TG)` are the same number, so "the shortest-ping VP is near the interconnect" and "the shortest-ping VP is near the target" are the *same observation*. The PNI account and the plain closest-VP account make identical predictions exactly where the mechanism works, and under §7.3's premise that is most of the population — so any pooled statistic is dominated by the cases that cannot discriminate. A scatter of `d(sping VP, PNI)` against `d(TG, PNI)` degenerates for the same reason: its x-axis collapses to zero wherever the premise holds.
+
+The two accounts separate only where the target is **far** from every listed site. There the naive account still predicts a win; the PNI account predicts a loss, because min-RTT is then ranking VPs by proximity to a site the target is not at. **The test is therefore a trend in the failures, not a correlation among the successes.**
+
+Four things to show, each tied to the artifact that produces it:
+
+- **The premise.** The distribution of `d(TG, nearest PNI)`, unweighted now and traffic-weighted when that dataset lands, beside the answer-region co-location rate. 【`sping_failure_strata.csv`; 【NEED WEIGHTED DATA】 for the weighted arm】
+- **Link 3, threshold-free.** The ECDF of `d(sping VP, TG)` split by whether the baseline was right, plus the exact membership rate. 【`sping_error_ecdf.csv`】
+- **Only nearby interconnects are physically possible.** For each target's shortest-ping VP, the set of sites inside the ⅔ c ellipse with foci VP and TG. This is an *exclusion*, so it needs no model of the CDN's site-selection policy: if only near sites are reachable within the observed RTT, then whatever policy is in force chose a near one. Reported against a permutation null over site lists of the same size, because with a short list a singleton feasible set says as much about sparsity as about the network. 【`build-pni-feasibility` → `headline_sping_only`, `null_model`】
+- **The discriminating test.** Shortest-Ping's error rate against `d(TG, nearest PNI)`, as a continuous rank correlation. Scored for **every** method over the same strata: a trend present in all of them is target difficulty rather than a Shortest-Ping mechanism. `d(TG, nearest PNI)` does correlate with rural, hence with VP sparsity and seed margin, so those covariates are reported per stratum on the same table. 【`sping_accuracy_by_pni_distance.csv`, `sping_failure_strata.csv`】
+
+**What this buys the operator section.** If `routing_inflation ≈ c₀`, the prescription becomes concrete: min-RTT converts to *routing* distance at a fixed `1/c₀`, and a CBG variant's geolocation error is then exactly the gap between routing distance and air distance — the detour ratio. Method error stops being a black box and becomes a topology measurement, which is a considerably stronger claim than "inflation hurts accuracy".
+
+**A calibration subset for `c₀`.** Pairs whose VP and target both effectively sit at a site have `detour ≈ 1` by construction, so their `routing_inflation` distribution *is* `c₀`, measured with geometry held constant. Estimating `c₀` there and then asking whether the remaining pairs sit at `c₀ × detour` is a genuine out-of-sample test rather than a fit evaluated on itself. 【NEEDS THE PER-ASN ENVELOPE COMMAND】
+
+Explain traffic-weighted dataset formation: traffic-weighting preserves heavy flows and target locations where peering resides. Define VP proximity of target, VP discrimination power of target, shortest-ping VP of target, and min-RTT inflation.
+
 
 Then characterize "targets that are close to peering locations": 
 	scatter plot of the【closest vp distance to seed】vs【min-RTT inflation of of closest vp】 among targets for two datasets, with mesh being gray dots and weighted being red dots. Try to see target clustering and overlaps.
