@@ -1,0 +1,57 @@
+# Materialization smoke test — validates the path from a unified config in
+# configs/ through to materialized inputs on disk.
+#
+#   snakemake -s scripts/benchmark/v2/Snakefile \
+#       --configfile configs/as01-materialization-test.yaml -j 4
+#
+# This is a PLUMBING test, not a reproduction of the original as01 run. The
+# as01 CSV was reconstructed from that run's outputs, and its folds are pinned
+# by a materialized stratification rather than by (k, seed) -- so the folds this
+# config produces are NOT the folds the published as01 numbers were scored on.
+# See configs/as01-260728-260802.yaml, which is the config for that run and
+# deliberately carries no benchmark block.
+#
+# Schema is configs/template.yaml: `benchmark:` drives the v2 Snakefile,
+# `analysis:` drives scripts/analysis/v3. Keys inside `benchmark:` win over
+# top-level ones, so the flat configs under scripts/benchmark/v2/config/ keep
+# working unchanged.
+
+run_id: as01-materialization-test
+
+benchmark:
+  source: generic_csv
+  setup: anchors_to_probes
+  slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+  source_kwargs:
+    csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.csv
+    k: 5
+    seed: 42
+    asn_bucket_top_n: 20
+
+  # Traffic-weighted arm. Left unset because this mesh carries no `weight`
+  # column; setting it here is a hard error by design, since the synthesized
+  # 1.0 fill would make any threshold <= 1.0 retain 100% of flows and publish
+  # an unweighted run as the weighted arm. Point csv_path at a weight-bearing
+  # mesh and uncomment to enable.
+  # eval_kept_traffic_fraction: 0.95
+
+  enable_fallback: true
+  seed: 42
+
+  combos:
+    # One cheap combo: this test is about the config -> inputs path, not about
+    # method coverage. See scripts/benchmark/v2/config/traffic_weighted.yaml
+    # for the full 14-combo grid.
+    - combo_id: vanilla_cbg
+      ltd: low_envelope
+      mtl: spherical_circle
+      ctr: boundary_vertex_mean
+      mtl_kwargs:
+        speed_ratio: 0.6667
+        enable_circle_filter: true
+
+analysis:
+  common:
+    grid: h3
+    resolution: [4]

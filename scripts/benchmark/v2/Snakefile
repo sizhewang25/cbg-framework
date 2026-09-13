@@ -11,15 +11,53 @@ import json
 from pathlib import Path
 
 # ---- Resolve config ---------------------------------------------------------
-RUN_ID  = config.get("run_id",  "default")
-SOURCE  = config["source"]                       # required
-SETUP   = config.get("setup", "probes_to_anchors")  # or "anchors_to_probes"
-SLICES  = config.get("slices", [])
-SOURCE_KWARGS = config.get("source_kwargs", {})
-COMBOS  = config["combos"]                       # required: list of dicts
-INPUTS_ROOT  = Path(config.get("inputs_root",  "scripts/benchmark/v2/inputs"))
-OUTPUTS_ROOT = Path(config.get("outputs_root", "scripts/benchmark/v2/outputs"))
-ENABLE_FALLBACK = bool(config.get("enable_fallback", True))
+# Two accepted shapes, resolved by `bcfg` below:
+#
+#   unified (configs/<run_id>.yaml, see configs/template.yaml)
+#       run_id: ...
+#       benchmark: {source: ..., slices: [...], combos: [...]}
+#       analysis:  {...}            # read by scripts/analysis/v3, ignored here
+#
+#   flat (scripts/benchmark/v2/config/*.yaml, the original shape)
+#       run_id: ...
+#       source: ...
+#       combos: [...]
+#
+# A populated `benchmark:` block wins key by key, with the top level as
+# fallback, so both shapes work and a unified config can still carry
+# `run_id` at the top where the analysis CLI also reads it.
+_BENCH = config.get("benchmark") or {}
+if not isinstance(_BENCH, dict):
+    raise TypeError(
+        f"`benchmark:` must be a mapping, got {type(_BENCH).__name__}"
+    )
+
+def bcfg(key, default=None):
+    """Read `key` from the `benchmark:` block, falling back to the top level."""
+    if key in _BENCH:
+        return _BENCH[key]
+    return config.get(key, default)
+
+_REQUIRED_SENTINEL = object()
+
+def bcfg_required(key):
+    value = bcfg(key, _REQUIRED_SENTINEL)
+    if value is _REQUIRED_SENTINEL:
+        raise KeyError(
+            f"config is missing required key {key!r}: put it under "
+            f"`benchmark:` (unified config) or at the top level (flat config)"
+        )
+    return value
+
+RUN_ID  = bcfg("run_id",  "default")
+SOURCE  = bcfg_required("source")
+SETUP   = bcfg("setup", "probes_to_anchors")     # or "anchors_to_probes"
+SLICES  = bcfg("slices", [])
+SOURCE_KWARGS = bcfg("source_kwargs", {})
+COMBOS  = bcfg_required("combos")                # list of dicts
+INPUTS_ROOT  = Path(bcfg("inputs_root",  "scripts/benchmark/v2/inputs"))
+OUTPUTS_ROOT = Path(bcfg("outputs_root", "scripts/benchmark/v2/outputs"))
+ENABLE_FALLBACK = bool(bcfg("enable_fallback", True))
 
 # Build a name → combo dict so we can dispatch by combo_id in the run-combo rule.
 def _combo_id(c):
@@ -53,12 +91,12 @@ rule materialize:
         # out entirely when none clears; fit samples stay full-mesh. Changes
         # the materialized inputs, so use a distinct run_id per threshold.
         eval_pair_weight_min_flag = lambda wc: (
-            f"--eval-pair-weight-min {config['eval_pair_weight_min']}"
-            if "eval_pair_weight_min" in config else ""
+            f"--eval-pair-weight-min {bcfg('eval_pair_weight_min')}"
+            if bcfg('eval_pair_weight_min') is not None else ""
         ),
         eval_kept_traffic_fraction_flag = lambda wc: (
-            f"--eval-kept-traffic-fraction {config['eval_kept_traffic_fraction']}"
-            if "eval_kept_traffic_fraction" in config else ""
+            f"--eval-kept-traffic-fraction {bcfg('eval_kept_traffic_fraction')}"
+            if bcfg('eval_kept_traffic_fraction') is not None else ""
         ),
     shell:
         CLI + " materialize-inputs"
@@ -97,7 +135,7 @@ rule run_combo:
         seed_flag = lambda wc: (
             f"--seed {COMBOS_BY_ID[wc.combo_id]['seed']}"
             if "seed" in COMBOS_BY_ID[wc.combo_id]
-            else (f"--seed {config['seed']}" if "seed" in config else "")
+            else (f"--seed {bcfg('seed')}" if bcfg('seed') is not None else "")
         ),
         # Traffic-weighted eval threshold; per-combo wins over run-level.
         # Empty flag = unweighted eval over every obs.
@@ -105,8 +143,8 @@ rule run_combo:
             f"--pair-weight-min {COMBOS_BY_ID[wc.combo_id]['pair_weight_min']}"
             if "pair_weight_min" in COMBOS_BY_ID[wc.combo_id]
             else (
-                f"--pair-weight-min {config['pair_weight_min']}"
-                if "pair_weight_min" in config else ""
+                f"--pair-weight-min {bcfg('pair_weight_min')}"
+                if bcfg('pair_weight_min') is not None else ""
             )
         ),
     shell:
