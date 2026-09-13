@@ -33,12 +33,12 @@ from scripts.benchmark.v2.sources.base import DataSource, EvalTarget, TgConfig, 
 from scripts.framework.v2 import FitSample
 
 
-# Repo-root `outputs/benchmark/v2/inputs/`, beside the run outputs, so a
-# dataset's inputs and results live in one tree. NOT the legacy
-# `scripts/benchmark/v2/inputs/` — see scripts/analysis/v3/modules/paths.py,
-# which resolves the same repo-root tree.
+# Repo-root `inputs/benchmark/v2/`, a sibling of `outputs/benchmark/v2/` and
+# shaped the same way. Kept OUT of the outputs tree so nothing walking that
+# tree for runs (scripts/analysis/v3/modules/paths.discover_runs) ever has to
+# step over a non-run directory. NOT the legacy `scripts/benchmark/v2/inputs/`.
 DEFAULT_INPUTS_ROOT = (
-    Path(__file__).resolve().parents[3] / "outputs" / "benchmark" / "v2" / "inputs"
+    Path(__file__).resolve().parents[3] / "inputs" / "benchmark" / "v2"
 )
 
 

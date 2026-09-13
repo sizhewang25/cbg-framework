@@ -207,3 +207,7 @@ scripts/benchmark/v2/inputs/
 
 agents/
 outputs/
+
+# Materialized benchmark inputs; sibling of outputs/ (see
+# scripts/benchmark/v2/inputs.py DEFAULT_INPUTS_ROOT).
+inputs/

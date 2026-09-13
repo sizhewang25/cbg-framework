@@ -39,15 +39,6 @@ DEFAULT_OUTPUTS_ROOT = _REPO_ROOT / "outputs" / "benchmark" / "v2"
 DEFAULT_ANALYSIS_ROOT = _REPO_ROOT / "outputs" / "analysis" / "v3"
 
 _NON_SOURCE_DIRS = frozenset({"eval_source", "eval_dataset", "bench_eval"})
-
-#: Top-level dirs under the outputs root that are not runs. `inputs/` holds the
-#: benchmark's materialized parquet (inputs.DEFAULT_INPUTS_ROOT) and lives here
-#: so a dataset's inputs and results share one tree. Its layout is one level
-#: deeper than a run's, so the `fold_*` test below already skips it — this
-#: makes that explicit rather than leaving it to coincide.
-_NON_RUN_DIRS = frozenset({"inputs"})
-
-
 class MissingArtifactError(FileNotFoundError):
     """A required artifact is absent, with a hint on how to produce it."""
 
@@ -291,8 +282,6 @@ def discover_runs(root: Path | str = DEFAULT_OUTPUTS_ROOT) -> list[RunPaths]:
 
     out: list[RunPaths] = []
     for run_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        if run_dir.name in _NON_RUN_DIRS:
-            continue
         for source_dir in sorted(p for p in run_dir.iterdir() if p.is_dir()):
             if source_dir.name in _NON_SOURCE_DIRS:
                 continue

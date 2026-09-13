@@ -56,7 +56,7 @@ SLICES  = bcfg("slices", [])
 SOURCE_KWARGS = bcfg("source_kwargs", {})
 COMBOS  = bcfg_required("combos")                # list of dicts
 # Repo-root tree, matching the CLI defaults and where analysis/v3 looks.
-INPUTS_ROOT  = Path(bcfg("inputs_root",  "outputs/benchmark/v2/inputs"))
+INPUTS_ROOT  = Path(bcfg("inputs_root",  "inputs/benchmark/v2"))
 OUTPUTS_ROOT = Path(bcfg("outputs_root", "outputs/benchmark/v2"))
 ENABLE_FALLBACK = bool(bcfg("enable_fallback", True))
 
