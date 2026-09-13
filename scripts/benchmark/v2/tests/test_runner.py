@@ -349,13 +349,39 @@ class TestPairWeightEval(unittest.TestCase):
         )
 
         table = pq.read_table(inputs_dir / "eval_observations.parquet")
-        # Per (vp_id,target_city) weights = [8.0,2.0,1.0,1.5], 95% => thr 2.0
-        self.assertEqual(set(table.column("target_id").to_pylist()), {"2001"})
-        self.assertEqual(sorted(table.column("weight").to_pylist()), [2.0, 8.0])
+        # Keyless: flow weights desc [8.0, 2.0, 1.5, 1.0], total 12.5.
+        # 0.95 * 12.5 = 11.875; cum [8, 10, 11.5, 12.5] first clears at index
+        # 3 -> thr 1.0, so every flow survives at this fraction. (The removed
+        # (vp_id, target_city) max-dedupe collapsed these to [8.0, 2.0] and
+        # gave thr 2.0 — the point of the change.)
+        self.assertEqual(set(table.column("target_id").to_pylist()), {"2001", "2002"})
+        self.assertEqual(
+            sorted(table.column("weight").to_pylist()), [1.0, 1.5, 2.0, 8.0]
+        )
 
         fit_frac = pq.read_table(inputs_dir / "fit_samples.parquet")
         fit_full = pq.read_table(self.inputs_dir / "fit_samples.parquet")
         self.assertTrue(fit_frac.equals(fit_full))
+
+    def test_materialize_time_eval_kept_fraction_can_drop_a_target(self) -> None:
+        """A tighter fraction drops the all-light target; fit stays full-mesh."""
+        src = GenericCSVSource(
+            slice="all", setup="anchors_to_probes", csv_path=self.csv_path,
+            eval_kept_traffic_fraction=0.8,
+        )
+        inputs_dir = materialize_inputs(
+            src, root=self.root / "inputs_frac80", run_id="pw-test",
+        )
+
+        table = pq.read_table(inputs_dir / "eval_observations.parquet")
+        # 0.8 * 12.5 = 10.0 == cum[1]; side="left" stops there -> thr 2.0.
+        # 2002 carries only 1.0/1.5 flows, so it leaves the eval set entirely.
+        self.assertEqual(set(table.column("target_id").to_pylist()), {"2001"})
+        self.assertEqual(sorted(table.column("weight").to_pylist()), [2.0, 8.0])
+
+        fit_80 = pq.read_table(inputs_dir / "fit_samples.parquet")
+        fit_full = pq.read_table(self.inputs_dir / "fit_samples.parquet")
+        self.assertTrue(fit_80.equals(fit_full))
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@
 # optional asn/country/continent/region/city/weight columns — see
 # sources/generic_csv.py for the full contract).
 #
-# No fold_N / wsplit slices exist for this source: `all` runs every test
+# No fold_N slices exist for this source: `all` runs every test
 # target, `head<k>` keeps the first k test targets by id (smoke slice; the
 # train side is untouched either way).
 #

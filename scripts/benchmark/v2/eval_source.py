@@ -328,36 +328,39 @@ def apply_eval_target_filters(
 
 def _derive_eval_pair_weight_min(df: pd.DataFrame, frac: float) -> float:
     """Same derivation as generic_csv.py's `_derive_eval_weight_min_from_fraction`:
-    dedupe at `(vp_id, target_city)` by per-pair max(weight), then descending
-    cumulative sum to the requested kept traffic fraction."""
-    if "target_city" not in df.columns:
-        raise ValueError("eval_kept_traffic_fraction requires a target_city column")
-    city = df["target_city"].astype(str).str.strip()
-    blank = ~df["target_city"].notna() | (city == "")
-    if blank.any():
+    KEYLESS (one `(vp_id, target_id)` flow = one row; no `(vp_id, target_city)`
+    dedup, so no city column is needed) and computed over the WHOLE frame, then
+    descending cumulative sum to the requested kept traffic fraction.
+
+    Must stay in lockstep with the source-side implementation — if these drift,
+    the precheck describes a different subset than the benchmark actually scores.
+    """
+    if "weight" not in df.columns:
         raise ValueError(
-            "eval_kept_traffic_fraction requires non-blank target_city on every row"
+            "eval_kept_traffic_fraction needs a 'weight' column; "
+            f"columns present: {list(df.columns)}"
         )
-    per_pair = df.groupby(["vp_id", "target_city"], as_index=False).agg(
-        weight=("weight", "max")
-    )
-    weights = per_pair["weight"].to_numpy(dtype=float)
+    weights = pd.to_numeric(df["weight"], errors="coerce").fillna(0.0).to_numpy(float)
     total = float(weights.sum())
     if total <= 0:
-        print(
-            f"eval_kept_traffic_fraction={frac}: all pair weights are zero; "
-            "derived eval_pair_weight_min=0.0"
+        raise ValueError(
+            f"eval_kept_traffic_fraction={frac} needs a traffic signal, but the "
+            f"total weight over {len(weights)} flows is {total} — all weightless"
         )
-        return 0.0
     weights_sorted = np.sort(weights)[::-1]
     target = frac * total
     cum = np.cumsum(weights_sorted)
     idx = int(np.searchsorted(cum, target, side="left"))
+    # Load-bearing clamp: cum sums the sorted array, total the original, so at
+    # frac=1.0 float error can push searchsorted past the end.
     idx = min(idx, len(weights_sorted) - 1)
     threshold = float(weights_sorted[idx])
+    kept = weights >= threshold
     print(
         f"eval_kept_traffic_fraction={frac}: derived eval_pair_weight_min="
-        f"{threshold:.12g} from {len(per_pair)} (vp_id, target_city) pairs"
+        f"{threshold:.12g} over {len(weights)} whole-mesh flows "
+        f"(total weight {total:.12g}); kept_flows={int(kept.sum())} "
+        f"({100 * weights[kept].sum() / total:.2f}% traffic)"
     )
     return threshold
 

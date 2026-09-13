@@ -35,11 +35,10 @@ Steps:
 3. `python -m scripts.benchmark.v2.cli materialize-inputs --source generic_csv --slice all`
 
 Slices: `all` (everything), `head<k>` (first k targets after a
-deterministic sort — a cheap smoke slice), `fold_N` (DistGeo K-fold
-train/test partition), or `wsplit<P>` (location-weighted holdout: per
-`target_city`, the top ceil(P/100 × n) targets by summed `pair_weight`
-go to eval, the rest to fit — requires a non-blank `target_city` on
-every target). Both setups (probes_to_anchors and anchors_to_probes)
+deterministic sort — a cheap smoke slice), or `fold_N` (DistGeo K-fold
+train/test partition). Traffic enters as an eval-side mask
+(`eval_pair_weight_min` / `eval_kept_traffic_fraction`), never as a
+split. Both setups (probes_to_anchors and anchors_to_probes)
 work out of the box; the same columns play the VP role under one setup
 and the target role under the other.
 
@@ -82,8 +81,11 @@ python -m scripts.benchmark.v2.cli materialize-inputs \
   always reports the fixed label `vp_to_target`, so Snakemake configs
   must set `setup: vp_to_target` for their paths to line up.
 - `min_obs` (applied per file), `eval_pair_weight_min`, and
-  `eval_kept_traffic_fraction` (both test-side-only, same semantics as
-  above) carry over; `fold_N` / `wsplit<P>` do not exist here.
+  `eval_kept_traffic_fraction` carry over test-side-only; `fold_N` does
+  not exist here. Note the fraction's denominator differs: `generic_csv`
+  normalizes over its whole mesh to keep the threshold fold-independent,
+  while this source has no single mesh and sums the test file only, so the
+  same fraction is not comparable across the two.
 
 Read on if your data shape doesn't fit this schema (e.g. ClickHouse-backed,
 landmark/probe-coords come from separate files, custom slicing logic).

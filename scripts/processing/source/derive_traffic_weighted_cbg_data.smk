@@ -1,99 +1,76 @@
-"""Derive traffic-weighted CBG data from sanitized rows via UP-city whitelist.
+"""Derive a traffic-weighted CBG dataset by pruning light (VP, target) flows.
 
-Two-stage pipeline:
-  1. derive_up_city_whitelist              – traffic-gated (vp_id, city) pairs
-     from UP-city ``TOTAL_TB`` (default keep fraction: 0.95).
-  2. filter_sanitized_by_up_city_whitelist – keep only sanitized rows whose
-     (vp_id, target_norm_city) key is whitelisted.
+Single stage:
+  1. filter_weighted_flows – keep the smallest set of (vp_id, target_id) flows
+     whose weights sum to >= KEPT_TRAFFIC_FRACTION of total mesh traffic. VPs
+     and targets that lose all their flows disappear from the output; that node
+     loss is reported in the summary JSON.
+
+The output CSV is for dataset characterisation (paper §8.1 figures), NOT for the
+benchmark. The benchmark consumes the WEIGHT-BEARING MESH plus a top-level
+`eval_kept_traffic_fraction:` yaml key, and derives the identical threshold
+itself -- see GenericCSVSource._derive_eval_weight_min_from_fraction. The
+`eval_pair_weight_min` reported here is the cross-check that the two agree.
 
 Usage (from repo root):
   snakemake -s scripts/processing/source/derive_traffic_weighted_cbg_data.smk \
-      -j 1
+      -j 1 --config mesh=datasets/final/<stem>.csv
 
 Override defaults via --config:
-  sanitized              : sanitized CBG CSV to filter
-  up_city_csv            : UP-city traffic CSV with TOTAL_TB
-  out_dir                : final output directory
-  outputs_dir            : intermediate/audit directory root
-  kept_traffic_fraction  : cumulative traffic target in (0, 1] (default: 0.95)
+  mesh                  : REQUIRED weighted mesh CSV (must carry a weight column)
+  out_dir               : final output directory  (default: datasets/final)
+  outputs_dir           : audit directory root    (default: scripts/processing/source/outputs)
+  kept_traffic_fraction : cumulative traffic target in (0, 1] (default: 0.95)
+  vp_col / target_col / weight_col : column overrides (default: vp_id/target_id/weight)
 """
 
 from pathlib import Path
 
 # ── configurable inputs ───────────────────────────────────────────────────────
-SANITIZED = Path(
-    config.get(
-        "sanitized",
-    )
-)
-UP_CITY_CSV = Path(
-    config.get(
-        "up_city_csv",
-        "datasets/up_asn_traffic/"
-    )
-)
-OUT_DIR = Path(config.get("out_dir", "datasets/final"))
+MESH         = Path(config["mesh"])   # required: weight-bearing mesh CSV
+_stem        = MESH.stem              # dataset name; drives every derived path
+OUT_DIR      = Path(config.get("out_dir",     "datasets/final"))
 OUTPUTS_ROOT = Path(config.get("outputs_dir", "scripts/processing/source/outputs"))
-KEPT_TRAFFIC_FRACTION = float(config.get("kept_traffic_fraction", 0.95))
+KEPT_FRAC    = float(config.get("kept_traffic_fraction", 0.95))
+VP_COL       = config.get("vp_col",     "vp_id")
+TARGET_COL   = config.get("target_col", "target_id")
+WEIGHT_COL   = config.get("weight_col", "weight")
 
 # ── derive intermediate / final paths ────────────────────────────────────────
-OUTPUTS_DIR = OUTPUTS_ROOT / _stem
-
-WHITELIST = OUTPUTS_DIR / f"{_stem}.up-city-whitelist.csv"
-WHITELIST_SUMMARY = OUTPUTS_DIR / f"{_stem}.up-city-whitelist.summary.json"
-
-TRAFFIC_WEIGHTED = OUT_DIR / f"{_stem}.traffic-weighted.csv"
-TRAFFIC_WEIGHTED_SUMMARY = OUTPUTS_DIR / f"{_stem}.traffic-weighted.summary.json"
-
+OUTPUTS_DIR      = OUTPUTS_ROOT / _stem                                    # per-dataset audit dir
+TRAFFIC_WEIGHTED = OUT_DIR     / f"{_stem}.traffic-weighted.csv"           # final output only
+SUMMARY_JSON     = OUTPUTS_DIR / f"{_stem}.traffic-weighted.summary.json"
 
 # ── rules ─────────────────────────────────────────────────────────────────────
+
 rule all:
-    input:
-        str(TRAFFIC_WEIGHTED),
-        str(WHITELIST),
-        str(WHITELIST_SUMMARY),
-        str(TRAFFIC_WEIGHTED_SUMMARY),
+    input: TRAFFIC_WEIGHTED, SUMMARY_JSON
 
 
-rule derive_up_city_whitelist:
-    """Derive (vp_id, target_norm_city) whitelist from UP-city TOTAL_TB."""
+rule filter_weighted_flows:
+    """Prune (vp_id, target_id) flows below the cumulative-traffic threshold."""
     input:
-        up_city_csv=str(UP_CITY_CSV),
+        csv = str(MESH),
     output:
-        csv=str(WHITELIST),
-        summary=str(WHITELIST_SUMMARY),
+        csv     = str(TRAFFIC_WEIGHTED),
+        summary = str(SUMMARY_JSON),
     params:
-        kept_traffic_fraction=KEPT_TRAFFIC_FRACTION,
-        outputs_dir=str(OUTPUTS_DIR),
-    shell:
-        """
-        mkdir -p {params.outputs_dir}
-        .venv/bin/python -m scripts.processing.source.derive_up_city_whitelist \
-            --input {input.up_city_csv} \
-            --kept-traffic-fraction {params.kept_traffic_fraction} \
-            --output {output.csv} \
-            --summary {output.summary}
-        """
-
-
-rule filter_sanitized_by_whitelist:
-    """Filter sanitized CBG rows to only whitelist-approved (vp_id, city) pairs."""
-    input:
-        sanitized_csv=str(SANITIZED),
-        whitelist_csv=str(WHITELIST),
-    output:
-        csv=str(TRAFFIC_WEIGHTED),
-        summary=str(TRAFFIC_WEIGHTED_SUMMARY),
-    params:
-        out_dir=str(OUT_DIR),
-        outputs_dir=str(OUTPUTS_DIR),
+        kept_fraction = KEPT_FRAC,
+        vp_col        = VP_COL,
+        target_col    = TARGET_COL,
+        weight_col    = WEIGHT_COL,
+        out_dir       = str(OUT_DIR),
+        outputs_dir   = str(OUTPUTS_DIR),
     shell:
         """
         mkdir -p {params.out_dir}
         mkdir -p {params.outputs_dir}
-        .venv/bin/python -m scripts.processing.source.filter_sanitized_by_up_city_whitelist \
-            --input {input.sanitized_csv} \
-            --whitelist {input.whitelist_csv} \
+        .venv/bin/python -m scripts.processing.source.filter_weighted_flows \
+            --input {input.csv} \
             --output {output.csv} \
-            --summary {output.summary}
+            --summary {output.summary} \
+            --kept-traffic-fraction {params.kept_fraction} \
+            --vp-col {params.vp_col} \
+            --target-col {params.target_col} \
+            --weight-col {params.weight_col}
         """

@@ -151,6 +151,8 @@ class TestGenericPresplitSource_Validation(_PresplitBase):
     def test_unknown_slice_raises(self) -> None:
         with self.assertRaises(ValueError):
             self._make(slice="fold_0")
+        # `wsplit<P>` was removed from generic_csv entirely; it must still be
+        # rejected here rather than silently treated as a head/all slice.
         with self.assertRaises(ValueError):
             self._make(slice="wsplit20")
         with self.assertRaises(ValueError):
@@ -245,14 +247,40 @@ class TestGenericPresplitSource_Filters(_PresplitBase):
             list(src.iter_eval_targets())
 
     def test_eval_kept_traffic_fraction_derives_threshold(self) -> None:
-        # Test-side (vp_id, target_city) pairs dedupe to per-pair max weight:
-        # (1.1.1.1, Fargo)=8.0, (2.2.2.2, Fargo)=6.0, (3.3.3.3, Fargo)=1.0.
-        # Total 15; frac=0.5 → cumsum hits 7.5 at the first pair → thr=8.0.
+        # Keyless: every test-file row is its own flow, no (vp_id, target_city)
+        # dedupe. Weights desc [8.0, 6.0, 1.0, 0.5, 0.25, 0.1], total 15.85;
+        # frac=0.5 → target 7.925, cum[0]=8.0 clears it → thr=8.0.
         src = self._make(eval_kept_traffic_fraction=0.5)
         targets = list(src.iter_eval_targets())
         self.assertEqual(src._eval_pair_weight_min, 8.0)
         self.assertEqual({t.target_id for t in targets}, {"2001"})
         self.assertEqual(targets[0].obs_weights, [8.0])
+
+    def test_eval_kept_traffic_fraction_is_keyless(self) -> None:
+        """Distinguishes keyless from the old (vp_id, target_city) max-dedupe.
+
+        Every row here shares one city, so the old derivation collapsed the six
+        flows to three pair weights [8, 6, 1] (total 15) and frac=0.9 → thr 6.0.
+        Keyless keeps all six (total 15.85): target 14.265, cum
+        [8, 14, 15, ...] first clears at index 2 → thr 1.0.
+        """
+        src = self._make(eval_kept_traffic_fraction=0.9)
+        targets = list(src.iter_eval_targets())
+        self.assertEqual(src._eval_pair_weight_min, 1.0)
+        # t2002/t2003 carry only sub-1.0 flows, so only t2001 survives.
+        self.assertEqual({t.target_id for t in targets}, {"2001"})
+        self.assertEqual(sorted(targets[0].obs_weights), [1.0, 6.0, 8.0])
+
+    def test_eval_kept_traffic_fraction_needs_no_target_city(self) -> None:
+        """The city column is now irrelevant — dropping it changes nothing."""
+        import pandas as pd
+
+        for path in (self.train_path, self.test_path):
+            df = pd.read_csv(path).drop(columns=["target_city"])
+            df.to_csv(path, index=False)
+        src = self._make(eval_kept_traffic_fraction=0.9)
+        list(src.iter_eval_targets())
+        self.assertEqual(src._eval_pair_weight_min, 1.0)
 
     def test_mutually_exclusive_weight_kwargs_raise(self) -> None:
         with self.assertRaises(ValueError):

@@ -33,14 +33,6 @@ Slicing (`--slice`):
                Deterministic in (k, seed, asn_bucket_top_n) source_kwargs.
                When `target_asn` is absent / missing, those targets land in
                the `asn_none` bucket and still round-robin into the K folds.
-  wsplit<P>  — location-weighted holdout (P in 1..99, e.g. wsplit20). Per
-               `target_city` (must be non-blank for every target), rank
-               targets by summed weight descending (ties broken by
-               target_id) and send the top ceil(P/100 * n) to the eval set;
-               the rest go to fit. Every city contributes >= 1 eval target
-               (a 1-target city goes entirely to eval and is absent from
-               fit) — test-side location coverage is the invariant, and no
-               top-weight target ever leaks into the fit corpus.
 
 Source kwargs (defaults match the prior VultrCSVSource):
   csv_path           : Path | str   — required; canonical-schema CSV path.
@@ -55,16 +47,28 @@ Source kwargs (defaults match the prior VultrCSVSource):
                        only those clearing obs in iter_eval_targets. The fit
                        side is untouched — training always sees the full
                        mesh; only the evaluated view is traffic-restricted.
-    eval_kept_traffic_fraction : float = None — derive `eval_pair_weight_min`
-                                             from eval-side deduped `(vp_id, target_city)` pair
-                                             weights so at least this pair-level traffic fraction
-                                             is retained, then apply the same eval-only mask above.
+  eval_kept_traffic_fraction : float = None — derive `eval_pair_weight_min`
+                       from the flow weights so at least this fraction of the
+                       mesh's traffic is retained, then apply the same
+                       eval-only mask above. The derivation is KEYLESS and
+                       WHOLE-MESH: `total` sums `weight` over every row in the
+                       CSV (not just eval-side rows, and not deduped by any
+                       key), flows are ranked descending and cumulated, and the
+                       smallest prefix reaching `frac * total` fixes the
+                       threshold. Whole-mesh normalization is what makes the
+                       threshold FOLD-INDEPENDENT — every `fold_N` derives the
+                       same number, so folds stay comparable and "survived
+                       traffic filtering" is a property of the traffic rather
+                       than of the partition. Mesh weights are typically shares
+                       of a larger universe (the CSV itself samples top targets
+                       per location) and need not sum to 1; renormalizing by
+                       the mesh total is what makes the fraction meaningful.
+                       Requires a real `weight` column — see `_normalize_weight`.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 import re
 from pathlib import Path
 from typing import Iterator, Optional
@@ -111,7 +115,6 @@ _OPTIONAL_STR = (
 )
 
 _FOLD_SLICE_RE = re.compile(r"^fold_(\d+)$")
-_WSPLIT_SLICE_RE = re.compile(r"^wsplit(\d{1,2})$")
 
 
 class GenericCSVSource(DataSource):
@@ -164,8 +167,6 @@ class GenericCSVSource(DataSource):
                 f"got {eval_kept_traffic_fraction}"
             )
         fold_match = _FOLD_SLICE_RE.match(slice)
-        wsplit_match = _WSPLIT_SLICE_RE.match(slice)
-        wsplit_pct = None
         if fold_match is not None:
             fold_index = int(fold_match.group(1))
             if fold_index >= k:
@@ -173,29 +174,19 @@ class GenericCSVSource(DataSource):
                     f"slice fold index {fold_index} >= k={k} "
                     f"(available: fold_0..fold_{k - 1})"
                 )
-        elif wsplit_match is not None:
-            fold_index = None
-            wsplit_pct = int(wsplit_match.group(1))
-            if not 1 <= wsplit_pct <= 99:
-                raise ValueError(
-                    f"wsplit percentage must be in 1..99, got {wsplit_pct} "
-                    f"(slice {slice!r})"
-                )
         elif slice == "all" or slice.startswith("head"):
             # `head<k>` is fully validated inside _apply_slice when the row
             # parser runs; constructor only confirms the prefix is legal.
             fold_index = None
         else:
             raise ValueError(
-                f"unknown slice {slice!r}; expected 'all', 'head<k>', "
-                f"'fold_N', or 'wsplit<P>'"
+                f"unknown slice {slice!r}; expected 'all', 'head<k>', or 'fold_N'"
             )
 
         self._slice = slice
         self._setup = setup
         self._csv_path = Path(csv_path)
         self._fold_index = fold_index
-        self._wsplit_pct = wsplit_pct
         self._k = k
         self._seed = seed
         self._asn_bucket_top_n = asn_bucket_top_n
@@ -298,18 +289,10 @@ class GenericCSVSource(DataSource):
     def _ensure_loaded(self) -> pd.DataFrame:
         if self._df is None:
             self._load_csv()
-            if self._wsplit_pct is not None:
-                # min_obs must run BEFORE the weight split: dropping a
-                # top-weight target after the split would silently shrink
-                # test-side location coverage — the split's invariant.
-                if self._min_obs is not None:
-                    self._apply_min_obs_filter()
-                self._apply_weight_split()
-            else:
-                if self._fold_index is not None:
-                    self._apply_stratification()
-                if self._min_obs is not None:
-                    self._apply_min_obs_filter()
+            if self._fold_index is not None:
+                self._apply_stratification()
+            if self._min_obs is not None:
+                self._apply_min_obs_filter()
             # Eval weight mask runs LAST: the split defines the eval set,
             # min_obs prunes sparse targets, and this only shrinks the eval
             # side further. The fit side is never touched.
@@ -347,18 +330,27 @@ class GenericCSVSource(DataSource):
             notion"; summed target weight degenerates to obs count, and
             pair-weight-min thresholds <= 1.0 stay no-ops).
           * column present but cell NaN/non-numeric → 0.0 ("traffic unknown
-            = weightless"): the pair can never outrank genuinely heavy
-            flows in the wsplit ranking nor survive a weighted-eval
+            = weightless"): the flow can never outrank genuinely heavy flows
+            in the kept-traffic ranking nor survive a weighted-eval
             threshold. Filling 1.0 here would masquerade as 1 unit of real
             traffic (e.g. 1 TB) among measured values.
         """
         if "weight" not in df.columns:
-            df["weight"] = 1.0
-            if self._wsplit_pct is not None:
-                logger.info(
-                    "CSV %s has no weight column; defaulting to 1.0 — "
-                    "wsplit ranks targets by obs count", self._csv_path,
+            # A traffic-weighted eval over a synthesized all-1.0 weight column
+            # is a silent no-op: every threshold <= 1.0 retains 100% of flows,
+            # so the run would be published as the "weighted" arm while being
+            # byte-identical to the unweighted one. Refuse instead.
+            if (
+                self._eval_pair_weight_min is not None
+                or self._eval_kept_traffic_fraction is not None
+            ):
+                raise ValueError(
+                    f"CSV {self._csv_path} has no 'weight' column, but a "
+                    f"traffic-weighted eval was requested "
+                    f"(eval_pair_weight_min / eval_kept_traffic_fraction). "
+                    f"Columns present: {list(df.columns)}"
                 )
+            df["weight"] = 1.0
             return df
         df["weight"] = pd.to_numeric(df["weight"], errors="coerce")
         n_missing = int(df["weight"].isna().sum())
@@ -382,7 +374,7 @@ class GenericCSVSource(DataSource):
         lives in cached id sets, not in row drops."""
         if slice_name == "all":
             return df
-        if _FOLD_SLICE_RE.match(slice_name) or _WSPLIT_SLICE_RE.match(slice_name):
+        if _FOLD_SLICE_RE.match(slice_name):
             return df
         if slice_name.startswith("head"):
             try:
@@ -398,8 +390,7 @@ class GenericCSVSource(DataSource):
                 )
             return df[df["target_id"].astype(str).isin(keep)].copy()
         raise ValueError(
-            f"unknown slice {slice_name!r}; expected 'all', 'head<k>', "
-            f"'fold_N', or 'wsplit<P>'"
+            f"unknown slice {slice_name!r}; expected 'all', 'head<k>', or 'fold_N'"
         )
 
     def _apply_stratification(self) -> None:
@@ -440,57 +431,6 @@ class GenericCSVSource(DataSource):
             len(eval_targets), self._k - 1, len(fit_targets),
         )
 
-    def _apply_weight_split(self) -> None:
-        """Location-weighted holdout (`wsplit<P>`). Per target_city, the top
-        ceil(P/100 * n) targets by summed weight go to the eval set;
-        the rest go to fit. Deterministic: ties break on target_id."""
-        assert self._df is not None and self._wsplit_pct is not None
-        df = self._df
-        if "target_city" not in df.columns:
-            raise ValueError(
-                f"slice {self._slice!r} requires a target_city column "
-                f"(missing from {self._csv_path})"
-            )
-
-        unique = df.drop_duplicates("target_id").copy()
-        unique["target_id"] = unique["target_id"].astype(str)
-        city = unique["target_city"].astype(str).str.strip()
-        blank = ~unique["target_city"].notna() | (city == "")
-        if blank.any():
-            raise ValueError(
-                f"slice {self._slice!r} requires a non-blank target_city for "
-                f"every target; {int(blank.sum())} of {len(unique)} targets "
-                f"have none (e.g. {unique.loc[blank, 'target_id'].head(3).tolist()})"
-            )
-
-        weight_by_target = (
-            df.assign(target_id=df["target_id"].astype(str))
-            .groupby("target_id")["weight"].sum()
-        )
-
-        eval_targets: set[str] = set()
-        fit_targets: set[str] = set()
-        n_cities_without_fit = 0
-        for _, group in unique.groupby(city):
-            ranked = sorted(
-                group["target_id"],
-                key=lambda t: (-weight_by_target[t], t),
-            )
-            n_eval = math.ceil(self._wsplit_pct / 100 * len(ranked))
-            eval_targets.update(ranked[:n_eval])
-            fit_targets.update(ranked[n_eval:])
-            if n_eval == len(ranked):
-                n_cities_without_fit += 1
-
-        self._eval_targets = eval_targets
-        self._fit_targets = fit_targets
-        logger.info(
-            "weight-split %d targets over %d cities at %d%%: eval=%d "
-            "(top-sum-weight per city), fit=%d (%d cities absent from fit)",
-            len(unique), city.nunique(), self._wsplit_pct,
-            len(eval_targets), len(fit_targets), n_cities_without_fit,
-        )
-
     def _apply_eval_weight_filter(self) -> None:
         """Traffic-weighted eval mask (`eval_pair_weight_min`). An eval target
         survives iff >= 1 of its obs has weight >= the threshold;
@@ -518,83 +458,60 @@ class GenericCSVSource(DataSource):
         self._eval_targets = kept
 
     def _derive_eval_weight_min_from_fraction(self) -> None:
-        """Derive eval_pair_weight_min from eval-side pair traffic retention.
+        """Derive `eval_pair_weight_min` from whole-mesh flow traffic retention.
 
-        Uses eval-side rows only, deduped at `(vp_id, target_city)` by per-pair
-        max(weight), then descending cumulative sum to the requested kept
-        fraction.
+          * WHOLE-MESH — `total` sums `weight` over every row in the CSV, not
+            just the eval-side rows. This is what makes the threshold
+            FOLD-INDEPENDENT: every `fold_N` of the same CSV derives the same
+            number, so folds stay comparable and "survived traffic filtering"
+            is a property of the traffic rather than of the partition.
+            Normalizing over eval-side rows only would give each fold a
+            different cut.
+
+        Mesh weights are typically shares of a larger universe (the CSV itself
+        samples top targets per location) and need not sum to 1; renormalizing
+        by the mesh total is what makes `frac` meaningful.
         """
         assert self._df is not None and self._eval_kept_traffic_fraction is not None
         df = self._df
         frac = self._eval_kept_traffic_fraction
 
-        if "target_city" not in df.columns:
-            raise ValueError(
-                "eval_kept_traffic_fraction requires target_city column"
-            )
-
-        eval_ids = (
-            self._eval_targets
-            if self._eval_targets is not None
-            else set(df["target_id"].astype(str))
-        )
-        eval_df = df[df["target_id"].astype(str).isin(eval_ids)].copy()
-        if eval_df.empty:
-            raise ValueError(
-                f"slice {self._slice!r} has no eval rows to derive "
-                "eval_pair_weight_min"
-            )
-
-        city = eval_df["target_city"].astype(str).str.strip()
-        blank_city = ~eval_df["target_city"].notna() | (city == "")
-        if blank_city.any():
-            raise ValueError(
-                "eval_kept_traffic_fraction requires non-blank target_city "
-                "on eval rows"
-            )
-
-        per_pair = (
-            eval_df.groupby(["vp_id", "target_city"], as_index=False)
-            .agg(weight=("weight", "max"), distinct_values=("weight", "nunique"))
-        )
-        inconsistent_pairs = int((per_pair["distinct_values"] > 1).sum())
-
-        weights = per_pair["weight"].to_numpy(dtype=float)
+        weights = df["weight"].to_numpy(dtype=float)
         total = float(weights.sum())
         if total <= 0:
-            self._eval_pair_weight_min = 0.0
-            logger.info(
-                "eval_kept_traffic_fraction=%.3f: all eval-side pair weights "
-                "are zero; derived eval_pair_weight_min=0.0",
-                frac,
+            raise ValueError(
+                f"eval_kept_traffic_fraction={frac} needs a traffic signal, but "
+                f"the total weight over {len(weights)} flows in "
+                f"{self._csv_path} is {total} — every flow is weightless"
             )
-            return
 
         weights_sorted = np.sort(weights)[::-1]
         target = frac * total
         cum = np.cumsum(weights_sorted)
         idx = int(np.searchsorted(cum, target, side="left"))
+        # Load-bearing clamp: `cum` sums the sorted array while `total` sums the
+        # original, so at frac=1.0 float error can put cum[-1] one ULP below
+        # `total` and push searchsorted to len(weights_sorted).
         idx = min(idx, len(weights_sorted) - 1)
         threshold = float(weights_sorted[idx])
 
-        kept_pairs = int((weights >= threshold).sum())
-        achieved = float(weights[weights >= threshold].sum() / total)
+        kept = weights >= threshold
+        kept_flows = int(kept.sum())
+        achieved = float(weights[kept].sum() / total)
         self._eval_pair_weight_min = threshold
         logger.info(
             "eval_kept_traffic_fraction=%.3f: derived "
-            "eval_pair_weight_min=%.12g from %d eval-side (vp_id,target_city) "
-            "pairs; kept_pairs=%d (%.2f%% traffic)",
-            frac,
-            threshold,
-            len(per_pair),
-            kept_pairs,
-            100 * achieved,
+            "eval_pair_weight_min=%.12g over %d whole-mesh flows "
+            "(total weight %.12g); kept_flows=%d (%.2f%% traffic)",
+            frac, threshold, len(weights), total, kept_flows, 100 * achieved,
         )
-        if inconsistent_pairs:
-            logger.info(
-                "  note: %d eval-side (vp_id,target_city) pairs had "
-                "non-identical row weights; used per-pair max(weight)",
-                inconsistent_pairs,
+        if achieved - frac > 0.01:
+            logger.warning(
+                "  kept traffic overshoots target by %.2f pp: %d flows tie at "
+                "the threshold weight %.12g and all are kept (>= semantics)",
+                100 * (achieved - frac),
+                int((weights == threshold).sum()),
+                threshold,
             )
 
     def _apply_min_obs_filter(self) -> None:

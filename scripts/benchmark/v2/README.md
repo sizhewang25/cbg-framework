@@ -103,7 +103,7 @@ Slices: `all_anchors`, `n<K>`. Requires ClickHouse running with the
 `ping_10k_to_anchors` table populated.
 - **generic_presplit** — like `generic_csv` but takes an already-split
 train/test pair of files (`train_path`, `test_path` source kwargs; each
-`.csv` or `.parquet`). No fold/wsplit logic — train rows feed LTD fitting,
+`.csv` or `.parquet`). No fold logic — train rows feed LTD fitting,
 test rows feed eval, and a target appearing in both files is a hard error.
 Slices: `all`, `head<k>` (test side). The legacy `setup` axis is ignored
 (columns fix the roles); its path segment is always `vp_to_target`, so
@@ -132,63 +132,27 @@ inputs/<source>/<setup>/<slice>/{vp_configs,fit_samples,eval_observations}.parqu
 outputs/<run_id>/<source>/<setup>/<slice>/<combo_id>/{run.json, targets.parquet, fit_checkpoint.pkl}
 ```
 
-## Location-weighted split + traffic-weighted eval
+## Traffic-weighted eval
 
-Beyond the K-fold `fold_N` slices, `generic_csv` supports a
-traffic-ranked holdout driven by an optional `pair_weight` column in the
-canonical CSV — the (vp, target) pair's traffic in whatever unit the
-dataset uses (e.g. TB; raw values, no normalization needed: the split
-ranking is scale-invariant and an absolute `--pair-weight-min` threshold
-stays interpretable in that unit). Defaults: column absent → 1.0
-everywhere ("no weight notion" — target weight degenerates to obs count,
-thresholds ≤ 1.0 are no-ops); cell NaN in a present column → 0.0
+Eval targets and eval observations can be restricted to the flows that
+actually carry traffic, while LTD training keeps the **full mesh**. This is
+the operator view: score the targets an operator cares about, on a model
+that saw everything.
+
+Traffic comes from an optional `weight` column in the canonical CSV — the
+`(vp_id, target_id)` flow's traffic in whatever unit the dataset uses (e.g.
+TB; raw values, no normalization needed). Defaults: column absent → 1.0
+everywhere ("no weight notion"); cell NaN in a present column → 0.0
 ("unknown traffic = weightless" — can't outrank measured flows or pass a
-weighted-eval threshold).
+weighted-eval threshold). Requesting a weighted eval against a CSV with
+**no** `weight` column is a hard error, because the 1.0 fill would make
+every threshold ≤ 1.0 retain 100% of flows — a "weighted" run byte-identical
+to the unweighted one.
 
-**Split (`wsplit<P>`, e.g. `wsplit20`).** Per `target_city` (must be
-non-blank for every target), targets are ranked by *summed* `pair_weight`
-descending (ties broken by `target_id`) and the top `ceil(P/100 × n)` are
-held out as the eval set; the rest form the fit corpus. Two invariants:
-every city contributes ≥ 1 eval target (a 1-target city goes entirely to
-eval and is simply absent from fit — test-side location coverage is
-guaranteed), and no top-weight target ever leaks into LTD training. The
-split is location-proportional by construction; within each city the
-held-out targets are the traffic-heavy ones, so the benchmark scores
-exactly the targets an operator cares about, on a model that never saw
-them. With `--min-obs`, the obs filter runs *before* the split so it can
-never silently drop a held-out top-weight target afterwards.
-
-**Eval (`--pair-weight-min X` on `run-combo`).** Unweighted eval (default)
-geolocates each target from **all** of its VP obs. Traffic-weighted eval
-keeps only obs with `pair_weight >= X`; targets left with zero qualifying
-obs are excluded from the test set entirely (the count lands in `run.json`
-as `n_targets_dropped_below_min_weight`, and the run aborts loudly if the
-threshold empties the whole eval set). The threshold is a run-combo flag —
-stamped into `run.json`, settable per combo or run-wide in the Snakemake
-config (`pair_weight_min:`) — so both eval modes run from a single
-materialization: `pair_weight` is just a column in
-`eval_observations.parquet`, carried through by every source (unweighted
-sources write 1.0 everywhere).
-
-```bash
-poetry run python -m scripts.benchmark.v2.cli materialize-inputs \
-    --source generic_csv --slice wsplit20 --run-id wtest-001 \
-    --source-kwargs '{"csv_path": "path/to/weighted.csv"}'
-
-# unweighted eval: all obs per held-out target
-poetry run python -m scripts.benchmark.v2.cli run-combo \
-    --source generic_csv --slice wsplit20 --run-id wtest-001 \
-    --ltd speed_of_internet --mtl planar_circle --ctr geometric_centroid \
-    --source-kwargs '{"csv_path": "path/to/weighted.csv"}'
-
-# traffic-weighted eval: only obs with pair_weight >= 5.0
-poetry run python -m scripts.benchmark.v2.cli run-combo \
-    --source generic_csv --slice wsplit20 --run-id wtest-001 \
-    --combo-id vanilla_cbg_pw5 \
-    --ltd speed_of_internet --mtl planar_circle --ctr geometric_centroid \
-    --source-kwargs '{"csv_path": "path/to/weighted.csv"}' \
-    --pair-weight-min 5.0
-```
+There is no traffic-based *split*. The split stays the geo-stratified
+`fold_N` K-fold over the full ground-truth set (every target trains in K−1
+folds and tests once — no labels sacrificed to a holdout), and traffic
+enters only as an eval-side mask.
 
 **Materialize-time eval mask (`--eval-pair-weight-min X` on
 `materialize-inputs`, config key `eval_pair_weight_min:`).** The
@@ -197,7 +161,7 @@ slices over the *full* ground-truth set (every target trains in K−1 folds
 and tests once — no labels sacrificed to a traffic holdout) and let
 traffic enter only as an eval-side mask, baked into the materialized
 inputs. Applied after stratification (and after `--min-obs`): a fold's
-eval target survives iff ≥ 1 of its obs has `pair_weight >= X`, and
+eval target survives iff ≥ 1 of its obs has `weight >= X`, and
 surviving targets keep only those clearing obs in
 `eval_observations.parquet`. Fit samples are untouched — training always
 sees the full mesh, and the train/eval asymmetry is deliberate: the model
@@ -215,12 +179,46 @@ a distinct `run_id` per threshold (inputs live under
 
 ```bash
 # k-fold + traffic-masked eval: full-mesh training, eval only the
-# targets/flows with pair_weight >= 5.0 in each fold
+# targets/flows with weight >= 5.0 in each fold
 poetry run python -m scripts.benchmark.v2.cli materialize-inputs \
     --source generic_csv --slice fold_0 --run-id ktraffic-001 \
     --source-kwargs '{"csv_path": "path/to/weighted.csv"}' \
     --eval-pair-weight-min 5.0
 ```
+
+**Fraction-driven threshold (`--eval-kept-traffic-fraction F`, config key
+`eval_kept_traffic_fraction:`).** Usually easier to reason about than a raw
+threshold: name the share of traffic you want to keep and let the source
+derive the cut. The derivation is **keyless and whole-mesh** — `total` sums
+`weight` over every row in the CSV (one `(vp_id, target_id)` flow per row; no
+`(vp_id, target_city)` dedupe, so no city column is needed), flows are ranked
+descending and cumulated, and the smallest prefix reaching `F × total` fixes
+the threshold.
+
+Whole-mesh normalization is the point: every `fold_N` of the same CSV derives
+the **same** number, so folds stay comparable and "survived traffic filtering"
+is a property of the traffic rather than of the partition. (Normalizing over
+eval-side rows would give each fold a different cut.) Mesh weights are
+typically shares of a larger universe — the CSV itself often samples top
+targets per location — and need not sum to 1; renormalizing by the mesh total
+is what makes `F` meaningful. Mutually exclusive with `eval_pair_weight_min`.
+
+`scripts/processing/source/derive_traffic_weighted_cbg_data.smk` runs the same
+derivation standalone, emitting a filtered `.traffic-weighted.csv` plus a
+summary JSON with the derived threshold and the VP/target node loss the
+benchmark doesn't report. That CSV is for dataset characterisation; the
+benchmark consumes the weight-bearing mesh and derives the threshold itself.
+
+```bash
+# keep the flows carrying 95% of mesh traffic; full-mesh training
+poetry run python -m scripts.benchmark.v2.cli materialize-inputs \
+    --source generic_csv --slice fold_0 --run-id ktraffic-002 \
+    --source-kwargs '{"csv_path": "path/to/weighted.csv"}' \
+    --eval-kept-traffic-fraction 0.95
+```
+
+See `scripts/benchmark/v2/config/traffic_weighted.yaml` for a full
+weighted-arm config.
 
 ## Stage instrumentation
 

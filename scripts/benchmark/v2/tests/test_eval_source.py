@@ -661,35 +661,71 @@ _EVAL_KEPT_FRAC_CSV = textwrap.dedent("""
 
 
 class TestEvalKeptTrafficFraction(unittest.TestCase):
+    """Keyless whole-frame derivation; must match generic_csv's exactly."""
+
     def test_fraction_derives_threshold_matching_source(self) -> None:
+        """The precheck and the benchmark must agree, or the §8.1 dataset
+        figures describe a different subset than what was scored."""
+        from scripts.benchmark.v2.sources.generic_csv import GenericCSVSource
+
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "frac.csv"
             path.write_text(_EVAL_KEPT_FRAC_CSV)
-            df = load_canonical_csv(path)
-            # Per (vp_id,target_city) weights = [10, 1, 9, 1]; 95% -> threshold 1.
-            threshold = _derive_eval_pair_weight_min(df, 0.95)
-        self.assertEqual(threshold, 1.0)
+            # Flow weights desc [10, 9, 1, 1], total 21; 0.95*21 = 19.95,
+            # cum [10, 19, 20, 21] first clears at index 2 -> threshold 1.
+            threshold = _derive_eval_pair_weight_min(load_canonical_csv(path), 0.95)
+            self.assertEqual(threshold, 1.0)
 
-    def test_zero_total_weight_derives_zero_threshold(self) -> None:
+            src = GenericCSVSource(
+                slice="all", setup="anchors_to_probes", csv_path=path,
+                eval_kept_traffic_fraction=0.95,
+            )
+            list(src.iter_eval_targets())
+            self.assertEqual(src._eval_pair_weight_min, threshold)
+
+    def test_derivation_ignores_target_city(self) -> None:
+        """Keyless: dropping the city column must not change the answer."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with_city = Path(tmp) / "city.csv"
+            with_city.write_text(_EVAL_KEPT_FRAC_CSV)
+            no_city = Path(tmp) / "no_city.csv"
+            no_city.write_text(
+                "\n".join(
+                    ",".join(p for i, p in enumerate(line.split(",")) if i != 6)
+                    for line in _EVAL_KEPT_FRAC_CSV.strip().splitlines()
+                )
+                + "\n"
+            )
+            a = _derive_eval_pair_weight_min(load_canonical_csv(with_city), 0.95)
+            b = _derive_eval_pair_weight_min(load_canonical_csv(no_city), 0.95)
+        self.assertEqual(a, b)
+
+    def test_weights_not_summing_to_one_renormalize(self) -> None:
+        """Mesh weights are shares of a larger universe; total here is 0.9."""
         csv = textwrap.dedent("""
-            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,target_city,rtt_ms,weight
-            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,atlanta,10.0,0
-            2.2.2.2,47.0,-122.0,t2,41.0,-101.0,boston,11.0,0
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,weight
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0,0.4
+            2.2.2.2,47.0,-122.0,t2,41.0,-101.0,11.0,0.3
+            3.3.3.3,51.0,-114.0,t3,42.0,-102.0,12.0,0.2
+        """).strip() + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frac2.csv"
+            path.write_text(csv)
+            # total 0.9; 0.7*0.9 = 0.63; cum [0.4, 0.7, 0.9] clears at index 1
+            # -> 0.3. Against a total of 1.0 the answer would be 0.4.
+            threshold = _derive_eval_pair_weight_min(load_canonical_csv(path), 0.7)
+        self.assertAlmostEqual(threshold, 0.3)
+
+    def test_zero_total_weight_raises(self) -> None:
+        """A weightless frame has no traffic signal — refuse rather than
+        return a 0.0 threshold that silently retains everything."""
+        csv = textwrap.dedent("""
+            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,weight
+            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0,0
+            2.2.2.2,47.0,-122.0,t2,41.0,-101.0,11.0,0
         """).strip() + "\n"
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "zero.csv"
-            path.write_text(csv)
-            df = load_canonical_csv(path)
-            threshold = _derive_eval_pair_weight_min(df, 0.95)
-        self.assertEqual(threshold, 0.0)
-
-    def test_requires_target_city(self) -> None:
-        csv = textwrap.dedent("""
-            vp_id,vp_lat,vp_lon,target_id,target_lat,target_lon,rtt_ms,weight
-            1.1.1.1,33.0,-84.0,t1,40.0,-100.0,10.0,10
-        """).strip() + "\n"
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "no_city.csv"
             path.write_text(csv)
             df = load_canonical_csv(path)
             with self.assertRaises(ValueError):

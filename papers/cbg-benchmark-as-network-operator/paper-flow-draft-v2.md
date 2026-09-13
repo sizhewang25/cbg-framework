@@ -106,7 +106,7 @@ That residual is what the paper addresses. When canonical signals are absent, st
 
 ### 3.2 The data-access asymmetry cuts both ways
 
-The operator holds two assets no academic study can reproduce: topology knowledge (its own network graph and the geographic connectivity to peering hypergiants/CDNs) and private passive data (large-volume in-network RTT at ground-truthed vantage points). That asymmetry is itself the challenge, and it breaks *both* research directions.
+The operator holds two assets no academic study can reproduce: topology knowledge (its own network graph and the geographic connectivity to peering hypergiants/CDNs) and private in-network traffic data (per-flow volume at ground-truthed vantage points, which tells the operator which targets and flows actually matter). That asymmetry is itself the challenge, and it breaks *both* research directions.
 
 - **Academia cannot reproduce the operator setting.** Public platforms offer no way to recreate an operator's traffic pattern: VP sets are self-selected and heterogeneous in device and network type rather than sited at user planes, target sets are anchors rather than the hypergiant prefixes the operator actually carries, and the peering relationship that shapes the path (on-net embedded cache vs. off-net via IXP/transit) cannot be replicated at all. Published accuracy numbers are therefore measured on a topology no operator has, and whether they transfer is unknown.
 - **Operators cannot substitute public infrastructure.** An operator wanting to monitor its own network from RIPE Atlas finds that coverage does not reach its ASNs or its target sets, that probe placement is not controllable, and that probes sit at heterogeneous positions rather than where its traffic is actually observed.
@@ -119,7 +119,7 @@ Neither side can validate the other's results, and no dataset exists on which th
 
 ### 4.1 Gaps
 
-- **G1 · VP realism.** VP setups in existing CBG work do not reflect operator deployments (count, placement, on-net position, passive collection).
+- **G1 · VP realism.** VP setups in existing CBG work do not reflect operator deployments (count, placement, on-net position, and which flows actually carry traffic).
 - **G2 · No cross-variant comparison on operator-realistic data.** Variants are published against different datasets, VPs, and metrics; nobody has run them side by side under operator conditions.
 - **G3 · Results without mechanism.** Accuracy tables do not tell the reader *why* a variant wins or loses, so the result does not transfer to a new setting.
 - **G4 · Accuracy is not a deployment criterion.** Runtime, memory, and robustness decide what actually ships at million-IP scale, and they are largely unreported.
@@ -242,89 +242,22 @@ Two things follow from the decomposition. Variant comparison becomes phase attri
 **Fallbacks count as failures.** When the intersection is empty and no relaxation recovers it, the pipeline falls back to the Shortest-Ping VP. Scoring that fallback as a CBG success would floor CBG's measured accuracy at Shortest-Ping's, which is precisely the comparison RQ2 rests on (§5), so fallbacks are counted as failures. Fallback rate is reported as a first-class diagnostic, and accuracy is given both with and without fallback cases included.
 
 **Cost is measured per phase and per stage.** Fit cost and apply cost are reported separately, because they scale differently and are paid on different schedules. Fit cost grows with the number of (VP, peer ASN) pairs and the labels available per pair, and is paid once per recalibration. Apply cost grows with the number of targets, and at million-IP scale it is paid on every run. Separating them is also what lets the per-ASN vs. pooled ablation report a trade-off rather than a winner, since per-ASN calibration multiplies fit cost by the peer count.
-
 ### 7.3 Datasets and experimental setup
-- **Proprietary Mesh Unicast IP dataset** 
-	- VPs: Mobile cores of AS7018
-	- Targets: Top-ASN servers (3 ASNs)
-	- Measurements: Mesh-ping RTT from VPs to Targets
-	- Properties: 
-		- In-network active measurement: mobile cores/targets are used in real traffic.
-		- Known peering locations for each ASN (support RTT root cause analysis)
-		- VP-Target bipartite graph of 3 ASNs are geographically & topologically different
-		- Clean ASN separation, allow data training and testing on each ASN individually, thus cleaner RTT-distance modeling for routing topology
-		- p5 RTTs from weekly tests that avoid congestion impact
-- **Proprietary Traffic-Weighted Unicast IP dataset**
-	- VPs: Mobile cores of AS7018
-	- Targets: Top-ASN servers that serve top 95% of Unicast traffic (3 ASNs)
-	- Measurements: Passive RTT of real traffic flows from VPs to Targets
-	- Properties:
-		- In-network passive measurement, reflecting real-world traffic patterns and important target locations
-		- Fewer VPs have RTT measurements to targets compared to mesh-ping.
-- **Public Mesh Unicast IP dataset**
-	- VPs: RIPE probes of AS7018 (need reciprocal filtering)
-	- Targets: RIPE anchors of mixed ASNs
-	- Measurements: Mesh-ping RTT from VPs to Targets
-	- Properties:
-		- Best-effort active measurement that relies on crowd-source infrastructure 
-		- Vantage points' network types are heterogeneous and locations are not always correct.
-		- Mixture of ASNs in training, which could impact accuracy of RTT-distance modeling
-		- Unknown peering locations for the ASNs
-- **Proprietary Traffic-Weighted Anycast IP dataset**
-	- VPs: Mobile cores of AS7018
-	- Targets: Top-ASN servers that serve top 95% of Anycast traffic
-	- Measurements: Passive RTT of real traffic flows from VPs to Targets
-	- Properties:
-		- In-network passive measurement
-		- Multiple location labels per IP, where exact location depends on input of regional VPs
 
+#### Experimental setup
+##### Dataset generation
+For ground truth generation, we applied RDNS and GeoFeed to recognize IP locations from real traffic, validating them through speed-of-internet violation checks and manual confirmation over one week of data. 
+For each unique location, we picked the top 10 IPv4 and top 10 IPv6 addresses to serve as targets, repeating this across all known locations. We then conduct ping from all the mobile cores to the 20 targets per location, where we do 5 pings per hour, running this every hour of the day, seven days a week. Through this, we collected one week of data. And then we picked P5 latency per VP target pair to avoid the impact of congestion, thus better reflecting the best-case latency for approximating propagation delay.
+Meanwhile, we annotated the edges in the mesh dataset with the actual traffic volume (in TB) of each flow in the real traffic. Then we apply a threshold of 95% of cumulative total traffic among all the targets in the mesh dataset to filter flows that carry heavy traffic. As a consequence, we created our traffic-weighted dataset, which preserves only the traffic-heavy VPs and TGs with flows between them.【Show a demo image with mesh and traffic-weighted datasets】
 
-【Discuss datasets】
-- Unique Dataset properties:
-	- VPs 
-		- in-network measurement:
-			- VPs all belong to the same ASN of the operator networks -> PNI locations
-			- Mesh measurement to targets flow via the same in-network routes, enabling traffic weighting
-	- Targets
-		- ASN separation with sufficient samples and known PNI locations, removing noise and enabling deep reasoning
-	- PNI
-		- At every PNI location there is at least one VP (operator infrastructure) and at least one target (physical direct-connect), so the interconnect list is simultaneously a VP roster and a target roster.
-		- Expectation: in normal conditions (no failure, no congestion) a PNI makes packets flow VP → PNI → TG, so **the distance an RTT is evidence about is the routing distance `d(VP,PNI) + d(PNI,TG)`, not the air distance `d(VP,TG)`**.
+**Traffic volume is used to shape the edge set, not to re-measure delay.** A passively collected RTT dataset would differ from the mesh in two ways at once — which flows exist, and how delay is measured — and a single comparison could not separate them. We therefore hold the delays fixed at the mesh's p5 ping RTTs and let traffic volume select the edges alone, so the traffic-weighted arm differs from the mesh arm in exactly one respect. Traffic volume is a faithful stand-in for *which* pairs a passive collector would observe, since a pair is visible to it only if traffic traverses it; it is not a stand-in for the delay values themselves. Real passive RTT is congestion-exposed and carries no low-percentile filtering, so it would run higher and noisier than p5 ping, and the traffic-weighted results here should be read as optimistic with respect to a genuinely passive collection. We treat passive delay as out of scope for this phase, both because the data is sensitive and because its measurement characteristics are themselves under-explored.
+##### Eval on Mesh datasets
+We adopt K-fold evaluation, which splits the mesh dataset into five folds. We take four folds for training and one fold for testing, and then we rotate until we have all targets evaluated. 
 
-**The assignment is detected, not assumed.** Three site-selection policies are scored against the observed min-RTTs before any of them is adopted — the target's nearest site, the VP's nearest site, and the argmin — with the no-PNI null alongside. Each implies a different predictor, and the implication is cleanest in *ranks*: an additive per-unit constant cannot reorder that unit's observations, so the fixed leg of the policy and the unit's access floor both drop out with no floor model and nothing fitted. A peer is assigned a pure rule only when one verdict holds an outright majority of the units that can distinguish the rules at all *and* survives being recomputed on a held-out half of each target's VPs; otherwise it is `mixed` and the argmin is used as the parameter-free default. That the rule is chosen by agreement with min-RTT is exactly why the holdout exists: the linearity claims below are scored on pairs the rule was not selected from.
-
-Two limits are worth stating with it. The rules only disagree on some pairs, and where they agree the three predictors are one column, so a verdict is possible on a minority of units and abstention is reported beside every share. And the abstention is *highest* among targets sitting on a site — precisely where the interconnect list is most trustworthy — because `air` and the target's-nearest axis become equal there. Site-list quality and policy identifiability pull in opposite directions.
-
-**Under the argmin, the bound is conditional.** Each measured pair is assigned `argmin_p [d(VP,p) + d(p,TG)]` — parameter-free, with no traceroute or BGP evidence behind it, and deliberately *not* assuming the target is served through its own nearest site, since that is the good-peering hypothesis and defining the assignment by it would make the hypothesis unfalsifiable. The agreement between the two rules is measured instead.
-
-The bound this buys is conditional, and the conditional matters. When the true path does cross one of the listed sites, `via_argmin ≤ via_true`, so the argmin **understates** the detour and therefore understates how much of the inflation geometry accounts for. When the true path crosses no listed site — direct local serving, an unlisted facility, an off-net cache — then `detour_true = 1 ≤ detour_argmin` and geometry is **overstated**. No unconditional bound holds in either direction.
-
-**What is testable, stated as a constancy claim.** With `direct = d(VP,TG)`, `via = d(VP,PNI) + d(PNI,TG)` and one speed constant, the three quantities satisfy an exact identity, `air_inflation = detour_ratio × routing_inflation`. The claim worth testing is *not* that inflation exceeds 1 under hairpin routing: given `routing ≥ 1` that is arithmetic rather than a hypothesis, and only its magnitude is at stake. It is that
-
-> **`routing_inflation` is approximately constant across pairs** — independent of distance, of detour magnitude, and of which site was selected.
-
-If it is, then `air ≈ c₀ × detour`: inflation *is* geometry up to one scale factor, and `c₀` is the internet's speed constant rather than a failure. The **dispersion** of `routing_inflation`, not its mean, is what carries the claim.
-
-Two corrections to the naive version. Against ⅔ c the no-hairpin baseline is ≈ 1.6, not 1 — direct routing at exactly ⅔ c with zero queueing, zero serialization and geodesic fibre does not happen — so "inflation ≈ 1 under direct routing" holds only against the *measured* speed and only once a per-target additive access floor is removed. And the converse fails: `air > 1` does **not** imply `detour > 1`, because inflation can be entirely non-geometric. That is the direction §8's failure characterization leans on, which is why the two terms must be reported separately rather than as their product.
-
-**One decomposition, two consumers.** This is what makes §7.3 hand off to §8 rather than merely precede it. The CBG variants convert an RTT into a distance, so they inherit the inflation **level**: a systematic 1.6× becomes disks 1.6× too large. Shortest-Ping converts nothing; it needs only the RTT *ranking* to track the distance ranking, which any constant inflation leaves intact, so it is sensitive to the **dispersion** alone. Mean and variance of one quantity, answering two different questions.
-
-**Reporting rules, each forced by a way the naive version fails.**
-	- **Stratify by `d(VP,TG)`; do not truncate it.** A kilometre threshold selects on a variable correlated with the outcome — near VPs have both low detour and low inflation — so truncating makes the linearity look better without evidence. Where a subset is genuinely needed, define it topologically (VPs whose argmin site is the target's nearest) rather than by radius.
-	- **The argmin axis is partly self-fulfilling.** It minimizes the two-leg sum per pair, compressing it toward `d(VP,TG)` exactly where sites sit on the corridor. Linearity is therefore also reported against a **fixed** per-target site, where x is a clean function of VP position, and the gap between the two axes is how much the argmin's freedom contributed. 【`compare-pni-linearity` → `linearity_fits.csv`, three axes】
-	- **Pooled r² is the weaker half.** With ~134 VPs per target most of the pooled spread is targets sitting at different access-latency floors, so a model can win by ordering targets better while explaining nothing within one. The paired within-target difference is the statistic, reported as the proportional reduction in residual variance. 【`target_linearity.csv`, `linearity_by_pni_distance.csv`】
-	- **The baseline speed is a low-quantile envelope on the routing axis, not an OLS slope.** OLS trades slope against intercept: on as02 the routing fit came out *steeper* than the air fit despite a uniformly larger x, purely because its intercept fell 10.31 → 6.51 ms. A fitted slope is not a speed. 【NEEDS THE PER-ASN ENVELOPE COMMAND】
-	- Mesh dataset
-		- importance:【Weight design can be used for different weight metrics】capacity/traffic-weight/... create any sub dataset
-	- Traffic-weight filtering (95%) on top of mesh 
-		- show how good content routing is.
-		- **Good interconnect design and content routing strategy** means the topology and routing jointly ensure a TG having majority of the traffic between nearby VPs via TG's closest PNI location, which enables traffic weight filtering to preserve TGs mainly at peering locations【Show TG-PNI distance of TW/MESH datasets side-by-side box plots】
-
-**The datasets are described as a bipartite graph.** VPs and individual targets are the two measured node sets, and an edge exists wherever a (VP, target) pair carries a measurement. The same grid quantizes both node sets, and the Voronoi partition it seeds is the answer space. Both are defined immediately below. Everything in this subsection is geometry and structure only, with no RTT entering and no variant running, which is what makes these numbers the fixed reference that the RTT-dependent characterization of §8.2 and the per-variant results of §8.3 are read against.
-
-**Latent and observed geometry are reported as a pair.** Because an edge records a measurement, the edge set is an artifact of the campaign rather than a property of the deployment, and every distance quantity therefore has two values: the latent one over all VP × target pairs, which describes where the infrastructure sits, and the observed one over measured edges only, which describes what the dataset can actually deliver. The pairing applies to distances and not to degree, whose latent value is the VP count for every target and so carries nothing. The gap between the two is a property of the campaign, and reporting only one of them is what allows sampling bias to be misread as an algorithmic result.
-
-**Degree is a precision covariate, and no feasibility gate arises.** Every CBG constraint is a distance upper bound, so the feasible region is an intersection of disks: bounded, convex, and nonempty with a well-defined centroid at any degree of one or more. There is no threshold at three constraints. A target also enters either dataset only by having been measured, so degree is at least one everywhere by construction and degree zero is not a case that occurs. That guarantee is a property of how the datasets are assembled rather than of the method, and it does not extend to deployment, where an unmeasured target is an ordinary case; §10 takes that up. Precision degrades continuously as degree falls, and it degrades far more sharply under a poor angular arrangement than under a low count, since two landmarks on opposite sides of a target constrain it better than five clustered in one metro. Degree is therefore carried forward purely as a covariate that §8.3 regresses error and region area against, jointly with the angular statistics, and the expectation to be tested is that the angular term dominates the count term.
+By splitting, we mean we apply geostratification (as used by reference "Selection of Landmarks for Efficient Active Geolocation") to stratify the targets by the distances between each other. This guarantees that within a fold, targets will be distributed far enough apart, hence avoiding insufficient distance bins in the RTT distance modeling.
+#####  Eval on Traffic-weighted datasets
+We also adopt K-fold evaluation, but the difference compared to the evaluation for mesh is that we will filter the evaluation fold to keep only the flows that appear in the traffic-weighted dataset. 
+And then we still do the rotation for all the folds to get evaluated. In this way, we are able to keep the scores only on the traffic-weighted targets.
 
 **Best-effort VP-topology matching.** Where the public dataset allows it, we select probes to approximate the operator's VP count, geographic spread, and pairwise distance distribution, so that a cross-dataset accuracy difference is less likely to be an artifact of VP placement alone. This is a mitigation rather than a control, and we report the residual mismatch instead of claiming it away. 【TODO: operationalize the matching criteria.】
 #### Metric List:
@@ -351,6 +284,72 @@ Two corrections to the naive version. Against ⅔ c the no-hairpin baseline is �
 
 *[Remaining §7 subsections: leakage-free K-fold protocol · the SoI validation primitive and its k-of-N threshold · metric definitions (error distance, classification accuracy, classification confidence, practicality, diagnostics) · whether per-VP calibration geometry earns a place · the runtime and memory measurement protocol (hardware, whether the million-IP figure is measured or extrapolated, calibration time counted separately from inference). Material to migrate and tighten from [[CBG-Benchmark-Paper-Flow-v1]] §5.]*
 
+- **Proprietary Mesh Unicast IP dataset** 
+	- VPs: Mobile cores of AS7018
+	- Targets: Top-ASN servers (3 ASNs)
+	- Measurements: Mesh-ping RTT from VPs to Targets
+	- Properties: 
+		- In-network active measurement: mobile cores/targets are used in real traffic.
+		- Known peering locations for each ASN (support RTT root cause analysis)
+		- VP-Target bipartite graph of 3 ASNs are geographically & topologically different
+		- Clean ASN separation, allow data training and testing on each ASN individually, thus cleaner RTT-distance modeling for routing topology
+		- p5 RTTs from weekly tests that avoid congestion impact
+- **Proprietary Traffic-Weighted Unicast IP dataset**
+	- VPs: Mobile cores of AS7018
+	- Targets: Top-ASN servers that serve top 95% of Unicast traffic (3 ASNs)
+	- Measurements: the same mesh-ping p5 RTTs as above, restricted to the flows that carry traffic
+	- Properties:
+		- Traffic volume shapes the edge set, not the delays: the flows retained are the ones real traffic actually uses, so the evaluated RTT distribution reflects real-world traffic patterns and important target locations. Stands in for which pairs a passive collector would observe; see the substitution note above.
+		- Fewer VPs have RTT measurements to targets compared to mesh-ping.
+- **Public Mesh Unicast IP dataset**
+	- VPs: RIPE probes of AS7018 (need reciprocal filtering)
+	- Targets: RIPE anchors of mixed ASNs
+	- Measurements: Mesh-ping RTT from VPs to Targets
+	- Properties:
+		- Best-effort active measurement that relies on crowd-source infrastructure 
+		- Vantage points' network types are heterogeneous and locations are not always correct.
+		- Mixture of ASNs in training, which could impact accuracy of RTT-distance modeling
+		- Unknown peering locations for the ASNs
+- **Proprietary Traffic-Weighted Anycast IP dataset**
+	- VPs: Mobile cores of AS7018
+	- Targets: Top-ASN servers that serve top 95% of Anycast traffic
+	- Measurements: the same mesh-ping p5 RTTs as above, restricted to the flows that carry traffic
+	- Properties:
+		- Traffic volume shapes the edge set, not the delays, as in the unicast case above.
+		- Multiple location labels per IP, where exact location depends on input of regional VPs
+
+
+【Discuss datasets】
+- Unique Dataset properties:
+	- VPs 
+		- in-network measurement:
+			- VPs all belong to the same ASN of the operator networks -> PNI locations
+			- Mesh measurement to targets flow via the same in-network routes, enabling traffic weighting
+	- Targets
+		- ASN separation with sufficient samples and known PNI locations, removing noise and enabling deep reasoning
+	- **PNI**
+		- At every PNI location, there will be at least one VP (operator's infra) and one TG deployed (physical direct-connect) 
+		- **Importance of considering PNI into RTT-distance modeling:** 
+			- **Background: PNI selection strategy**: 
+				- Depends on business peering agreement, could be majorly one policy but mixed in some cases. 
+				- **In our study, we assume "argmin PNI" strategy as the lower bound of the routing distance.**
+				- ![[IMG_DD8D927EFA38-1.jpeg]]
+				- **TG's nearest PNI**
+					- If true, then d(PNI, TG) is a constant per target across VPs, we should see d(VP, TG's nearest PNI) rank of a TG across VPs should have strong positive linear correlation with minRTT rank over VPs consistently 【 spearman correlation higher】; 
+						- `rank(d(VP,P) + d(P,TG)) ≡ rank(d(VP,P))` within a target, because adding a per-target constant cannot reorder that target's VPs. 
+				- **VP's nearest PNI**
+					- If true, then d(VP, PNI) is a constant per VP across targets, then we should see d(VP's nearest PNI, TG) rank of a VP should have strong correlation with minRTT rank over the VP's TGs consistently 【per-VP spearman correlation】; 
+				- **Mixture selection**
+					- Mixture portions will need traceroute to identify.
+					- **argmin_p** d(VP,p) + d(p,TG)** gives a **lower bound** on routed distance, hence an upper bound on how much inflation geometry can explain.
+			- Expectation: in normal conditions (no failure, no congestion) a PNI makes packets flow VP → PNI → TG, so **the distance an RTT is evidence about is the routing distance `d(VP,PNI) + d(PNI,TG)`, not the air distance `d(VP,TG)`**.
+				- min-RTTs will have linear relationship to d(VP, PNI) + d(PNI, TG). Hence **min-RTT is a good proxy for routing distance**. 【Show Pearson's Linear Correlation Coefficient for minRTT and d(VP, PNI) + d(PNI, TG) HIGHER compared to minRTT and d(VP, TG) 】
+
+**The datasets are described as a bipartite graph.** VPs and individual targets are the two measured node sets, and an edge exists wherever a (VP, target) pair carries a measurement. The same grid quantizes both node sets, and the Voronoi partition it seeds is the answer space. Both are defined immediately below. Everything in this subsection is geometry and structure only, with no RTT entering and no variant running, which is what makes these numbers the fixed reference that the RTT-dependent characterization of §8.2 and the per-variant results of §8.3 are read against.
+
+**Latent and observed geometry are reported as a pair.** Because an edge records a measurement, the edge set is an artifact of the campaign rather than a property of the deployment, and every distance quantity therefore has two values: the latent one over all VP × target pairs, which describes where the infrastructure sits, and the observed one over measured edges only, which describes what the dataset can actually deliver. The pairing applies to distances and not to degree, whose latent value is the VP count for every target and so carries nothing. The gap between the two is a property of the campaign, and reporting only one of them is what allows sampling bias to be misread as an algorithmic result.
+
+**Degree is a precision covariate, and no feasibility gate arises.** Every CBG constraint is a distance upper bound, so the feasible region is an intersection of disks: bounded, convex, and nonempty with a well-defined centroid at any degree of one or more. There is no threshold at three constraints. A target also enters either dataset only by having been measured, so degree is at least one everywhere by construction and degree zero is not a case that occurs. That guarantee is a property of how the datasets are assembled rather than of the method, and it does not extend to deployment, where an unmeasured target is an ordinary case; §10 takes that up. Precision degrades continuously as degree falls, and it degrades far more sharply under a poor angular arrangement than under a low count, since two landmarks on opposite sides of a target constrain it better than five clustered in one metro. Degree is therefore carried forward purely as a covariate that §8.3 regresses error and region area against, jointly with the angular statistics, and the expectation to be tested is that the angular term dominates the count term.
 ---
 
 ### 7.4 Answer space construction

@@ -8,7 +8,7 @@ separate files instead of being derived here:
   * `train_path` — every row feeds `iter_fit_samples()` (LTD training).
   * `test_path`  — every row feeds `iter_eval_targets()` (evaluation).
 
-No fold / wsplit / stratification logic exists in this source — the two
+No fold / stratification logic exists in this source — the two
 files are assumed to be a clean split. That assumption is enforced: a
 `target_id` appearing in BOTH files is a hard error (LTD-leakage guard),
 as is a `vp_id` carrying different coordinates across the two files.
@@ -42,9 +42,14 @@ Source kwargs:
                keep only those clearing obs in iter_eval_targets. The train
                side is untouched.
   eval_kept_traffic_fraction : float = None — derive `eval_pair_weight_min`
-               from test-side deduped `(vp_id, target_city)` pair weights so
-               at least this pair-level traffic fraction is retained, then
-               apply the same eval-only mask above.
+               so at least this fraction of the TEST file's traffic is
+               retained, then apply the same eval-only mask above. Keyless:
+               the unit is one `(vp_id, target_id)` flow, so no `target_city`
+               is required. NOTE the denominator differs from generic_csv's,
+               which normalizes over its whole mesh to keep the threshold
+               fold-independent; this source has no single mesh, so `total`
+               sums the test file only. The same fraction is therefore not
+               comparable across the two sources.
 """
 
 from __future__ import annotations
@@ -415,67 +420,46 @@ class GenericPresplitSource(DataSource):
         self._eval_targets = kept
 
     def _derive_eval_weight_min_from_fraction(self) -> None:
-        """Derive eval_pair_weight_min from test-side pair traffic retention:
-        dedupe at `(vp_id, target_city)` by per-pair max(weight), then
-        descending cumulative sum to the requested kept fraction. Mirrors
-        generic_csv._derive_eval_weight_min_from_fraction."""
+        """Derive `eval_pair_weight_min` from test-file flow traffic retention.
+
+        KEYLESS, mirroring generic_csv: the unit is one `(vp_id, target_id)`
+        flow (one row), with no `(vp_id, target_city)` dedup and no
+        `target_city` requirement.
+
+        SCOPE DIFFERS from generic_csv deliberately. That source normalizes over
+        the whole mesh so the threshold is identical across its K folds; this
+        source has no single mesh — the caller supplies two files — so `total`
+        sums the TEST file only. Same kwarg name, different denominator: a
+        fraction set here is not comparable to the same fraction set there.
+        """
         assert self._test_df is not None and self._eval_kept_traffic_fraction is not None
         eval_df = self._test_df
         frac = self._eval_kept_traffic_fraction
 
-        if "target_city" not in eval_df.columns:
-            raise ValueError(
-                "eval_kept_traffic_fraction requires a target_city column "
-                f"in the test file ({self._test_path})"
-            )
-        city = eval_df["target_city"].astype(str).str.strip()
-        blank_city = ~eval_df["target_city"].notna() | (city == "")
-        if blank_city.any():
-            raise ValueError(
-                "eval_kept_traffic_fraction requires non-blank target_city "
-                f"on every test row ({self._test_path})"
-            )
-
-        per_pair = (
-            eval_df.groupby(["vp_id", "target_city"], as_index=False)
-            .agg(weight=("weight", "max"), distinct_values=("weight", "nunique"))
-        )
-        inconsistent_pairs = int((per_pair["distinct_values"] > 1).sum())
-
-        weights = per_pair["weight"].to_numpy(dtype=float)
+        weights = eval_df["weight"].to_numpy(dtype=float)
         total = float(weights.sum())
         if total <= 0:
-            self._eval_pair_weight_min = 0.0
-            logger.info(
-                "eval_kept_traffic_fraction=%.3f: all test-side pair weights "
-                "are zero; derived eval_pair_weight_min=0.0",
-                frac,
+            raise ValueError(
+                f"eval_kept_traffic_fraction={frac} needs a traffic signal, but "
+                f"the total weight over {len(weights)} flows in "
+                f"{self._test_path} is {total} — every flow is weightless"
             )
-            return
 
         weights_sorted = np.sort(weights)[::-1]
         target = frac * total
         cum = np.cumsum(weights_sorted)
         idx = int(np.searchsorted(cum, target, side="left"))
+        # Load-bearing clamp: cum sums the sorted array, total the original, so
+        # at frac=1.0 float error can push searchsorted past the end.
         idx = min(idx, len(weights_sorted) - 1)
         threshold = float(weights_sorted[idx])
 
-        kept_pairs = int((weights >= threshold).sum())
-        achieved = float(weights[weights >= threshold].sum() / total)
+        kept = weights >= threshold
         self._eval_pair_weight_min = threshold
         logger.info(
             "eval_kept_traffic_fraction=%.3f: derived "
-            "eval_pair_weight_min=%.12g from %d test-side (vp_id,target_city) "
-            "pairs; kept_pairs=%d (%.2f%% traffic)",
-            frac,
-            threshold,
-            len(per_pair),
-            kept_pairs,
-            100 * achieved,
+            "eval_pair_weight_min=%.12g over %d test-file flows "
+            "(total weight %.12g); kept_flows=%d (%.2f%% traffic)",
+            frac, threshold, len(weights), total,
+            int(kept.sum()), 100 * weights[kept].sum() / total,
         )
-        if inconsistent_pairs:
-            logger.info(
-                "  note: %d test-side (vp_id,target_city) pairs had "
-                "non-identical row weights; used per-pair max(weight)",
-                inconsistent_pairs,
-            )
