@@ -29,6 +29,3 @@ v2_outputs_root: scripts/benchmark/v2/outputs
 # Plotting parameters.
 merge_folds: true
 group_by: ltd
-phase_stat: p95
-include_fit: true
-runtime_stat: p50

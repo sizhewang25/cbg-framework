@@ -239,9 +239,20 @@ One row per `(run_id, source, setup, slice, combo_id)`; 87 columns.
 > sweep cost is `peak - after_fit`. `peak - baseline` is NOT fit-free, because
 > the baseline is sampled before the inputs load.
 >
-> `modules/pareto.py` reduces memory across stages with **`max`** — the columns
-> are per-stage peaks, making `max` the pipeline high-water mark and `sum` the
-> no-release upper bound. Runtime sums.
+> The reduce lives in `modules/cost.py` and has two consumers, `plot-pareto`
+> (one scalar per method) and `plot-phase-cost` (the per-stage decomposition).
+> Memory reduces across stages with **`max`** — the columns are per-stage peaks,
+> making `max` the pipeline high-water mark and `sum` the no-release upper
+> bound. Runtime sums.
+>
+> **Per-stage values never compose by stacking.** Reduce per target *first*,
+> then take the percentile — never the reverse. Measured on
+> `as7018-ripe-mesh-reciprocal`: `octant_cbg_hull`'s runtime p50 is 499.4 ms,
+> while the sum of its per-stage p50s is 451.0 ms, because no single target is
+> at the median of all three stages at once. For memory the error runs the other
+> way (`sum >= max` by construction). `cost.combo_stage_costs` returns the three
+> marginals and the correct pipeline value together, over one denominator, so
+> the two cannot be confused.
 >
 > `error_km_*` here pools FALLBACK rows (see §3 trap). For fallback-excluded
 > accuracy, recompute from `targets.parquet`.

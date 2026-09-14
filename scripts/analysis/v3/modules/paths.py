@@ -117,6 +117,24 @@ class RunPaths:
     def combo_dir(self, combo_id: str, fold_id: str) -> Path:
         return self.setup_dir / fold_id / combo_id
 
+    def combo_schema(self, combo_id: str):
+        """`targets.parquet`'s schema for one combo, read from its first fold.
+
+        Schema only — no row groups are read. Callers use it to ask what a run
+        *has* before requesting columns, because pyarrow raises on an unknown
+        column name and that pre-empts any friendlier schema-aware error.
+        Folds of one combo share a schema (one `run-combo` writes them all), so
+        the first is representative.
+        """
+        import pyarrow.parquet as pq
+
+        if not self.fold_ids:
+            raise MissingArtifactError(f"{self.run_id}: no folds under {self.setup_dir}")
+        path = self.combo_dir(combo_id, self.fold_ids[0]) / "targets.parquet"
+        if not path.exists():
+            raise MissingArtifactError(f"{path} missing")
+        return pq.read_schema(path)
+
     # -- eval_* basename --------------------------------------------------
 
     @property

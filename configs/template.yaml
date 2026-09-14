@@ -118,10 +118,27 @@ analysis:
     # no_regions: false               # true drops the MTL feasible-region layer
     workers: 8                        # processes for the region replay (the slow part)
 
+  # Per-stage cost decomposition: where each variant spends, and the true
+  # pipeline reduce beside it. Grouped dots on a log axis — never stacked bars;
+  # stacking per-stage percentiles has no statistic under it.
+  plot-phase-cost:
+    cost: memory_heap                 # same channel vocabulary as plot-pareto
+    cost_rows: all                    # all | solved
+    # No cost_stat: the figure is a box (p5/p25/p50/p75/p95), so there is no
+    # single statistic to pick. plot-pareto still needs one, because a frontier
+    # takes a scalar per method.
+    # memory_reduce: max              # max | sum (runtime always sums)
+    # method: []                      # restrict the method pool
+
   plot-pareto:
     top_n: 1
-    cost: runtime                     # runtime | memory_alloc | memory_rss
-    cost_stat: p50                    # p50 | p75 | p90 | p95 | mean (use p95 for memory_rss)
+    # runtime | memory_heap | memory_alloc | memory_rss.
+    #   memory_heap  — sampled libc heap; sees Shapely/GEOS C allocations.
+    #   memory_alloc — tracemalloc; sees Python/NumPy, blind to GEOS.
+    #   The two have disjoint blind spots and are never combined; pick one.
+    #   memory_rss   — DEPRECATED. Degenerate on old runs, NULL on new ones.
+    cost: runtime
+    cost_stat: p50                    # p50 | p75 | p90 | p95 | mean
     cost_rows: all                    # all | solved
     # memory_reduce: max              # max | sum (ignored for runtime)
     # x: cost                         # cost | throughput (runtime only)

@@ -18,6 +18,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from scripts.analysis.v3.modules import pareto as P
+from scripts.analysis.v3.modules import cost as C
 from scripts.analysis.v3.modules.cost import COST_SPECS
 from scripts.analysis.v3.modules.classify import SHORTEST_PING
 from scripts.analysis.v3.modules.paths import MissingArtifactError, RunPaths
@@ -117,7 +118,7 @@ def test_short_label_drops_the_redundant_cbg_suffix():
 
 def test_shortest_ping_is_charged_exactly_zero_on_both_axes():
     row = pd.Series({"accuracy": 0.37, "n_targets": 412})
-    for key in ("runtime", "memory_alloc", "memory_rss"):
+    for key in C.COST_SPECS:
         got = P.shortest_ping_row("as02", row, COST_SPECS[key])
         assert got["cost"] == 0.0 and got["cost_basis"] == "analytical"
         assert bool(got["is_baseline"])

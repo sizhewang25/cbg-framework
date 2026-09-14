@@ -14,9 +14,6 @@ slices: []
 merge_folds: true
 
 group_by: ltd
-phase_stat: p95
-include_fit: true
-runtime_stat: p50
 
 # Combos to plot. Every analysis rule restricts to these via --combos.
 # Leave empty (or remove the key) to include every combo on disk.

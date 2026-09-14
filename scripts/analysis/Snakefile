@@ -9,8 +9,12 @@
 #   plot_error_cdf.png              – CDF of error_km (SUCCESS+FALLBACK), panelled by LTD
 #   plot_error_cdf_for_success.png  – same, but SUCCESS-only; count = "<succ>/<total>"
 #   plot_error_diff_cdf.png         – pairwise per-target error_A − error_B CDF
-#   plot_phase_memory.png           – stacked LTD/MTL/CTR (+ FIT) peak memory
-#   plot_phase_runtime.png          – stacked LTD/MTL/CTR per-target runtime + total line
+#   phase_cost_memory_heap.*.png    – per-stage peak memory, grouped dots + pipeline rule
+#   phase_cost_runtime.*.png        – same, per-target runtime
+#     Both come from `analysis.v3.cli plot-phase-cost`, which pools folds itself,
+#     so they are MERGED-only: there is no per-slice variant. The retired
+#     plot_phase_{memory,runtime}.py stacked per-stage percentiles, which has no
+#     statistic under it (see scripts/analysis/v3/modules/cost.py).
 # Both error-CDF plots overlay a nearest-ping VP baseline read from
 # inputs/<source>/<setup>/<slice>/eval_observations.parquet.
 #
@@ -37,9 +41,10 @@ ANALYSIS_ROOT   = Path(config.get("analysis_root",   "scripts/analysis/outputs")
 
 # Plot knobs
 GROUP_BY   = config.get("group_by", "ltd")  # "ltd" | "none"
-PHASE_STAT = config.get("phase_stat", "p95")  # p5/p25/p50/p75/p95/mean
-INCLUDE_FIT = bool(config.get("include_fit", True))
-RUNTIME_STAT = config.get("runtime_stat", "p50")  # bars on plot_phase_runtime — default median
+# `phase_stat` / `runtime_stat` / `include_fit` are gone. plot-phase-cost draws
+# a box (p5/p25/p50/p75/p95), so there is no single statistic to choose; and FIT
+# is a run-level one-time peak that never belonged on a per-target bar. Read the
+# fit numbers from run.json instead.
 # Diff pairs: list of [A, B] combo_id pairs. Required for the diff plot.
 DIFF_PAIRS = config.get("diff_pairs", [])
 # Continent split: when set, plot_error_cdf gets two extra outputs that split
@@ -61,6 +66,12 @@ _CONT_SLUG = (
 COMBOS = config.get("combos", []) or []
 COMBOS_ARG = (" --combos " + " ".join(COMBOS)) if COMBOS else ""
 
+# plot-phase-cost names the method flag `--method`, and puts every axis that
+# changes the numbers into the filename, so the rule's output must agree.
+PHASE_COMBOS_ARG = ("".join(f" --method {c}" for c in COMBOS)) if COMBOS else ""
+PHASE_MEMORY_PNG = "phase_cost_memory_heap.all.max.png"
+PHASE_RUNTIME_PNG = "phase_cost_runtime.all.sum.png"
+
 # Optional list of combo_ids to overlay on a single CDF (no LTD grouping).
 # Drives the plot_error_cdf_merge.png / plot_error_cdf_merge_by_continent_*.png
 # outputs. Empty/unset → those outputs are skipped.
@@ -74,6 +85,8 @@ if not SLICES and not MERGE_FOLDS:
     )
 
 CLI = "python -m scripts.analysis"
+# The phase-cost figures live in v3; everything else is still v2-era.
+V3_CLI = "python -m scripts.analysis.v3.cli"
 
 RUN_DIR = V2_OUTPUTS_ROOT / RUN_ID
 SLICE_OUT = ANALYSIS_ROOT / RUN_ID / SOURCE / SETUP / "{slice}"
@@ -86,8 +99,6 @@ MERGED_INPUTS_DIR = V2_INPUTS_ROOT / SOURCE / RUN_ID / SETUP  # parent of all fo
 _PLOTS = [
     "plot_error_cdf",
     "plot_error_cdf_for_success",
-    "plot_phase_memory",
-    "plot_phase_runtime",
     "plot_accuracy_runtime",
     "plot_accuracy_memory",
 ]
@@ -126,6 +137,8 @@ def _all_targets():
         targets.extend(expand(str(MERGED_OUT / "{plot}.png"), plot=_PLOTS))
         targets.append(str(MERGED_OUT / "inspect_mtl_blockers.json"))
         targets.append(str(MERGED_OUT / "inspect_mtl_blockers.md"))
+        targets.append(str(MERGED_OUT / PHASE_MEMORY_PNG))
+        targets.append(str(MERGED_OUT / PHASE_RUNTIME_PNG))
         targets.append(str(MERGED_OUT / "per_target_table.parquet"))
         targets.append(str(MERGED_OUT / "plot_per_target_sorted.png"))
         if SPLIT_CONT:
@@ -209,42 +222,6 @@ if SPLIT_CONT:
             " --split-by-main-continent {params.cont}"
             " --filtered-anchors {params.anchors}"
             " --out {params.base_out}" + COMBOS_ARG
-
-rule phase_memory:
-    input:
-        summary = RUN_DIR / "summary.parquet",
-    output:
-        png = SLICE_OUT / "plot_phase_memory.png",
-    params:
-        run_dir = str(RUN_DIR),
-        source = SOURCE,
-        stat = PHASE_STAT,
-        fit_flag = "" if INCLUDE_FIT else "--no-fit",
-    shell:
-        CLI + ".plot_phase_memory"
-        " --run-dir {params.run_dir}"
-        " --source {params.source}"
-        " --slice {wildcards.slice}"
-        " --stat {params.stat}"
-        " {params.fit_flag}"
-        " --out {output.png}" + COMBOS_ARG
-
-rule phase_runtime:
-    input:
-        summary = RUN_DIR / "summary.parquet",
-    output:
-        png = SLICE_OUT / "plot_phase_runtime.png",
-    params:
-        run_dir = str(RUN_DIR),
-        source = SOURCE,
-        stat = RUNTIME_STAT,
-    shell:
-        CLI + ".plot_phase_runtime"
-        " --run-dir {params.run_dir}"
-        " --source {params.source}"
-        " --slice {wildcards.slice}"
-        " --stat {params.stat}"
-        " --out {output.png}" + COMBOS_ARG
 
 rule accuracy_runtime_box:
     input:
@@ -431,39 +408,37 @@ if SPLIT_CONT:
             " --filtered-anchors {params.anchors}"
             " --out {params.base_out}" + COMBOS_ARG
 
-rule phase_memory_merged:
+rule phase_cost_memory_merged:
     input:
         summary = RUN_DIR / "summary.parquet",
     output:
-        png = MERGED_OUT / "plot_phase_memory.png",
+        png = MERGED_OUT / PHASE_MEMORY_PNG,
     params:
-        run_dir = str(RUN_DIR),
-        source = SOURCE,
-        stat = PHASE_STAT,
-        fit_flag = "" if INCLUDE_FIT else "--no-fit",
+        run_id = RUN_ID,
+        outputs_root = str(V2_OUTPUTS_ROOT),
+        out_dir = str(MERGED_OUT),
     shell:
-        CLI + ".plot_phase_memory"
-        " --run-dir {params.run_dir}"
-        " --source {params.source}"
-        " --stat {params.stat}"
-        " {params.fit_flag}"
-        " --out {output.png}" + COMBOS_ARG
+        V3_CLI + " plot-phase-cost"
+        " --run-id {params.run_id}"
+        " --cost memory_heap"
+        " --outputs-root {params.outputs_root}"
+        " --out-dir {params.out_dir}" + PHASE_COMBOS_ARG
 
-rule phase_runtime_merged:
+rule phase_cost_runtime_merged:
     input:
         summary = RUN_DIR / "summary.parquet",
     output:
-        png = MERGED_OUT / "plot_phase_runtime.png",
+        png = MERGED_OUT / PHASE_RUNTIME_PNG,
     params:
-        run_dir = str(RUN_DIR),
-        source = SOURCE,
-        stat = RUNTIME_STAT,
+        run_id = RUN_ID,
+        outputs_root = str(V2_OUTPUTS_ROOT),
+        out_dir = str(MERGED_OUT),
     shell:
-        CLI + ".plot_phase_runtime"
-        " --run-dir {params.run_dir}"
-        " --source {params.source}"
-        " --stat {params.stat}"
-        " --out {output.png}" + COMBOS_ARG
+        V3_CLI + " plot-phase-cost"
+        " --run-id {params.run_id}"
+        " --cost runtime"
+        " --outputs-root {params.outputs_root}"
+        " --out-dir {params.out_dir}" + PHASE_COMBOS_ARG
 
 rule accuracy_runtime_box_merged:
     input:

@@ -12,9 +12,6 @@ merge_folds: true   # 5 K-fold slices → one merged plot per metric
 
 # Plot knobs
 group_by: ltd                  # "ltd" = one CDF panel per LTD model; "none" = single panel
-phase_stat: p95                # which per-stage summary stat to stack: p5/p25/p50/p75/p95/mean
-include_fit: true              # add a FIT bar from each combo's run.json
-runtime_stat: p50              # plot_phase_runtime bars — median per-stage (sequential, so stack ≈ total)
 
 # Combos to plot. Every analysis rule restricts to these via --combos.
 # Leave empty (or remove the key) to include every combo on disk.

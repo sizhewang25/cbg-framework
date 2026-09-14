@@ -149,7 +149,11 @@ COST_ROWS: tuple[str, ...] = ("all", "solved")
 #: validates against this too, so the old `MEMORY_REDUCERS` was a misnomer.
 REDUCERS: tuple[str, ...] = ("max", "sum")
 
-_STAT_QUANTILE = {"p50": 50.0, "p75": 75.0, "p90": 90.0, "p95": 95.0}
+#: `p5`/`p25` exist for the box-and-whisker figure (`phase_cost.py`), which
+#: needs hinges and a lower whisker; `COST_STATS` deliberately does not
+#: offer them as a `--cost-stat` choice, because a lower tail is not a
+#: sensible single number to rank methods by.
+_STAT_QUANTILE = {"p5": 5.0, "p25": 25.0, "p50": 50.0, "p75": 75.0, "p90": 90.0, "p95": 95.0}
 
 
 def _scaled_stages(df: pd.DataFrame, spec: CostSpec) -> list[np.ndarray] | None:
@@ -232,11 +236,14 @@ def per_target_cost(
 
 
 def cost_stats(values: np.ndarray) -> dict[str, float]:
-    """p50/p75/p90/p95/mean/min/max/n over the finite values; NaN in -> NaN out."""
+    """p5/p25/p50/p75/p90/p95/mean/min/max/n over the finite values.
+
+    NaN in -> NaN out, and `n` is the count of finite values, which is what
+    lets a caller see that a block is empty rather than zero."""
     arr = np.asarray(values, dtype=float)
     arr = arr[np.isfinite(arr)]
     if arr.size == 0:
-        out = {k: float("nan") for k in ("p50", "p75", "p90", "p95", "mean", "min", "max")}
+        out = {k: float("nan") for k in (*_STAT_QUANTILE, "mean", "min", "max")}
         out["n"] = 0
         return out
     out = {k: float(np.percentile(arr, q)) for k, q in _STAT_QUANTILE.items()}
@@ -255,14 +262,89 @@ def _rows_for(
     `columns` is passed explicitly so the nested `ltd_predictions` /
     `mtl_participants` columns are never read (they dominate the file size)
     while `load_folds`' K-fold disjointness check still runs.
+
+    Requested columns are intersected with what the run actually has, because
+    pyarrow raises `ArrowInvalid` on an unknown column name and that fired
+    *before* `_scaled_stages` could produce its schema-aware
+    `MissingArtifactError` — making that friendly error unreachable through
+    `combo_cost` / `combo_stage_costs` (it only ever fired for callers handing
+    `_scaled_stages` a frame directly, which is why the test for it passed).
+    Dropping them here instead lets the real message through, naming the
+    columns and the schema that has them.
     """
     if rows not in COST_ROWS:
         raise ValueError(f"rows must be one of {list(COST_ROWS)}; got {rows!r}")
     cols = ["target_id", "status", *spec.stage_cols]
-    df = io.load_folds(run, combo_id, columns=cols)
+    available = set(run.combo_schema(combo_id).names)
+    df = io.load_folds(run, combo_id, columns=[c for c in cols if c in available])
     if rows == "solved":
         df = df[df["status"].isin(io.CBG_SUCCESS_STATUSES)]
     return df
+
+
+#: Channels whose columns exist in the schema but are no longer populated.
+#: Kept selectable so archived runs stay readable; see the module docstring.
+DEPRECATED_SPECS: frozenset[str] = frozenset({"memory_rss"})
+
+
+def warn_if_deprecated(spec: CostSpec, *, echo=print) -> None:
+    """Say so, once, when a caller selects a retired channel.
+
+    `memory_rss` is not merely coarse at p50 — it is degenerate at every stat
+    (glibc heap reuse collapses a per-stage RSS delta to one page after warmup)
+    and is NULL outright on runs postdating the heap channel. An earlier version
+    of this warning advised `--cost-stat p95`, which does not rescue it.
+    """
+    if spec.key in DEPRECATED_SPECS:
+        echo(
+            f"warning: --cost {spec.key} is DEPRECATED. It is degenerate at every "
+            f"stat on older runs and NULL on runs carrying the heap channel. "
+            f"Use --cost memory_heap (libc heap, sees GEOS/C) or --cost "
+            f"memory_alloc (tracemalloc, sees Python/NumPy)."
+        )
+
+
+def require_measured(
+    stats: dict[str, float], spec: CostSpec, *, run_id: str, method: str
+) -> None:
+    """Raise when a channel's columns are present but hold no measurements.
+
+    `_scaled_stages` returns `None` for an uninstrumented run and every caller
+    turns that into NaN, deliberately, so a figure can *refuse* rather than draw
+    a bar for something never measured. Refusing is the caller's job and nobody
+    was doing it: `plot-pareto --cost memory_rss` on a run with the heap channel
+    produced `p50=nan` silently and plotted it.
+
+    Distinct from the `MissingArtifactError` in `_scaled_stages`, which fires
+    when the columns are *absent* (a pre-`c7ee30a` schema). Here they exist and
+    are all NULL, which is what a deprecated-but-retained channel looks like.
+    """
+    if stats.get("n", 0) > 0 and np.isfinite(stats.get("p50", np.nan)):
+        return
+    alt = "memory_heap" if spec.key != "memory_heap" else "memory_alloc"
+    raise MissingArtifactError(
+        f"{run_id}/{method}: cost channel {spec.key!r} has no measurements — "
+        f"{list(spec.stage_cols)} are present but entirely NULL. This run "
+        f"predates or postdates that channel; try --cost {alt}."
+    )
+
+
+def load_cost_frame(
+    run: RunPaths, combo_id: str, spec: CostSpec, *, rows: str = "all"
+) -> pd.DataFrame:
+    """The per-target frame a figure needs when stats alone are not enough.
+
+    `combo_cost` / `combo_stage_costs` return reduced blocks, which is all the
+    scalar figures need. A distribution figure (box-and-whisker) needs the
+    values themselves — and needs to know which of them were *null before the
+    fill*, so it can draw a stage over the rows where that stage actually ran
+    while the pipeline reduce still sees every row.
+
+    Returns the raw columns (`spec.stage_cols` unscaled, plus `target_id` /
+    `status`); pair it with `per_stage_cost` / `per_target_cost` for the scaled,
+    null-filled views.
+    """
+    return _rows_for(run, combo_id, spec, rows=rows)
 
 
 def combo_cost(

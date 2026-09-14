@@ -131,8 +131,8 @@ Reads `summary.parquet` from step 4b and emits five PNGs at
 | `plot_error_cdf.png`              | Error CDF, all targets, all combos              |
 | `plot_error_cdf_for_success.png`  | Error CDF restricted to successfully geolocated |
 | `plot_error_diff_cdf.png`         | Error delta vs. `shortest_ping` baseline        |
-| `plot_phase_runtime.png`          | Wall-time per algorithm phase                   |
-| `plot_phase_memory.png`           | Peak memory per algorithm phase                 |
+| `phase_cost_runtime.*.png`        | Wall-time per algorithm phase (merged folds)     |
+| `phase_cost_memory_heap.*.png`    | Peak memory per algorithm phase (merged folds)   |
 
 Final line: `6 of 6 steps (100%) done`.
 

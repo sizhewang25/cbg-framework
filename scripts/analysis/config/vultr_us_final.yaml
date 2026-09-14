@@ -16,9 +16,6 @@ slices: []
 merge_folds: true
 
 group_by: ltd
-phase_stat: p95
-include_fit: true
-runtime_stat: p50
 
 # All 16 combos from the bench config. group_by=ltd will produce 4 panels:
 #   low_envelope      → vanilla_cbg, vanilla_cbg_geo

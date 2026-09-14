@@ -40,6 +40,7 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/map_bipartite.py](modules/map_bipartite.py) | cmd · `plot-bipartite-graph` |
 | [modules/map_mtl.py](modules/map_mtl.py) | cmd · `plot-mtl-map` |
 | [modules/pareto.py](modules/pareto.py) | cmd · `plot-pareto` |
+| [modules/phase_cost.py](modules/phase_cost.py) | cmd · `plot-phase-cost` |
 
 [modules/diagram/](modules/diagram/) is the one package here, split from
 `venn.py` when that module passed 2,000 lines. The split follows the bargain
@@ -329,6 +330,7 @@ analysis:
   plot-venn:         {top_n: 1}
   plot-answer-space: {us_only: true}
   plot-pareto:       {top_n: 1, cost: runtime, cost_stat: p50}
+  plot-phase-cost:   {cost: memory_heap, cost_stat: p50}
 ```
 
 ```bash
@@ -389,6 +391,8 @@ are parsed — `ctx.args` is empty there — so both are read from `sys.argv`:
   1630 km — which is why the CLI defaults it per grid. Inheriting the other
   grid's number would silently build an answer space nobody asked for. Pass
   `-r` too for a specific rung.
+
+`plot-phase-cost` is per-run, so its `run_id` is a scalar.
 
 `run_id` may be a list. `plot-pareto` and `plot-venn` take `--run-id` repeatably
 because both pool datasets, so `configs/cross-as01-as03.yaml` names three runs
@@ -2330,6 +2334,14 @@ Their identities stay in the CSV.
   buffers but is blind to pymalloc. They overlap on malloc-backed NumPy, so
   they must never be summed or max'd together. On MTL the heap channel reads
   ~10x the alloc channel; on the NumPy-bound CTR they agree to 0.1%.
+* **`plot-phase-cost` is the decomposition; `plot-pareto` is the scalar.** The
+  pareto frontier answers "is this variant worth its cost"; it cannot say
+  *where* the cost is. `plot-phase-cost` draws the three stage marginals per
+  method plus the true per-target reduce, over one denominator. It replaces the
+  retired `plot_phase_{memory,runtime}.py`, which stacked per-stage percentiles
+  — a bar with no statistic under it. Grouped dots on a log axis rather than
+  bars: the span is ~4 orders of magnitude, and a bar encodes magnitude as
+  length from a baseline that a log axis does not have.
 * **`memory_rss` is DEPRECATED and NULL on new runs.** Not merely coarse:
   glibc's dynamic mmap threshold makes a per-stage RSS delta collapse to one
   4096-byte page after warmup at *any* sampler interval. `--cost-stat p95` does

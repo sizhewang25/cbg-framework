@@ -81,7 +81,7 @@ Because the answer space is finite and metro-granular, the question to ask is *"
 Operator geolocation is a routine rather than a one-shot study over a few hundred targets: a recurring job over the operator's full address space, on the order of millions of IPs, re-run as prefixes move and interconnects change. Two costs follow from that.
 
 - **Runtime** must fit the routine's cadence. A variant that takes hours per run cannot support continuous content-steering monitoring, whatever its accuracy.
-- **Memory** must stay bounded as target count grows. Variants differ sharply here: region-intersection geometry, Monte Carlo sampling over constraint sets, and per-(VP, ASN) calibration models all scale differently in the number of VPs, targets, and peers.
+- **Memory** must stay bounded as target count grows. Variants differ sharply here: region-intersection geometry, Monte Carlo sampling over constraint sets, and per-(VP, ASN) calibration models all scale differently in the number of VPs, targets, and peers — and, as §8.3 shows, the largest term and the growing term are not the same phase.
 
 Prior work rarely reports either. Published CBG results are stated as accuracy on modest target sets, so an operator has no way to know whether a variant that wins on accuracy is affordable to run, or whether the cheapest variant, Shortest-Ping, is being beaten by an amount worth paying for. Measuring runtime and memory alongside accuracy for every variant is part of the benchmark's contribution, not instrumentation around it.
 
@@ -282,7 +282,7 @@ And then we still do the rotation for all the folds to get evaluated. In this wa
 - **Max angular gap per target**: the largest empty wedge among bearings from the target to its measured VPs, as median and p90. VPs at bearings 10°, 40°, 75° leave a 295° gap and barely constrain the target; VPs at 20°, 140°, 260° leave 120° and bracket it. Identical degree, different precision, which is the whole point.
 - **Circular variance of bearings**: near 0 means every landmark lies in one direction, near 1 means well surrounded. Smoother than max gap, so this is the form used in the §8.3 regressions.
 
-*[Remaining §7 subsections: leakage-free K-fold protocol · the SoI validation primitive and its k-of-N threshold · metric definitions (error distance, classification accuracy, classification confidence, practicality, diagnostics) · whether per-VP calibration geometry earns a place · the runtime and memory measurement protocol (hardware, whether the million-IP figure is measured or extrapolated, calibration time counted separately from inference). Material to migrate and tighten from [[CBG-Benchmark-Paper-Flow-v1]] §5.]*
+*[Remaining §7 subsections: leakage-free K-fold protocol · the SoI validation primitive and its k-of-N threshold · metric definitions (error distance, classification accuracy, classification confidence, practicality, diagnostics) · whether per-VP calibration geometry earns a place · the runtime and memory measurement protocol (hardware, whether the million-IP figure is measured or extrapolated, calibration time counted separately from inference; memory defined as per-phase peak libc-heap allocation, with process peak RSS reported alongside it — see §8.3). Material to migrate and tighten from [[CBG-Benchmark-Paper-Flow-v1]] §5.]*
 
 - **Proprietary Mesh Unicast IP dataset** 
 	- VPs: Mobile cores of AS7018
@@ -563,7 +563,46 @@ The coverage ceiling and the two failure rates are settled by geometry and RTT r
 - Octant Spline: Tighter Piece-wise spline modeling, could over constraints such that negative excludes truth. But still accurate and robust in general. Couldn't compete with shortest-ping/SoI when RTT is small.
 - Spotter CBG: Oversimplified assumption on RTT-distance modeling using normal distribution, could create tight/inaccurate constraint for close/far-range targets, but good at mid-range targets.
 ##### Resource Consumption wise
-Memory
+
+**Memory.** We report **per-phase peak allocation**: the high-water mark of libc
+heap in use (`mallinfo2`), sampled at 1 ms over each phase's execution window and
+reduced per target before any percentile. This is an allocation figure, not a
+resident-set figure — it excludes the interpreter, imports and loaded inputs — so
+it answers *where a method spends*, not *how much RAM a worker needs*. The latter
+is reported separately as the process peak (`getrusage` high-water mark), which
+is the number an operator provisions against.
+
+The distinction matters because no kernel facility can attribute memory to a
+phase: cgroup `memory.peak`, `ru_maxrss` and `VmHWM` are all whole-process and
+lifetime-scoped, while the three phases are millisecond events inside one
+process. Allocator accounting is the only instrument at this granularity. We
+validated the sampler against an exact `malloc` interposer and it recovers 98.4%
+of the true peak on geometry-bound work and 100.0% on array-bound work.
+
+Three findings, and they do not all point at the same phase:
+
+- **CTR dominates, by three orders of magnitude, and only when it samples.** The
+  centroid phase splits cleanly in two: closed-form centroid selection costs
+  ~6 KB per target, while Monte-Carlo medoid selection costs ~24.7 MB — roughly
+  4,000x more, and ~94x the next-largest phase. Every variant using it
+  (Octant-Hull, Octant-Spline, Spotter) lands within 1 KB of the same figure,
+  because what is being allocated is the sample grid, not anything derived from
+  the data.
+- **That cost is a configuration constant, not a scaling term.** It is set by the
+  sample count alone and is identical across datasets, VP corpus sizes and target
+  counts — 24,655 KB on both the operator and the public RIPE runs. The dominant
+  memory term in the pipeline is therefore a *tunable*, not a property of scale,
+  which is the opposite of what the phase's magnitude suggests.
+- **MTL is the phase that actually scales with the data.** Region-intersection
+  geometry moves with VP density: the same variant costs 263 KB per target on the
+  public RIPE topology and 1,581 KB on the denser operator corpus, a ~6x spread,
+  while its LTD and CTR phases are unchanged. At million-IP scale MTL is the term
+  that grows; CTR is the term that is merely large.
+
+The practical reading is that the two cheap variants (Shortest-Ping, SoI CBG) and
+Vanilla stay in the tens of KB per target end to end, and the accuracy-competitive
+variants buy their accuracy with a fixed ~25 MB working set that can be traded
+back down by reducing the sample count.
 
 Runtime
 

@@ -15,9 +15,6 @@ slices: []
 merge_folds: true
 
 group_by: none                 # all 10 sweep variants share the same LTD; one CDF panel
-phase_stat: p95
-include_fit: true
-runtime_stat: p50
 
 # Every sweep variant. The Snakefile threads these through --combos so the CDF,
 # diff-CDF, phase, and inspect plots only consider this list.

@@ -42,6 +42,7 @@ from scripts.analysis.v3.modules import (
     map_bipartite,
     map_mtl,
     pareto,
+    phase_cost,
     pni,
     pni_feasibility,
     pni_linearity,
@@ -82,6 +83,7 @@ _COMMAND_MODULES = (
     map_bipartite,
     map_mtl,
     pareto,
+    phase_cost,
 )
 
 for _module in _COMMAND_MODULES:

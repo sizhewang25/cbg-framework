@@ -3,7 +3,7 @@
 The v3 layer already answers *how accurate* each CBG variant is
 (`classify` -> `topn_accuracy.csv`). This module answers what that accuracy
 costs, by joining it to the per-target runtime and memory the benchmark already
-records in `targets.parquet` (`{ltd,mtl,ctr}_{ms,alloc_peak_bytes,rss_peak_bytes}`
+records in `targets.parquet` (`{ltd,mtl,ctr}_{ms,alloc_peak_bytes,heap_peak_bytes,rss_peak_bytes}`
 — see ../SCHEMA.md §3).
 
 **Cross-dataset by construction.** A single run's accuracy number hides how
@@ -65,6 +65,8 @@ from scripts.analysis.v3.modules.cost import (
     REDUCERS,
     CostSpec,
     combo_cost,
+    require_measured,
+    warn_if_deprecated,
     cost_stats,
     per_target_cost,
 )
@@ -288,6 +290,9 @@ def load_cost_accuracy(
                 )
             except MissingArtifactError as exc:
                 raise MissingArtifactError(f"{run_id}/{method}: {exc}") from exc
+            # Columns present but all NULL yields NaN, not an exception; without
+            # this the frontier silently plots nothing. See cost.require_measured.
+            require_measured(stats, spec, run_id=run_id, method=method)
 
             sub = cfg[cfg["combo_id"] == method] if "combo_id" in cfg.columns else cfg.iloc[:0]
             fit_ms = float(sub["fit_ms"].mean()) if len(sub) else float("nan")
@@ -722,8 +727,7 @@ def register(app) -> None:
         ),
         cost_stat: str = typer.Option(
             DEFAULT_COST_STAT, "--cost-stat",
-            help=f"Per-target statistic: {list(COST_STATS)}. memory_rss is "
-                 "degenerate at p50 (4 KB page floor) — use p95 there.",
+            help=f"Per-target statistic: {list(COST_STATS)}.",
         ),
         cost_rows: str = typer.Option(
             "all", "--cost-rows",
@@ -813,12 +817,7 @@ def register(app) -> None:
                 "--amortize-fit applies to runtime only: a one-time fit's peak memory is "
                 "not additive across targets"
             )
-        if spec.key == "memory_rss" and cost_stat == "p50":
-            typer.echo(
-                "warning: memory_rss at p50 is floored at one 4096-byte page for every "
-                "fast stage (5 ms sampler) and cannot rank methods — prefer "
-                "--cost-stat p95."
-            )
+        warn_if_deprecated(spec, echo=typer.echo)
 
         g, resolutions = resolve_cli_grid(grid, list(resolution), sweep=sweep)
 

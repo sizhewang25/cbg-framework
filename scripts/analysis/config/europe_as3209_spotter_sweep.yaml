@@ -18,9 +18,6 @@ slices: []
 merge_folds: true
 
 group_by: none                 # 12 sweep variants share the same LTD; one CDF panel
-phase_stat: p95
-include_fit: true
-runtime_stat: p50
 
 # Every sweep variant. Listed unweighted first, then weighted, so the legend
 # orders cleanly in the CDF + diff plots.

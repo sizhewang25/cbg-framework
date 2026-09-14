@@ -23,21 +23,21 @@ It's all about **paths**. Rules don't have names you call; they're matched by th
 From [scripts/analysis/Snakefile](../scripts/analysis/Snakefile):
 
 ```python
-rule phase_runtime:                                      # ← name (for logs only)
+rule error_cdf:                                          # ← name (for logs only)
     input:
         summary = RUN_DIR / "summary.parquet",           # ← files this rule needs
     output:
-        png = SLICE_OUT / "plot_phase_runtime.png",      # ← files this rule produces
+        png = SLICE_OUT / "plot_error_cdf.png",          # ← files this rule produces
     params:
         run_dir = str(RUN_DIR),                          # ← values for the shell template
         source = SOURCE,
-        stat = RUNTIME_STAT,
+        group_by = GROUP_BY,
     shell:
-        CLI + ".plot_phase_runtime"                      # ← the command, with {params}/{wildcards} substituted
+        CLI + ".plot_error_cdf"                          # ← the command, with {params}/{wildcards} substituted
         " --run-dir {params.run_dir}"
         " --source {params.source}"
         " --slice {wildcards.slice}"
-        " --stat {params.stat}"
+        " --group-by {params.group_by}"
         " --out {output.png}"
 ```
 
@@ -45,14 +45,14 @@ Snakemake runs this rule **whenever the requested output path matches the `outpu
 
 ## Wildcards — the bit that's confusing
 
-The output is `SLICE_OUT / "plot_phase_runtime.png"`, where `SLICE_OUT = ANALYSIS_ROOT / RUN_ID / SOURCE / SETUP / "{slice}"`. That `{slice}` is a **wildcard** — a placeholder Snakemake matches against actual paths.
+The output is `SLICE_OUT / "plot_error_cdf.png"`, where `SLICE_OUT = ANALYSIS_ROOT / RUN_ID / SOURCE / SETUP / "{slice}"`. That `{slice}` is a **wildcard** — a placeholder Snakemake matches against actual paths.
 
 If you ask Snakemake for:
 ```
-scripts/analysis/outputs/smoke-003/vultr_csv/anchors_to_probes/top1/plot_phase_runtime.png
+scripts/analysis/outputs/smoke-003/vultr_csv/anchors_to_probes/top1/plot_error_cdf.png
 ```
 
-Snakemake pattern-matches against `phase_runtime`'s output template and concludes `{slice} = top1`. From that point on, `{wildcards.slice}` is literally `"top1"` everywhere in the rule body, including the shell command.
+Snakemake pattern-matches against `error_cdf`'s output template and concludes `{slice} = top1`. From that point on, `{wildcards.slice}` is literally `"top1"` everywhere in the rule body, including the shell command.
 
 This is what lets one rule produce N output files. The wildcard is the rule's "parameter."
 
@@ -66,12 +66,12 @@ rule all:
 
 `rule all` is the conventional name for "the target rule." When you run `snakemake` with no rule arg, it runs `rule all` and asks for everything in its `input:`. Note it's `input:`, not `output:` — `rule all` doesn't *make* anything; it requests files.
 
-`expand()` is a string formatter. Given `SLICES=["top1"]` and `_PLOTS=["plot_error_cdf", "plot_phase_memory", ...]`, it produces a cross product:
+`expand()` is a string formatter. Given `SLICES=["top1"]` and `_PLOTS=["plot_error_cdf", "plot_error_cdf_for_success", ...]`, it produces a cross product:
 
 ```
 scripts/analysis/outputs/smoke-003/.../top1/plot_error_cdf.png
-scripts/analysis/outputs/smoke-003/.../top1/plot_phase_memory.png
-scripts/analysis/outputs/smoke-003/.../top1/plot_phase_runtime.png
+scripts/analysis/outputs/smoke-003/.../top1/plot_error_cdf_for_success.png
+scripts/analysis/outputs/smoke-003/.../top1/plot_error_cdf.png
 …
 ```
 
@@ -84,8 +84,8 @@ For smoke-003, `rule all` requests 5 PNGs. Snakemake works backward:
 ```
 plot_error_cdf.png       needs summary.parquet  +  eval_observations.parquet
 plot_error_cdf_for_*     needs summary.parquet  +  eval_observations.parquet
-plot_phase_memory.png    needs summary.parquet
-plot_phase_runtime.png   needs summary.parquet
+plot_error_cdf_for_success.png needs summary.parquet
+plot_error_cdf.png   needs summary.parquet
 plot_error_diff_cdf.png  needs summary.parquet
 ```
 
@@ -141,3 +141,16 @@ Open [scripts/benchmark/v2/Snakefile](../scripts/benchmark/v2/Snakefile) and try
 3. If you change `--configfile` to point at a config with 8 combos instead of 4, how many `run_combo` jobs run, and what triggers that count?
 
 Answer to (3): "8, because `expand(combo_id=COMBO_IDS)` builds 8 output paths in `rule all`'s input, so the DAG has 8 leaves of that rule." That's the whole story — config drives `expand()`, `expand()` builds the request list, Snakemake fills in the wildcards and runs the rules backward.
+
+
+---
+
+## Addendum, 2026-09-14 — the example rule changed
+
+This primer originally used `rule phase_runtime`. That rule and its memory twin
+were retired: they drove `plot_phase_{runtime,memory}.py`, which stacked
+per-stage percentiles — a bar with no statistic under it (see
+`scripts/analysis/v3/modules/cost.py`). Their replacement,
+`plot-phase-cost`, pools folds itself, so it has **no `{slice}` wildcard** and
+would not illustrate the point this primer is making. The worked example is now
+`rule error_cdf`, which is still per-slice.

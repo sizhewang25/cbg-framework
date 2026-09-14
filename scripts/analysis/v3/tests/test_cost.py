@@ -138,9 +138,23 @@ def test_per_stage_columns_reduce_to_the_pipeline_value():
     `per_target_cost` is *defined* as this frame reduced row-wise, so the null
     policy has one definition rather than two that can diverge.
     """
-    df = _cost_frame([1.0, 5.0], [10.0, 2.0], [100.0, 3.0])
+    MB = 1024 * 1024
+    frames = {
+        "runtime": _cost_frame([1.0, 5.0], [10.0, 2.0], [100.0, 3.0]),
+        "memory_alloc": pd.DataFrame({
+            "target_id": ["t0", "t1"],
+            "status": ["SUCCESS", "SUCCESS"],
+            "ltd_alloc_peak_bytes": [1 * MB, 5 * MB],
+            "mtl_alloc_peak_bytes": [10 * MB, 2 * MB],
+            "ctr_alloc_peak_bytes": [100 * MB, 3 * MB],
+        }),
+    }
+    # Each channel builds its OWN frame: an earlier version looped over both
+    # keys but reassigned `spec` to runtime inside the body, so the byte-column
+    # arm never ran and `key` only decorated the assert message.
     for key, op in (("runtime", "sum"), ("memory_alloc", "max")):
-        spec = C.COST_SPECS["runtime"]  # ms columns; reduce is what varies
+        spec = C.COST_SPECS[key]
+        df = frames[key]
         stages = C.per_stage_cost(df, spec)
         expected = stages.sum(axis=1) if op == "sum" else stages.max(axis=1)
         got = C.per_target_cost(df, spec, reduce=op)
@@ -211,3 +225,36 @@ def test_the_mean_stack_is_exactly_additive_for_sum_but_not_for_max():
     assert stage_means != pytest.approx(
         float(C.per_target_cost(df, spec, reduce="max").mean())
     )
+
+
+# ---------------------------------------------------------------------------
+# the channel registry itself
+# ---------------------------------------------------------------------------
+
+
+def test_every_cost_spec_names_three_real_stage_columns():
+    """Nothing pinned `COST_SPECS`, so adding or renaming a channel broke
+    nothing in the suite while breaking every figure that reads it."""
+    for key, spec in C.COST_SPECS.items():
+        assert spec.key == key
+        assert len(spec.stage_cols) == len(C.STAGES)
+        for stage, col in zip(C.STAGES, spec.stage_cols):
+            assert col.startswith(f"{stage}_"), (key, col)
+        assert spec.reduce in C.REDUCERS
+
+
+def test_the_two_live_memory_channels_are_both_registered():
+    """`memory_heap` (libc heap, sees GEOS) and `memory_alloc` (tracemalloc,
+    sees Python/NumPy) have disjoint blind spots, so both must exist and both
+    must reduce with max. `memory_rss` is retained only to read archived runs."""
+    assert C.COST_SPECS["memory_heap"].stage_cols == (
+        "ltd_heap_peak_bytes", "mtl_heap_peak_bytes", "ctr_heap_peak_bytes"
+    )
+    assert C.COST_SPECS["memory_alloc"].stage_cols == (
+        "ltd_alloc_peak_bytes", "mtl_alloc_peak_bytes", "ctr_alloc_peak_bytes"
+    )
+    for key in ("memory_heap", "memory_alloc", "memory_rss"):
+        assert C.COST_SPECS[key].reduce == "max"
+    assert C.COST_SPECS["runtime"].reduce == "sum"
+    assert "memory_rss" in C.DEPRECATED_SPECS
+    assert "memory_heap" not in C.DEPRECATED_SPECS

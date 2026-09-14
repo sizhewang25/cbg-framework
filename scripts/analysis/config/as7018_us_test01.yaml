@@ -18,9 +18,6 @@ textbook_combos: [vanilla_cbg, million_scale_cbg, octant_cbg, spotter_cbg]
 feature_parquet: scripts/analysis/partvp/outputs/data/as7018_us_test01.parquet
 
 group_by: ltd
-phase_stat: p95
-include_fit: true
-runtime_stat: p50
 
 combos:
   - vanilla_cbg
