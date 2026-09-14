@@ -1,13 +1,20 @@
 """Phase-local peak memory per v2 combo: stacked LTD / MTL / CTR (+ FIT) with
 a process-max-RSS line.
 
-Two memory channels available per phase, selected by `--channel`:
-  * `rss` (default) — `{ltd,mtl,ctr}_rss_peak_bytes_<stat>`: max RSS-delta over
-    the stage window from the background sampler. Catches Shapely/GEOS C
-    allocations. The honest "how much memory did this stage need" number.
+Three memory channels per phase, selected by `--channel`. Neither of the two
+live channels dominates the other — they have disjoint blind spots, and on the
+CTR Sobol grid they agree to <0.1% while on MTL the heap channel reads ~60x the
+alloc channel:
+  * `heap` (default) — `{ltd,mtl,ctr}_heap_peak_bytes_<stat>`: sampled peak of
+    libc heap in use (mallinfo2). Sees GEOS/C and large NumPy buffers; blind to
+    pymalloc-satisfied small Python objects.
   * `alloc` — `{ltd,mtl,ctr}_alloc_peak_bytes_<stat>`: tracemalloc Python
-    allocator peak. Catches NumPy/SciPy but blind to libc C allocations.
-    Useful for Python-side attribution but materially underreports MTL.
+    allocator peak. Sees Python objects and NumPy; blind to libc C allocations,
+    so it materially underreports MTL.
+  * `rss` — DEPRECATED, retained only to read back historical runs. A per-stage
+    RSS delta collapses to one 4096-byte page after warmup because glibc reuses
+    the heap rather than growing RSS; it cannot rank stages at any sampler
+    interval. Runs predating the heap channel carry only this column.
 
 Run-level: `fit_<channel>_peak_bytes` / `run_baseline_rss_bytes` /
 `run_peak_rss_bytes` from each combo's `run.json`.
@@ -57,6 +64,13 @@ _PHASE_COLOR = {
 
 _BYTES_PER_MB = 1024 * 1024
 
+_CHANNELS = ("heap", "alloc", "rss")
+_CHANNEL_BLURB = {
+    "heap": "peak libc heap in use (mallinfo2; sees GEOS/C, blind to pymalloc)",
+    "alloc": "tracemalloc peak (sees Python/NumPy, blind to GEOS/C)",
+    "rss": "sampled RSS delta (DEPRECATED — collapses to one page after warmup)",
+}
+
 
 def plot_phase_memory(
     summary: pa.Table,
@@ -65,7 +79,7 @@ def plot_phase_memory(
     *,
     stat: str = "p95",
     include_fit: bool = True,
-    channel: str = "rss",
+    channel: str = "heap",
     title: Optional[str] = None,
 ) -> plt.Figure:
     """Stacked phase-memory bars (MB) + process max-RSS line.
@@ -78,12 +92,13 @@ def plot_phase_memory(
         stat: Which per-stage stat to plot — "p5"/"p25"/"p50"/"p75"/"p95"/"mean".
         include_fit: Whether to add a stacked FIT bar from run.json
             fit_<channel>_peak_bytes.
-        channel: "rss" (honest, catches Shapely C allocations) or "alloc"
+        channel: "heap" (libc heap, catches GEOS), "alloc" (tracemalloc), or
+            the deprecated "rss"
             (tracemalloc Python-only, Shapely-blind).
         title: Figure title.
     """
-    if channel not in ("rss", "alloc"):
-        raise ValueError(f"channel must be 'rss' or 'alloc'; got {channel!r}")
+    if channel not in _CHANNELS:
+        raise ValueError(f"channel must be one of {_CHANNELS}; got {channel!r}")
     combo_ids = summary.column("combo_id").to_pylist()
     phase_mb: dict[str, list[float]] = {}
     for phase in ("ltd", "mtl", "ctr"):
@@ -91,6 +106,8 @@ def plot_phase_memory(
         if col not in summary.column_names:
             raise ValueError(
                 f"Column {col!r} not in summary.parquet — check --stat / --channel. "
+                f"Runs predating the heap channel only carry --channel rss "
+                f"(deprecated) and --channel alloc. "
                 f"Available: {sorted(c for c in summary.column_names if c.endswith(tuple(['_p5','_p25','_p50','_p75','_p95','_mean','_std'])))}"
             )
         values = summary.column(col).to_numpy(zero_copy_only=False).astype(float)
@@ -169,10 +186,7 @@ def plot_phase_memory(
     )
     ax_rss.legend(rss_handles, rss_labels, loc="upper right", fontsize=8, frameon=True)
 
-    channel_blurb = {
-        "rss": "RSS-sampled peak (catches Shapely C allocations)",
-        "alloc": "tracemalloc Python-allocator peak (Shapely-blind)",
-    }[channel]
+    channel_blurb = _CHANNEL_BLURB[channel]
     fig.text(
         0.01, 0.01,
         f"Bars: per-stage {channel_blurb} (summary {stat}). "
@@ -270,7 +284,7 @@ def _load_from_run(
     slice_: Optional[str],
     combos: Optional[list[str]] = None,
     *,
-    channel: str = "rss",
+    channel: str = "heap",
 ) -> tuple[pa.Table, dict[str, dict]]:
     """Return (summary table, run_jsons by combo_id).
 
@@ -324,9 +338,10 @@ def main() -> None:
     )
     parser.add_argument("--no-fit", action="store_true", help="Hide the FIT bar.")
     parser.add_argument(
-        "--channel", choices=("rss", "alloc"), default="rss",
+        "--channel", choices=_CHANNELS, default="heap",
         help=(
-            "Memory channel to plot. 'rss' (default) = RSS-sampled peak, "
+            "Memory channel to plot. 'heap' (default) = sampled libc heap "
+            "in use, 'alloc' = tracemalloc, 'rss' = deprecated legacy channel. "
             "catches Shapely C allocations (honest MTL). 'alloc' = tracemalloc "
             "Python-allocator peak, Shapely-blind."
         ),

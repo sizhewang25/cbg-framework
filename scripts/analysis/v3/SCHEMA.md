@@ -53,9 +53,9 @@ triple *and* the phase-attribution forensics.
 | --- | --- |
 | identity / truth | `target_id`, `target_lat`, `target_lon`, `n_obs`, `seed` |
 | prediction | `pred_lat`, `pred_lon`, `status`, `error`, `error_km` |
-| LTD | `ltd_ms`, `ltd_alloc_peak_bytes`, `ltd_rss_peak_bytes`, `n_ltd_success`, `ltd_predictions` |
-| MTL | `mtl_ms`, `mtl_alloc_peak_bytes`, `mtl_rss_peak_bytes`, `mtl_success`, `mtl_error`, `mtl_intersection_kind`, `n_mtl_participants`, `mtl_participants` |
-| CTR | `ctr_ms`, `ctr_alloc_peak_bytes`, `ctr_rss_peak_bytes`, `ctr_success`, `ctr_error` |
+| LTD | `ltd_ms`, `ltd_alloc_peak_bytes`, `ltd_heap_peak_bytes`, `ltd_rss_peak_bytes`, `n_ltd_success`, `ltd_predictions` |
+| MTL | `mtl_ms`, `mtl_alloc_peak_bytes`, `mtl_heap_peak_bytes`, `mtl_rss_peak_bytes`, `mtl_success`, `mtl_error`, `mtl_intersection_kind`, `n_mtl_participants`, `mtl_participants` |
+| CTR | `ctr_ms`, `ctr_alloc_peak_bytes`, `ctr_heap_peak_bytes`, `ctr_rss_peak_bytes`, `ctr_success`, `ctr_error` |
 
 Nested list-of-struct columns (the per-VP evidence):
 
@@ -84,8 +84,9 @@ Combo config + run-level cost. Keys: `run_id`, `source`, `setup`, `slice`,
 `base_seed`, `pair_weight_min`, `n_targets_dropped_below_min_weight`,
 `enable_fallback`, `started_at`, `n_fit_samples`, `n_targets`,
 `status_counts{SUCCESS,FALLBACK,ERROR}`, `fit_success`, `fit_error`, `fit_ms`,
-`fit_alloc_peak_bytes`, `fit_rss_peak_bytes`, `run_baseline_rss_bytes`,
-`run_peak_rss_bytes`.
+`fit_alloc_peak_bytes`, `fit_heap_peak_bytes`, `fit_rss_peak_bytes`,
+`run_baseline_rss_bytes`, `rss_after_inputs_bytes`, `rss_after_fit_bytes`,
+`run_peak_rss_bytes`, `memory_channel`.
 
 > **Trap — `(ltd, mtl, ctr)` does NOT identify a combo.** The distinguishing
 > config lives in `*_kwargs`. `combo_id` is the only safe key.
@@ -207,21 +208,40 @@ One row per `(run_id, source, setup, slice, combo_id)`; 87 columns.
 - counts: `n_targets`, `n_success`, `n_fallback`, `n_error`
 - accuracy: `error_km_{p5,p25,p50,p75,p95,mean,std}`
 - per-phase cost, for each of `ltd`/`mtl`/`ctr` × `{ms, alloc_peak_bytes,
-  rss_peak_bytes}` × `{p5,p25,p50,p75,p95,mean,std}`
-- fit/run: `fit_ms`, `fit_alloc_peak_bytes`, `fit_rss_peak_bytes`,
-  `run_baseline_rss_bytes`, `run_peak_rss_bytes`
+  heap_peak_bytes, rss_peak_bytes}` × `{p5,p25,p50,p75,p95,mean,std}`
+- fit/run: `fit_ms`, `fit_alloc_peak_bytes`, `fit_heap_peak_bytes`,
+  `fit_rss_peak_bytes`, `run_baseline_rss_bytes`, `rss_after_inputs_bytes`,
+  `rss_after_fit_bytes`, `run_peak_rss_bytes`, `memory_channel`
 
-> Per README: per-target `tracemalloc` numbers are noise-dominated for fast
-> stages. Trust the aggregated p50/p95 here, and use `run_peak_rss_bytes`
-> (psutil) for run-level memory.
+> **Two live memory channels, disjoint blind spots, never combined.**
+> `*_alloc_peak_bytes` (tracemalloc) sees Python objects and NumPy but is blind
+> to Shapely/GEOS C allocations. `*_heap_peak_bytes` (sampled `mallinfo2`) sees
+> GEOS/C and large NumPy buffers but is blind to pymalloc-satisfied small
+> objects. They overlap on malloc-backed NumPy, so summing double-counts and
+> `max` discards the pymalloc side — report them separately. On a real
+> `octant_cbg_hull` fold the heap channel reads 10x the alloc channel on MTL,
+> while on the NumPy-bound CTR the two agree to 0.1%.
 >
-> `modules/pareto.py` therefore defaults to the **`alloc`** channel aggregated to
-> a percentile rather than raw per-target values: `*_rss_peak_bytes` is floored
-> at one 4096-byte page for every stage faster than the 5 ms sampler, so it
-> cannot rank methods at p50. It also reduces memory across stages with
-> **`max`** — `instrument.py` resets tracemalloc inside each stage, so the
-> columns are per-stage peaks, making `max` the pipeline high-water mark and
-> `sum` the no-release upper bound. Runtime sums.
+> **`*_rss_peak_bytes` is DEPRECATED** and NULL on glibc runs. It is not merely
+> coarse: glibc's dynamic mmap threshold means a per-stage RSS delta collapses
+> to one 4096-byte page after warmup at *any* sampler interval. On real data it
+> took two distinct values across 80 LTD measurements, and a single 22 MB
+> warmup artifact set an entire combo's MTL figure under `max`. Do not rank
+> stages with it.
+>
+> Per-target numbers are usable directly — the old "tracemalloc is
+> noise-dominated" caveat was unfounded (measured 819 ns per cycle, ~1.00x
+> slowdown); the aggregated p50/p95 here remain the safer read.
+>
+> `run_peak_rss_bytes` is `getrusage(ru_maxrss)`, a monotonic *kernel*
+> high-water mark (not psutil). The four RSS marks are ordered
+> `baseline <= after_inputs <= after_fit <= peak`; the **fit-free, input-free**
+> sweep cost is `peak - after_fit`. `peak - baseline` is NOT fit-free, because
+> the baseline is sampled before the inputs load.
+>
+> `modules/pareto.py` reduces memory across stages with **`max`** — the columns
+> are per-stage peaks, making `max` the pipeline high-water mark and `sum` the
+> no-release upper bound. Runtime sums.
 >
 > `error_km_*` here pools FALLBACK rows (see §3 trap). For fallback-excluded
 > accuracy, recompute from `targets.parquet`.

@@ -36,6 +36,7 @@ from scripts.benchmark.v2.inputs import (
 )
 from scripts.benchmark.v2.instrument import (
     TimingMemoryInstrument,
+    heap_probe_available,
     measure_block,
     peak_rss_bytes,
 )
@@ -94,6 +95,7 @@ def run_one_combo(
         eval_targets, n_targets_dropped_below_min_weight = _filter_by_weight(
             eval_targets, spec.pair_weight_min,
         )
+    rss_after_inputs = peak_rss_bytes()
 
     # --- 2. Construct + fit model -------------------------------------------
     model = CBGModel.from_config(
@@ -106,6 +108,7 @@ def run_one_combo(
     with measure_block("fit") as fit_meas:
         fit_result = model.fit(fit_samples)
     save_ltd_checkpoint(model.ltd, fit_result, combo_dir=out_dir)
+    rss_after_fit = peak_rss_bytes()
 
     # --- 3. Loop targets, geolocate with instrumentation --------------------
     # Streaming writer: one row group per target. Each writer.write_table call
@@ -113,6 +116,7 @@ def run_one_combo(
     # is durable. Parquet's footer is still only written on close(), so a hard
     # crash leaves a footer-less file — recoverable but not directly readable.
     status_counts = {"SUCCESS": 0, "FALLBACK": 0, "ERROR": 0}
+    memory_channel = "heap" if heap_probe_available() else "rss"
     targets_path = out_dir / "targets.parquet"
     has_stochastic_ctr = hasattr(model.ctr, "rng")
     with pq.ParquetWriter(str(targets_path), bench_schema.TARGETS_SCHEMA) as writer:
@@ -123,16 +127,20 @@ def run_one_combo(
 
             instr = TimingMemoryInstrument()
             result = model.geolocate(target.obs, instrument=instr)
+            memory_channel = instr.memory_channel
             status_counts[result.status.name] += 1
 
             row = _build_target_row(target, result, instr, seed=target_seed)
             writer.write_table(_row_to_table(row))
 
     # --- 5. Write run.json ---------------------------------------------------
-    # `rss_start` was sampled before fit/per-target work — that's the
-    # baseline (Python + libs + inputs). `rss_end` is the lifetime peak.
-    # Both come from `getrusage().ru_maxrss`, which is monotonic, so
-    # `rss_end >= rss_start` by construction (no max() needed).
+    # Four ordered RSS marks, all from `getrusage().ru_maxrss` (monotonic
+    # kernel high-water mark), so baseline <= after_inputs <= after_fit <=
+    # peak holds by construction — no max() needed.
+    #
+    # NB `rss_start` is sampled BEFORE the input parquets are loaded, so it is
+    # NOT the "Python + libs + inputs" baseline earlier comments claimed. The
+    # fit-free, input-free sweep cost is `run_peak - rss_after_fit`.
     rss_end = peak_rss_bytes()
     run_meta = {
         "run_id": run_id,
@@ -159,8 +167,13 @@ def run_one_combo(
         "fit_ms": fit_meas["duration_ns"] / 1e6,
         "fit_alloc_peak_bytes": fit_meas["alloc_peak_bytes"],
         "fit_rss_peak_bytes": fit_meas["rss_peak_bytes"],
+        "fit_heap_peak_bytes": fit_meas.get("heap_peak_bytes"),
         "run_baseline_rss_bytes": rss_start,
+        "rss_after_inputs_bytes": rss_after_inputs,
+        "rss_after_fit_bytes": rss_after_fit,
         "run_peak_rss_bytes": rss_end,
+        "memory_channel": memory_channel,
+        "heap_probe_available": heap_probe_available(),
     }
     (out_dir / "run.json").write_text(json.dumps(run_meta, indent=2) + "\n")
     return out_dir
@@ -282,12 +295,15 @@ def _build_target_row(
         "error_km": error_km,
         "ltd_ms": (ltd_rec.duration_ns / 1e6) if ltd_rec else 0.0,
         "ltd_alloc_peak_bytes": ltd_rec.alloc_peak_bytes if ltd_rec else 0,
-        "ltd_rss_peak_bytes": ltd_rec.rss_peak_bytes if ltd_rec else 0,
+        "ltd_heap_peak_bytes": ltd_rec.heap_peak_bytes if ltd_rec else None,
+        "ltd_rss_peak_bytes": ltd_rec.rss_peak_bytes if ltd_rec else None,
         "mtl_ms": (mtl_rec.duration_ns / 1e6) if mtl_rec else None,
         "mtl_alloc_peak_bytes": mtl_rec.alloc_peak_bytes if mtl_rec else None,
+        "mtl_heap_peak_bytes": mtl_rec.heap_peak_bytes if mtl_rec else None,
         "mtl_rss_peak_bytes": mtl_rec.rss_peak_bytes if mtl_rec else None,
         "ctr_ms": (ctr_rec.duration_ns / 1e6) if ctr_rec else None,
         "ctr_alloc_peak_bytes": ctr_rec.alloc_peak_bytes if ctr_rec else None,
+        "ctr_heap_peak_bytes": ctr_rec.heap_peak_bytes if ctr_rec else None,
         "ctr_rss_peak_bytes": ctr_rec.rss_peak_bytes if ctr_rec else None,
         "n_ltd_success": sum(1 for r in geo_result.ltd_results if r.success),
         "ltd_predictions": ltd_predictions,

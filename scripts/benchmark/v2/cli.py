@@ -310,6 +310,12 @@ def _stat_block(series) -> dict[str, float | None]:
     return out
 
 
+def _opt_int(value) -> int | None:
+    """int(), but preserving None — a missing memory mark must stay NULL
+    rather than becoming a 0 that reads like a real measurement."""
+    return None if value is None else int(value)
+
+
 def _summarize_combo(run_json: Path) -> dict:
     """Read run.json + targets.parquet for one combo and produce a SUMMARY_SCHEMA row."""
     meta = json.loads(run_json.read_text())
@@ -335,9 +341,15 @@ def _summarize_combo(run_json: Path) -> dict:
         "n_error": int(sc.get("ERROR", 0)),
         "fit_ms": float(meta.get("fit_ms", 0.0)),
         "fit_alloc_peak_bytes": int(meta.get("fit_alloc_peak_bytes", 0)),
-        "fit_rss_peak_bytes": int(meta.get("fit_rss_peak_bytes", 0)),
+        "fit_heap_peak_bytes": _opt_int(meta.get("fit_heap_peak_bytes")),
+        "fit_rss_peak_bytes": _opt_int(meta.get("fit_rss_peak_bytes")),
         "run_baseline_rss_bytes": int(meta.get("run_baseline_rss_bytes", 0)),
-        "run_peak_rss_bytes": int(meta["run_peak_rss_bytes"]),
+        "rss_after_inputs_bytes": _opt_int(meta.get("rss_after_inputs_bytes")),
+        "rss_after_fit_bytes": _opt_int(meta.get("rss_after_fit_bytes")),
+        # `.get` not `[...]`: run.jsons written before this field existed would
+        # otherwise hard-KeyError the whole summarize step.
+        "run_peak_rss_bytes": int(meta.get("run_peak_rss_bytes", 0)),
+        "memory_channel": meta.get("memory_channel"),
     }
     # Aggregate every per-target metric over the SUCCESS+FALLBACK subset.
     # error_km is naturally NaN on ERROR rows, so dropna in _stat_block does

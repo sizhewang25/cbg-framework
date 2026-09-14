@@ -1,5 +1,13 @@
 # CBG memory footprint — per-worker RSS and `-j` sizing for the octant sweep
 
+> **[2026-09-13] The "Honest-MTL channel" section below is WRONG.** Its
+> diagnosis (the 5 ms sampler missing transient Shapely allocations) and its
+> proposed follow-up (re-run at 1 ms) were both refuted by measurement — see
+> the addendum at the end of this file and
+> [2026-09-13-per-phase-memory-instrument.md](2026-09-13-per-phase-memory-instrument.md).
+> The `-j` sizing and per-ASN RSS tables are unaffected and still stand.
+
+
 **Date:** 2026-05-28
 **Trigger:** First run of the 6-ASN octant_weighted_cbg sweep on the new
 [dual-channel memory instrumentation](../scripts/benchmark/v2/instrument.py) —
@@ -13,9 +21,10 @@ wanted to size `-j` for the next run.
 
 - Per-worker RSS peaks at **~304 MB** (AS7922, the largest VP corpus at 213
   probes) and bottoms at ~223 MB (AS16509/AS31898, 30–31 probes).
-- Baseline (Python + libs + inputs loaded, before any combo work) is
-  **163 MB across all ASNs** — identical, as expected for `getrusage` after
-  imports settle.
+- Baseline (Python + libs only — NOT inputs; see addendum) is
+  **163 MB across all ASNs** — identical. Read at the time as "imports settled";
+  in fact this is evidence the baseline EXCLUDES the inputs, since an
+  ASN-independent number cannot contain ASN-sized input parquets (see addendum).
 - The **CBG-attributable delta** (peak − baseline) scales linearly with VP
   count: 60 MB at 30 VPs → 141 MB at 213 VPs.
 - **CPU, not memory, is the bottleneck**. Memory permits 30+ parallel workers
@@ -36,9 +45,9 @@ wanted to size `-j` for the next run.
 | global_as16509       |  30 | 163 | 223 | 223 | 223 |  61 |  60 |
 
 The peak is captured via `resource.getrusage(RUSAGE_SELF).ru_maxrss` at the end
-of `run_one_combo` ([runner.py:120](../scripts/benchmark/v2/runner.py#L120));
+of `run_one_combo` ([runner.py:144](../scripts/benchmark/v2/runner.py#L144));
 baseline is the same call before fit + per-target work
-([runner.py:80](../scripts/benchmark/v2/runner.py#L80)). Monotonic kernel
+([runner.py:88](../scripts/benchmark/v2/runner.py#L88)). Monotonic kernel
 high-water mark, so `peak ≥ baseline` is guaranteed.
 
 ---
@@ -157,3 +166,44 @@ print(all_df.groupby('asn_run').agg(
 - Schema: [scripts/benchmark/v2/schema.py](../scripts/benchmark/v2/schema.py) —
   `SUMMARY_METRICS` lists both `*_alloc_peak_bytes` (tracemalloc) and
   `*_rss_peak_bytes` (sampler) per stage.
+
+
+---
+
+# Addendum, 2026-09-13 — the MTL channel diagnosis above is retracted
+
+The "Honest-MTL channel" section concluded that `mtl_rss_peak` came out below
+`mtl_alloc_peak` because the 5 ms background sampler missed transient
+Shapely/GEOS allocations, and recommended re-running at 1 ms to confirm.
+
+**Both the diagnosis and the remedy were wrong.** Two independent refutations:
+
+1. A 43–317 ms MTL stage gets 9–60 samples at 5 ms, and the observed value was
+   an **exact one-page constant** (4096 B) — across every run and every ASN.
+   A sampling-resolution problem cannot produce that.
+2. Measured directly: 50 µs, 500 µs and 5 ms sampling all return ~1000–1050 KB
+   on the GEOS workload. The interval was never the variable.
+
+The actual cause is **glibc heap reuse**. glibc's mmap threshold is *dynamic*:
+once it observes frees of mmap'd blocks it raises the threshold, after which
+allocations are served from the reused heap and never raise RSS. A per-stage
+RSS delta therefore measures "did this stage raise the process high-water
+mark", which after the first couple of targets is structurally *no*. Five
+identical 16 MB stages reported 16.00, 15.91, 0.00, 0.00, 0.00 MB.
+
+So the closing recommendation — "re-run with a tighter sampler interval (1 ms
+instead of 5 ms) and see if `mtl_rss_peak` jumps" — is **explicitly retracted**.
+It would not have jumped.
+
+The section's *other* claim also needs correcting: it inferred that "Shapely's
+C allocations for a 125–213-polygon intersection are tiny in absolute terms
+(well under 1 MB)". Measured with a reuse-immune channel they are ~1 MB per MTL
+call and **~10× the tracemalloc reading** on real data — the original
+hypothesis (that tracemalloc massively undercounts MTL because GEOS allocates
+in C) was right after all. It was the RSS channel, not the hypothesis, that was
+broken.
+
+Replacement: `*_heap_peak_bytes`, a `mallinfo2` (`uordblks + hblkhd`) sampled
+peak of logical heap in use. Full analysis, before/after tables and the
+run-level baseline correction are in
+[2026-09-13-per-phase-memory-instrument.md](2026-09-13-per-phase-memory-instrument.md).

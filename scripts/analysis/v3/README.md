@@ -96,7 +96,18 @@ this layer's boundary.
 
 ## Pipeline
 
+Steps 1, 2 and 3b describe the *dataset*, not any method's output, so they do
+not need a benchmark run — only `targets.csv` / `vps.csv` / `clusters/` and the
+canonical CSV. `materialize-target-space --configfile` builds all of those from
+the run config alone, which is why step 0 can precede the benchmark:
+
 ```bash
+# 0. Target space from the canonical CSV — no combos have to have run yet.
+#    --with-eval-source puts the precheck where build-proximity reads it
+#    (its own default --out-dir is the CSV's directory, where nothing looks).
+python -m scripts.benchmark.v2.cli materialize-target-space \
+    --configfile configs/<run_id>.yaml --with-eval-source
+
 # 1. Quantize targets -> seeds (answer space). Defaults to h3 res 4.
 python -m scripts.analysis.v3.cli build-answer-space --all-runs
 
@@ -2307,14 +2318,22 @@ Their identities stay in the CSV.
   every target, so the cost denominator has to be too.
 * **Memory reduces with `max`, not `sum`** (`--memory-reduce`).
   `benchmark/v2/instrument.py` resets tracemalloc *inside* each stage and the
-  RSS sampler returns a delta, so the columns are per-stage peaks: `max` is the
-  pipeline high-water mark, `sum` the no-release upper bound. Summing also
-  triples the ~41.6 KB tracemalloc pedestal, which is bookkeeping rather than
-  work. Runtime genuinely sums. (`plot_accuracy_cost_box.py` sums memory; that
-  is deliberately not inherited.)
-* **`memory_alloc` is the default memory channel.** `*_rss_peak_bytes` is
-  floored at one 4096-byte page for every stage faster than the 5 ms sampler, so
-  it cannot rank methods at p50 — pass `--cost-stat p95` to use it.
+  samplers return deltas, so the columns are per-stage peaks: `max` is the
+  pipeline high-water mark, `sum` the no-release upper bound. Runtime genuinely
+  sums. (`plot_accuracy_cost_box.py` sums memory; that is deliberately not
+  inherited.) An earlier version of this bullet justified `max` by a "~41.6 KB
+  tracemalloc pedestal" — the measured pedestal is ~5 KB and the rest is real
+  allocation, so that reason was wrong even though the conclusion holds.
+* **Two live memory channels, reported separately.** `memory_alloc`
+  (tracemalloc) sees Python and NumPy but is blind to Shapely/GEOS C
+  allocations; `memory_heap` (sampled `mallinfo2`) sees GEOS/C and large NumPy
+  buffers but is blind to pymalloc. They overlap on malloc-backed NumPy, so
+  they must never be summed or max'd together. On MTL the heap channel reads
+  ~10x the alloc channel; on the NumPy-bound CTR they agree to 0.1%.
+* **`memory_rss` is DEPRECATED and NULL on new runs.** Not merely coarse:
+  glibc's dynamic mmap threshold makes a per-stage RSS delta collapse to one
+  4096-byte page after warmup at *any* sampler interval. `--cost-stat p95` does
+  not rescue it. See `notes/2026-09-13-per-phase-memory-instrument.md`.
 * **Fit cost is excluded** and reported separately (`fit_ms_mean`,
   `fit_ms_per_target`). The fold size is an experimental artifact, not a
   deployment denominator: at 82 targets/fold `vanilla_cbg`'s 2-3 s fit amortizes

@@ -21,13 +21,19 @@ than assumed (see `README.md` for the numbers):
    ~22% higher on `vanilla_cbg` — and `accuracy_topN`'s denominator is every
    target, so the cost denominator must be too.
 2. **Memory reduces across stages with `max`, not `sum`.** `instrument.py`
-   resets tracemalloc *inside* each stage and the RSS sampler returns a delta,
-   so the columns are per-stage peaks: `max` is the pipeline high-water mark,
-   `sum` the no-release upper bound. Summing also triples the ~41.6 KB
-   tracemalloc pedestal, which is bookkeeping rather than work. Runtime
-   genuinely sums.
-3. **`memory_rss` is degenerate at p50** — the sampler is 5 ms, so fast stages
-   floor at one 4096-byte page — but graded at p95. Hence `cost_stat`.
+   resets tracemalloc *inside* each stage and the samplers return deltas, so
+   the columns are per-stage peaks: `max` is the pipeline high-water mark,
+   `sum` the no-release upper bound. Runtime genuinely sums. (An earlier note
+   here justified `max` by a "~41.6 KB tracemalloc pedestal"; the measured
+   pedestal is ~5 KB and the rest is real allocation. The high-water-mark
+   argument stands on its own.)
+3. **`memory_rss` is DEPRECATED — not degenerate at p50, degenerate full
+   stop.** glibc's dynamic mmap threshold means a per-stage RSS delta collapses
+   to one 4096-byte page after warmup at any sampler interval; on real data it
+   took two distinct values across 80 targets. Use `memory_heap` (sampled
+   `mallinfo2`), which is reuse-immune and sees the GEOS allocations
+   `memory_alloc` is blind to. The two live channels have disjoint blind spots
+   and must be reported separately, never combined.
 4. **Costs can cluster inside their own measurement floor.** On the memory
    axis the three heavy variants sit within 160 bytes of each other at
    ~24.09 MB, so their x ordering is noise. The figure shows each variant's

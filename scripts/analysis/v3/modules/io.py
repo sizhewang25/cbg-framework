@@ -184,12 +184,22 @@ def load_run_configs(run: RunPaths, combo_ids: list[str] | None = None) -> pd.Da
                     "n_error": counts.get("ERROR"),
                     "fit_ms": d.get("fit_ms"),
                     "fit_alloc_peak_bytes": d.get("fit_alloc_peak_bytes"),
+                    "fit_heap_peak_bytes": d.get("fit_heap_peak_bytes"),
                     "fit_rss_peak_bytes": d.get("fit_rss_peak_bytes"),
-                    # Both RSS numbers are absolute `getrusage` peaks, so only
-                    # their difference is attributable to the run — the baseline
-                    # is ~174 MB of interpreter and imports.
+                    # Four ordered `getrusage` peaks, monotonic by construction,
+                    # so only differences are attributable. The baseline is
+                    # interpreter + imports ONLY — it is sampled before the
+                    # input parquets load, so `peak - baseline` also contains
+                    # input loading and the fit. For the sweep alone use
+                    # `peak - rss_after_fit`; for input cost use
+                    # `rss_after_inputs - baseline`.
+                    # NULL on runs predating these marks.
                     "run_baseline_rss_bytes": d.get("run_baseline_rss_bytes"),
+                    "rss_after_inputs_bytes": d.get("rss_after_inputs_bytes"),
+                    "rss_after_fit_bytes": d.get("rss_after_fit_bytes"),
                     "run_peak_rss_bytes": d.get("run_peak_rss_bytes"),
+                    # Which per-stage sampler produced this run's numbers.
+                    "memory_channel": d.get("memory_channel"),
                 }
             )
     return pd.DataFrame(rows)

@@ -70,14 +70,37 @@ class TestRunOneCombo(unittest.TestCase):
         self.assertEqual(run_meta["n_targets"], 1)
         self.assertGreater(run_meta["fit_ms"], 0.0)
         self.assertGreaterEqual(run_meta["fit_alloc_peak_bytes"], 0)
-        self.assertGreaterEqual(run_meta["fit_rss_peak_bytes"], 0)
+        # Exactly one sampler runs, so one of the two fit channels is NULL.
+        fit_channels = [run_meta["fit_heap_peak_bytes"], run_meta["fit_rss_peak_bytes"]]
+        self.assertEqual(
+            sum(v is None for v in fit_channels), 1,
+            f"expected exactly one measured fit channel, got {fit_channels}",
+        )
+        self.assertGreaterEqual(next(v for v in fit_channels if v is not None), 0)
         self.assertIn("status_counts", run_meta)
         self.assertGreater(run_meta["run_peak_rss_bytes"], 1_000_000)
         self.assertGreater(run_meta["run_baseline_rss_bytes"], 1_000_000)
-        # Baseline is captured before any combo work, true peak is captured
-        # at run end → getrusage monotonicity makes the inequality strict-or-equal.
-        self.assertGreaterEqual(
-            run_meta["run_peak_rss_bytes"], run_meta["run_baseline_rss_bytes"]
+        # Four ordered RSS marks. All come from getrusage's monotonic
+        # high-water mark, so the chain is >= at every step by construction.
+        # NB the baseline is sampled BEFORE inputs load, so
+        # `peak - baseline` is NOT fit-free; `peak - after_fit` is.
+        marks = [
+            run_meta["run_baseline_rss_bytes"],
+            run_meta["rss_after_inputs_bytes"],
+            run_meta["rss_after_fit_bytes"],
+            run_meta["run_peak_rss_bytes"],
+        ]
+        for m in marks:
+            self.assertIsNotNone(m)
+        self.assertEqual(marks, sorted(marks), f"RSS marks out of order: {marks}")
+
+        # The run is self-describing about which sampler produced its numbers;
+        # without this a macOS run is silently incomparable with a Linux one.
+        self.assertIn(run_meta["memory_channel"], {"heap", "rss"})
+        self.assertIsInstance(run_meta["heap_probe_available"], bool)
+        self.assertEqual(
+            run_meta["memory_channel"],
+            "heap" if run_meta["heap_probe_available"] else "rss",
         )
 
         # 2. .stateless marker (SoI LTD has no fitted state)
@@ -96,15 +119,22 @@ class TestRunOneCombo(unittest.TestCase):
         self.assertGreater(row["ltd_ms"], 0.0)
         self.assertIsNotNone(row["mtl_ms"])
         self.assertIsNotNone(row["ctr_ms"])
-        # Both memory channels present on every stage. alloc_peak is
-        # tracemalloc (always >= 0); rss_peak is sampler delta (may be 0
-        # for sub-5ms stages — assert presence, not magnitude).
-        self.assertGreaterEqual(row["ltd_alloc_peak_bytes"], 0)
-        self.assertGreaterEqual(row["ltd_rss_peak_bytes"], 0)
-        self.assertGreaterEqual(row["mtl_alloc_peak_bytes"], 0)
-        self.assertGreaterEqual(row["mtl_rss_peak_bytes"], 0)
-        self.assertGreaterEqual(row["ctr_alloc_peak_bytes"], 0)
-        self.assertGreaterEqual(row["ctr_rss_peak_bytes"], 0)
+        # All three memory channels present on every stage. alloc_peak is
+        # tracemalloc (always >= 0); the sampled channels may be 0 for very
+        # short stages — assert presence, not magnitude. heap_peak is NULL
+        # (never 0) when the platform lacks mallinfo2.
+        from scripts.benchmark.v2.instrument import heap_probe_available
+        for stage in ("ltd", "mtl", "ctr"):
+            self.assertGreaterEqual(row[f"{stage}_alloc_peak_bytes"], 0)
+            heap = row[f"{stage}_heap_peak_bytes"]
+            rss = row[f"{stage}_rss_peak_bytes"]
+            if heap_probe_available():
+                self.assertIsNotNone(heap, f"{stage} heap column is NULL on glibc")
+                self.assertGreaterEqual(heap, 0)
+                self.assertIsNone(rss, f"{stage}_rss should be NULL, not 0")
+            else:
+                self.assertIsNone(heap)
+                self.assertGreaterEqual(rss, 0)
         # Under anchors_to_probes the lone anchor (1.1.1.1) is the single VP
         # observing each probe target → n_obs == 1.
         self.assertEqual(row["n_obs"], 1)

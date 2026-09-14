@@ -5,18 +5,31 @@ read it. Three commands now depend on the policies below, so they live here
 rather than beside any one of them.
 
 The per-target runtime and memory the benchmark records in `targets.parquet`
-(`{ltd,mtl,ctr}_{ms,alloc_peak_bytes,rss_peak_bytes}` — see ../SCHEMA.md §3)
-are per-*stage* peaks and durations. Turning them into a number means deciding
-how stages compose, and the two channels do not compose alike:
+(`{ltd,mtl,ctr}_{ms,alloc_peak_bytes,heap_peak_bytes,rss_peak_bytes}` — see
+../SCHEMA.md §3) are per-*stage* peaks and durations. Turning them into a
+number means deciding how stages compose, and the channels do not compose alike:
 
 1. **Memory reduces across stages with `max`, not `sum`.** `instrument.py`
-   resets tracemalloc *inside* each stage and the RSS sampler returns a delta,
-   so the columns are per-stage peaks: `max` is the pipeline high-water mark,
-   `sum` the no-release upper bound. Summing also triples the ~41.6 KB
-   tracemalloc pedestal, which is bookkeeping rather than work. Runtime
-   genuinely sums.
-2. **`memory_rss` is degenerate at p50** — the sampler is 5 ms, so fast stages
-   floor at one 4096-byte page — but graded at p95. Hence `cost_stat`.
+   resets tracemalloc *inside* each stage and the samplers return deltas, so
+   the columns are per-stage peaks: `max` is the pipeline high-water mark,
+   `sum` the no-release upper bound. Runtime genuinely sums.
+   (An earlier version of this note justified `max` by a "~41.6 KB tracemalloc
+   pedestal … bookkeeping rather than work". That was wrong — the measured
+   pedestal is ~5 KB; the rest is real Python allocation. The high-water-mark
+   argument above is the actual reason, and it stands on its own.)
+2. **`memory_alloc` and `memory_heap` do not measure the same thing and must
+   never be combined.** tracemalloc sees Python objects and NumPy but is blind
+   to Shapely/GEOS C allocations; the heap channel (mallinfo2) sees GEOS and
+   large NumPy buffers but is blind to pymalloc-satisfied small objects. They
+   overlap on malloc-backed NumPy, so summing double-counts and `max` discards
+   the pymalloc side. Report them separately.
+3. **`memory_rss` is DEPRECATED and must not be used to rank stages.** It is
+   not merely coarse: glibc's dynamic mmap threshold means a per-stage RSS
+   delta collapses to one 4096-byte page after warmup, regardless of sampler
+   interval. Measured on real runs, `ltd_rss_peak_bytes` took *two* distinct
+   values across 80 targets and `mtl_rss_peak_bytes` was a flat 4096 except
+   for two warmup artifacts — one of which was 22 MB and, under `reduce="max"`,
+   single-handedly set that combo's MTL memory figure. Prefer `memory_heap`.
 3. **Reduce across stages per target, then percentile.** Never the reverse. A
    quantile does not distribute over a sum (per-stage medians 1/10/100 sum to
    111 and no target costs 111), and for `max` there is no statistic at which
@@ -103,15 +116,29 @@ COST_SPECS: dict[str, CostSpec] = {
         supports_throughput=False,
         title_noun="peak memory (tracemalloc)",
     ),
+    "memory_heap": CostSpec(
+        key="memory_heap",
+        stage_cols=(
+            "ltd_heap_peak_bytes",
+            "mtl_heap_peak_bytes",
+            "ctr_heap_peak_bytes",
+        ),
+        reduce="max",
+        scale=1.0 / _BYTES_PER_MB,
+        unit="MB",
+        axis_label="Per-target peak libc heap (MB)",
+        supports_throughput=False,
+        title_noun="peak memory (libc heap)",
+    ),
     "memory_rss": CostSpec(
         key="memory_rss",
         stage_cols=("ltd_rss_peak_bytes", "mtl_rss_peak_bytes", "ctr_rss_peak_bytes"),
         reduce="max",
         scale=1.0 / _BYTES_PER_MB,
         unit="MB",
-        axis_label="Per-target peak sampled RSS (MB)",
+        axis_label="Per-target peak sampled RSS (MB, DEPRECATED)",
         supports_throughput=False,
-        title_noun="peak memory (sampled RSS)",
+        title_noun="peak memory (sampled RSS, deprecated)",
     ),
 }
 
@@ -167,7 +194,7 @@ def per_stage_cost(df: pd.DataFrame, spec: CostSpec) -> pd.DataFrame:
 
     Columns are the short stage names (`cost.STAGES`), not the source column
     names, so a caller never has to know whether it asked for `_ms`,
-    `_alloc_peak_bytes` or `_rss_peak_bytes`.
+    `_alloc_peak_bytes`, `_heap_peak_bytes` or `_rss_peak_bytes`.
 
     An uninstrumented run NaNs **every** stage, not just LTD. Returning real
     MTL/CTR columns beside a NaN LTD would let a figure draw two bars for a run

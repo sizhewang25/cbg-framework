@@ -15,7 +15,7 @@ post-hoc forensic analysis.
 | [inputs.py](inputs.py)         | Materializes a DataSource into three parquets                                                                                                                                                                                    |
 | [runner.py](runner.py)         | Per-combo fit + geolocate loop with instrumentation                                                                                                                                                                              |
 | [checkpoint.py](checkpoint.py) | Picks LTD checkpoint snapshot (or `.stateless` marker)                                                                                                                                                                           |
-| [instrument.py](instrument.py) | Per-stage timing + tracemalloc peak collector                                                                                                                                                                                    |
+| [instrument.py](instrument.py) | Per-stage timing + dual-channel memory collector (tracemalloc + sampled libc heap)                                                                                                                                                                                    |
 | [schema.py](schema.py)         | PyArrow schemas — single source of truth for all parquets                                                                                                                                                                        |
 | [airports.py](airports.py)     | OurAirports reference set + `AirportIndex` (haversine `BallTree` nearest-airport lookup)                                                                                                                                          |
 | [airport_eval.py](airport_eval.py) | Decoupled postprocessing — appends closest-airport columns to `targets.parquet`                                                                                                                                             |
@@ -239,16 +239,57 @@ weighted-arm config.
 `CBGModel.geolocate(obs, instrument=...)` accepts a callable that returns a
 context manager wrapping each stage call. The runner uses
 `TimingMemoryInstrument` from [instrument.py](instrument.py), which records
-per-stage `(duration_ns, peak_bytes)` via `time.perf_counter_ns` and
-`tracemalloc`.
+per-stage `duration_ns` via `time.perf_counter_ns` plus two memory channels.
 
-**Caveat — read before staring at the numbers.** For fast stages (~10–100 µs),
-the per-call `tracemalloc.start`/`stop` overhead is on the same order as the
-stage runtime. The recorded per-target-per-stage numbers are kept because the
-spec asks for them, but the trustworthy reading is the aggregated p50/p95/max
-across the full target sweep (computed by `summarize` into `summary.parquet`).
-For run-level memory, look at `run_peak_rss_bytes` (psutil RSS, not contaminated
-by tracemalloc).
+### Which memory channel?
+
+Neither channel dominates — they have disjoint blind spots, so both are
+recorded and they must **never** be combined (summing double-counts
+malloc-backed NumPy; `max` discards the pymalloc side).
+
+| | `*_alloc_peak_bytes` (tracemalloc) | `*_heap_peak_bytes` (mallinfo2) |
+| --- | --- | --- |
+| Python objects | ✅ | ❌ (pymalloc arenas are raw-mmap'd) |
+| NumPy / SciPy buffers | ✅ | ✅ |
+| Shapely / GEOS C allocations | ❌ | ✅ |
+
+Measured on a real `octant_cbg_hull` fold (80 targets): the heap channel reads
+**10×** the alloc channel on MTL, where GEOS dominates, while on the
+NumPy-bound CTR the two independent channels agree to **0.1%** — which is the
+cross-check that the heap reader is correct.
+
+**`*_rss_peak_bytes` is deprecated** and is written only on the non-glibc
+fallback path (NULL otherwise — never 0). It is not merely coarse: glibc's
+*dynamic* mmap threshold rises once it observes frees of mmap'd blocks, after
+which allocations reuse the heap and never raise RSS. A per-stage RSS delta
+therefore answers "did this stage raise the process high-water mark", which
+after the first few targets is structurally *no*. On the run above it took two
+distinct values across 80 LTD measurements and was a flat 4096 B for MTL apart
+from two warmup artifacts — one of 22 MB, which under `reduce="max"` set that
+combo's entire MTL memory figure. No sampler interval fixes this.
+
+**Overhead.** The per-stage cost is the sampler *thread* (~45 µs for
+`start()`+`join()`), not tracemalloc — a full
+`start`/`reset_peak`/`get_traced_memory`/`stop` cycle is ~819 ns, and tracing
+slows NumPy-heavy stages by ~1.00×. Against stage p50s of 17–530 ms that is
+~0.03%. Per-target numbers are usable directly; the aggregated p50/p95/max from
+`summarize` remain the safer read.
+
+**Run level.** `run_peak_rss_bytes` comes from
+`getrusage(RUSAGE_SELF).ru_maxrss` — a monotonic *kernel* high-water mark, not
+a psutil snapshot. It matched cgroup v2 `memory.peak` within 4% in a controlled
+comparison, and it is the number to quote for whole-run memory (it is also what
+systems/measurement papers conventionally report). `run.json` carries four
+ordered marks — `run_baseline_rss_bytes` ≤ `rss_after_inputs_bytes` ≤
+`rss_after_fit_bytes` ≤ `run_peak_rss_bytes` — so the **fit-free, input-free**
+sweep cost is `peak − after_fit`. Note the baseline is sampled *before* the
+input parquets load, so `peak − baseline` is not fit-free; on the run above
+that distinction is 80.4 MB vs 133.0 MB.
+
+Per-stage attribution is above what this venue expects, and no kernel facility
+can provide it (cgroups and `ru_maxrss` are whole-process, lifetime-scoped).
+The heap channel was cross-checked once against an exact malloc interposer —
+see `notes/2026-09-13-per-phase-memory-instrument.md`.
 
 ## Stats collected (per target)
 
@@ -260,10 +301,14 @@ Per the spec, every row of `targets.parquet` carries:
 - **LTDResult / MTLResult / CTRResult**: nested `ltd_predictions`; `mtl_`* and `ctr_*` columns.
 - **CBGResult coord + status**: `pred_lat/lon`, `status`, `error`, `error_km`.
 - **Runtime per stage**: `ltd_ms`, `mtl_ms`, `ctr_ms`.
-- **Peak memory per stage**: `ltd_peak_bytes`, `mtl_peak_bytes`, `ctr_peak_bytes`.
+- **Peak memory per stage**: `{ltd,mtl,ctr}_alloc_peak_bytes` (tracemalloc) and
+  `{ltd,mtl,ctr}_heap_peak_bytes` (sampled libc heap). `*_rss_peak_bytes` is
+  the deprecated legacy channel, NULL on glibc.
 
-Run-level: `fit_ms`, `fit_peak_bytes`, `run_peak_rss_bytes` live in `run.json`
-and roll into `summary.parquet`.
+Run-level: `fit_ms`, `fit_alloc_peak_bytes`, `fit_heap_peak_bytes`, the four
+RSS marks and `memory_channel` live in `run.json` and roll into
+`summary.parquet`. `memory_channel` records which sampler produced the numbers,
+without which a macOS-collected run is silently incomparable with a Linux one.
 
 The six `*_airport_*` columns are **not** written by the runner — they are
 appended later by `airport-eval` (see below).

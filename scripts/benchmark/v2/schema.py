@@ -117,20 +117,38 @@ TARGETS_SCHEMA = pa.schema([
     pa.field("error", pa.string(), nullable=True),           # Error.name or None
     pa.field("error_km", pa.float64(), nullable=True),       # haversine(true, pred)
 
-    # Per-stage timing + memory (ms, bytes). Two memory channels per stage:
-    # `*_alloc_peak_bytes` = tracemalloc Python-allocator peak (catches NumPy,
-    # blind to Shapely/GEOS C allocations); `*_rss_peak_bytes` = RSS-delta
-    # high-water mark sampled by background thread (catches everything,
-    # incl. C; may report 0 for stages shorter than the 5 ms sample window).
+    # Per-stage timing + memory (ms, bytes). Two ACTIVE memory channels per
+    # stage, with disjoint blind spots — see instrument.py. Neither dominates,
+    # and they must never be combined (summing double-counts malloc-backed
+    # NumPy; max discards the pymalloc side):
+    #   `*_alloc_peak_bytes` = tracemalloc stage-local peak delta. Sees Python
+    #       objects + NumPy; blind to Shapely/GEOS C allocations.
+    #   `*_heap_peak_bytes`  = sampled peak of libc heap in use (mallinfo2).
+    #       Sees GEOS/C + large NumPy buffers; blind to pymalloc-satisfied
+    #       small Python objects. NULL on non-glibc platforms (never 0 — a
+    #       silent 0 is indistinguishable from a real measurement).
+    #   `*_rss_peak_bytes`   = DEPRECATED legacy psutil-RSS delta. Retained for
+    #       continuity with historical runs and written only on the non-glibc
+    #       fallback path — NULL (not 0) whenever the heap channel is
+    #       active, so an unmeasured channel can never be mistaken for a
+    #       stage that used no memory. Degenerate by construction: glibc's dynamic mmap
+    #       threshold means a per-stage RSS delta collapses to one page after
+    #       warmup (measured: exactly 4096 B p50 for LTD and MTL across whole
+    #       runs). Do not rank stages with it.
     # MTL/CTR fields nullable because both are skipped on early failures.
+    # `ltd_heap_peak_bytes` is nullable even though LTD always runs, because
+    # the platform — not the pipeline — decides whether it has a value.
     pa.field("ltd_ms", pa.float64(), nullable=False),
     pa.field("ltd_alloc_peak_bytes", pa.int64(), nullable=False),
-    pa.field("ltd_rss_peak_bytes", pa.int64(), nullable=False),
+    pa.field("ltd_heap_peak_bytes", pa.int64(), nullable=True),
+    pa.field("ltd_rss_peak_bytes", pa.int64(), nullable=True),
     pa.field("mtl_ms", pa.float64(), nullable=True),
     pa.field("mtl_alloc_peak_bytes", pa.int64(), nullable=True),
+    pa.field("mtl_heap_peak_bytes", pa.int64(), nullable=True),
     pa.field("mtl_rss_peak_bytes", pa.int64(), nullable=True),
     pa.field("ctr_ms", pa.float64(), nullable=True),
     pa.field("ctr_alloc_peak_bytes", pa.int64(), nullable=True),
+    pa.field("ctr_heap_peak_bytes", pa.int64(), nullable=True),
     pa.field("ctr_rss_peak_bytes", pa.int64(), nullable=True),
 
     # Stage outcome summaries (in addition to nested per-VP LTD)
@@ -159,12 +177,15 @@ SUMMARY_METRICS = (
     "error_km",
     "ltd_ms",
     "ltd_alloc_peak_bytes",
+    "ltd_heap_peak_bytes",
     "ltd_rss_peak_bytes",
     "mtl_ms",
     "mtl_alloc_peak_bytes",
+    "mtl_heap_peak_bytes",
     "mtl_rss_peak_bytes",
     "ctr_ms",
     "ctr_alloc_peak_bytes",
+    "ctr_heap_peak_bytes",
     "ctr_rss_peak_bytes",
 )
 
@@ -193,18 +214,36 @@ SUMMARY_SCHEMA = pa.schema(
         pa.field("n_fallback", pa.int32(), nullable=False),
         pa.field("n_error", pa.int32(), nullable=False),
     ]
-    # 10 metrics × 7 stats = 70 fields, in (metric, stat) order.
+    # 13 metrics × 7 stats = 91 fields, in (metric, stat) order.
     + [field for metric in SUMMARY_METRICS for field in _stat_fields(metric)]
     + [
-        # Run-level singletons from run.json. `run_baseline_rss_bytes` is
-        # captured before any per-target work — subtract from
-        # `run_peak_rss_bytes` to get the CBG-attributable peak delta
-        # (the always-on Python+libs+inputs overhead is roughly the
-        # baseline number; the delta is what CBG itself committed).
+        # Run-level singletons from run.json, all via getrusage(ru_maxrss),
+        # which is a monotonic kernel high-water mark. Four ordered marks:
+        #
+        #   run_baseline_rss_bytes  post-import, BEFORE inputs are loaded
+        #   rss_after_inputs_bytes  after input parquets + weight filter
+        #   rss_after_fit_bytes     after LTD.fit + checkpoint save
+        #   run_peak_rss_bytes      end of the target sweep
+        #
+        # Monotonic by construction, so baseline <= after_inputs <=
+        # after_fit <= peak always holds. Useful derived quantities:
+        #   peak - after_fit    = the fit-free, input-free SWEEP delta
+        #   peak - baseline     = total CBG cost (inputs + fit + sweep)
+        #   after_inputs - baseline = input-loading cost, for -j sizing
+        #
+        # NB `run_baseline_rss_bytes` does NOT include inputs, despite what
+        # earlier comments here claimed — it is sampled before they load.
+        # `memory_channel` records which per-stage sampler produced this
+        # run's numbers ("heap" on glibc, "rss" on the fallback), without
+        # which a macOS-collected run is silently incomparable with a Linux one.
         pa.field("fit_ms", pa.float64(), nullable=True),
         pa.field("fit_alloc_peak_bytes", pa.int64(), nullable=True),
+        pa.field("fit_heap_peak_bytes", pa.int64(), nullable=True),
         pa.field("fit_rss_peak_bytes", pa.int64(), nullable=True),
         pa.field("run_baseline_rss_bytes", pa.int64(), nullable=True),
+        pa.field("rss_after_inputs_bytes", pa.int64(), nullable=True),
+        pa.field("rss_after_fit_bytes", pa.int64(), nullable=True),
         pa.field("run_peak_rss_bytes", pa.int64(), nullable=True),
+        pa.field("memory_channel", pa.string(), nullable=True),
     ]
 )
