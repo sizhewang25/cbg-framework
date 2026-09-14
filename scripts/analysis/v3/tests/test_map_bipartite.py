@@ -174,6 +174,16 @@ def test_the_optional_layers_can_be_dropped(tmp_path, grid):
     assert out.exists() and out.stat().st_size > 0
 
 
+def test_the_flow_maps_voronoi_can_be_dropped_on_its_own(tmp_path, grid):
+    """`--no-flow-voronoi` exists so the topology map can keep the boundary
+    while the flow map drops it, so the two renders must actually differ."""
+    space, graph = _fixture(grid)
+    on = plot_bipartite_flows(space, graph, tmp_path / "on.png", voronoi=True)
+    off = plot_bipartite_flows(space, graph, tmp_path / "off.png", voronoi=False)
+    assert off.exists() and off.stat().st_size > 0
+    assert on.read_bytes() != off.read_bytes()
+
+
 def test_the_flow_map_can_be_capped(tmp_path, grid):
     """Deterministic, so a capped figure is still reproducible."""
     space, graph = _fixture(grid)

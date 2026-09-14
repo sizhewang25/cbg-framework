@@ -623,8 +623,16 @@ def register(app: typer.Typer) -> None:
         no_voronoi: bool = typer.Option(
             False,
             "--no-voronoi",
-            help="Skip the nearest-seed overlay. On by default: it is the "
-                 "classifier's own top-1 decision boundary.",
+            help="Skip the nearest-seed overlay on BOTH maps. On by default: "
+                 "it is the classifier's own top-1 decision boundary.",
+        ),
+        no_flow_voronoi: bool = typer.Option(
+            False,
+            "--no-flow-voronoi",
+            help="Skip the nearest-seed overlay on the flow map only, keeping "
+                 "it on the topology map. The flow map is already saturated "
+                 "with edge ink, and the boundary shares its colour with the "
+                 "seed markers.",
         ),
         no_vp_cells: bool = typer.Option(
             False,
@@ -697,7 +705,9 @@ def register(app: typer.Typer) -> None:
                 extent=chosen_extent,
                 title=f"{run.run_id} — bipartite graph, measured flows ({label})",
                 max_segments=max_segments,
-                voronoi=not no_voronoi,
+                # Either flag suppresses it here; only --no-voronoi reaches the
+                # topology map above, where the boundary is the point.
+                voronoi=not (no_voronoi or no_flow_voronoi),
             )
             cdf = plot_distance_cdf(
                 graph,

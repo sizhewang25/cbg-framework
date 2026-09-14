@@ -256,38 +256,32 @@ def build_answer_space(
         raise ValueError("targets is empty; there is no answer space to build")
 
     t = targets.loc[:, ["target_id", "target_lat", "target_lon"]].copy()
-    t["cell_id"] = grid.cell_ids(t["target_lat"], t["target_lon"], resolution)
+    part = grid.partition(t["target_lat"], t["target_lon"], resolution)
+    t["cell_id"] = part.cell_id
 
-    # Seed per occupied cell, ordered by cell id so seed_id is deterministic
-    # and independent of input row order. Sorting is lexicographic for H3's
-    # string ids and numeric for HEALPix's ints; either way it is a total order
-    # on the ids, which is all determinism needs.
-    #
-    # One batched `cell_centers` call rather than one per group: HEALPix answers
-    # the whole array in a single vectorized call, and asking per cell would let
-    # a scalar-shaped implementation pass unnoticed.
-    counts = t.groupby("cell_id", sort=True).size()
-    cells = counts.index.to_numpy()
-    centers = grid.cell_centers(cells, resolution)
-    seeds = pd.DataFrame(
-        {
-            "seed_id": np.arange(len(cells)),
-            "grid_scheme": grid.name,
-            "grid_resolution": resolution,
-            "cell_id": cells,
-            # Deliberately unrounded: rounding would move the seed off the exact
-            # centre and could break `cell_ids(seed) == cell_id` at a boundary.
-            "seed_lat": centers[:, 0],
-            "seed_lon": centers[:, 1],
-            "n_targets": counts.to_numpy().astype(int),
-        }
-    )
-
-    # Assign every target to its cell's seed: cell membership *is* the class.
+    # Assign every target to its cell's seed: cell membership *is* the class, and
+    # `cell_index` is already that membership as a contiguous id — the rank of a
+    # sorted cell id, hence independent of input row order (see `Partition`).
     # Predictions are labelled by nearest seed instead (`classify.py`), which is
     # the same rule wherever a cell contains its own centre's Voronoi region.
-    cell_to_seed = dict(zip(seeds["cell_id"], seeds["seed_id"]))
-    t["seed_id"] = t["cell_id"].map(cell_to_seed).astype(int)
+    t["seed_id"] = part.cell_index
+
+    # One seed per occupied cell, in the same order, so `seed_id` indexes this frame.
+    seeds = pd.DataFrame(
+        {
+            "seed_id": np.arange(part.n_occupied),
+            "grid_scheme": grid.name,
+            "grid_resolution": resolution,
+            "cell_id": part.cells,
+            # Deliberately unrounded: rounding would move the seed off the exact
+            # centre and could break `cell_ids(seed) == cell_id` at a boundary.
+            "seed_lat": part.center_lat,
+            "seed_lon": part.center_lon,
+            # `seeds.csv`'s name for the generic per-cell count. The artifact schema
+            # is owned here, not by the grid.
+            "n_targets": part.counts,
+        }
+    )
 
     seed_lat = seeds["seed_lat"].to_numpy()
     seed_lon = seeds["seed_lon"].to_numpy()

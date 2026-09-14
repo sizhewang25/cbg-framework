@@ -650,6 +650,54 @@ def test_an_unlocatable_source_csv_names_the_override_flag(tmp_path):
         bp.resolve_source_csv(run)
 
 
+def test_the_source_csv_falls_back_to_target_space_json(tmp_path):
+    """The pre-benchmark case: `materialize-target-space --configfile` has run,
+    so the target space exists, but no combo has -- there is no `eval_source/`
+    to read the CSV off yet."""
+    run = RunPaths(run_id="r", root=tmp_path, source="src", setup="setup")
+    run.setup_dir.mkdir(parents=True)
+    csv = tmp_path / "canonical.csv"
+    csv.write_text("x\n")
+    run.target_space_json.write_text(
+        json.dumps({"csv": str(csv), "csv_is_mesh_superset": False})
+    )
+    assert bp.resolve_source_csv(run) == csv
+
+
+def test_a_mesh_superset_edge_set_refuses_to_stand_in(tmp_path):
+    """An on-the-fly traffic-weighted arm has no file holding its pruned flows.
+    Silently describing the mesh graph as that arm's is the failure this whole
+    resolution order exists to prevent, so it raises instead."""
+    run = RunPaths(run_id="r", root=tmp_path, source="src", setup="setup")
+    run.setup_dir.mkdir(parents=True)
+    csv = tmp_path / "mesh.csv"
+    csv.write_text("x\n")
+    run.target_space_json.write_text(
+        json.dumps({"csv": str(csv), "csv_is_mesh_superset": True})
+    )
+    with pytest.raises(MissingArtifactError, match="MESH SUPERSET"):
+        bp.resolve_source_csv(run)
+    # ...but an explicit override still wins, for when the mesh graph is wanted.
+    assert bp.resolve_source_csv(run, csv) == csv
+
+
+def test_eval_stats_wins_over_target_space_json(tmp_path):
+    """A finished run's own record is the more specific one; the fallback must
+    not start overriding it once both files exist."""
+    run = RunPaths(run_id="r", root=tmp_path, source="src", setup="setup")
+    run.setup_dir.mkdir(parents=True)
+    run.eval_source_dir.mkdir(parents=True)
+    (run.eval_source_dir / "base_eval_per_target.csv").write_text("target_id\n")
+    recorded, other = tmp_path / "recorded.csv", tmp_path / "other.csv"
+    recorded.write_text("x\n")
+    other.write_text("x\n")
+    (run.eval_source_dir / "base_eval_stats.json").write_text(
+        json.dumps({"csv": str(recorded)})
+    )
+    run.target_space_json.write_text(json.dumps({"csv": str(other)}))
+    assert bp.resolve_source_csv(run) == recorded
+
+
 def test_an_explicit_override_wins_and_is_checked(tmp_path):
     run = RunPaths(run_id="r", root=tmp_path, source="src", setup="setup")
     csv = tmp_path / "mine.csv"

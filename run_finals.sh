@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Serial driver for the CBG finals: 3 operator ASNs x {mesh, traffic-weighted},
-# plus as7018_us_test01 as a mesh-only public counterpart. Seven runs.
+# plus as7018_us_test01 as a mesh-only public counterpart, plus the reciprocal
+# (topology-matched) public/private pairs.
 #
 # Each config runs to completion before the next; a failure is logged and the
 # batch continues. Per-config logs + a rollup live under logs/finals/.
@@ -16,6 +17,12 @@
 # Each weighted arm is two steps: derive the traffic-weighted subset beside its
 # mesh, then run against it (precomputed mode), so the same CSV feeds both the
 # benchmark and the §8.1 dataset figures.
+#
+# Each reciprocal pair is likewise two steps: cut BOTH datasets to the H3 res-4
+# cells they both occupy (§7.3's best-effort VP-topology match), then run each
+# filtered side. The pair is only comparable to itself -- each side's footprint is
+# defined by the other -- so matching the same public set against a different
+# operator ASN yields a different public set, and the filenames say which.
 #
 # Run ids are NEW (-mesh / -weighted suffixes). The published
 # as0X-260728-260802 trees are never written to: their CSVs are reconstructions
@@ -38,10 +45,10 @@ DERIVE_SMK="scripts/processing/source/derive_traffic_weighted_cbg_data.smk"
 
 # Mesh arms: run directly.
 MESH_CONFIGS=(
-  as01-260728-260802-mesh
+  # as01-260728-260802-mesh
   # as02-260728-260802-mesh
   # as03-260728-260802-mesh
-  as7018-ripe-mesh
+  # as01-materialization-test
 )
 
 # Weighted arms: derive the subset first, then run.
@@ -49,9 +56,25 @@ WEIGHTED_CONFIGS=(
   # as01-260728-260802-weighted
   # as02-260728-260802-weighted
   # as03-260728-260802-weighted
+  as01-randweight-precomputed
 )
 
-ALL_CONFIGS=("${MESH_CONFIGS[@]}" "${WEIGHTED_CONFIGS[@]}")
+# Reciprocal arms: "<public-config>:<private-config>". Both sides are filtered to
+# their common footprint, then both are run. The source CSVs come from these two
+# configs and the filtered CSVs from the matching `<config>-reciprocal.yaml`, so
+# every path lives in a config and none is spelled out here.
+RECIPROCAL_PAIRS=(
+  # "as7018-ripe-mesh:as02-260728-260802-mesh"
+  # "as01-materialization-test:as01-randweight-precomputed"
+)
+
+# The configs a pair runs, derived from it: two per pair, public then private.
+RECIPROCAL_CONFIGS=()
+for _pair in "${RECIPROCAL_PAIRS[@]}"; do
+  RECIPROCAL_CONFIGS+=("${_pair%%:*}-reciprocal" "${_pair##*:}-reciprocal")
+done
+
+ALL_CONFIGS=("${MESH_CONFIGS[@]}" "${WEIGHTED_CONFIGS[@]}" "${RECIPROCAL_CONFIGS[@]}")
 
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$SUMMARY"; }
 
@@ -91,7 +114,7 @@ if compgen -G ".snakemake/locks/*" >/dev/null; then
 fi
 
 # ---- preflight: every input must exist before anything runs -----------------
-log "preflight: checking inputs for ${#MESH_CONFIGS[@]} mesh + ${#WEIGHTED_CONFIGS[@]} weighted runs"
+log "preflight: checking inputs for ${#MESH_CONFIGS[@]} mesh + ${#WEIGHTED_CONFIGS[@]} weighted + ${#RECIPROCAL_CONFIGS[@]} reciprocal runs"
 MISSING=()
 for c in "${MESH_CONFIGS[@]}"; do
   p=$(cfg_path "$c" csv_path)
@@ -101,6 +124,20 @@ for c in "${WEIGHTED_CONFIGS[@]}"; do
   p=$(cfg_path "$c" mesh_csv_path)
   # Only the weight-bearing mesh must pre-exist; the subset is derived below.
   [[ -f "$p" ]] || MISSING+=("$c: mesh_csv_path $p")
+done
+for pair in "${RECIPROCAL_PAIRS[@]}"; do
+  # The two UNFILTERED sources must exist; both filtered CSVs are derived below.
+  # Their source configs need not be listed in MESH_CONFIGS -- a pair reads their
+  # csv_path whether or not that arm is itself being run.
+  for c in "${pair%%:*}" "${pair##*:}"; do
+    p=$(cfg_path "$c" csv_path)
+    [[ -f "$p" ]] || MISSING+=("$c (reciprocal source): csv_path $p")
+  done
+  # A missing -reciprocal config would otherwise surface as an empty output path
+  # and a filter that writes to the repo root.
+  for c in "${pair%%:*}-reciprocal" "${pair##*:}-reciprocal"; do
+    [[ -f "configs/$c.yaml" ]] || MISSING+=("$c: configs/$c.yaml does not exist")
+  done
 done
 
 if (( ${#MISSING[@]} )); then
@@ -142,6 +179,42 @@ for c in "${MESH_CONFIGS[@]}"; do
   else
     log "FAIL  $c (see $LOGDIR/$c.log)"
   fi
+done
+
+# ---- reciprocal arms: match both footprints, then run both sides ------------
+# Called directly rather than through a Snakefile: Snakemake locks the whole
+# working directory, and this step has a single input pair and no fan-out.
+for pair in "${RECIPROCAL_PAIRS[@]}"; do
+  pub="${pair%%:*}"; priv="${pair##*:}"
+  pub_in=$(cfg_path "$pub" csv_path)
+  priv_in=$(cfg_path "$priv" csv_path)
+  pub_out=$(cfg_path "$pub-reciprocal" csv_path)
+  priv_out=$(cfg_path "$priv-reciprocal" csv_path)
+
+  # Audit artifact, not a dataset: the match summary goes to the same outputs/
+  # tree the traffic-weighted step uses, so datasets/ holds only CSVs.
+  recip_outputs="scripts/processing/source/outputs/$pub-x-$priv"
+  mkdir -p "$recip_outputs"
+
+  log "START $pub x $priv (reciprocal match)"
+  if ! python -m scripts.processing.source.reciprocal_grid_filter \
+         --public "$pub_in"   --out-public  "$pub_out" \
+         --private "$priv_in" --out-private "$priv_out" \
+         --summary "$recip_outputs/reciprocal.summary.json" \
+         >"$LOGDIR/$pub-x-$priv.reciprocal.log" 2>&1; then
+    log "FAIL  $pub x $priv (reciprocal match; see $LOGDIR/$pub-x-$priv.reciprocal.log)"
+    continue        # no filtered CSVs -> both runs would fail anyway
+  fi
+  log "OK    $pub x $priv (reciprocal match)"
+
+  for c in "$pub-reciprocal" "$priv-reciprocal"; do
+    log "START $c"
+    if ./cli.sh --configfile "configs/$c.yaml" >"$LOGDIR/$c.log" 2>&1; then
+      log "OK    $c"
+    else
+      log "FAIL  $c (see $LOGDIR/$c.log)"
+    fi
+  done
 done
 
 log "ALL DONE"

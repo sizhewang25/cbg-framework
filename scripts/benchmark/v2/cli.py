@@ -39,12 +39,15 @@ app = typer.Typer(
     help="v2 CBG benchmark CLI (LTD/MTL/CTR sweeps with per-stage instrumentation).",
 )
 
+#: Repo root. `target_space.json` stores CSV paths relative to it so the
+#: recorded path survives the tree being moved, matching how
+#: `analysis.v3.modules.paths` resolves one.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 # Repo-root `outputs/benchmark/v2/`, which is where the runs already live and
 # where scripts/analysis/v3 looks (paths.DEFAULT_OUTPUTS_ROOT). The legacy
 # `scripts/benchmark/v2/outputs/` holds only `archived/`.
-DEFAULT_OUTPUTS_ROOT = (
-    Path(__file__).resolve().parents[3] / "outputs" / "benchmark" / "v2"
-)
+DEFAULT_OUTPUTS_ROOT = _REPO_ROOT / "outputs" / "benchmark" / "v2"
 
 
 # ---- materialize-inputs ------------------------------------------------------
@@ -617,36 +620,283 @@ def cmd_label_geo_for_targets(
 
 # ---- materialize-target-space (answer-space materialization) ----------------------
 
+def _resolve_bench_config(path: Path) -> dict:
+    """Flatten a benchmark config: `benchmark:` wins key by key over the top level.
+
+    Both accepted shapes -- unified (`configs/<run_id>.yaml`) and flat
+    (`scripts/benchmark/v2/config/*.yaml`) -- collapse to one dict, exactly as
+    `Snakefile`'s `bcfg` resolves them. Duplicated rather than imported because
+    a Snakefile is not a module; `test_cli.py` pins the two against each other
+    so a config that drives a run keeps driving the target space identically.
+    """
+    import yaml
+
+    cfg = yaml.safe_load(Path(path).read_text()) or {}
+    if not isinstance(cfg, dict):
+        raise TypeError(f"{path}: top level must be a mapping, got {type(cfg).__name__}")
+    bench = cfg.get("benchmark") or {}
+    if not isinstance(bench, dict):
+        raise TypeError(
+            f"{path}: `benchmark:` must be a mapping, got {type(bench).__name__}"
+        )
+    merged = {k: v for k, v in cfg.items() if k != "benchmark"}
+    merged.update(bench)
+    return merged
+
+
+def _source_kwargs_from_config(cfg: dict, source_cls) -> dict:
+    """`source_kwargs:` plus the two weight keys the Snakefile forwards as flags.
+
+    `eval_pair_weight_min` / `eval_kept_traffic_fraction` live at the config's
+    top level, not inside `source_kwargs:` (see `Snakefile`'s materialize rule),
+    so reading `source_kwargs` alone would build a source with the traffic
+    filter silently switched off -- and hand back the mesh's target space
+    labelled as the weighted arm's.
+    """
+    kwargs = dict(cfg.get("source_kwargs") or {})
+    accepted = inspect.signature(source_cls.__init__).parameters
+    for flag in ("eval_pair_weight_min", "eval_kept_traffic_fraction"):
+        value = cfg.get(flag)
+        if value is None:
+            continue
+        if flag not in accepted:
+            supported = sorted(
+                name for name, cls in SOURCES.items()
+                if flag in inspect.signature(cls.__init__).parameters
+            )
+            raise ValueError(
+                f"config sets {flag!r} but source {source_cls.name!r} does not "
+                f"accept it. Sources that do: {supported}."
+            )
+        kwargs[flag] = value
+    return kwargs
+
+
+def _edge_csv_from_kwargs(kwargs: dict) -> tuple[Optional[Path], bool]:
+    """`(path, is_mesh_superset)` for the CSV holding this run's edge set.
+
+    For `traffic_weighted_csv` in precomputed mode that is `weighted_csv_path`:
+    the pruned flows *are* the graph the run evaluates. On-the-fly mode has no
+    such file, so the mesh comes back with the flag set -- it is a strict
+    superset of the evaluated edges, and `build-bipartite-graph` reading it
+    would report the mesh's density as the weighted arm's.
+    """
+    weighted = kwargs.get("weighted_csv_path")
+    if weighted:
+        return Path(weighted), False
+    mesh = kwargs.get("mesh_csv_path") or kwargs.get("csv_path")
+    if not mesh:
+        return None, False
+    superset = (
+        kwargs.get("eval_kept_traffic_fraction") is not None
+        or kwargs.get("eval_pair_weight_min") is not None
+    )
+    return Path(mesh), superset
+
+
+def _node_sets_from_config(source_cls, setup: str, slices: list, kwargs: dict):
+    """Unique eval targets and VPs, unioned over `slices`.
+
+    Goes through the `DataSource` rather than `drop_duplicates` on the CSV,
+    because the two differ: `min_obs` drops sparse targets and
+    `traffic_weighted_csv` evaluates only the targets that survive the flow
+    filter. The source is what the benchmark would run, so the source defines
+    the target space -- making this the same set the `--run-id` path recovers
+    from the folds' `targets.parquet`, minus the need for a finished run.
+
+    K-fold slices partition the targets, so the union over every fold is the
+    full evaluated roster; a config listing a subset of folds yields the target
+    space of that subset, which is what the run would produce too.
+    """
+    import pandas as pd
+
+    targets: dict[str, tuple[float, float]] = {}
+    vps: dict[str, tuple] = {}
+    for slice_id in slices:
+        src = source_cls(slice=slice_id, setup=setup, **kwargs)
+        for tg in src.iter_eval_targets():
+            targets.setdefault(
+                tg.target_id, (tg.true_coord.lat, tg.true_coord.lon)
+            )
+        for vp in src.iter_vp_configs():
+            vps.setdefault(
+                vp.vp_id,
+                (vp.lat, vp.lon, vp.asn, vp.country,
+                 vp.continent, vp.region, vp.city),
+            )
+
+    targets_df = pd.DataFrame(
+        [(tid, lat, lon) for tid, (lat, lon) in targets.items()],
+        columns=["target_id", "target_lat", "target_lon"],
+    )
+    # Column names (and the un-prefixed continent/region/city tail) match what
+    # the `--run-id` path writes out of vp_configs.parquet, so the two modes
+    # produce the same file rather than two schemas of the same data.
+    vps_df = pd.DataFrame(
+        [(vid, *rest) for vid, rest in vps.items()],
+        columns=["vp_id", "vp_lat", "vp_lon", "vp_asn", "vp_country",
+                 "continent", "region", "city"],
+    )
+    return targets_df, vps_df
+
+
+def _write_target_space(
+    *,
+    setup_dir: Path,
+    targets,
+    radius_km: float,
+    geo_level: Optional[str],
+    geo_col: Optional[str],
+    geo_value: Optional[str],
+    label: str,
+) -> None:
+    """Cluster `targets` into the answer space under `setup_dir`.
+
+    Shared by both derivation modes so the clustering, the unique-coordinate
+    memory guard and the written schema cannot drift between them.
+    """
+    import pandas as pd
+
+    from scripts.benchmark.v2.sources.cluster_ground_truth import (
+        _write_outputs,
+        cluster_ground_truth,
+    )
+
+    if geo_col is not None:
+        sub = targets[targets[geo_col] == geo_value].reset_index(drop=True)
+        safe = str(geo_value).replace(" ", "_").replace("/", "_")
+        out_dir = setup_dir / "clusters" / "geo" / geo_level / safe
+    else:
+        sub = targets
+        out_dir = setup_dir / "clusters"
+    if len(sub) == 0:
+        typer.echo(f"  [{label}] no targets for {geo_level}={geo_value}; skipping", err=True)
+        return
+
+    # Memory guard: cluster only unique coordinates, then broadcast the
+    # resulting cluster assignment back to every target_id at that location.
+    uniq = (
+        sub[["target_lat", "target_lon"]]
+        .drop_duplicates()
+        .reset_index(drop=True)
+        .copy()
+    )
+    uniq["target_id"] = [f"loc_{i}" for i in range(len(uniq))]
+
+    res = cluster_ground_truth(
+        uniq["target_lat"].to_numpy(), uniq["target_lon"].to_numpy(), radius_km=radius_km
+    )
+    _, assignments_path, meta_path = _write_outputs(uniq, res, out_dir)
+
+    assignments_uniq = pd.read_csv(assignments_path)
+    assignments_all = (
+        sub[["target_id", "target_lat", "target_lon"]]
+        .merge(
+            assignments_uniq[["target_lat", "target_lon", "cluster_id", "dist_to_centroid_km"]],
+            on=["target_lat", "target_lon"],
+            how="left",
+            validate="many_to_one",
+        )
+        .drop_duplicates("target_id")
+        .reset_index(drop=True)
+    )
+    assignments_all.to_csv(assignments_path, index=False)
+
+    meta = json.loads(meta_path.read_text())
+    meta["n_targets"] = int(len(sub))
+    meta["n_unique_target_locations"] = int(len(uniq))
+    meta_path.write_text(json.dumps(meta, indent=2))
+    typer.echo(
+        f"  [{label}] {len(sub)} targets ({len(uniq)} unique locations) → {res.n_clusters} centroids "
+        f"(R={radius_km:.0f} km) → {out_dir}"
+    )
+
+
+def _repo_relative(path: Path) -> str:
+    """Repo-relative when the path is inside the repo, else absolute.
+
+    `build-bipartite-graph` resolves a recorded CSV against the repo root, so
+    the stored form has to survive the tree being moved or copied.
+    """
+    p = Path(path)
+    resolved = p if p.is_absolute() else (_REPO_ROOT / p)
+    try:
+        return str(resolved.resolve().relative_to(_REPO_ROOT))
+    except ValueError:
+        return str(resolved)
+
+
+def _write_target_space_manifest(setup_dir: Path, fields: dict) -> None:
+    """Write/merge `target_space.json` -- the provenance of this target space.
+
+    Merged rather than overwritten so a later `--run-id` pass over a run whose
+    space was first built from a config does not drop the `csv` key that
+    `build-bipartite-graph` resolves its edge set from.
+    """
+    path = setup_dir / "target_space.json"
+    existing = json.loads(path.read_text()) if path.exists() else {}
+    existing.update({k: v for k, v in fields.items() if v is not None})
+    path.write_text(json.dumps(existing, indent=2))
+
+
 @app.command("materialize-target-space")
 def cmd_materialize_target_space(
-    run_id: str = typer.Option(..., help="Run id whose targets to cluster."),
+    run_id: Optional[str] = typer.Option(
+        None,
+        help="Derive the target space from a FINISHED run's fold outputs. "
+             "Mutually exclusive with --configfile."),
+    configfile: Optional[Path] = typer.Option(
+        None,
+        "--configfile",
+        help="Derive the target space from a benchmark config's source + canonical "
+             "CSV, with no run outputs — so it can be run BEFORE the benchmark. "
+             "Mutually exclusive with --run-id."),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root containing <run_id>/."),
-    inputs_root: Path = typer.Option(DEFAULT_INPUTS_ROOT, help="Root containing materialized inputs (for the VP merge)."),
+    inputs_root: Path = typer.Option(
+        DEFAULT_INPUTS_ROOT,
+        help="Root containing materialized inputs (for the VP merge). --run-id mode only; "
+             "--configfile mode reads VPs from the source."),
     radius_km: float = typer.Option(50.0, help="Centroid-radius cap R for the cluster answer space."),
     geo_level: Optional[str] = typer.Option(
         None, help="continent|country — materialize a per-geo answer-space subset "
                    "(clusters/geo/<level>/<value>/). Pair with --geo-value."),
     geo_value: Optional[str] = typer.Option(None, help="Value for --geo-level (e.g. 'Europe', 'US')."),
+    with_eval_source: bool = typer.Option(
+        False,
+        "--with-eval-source",
+        help="Also score the canonical CSV into <run_id>/eval_source/, which is "
+             "what `analysis.v3 build-proximity` reads. --configfile mode only. "
+             "Without this, `eval-source`'s default --out-dir is the CSV's own "
+             "directory, where nothing downstream looks."),
 ) -> None:
     """Materialize the cluster answer space, once per (source, setup) of a run.
 
-    Merges the unique targets (from each
-    fold's targets.parquet) and VPs (from each fold's inputs vp_configs.parquet)
-    across folds into ``targets.csv`` + ``vps.csv`` at the folds' parent dir
-    (``<run_id>/<source>/<setup>/``), reverse-geocodes the targets for geo labels,
-    then clusters the targets via `cluster_ground_truth` into ``clusters/``
-    (global) or ``clusters/geo/<level>/<value>/`` (a geo subset). The plot scripts
-    read this with --clusters-dir instead of re-clustering.
+    Two derivations of the same artifacts — ``targets.csv``, ``vps.csv`` and
+    ``clusters/`` under ``<run_id>/<source>/<setup>/``, plus a
+    ``target_space.json`` recording where they came from:
+
+    ``--run-id`` merges the unique targets (from each fold's targets.parquet)
+    and VPs (from each fold's inputs vp_configs.parquet) across folds. Requires
+    a finished run.
+
+    ``--configfile`` builds the same two sets by constructing the config's
+    ``DataSource`` per slice and unioning ``iter_eval_targets`` /
+    ``iter_vp_configs``. Those are the same sets the folds would record, so the
+    answer space, the §7.3 bipartite geometry and the proximity labels can all
+    be built from the canonical CSV *before* any combo runs.
+
+    Both then reverse-geocode (only when ``--geo-level`` is given) and cluster
+    via `cluster_ground_truth`. The plot scripts read the result with
+    --clusters-dir instead of re-clustering.
     """
     import pandas as pd
 
     from scripts.benchmark.v2.geo_eval import _reverse_geocode_cc
-    from scripts.benchmark.v2.sources.cluster_ground_truth import (
-        _write_outputs,
-        cluster_ground_truth,
-    )
     from scripts.processing.ripe_atlas.continents import continent_of
 
+    if (run_id is None) == (configfile is None):
+        typer.echo("Pass exactly one of --run-id or --configfile.", err=True)
+        raise typer.Exit(code=2)
     if (geo_level is None) != (geo_value is None):
         typer.echo("--geo-level and --geo-value must be passed together", err=True)
         raise typer.Exit(code=2)
@@ -654,7 +904,114 @@ def cmd_materialize_target_space(
     if geo_level is not None and geo_col is None:
         typer.echo(f"--geo-level must be 'continent' or 'country' (got {geo_level!r})", err=True)
         raise typer.Exit(code=2)
+    if with_eval_source and configfile is None:
+        typer.echo("--with-eval-source requires --configfile (it needs the CSV path).", err=True)
+        raise typer.Exit(code=2)
 
+    # ---- config mode: no run outputs required -------------------------------
+    if configfile is not None:
+        if not configfile.exists():
+            typer.echo(f"No such config: {configfile}", err=True)
+            raise typer.Exit(code=2)
+        cfg = _resolve_bench_config(configfile)
+        run_id = cfg.get("run_id")
+        source = cfg.get("source")
+        if not run_id or not source:
+            typer.echo(f"{configfile}: `run_id` and `source` are both required.", err=True)
+            raise typer.Exit(code=2)
+        if source not in SOURCES:
+            typer.echo(f"Unknown source {source!r}. Available: {sorted(SOURCES)}", err=True)
+            raise typer.Exit(code=2)
+        setup = cfg.get("setup", _DataSource.PROBES_TO_ANCHORS)
+        slices = list(cfg.get("slices") or [])
+        if not slices:
+            typer.echo(f"{configfile}: `slices` is empty; nothing to build.", err=True)
+            raise typer.Exit(code=2)
+        # The config's own root wins only while --outputs-root sits at its
+        # default, so an explicit flag is never silently overridden.
+        if outputs_root == DEFAULT_OUTPUTS_ROOT and cfg.get("outputs_root"):
+            outputs_root = Path(cfg["outputs_root"])
+
+        source_cls = SOURCES[source]
+        try:
+            kwargs = _source_kwargs_from_config(cfg, source_cls)
+        except ValueError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=2)
+        targets, vps = _node_sets_from_config(source_cls, setup, slices, kwargs)
+
+        setup_dir = outputs_root / run_id / source / setup
+        setup_dir.mkdir(parents=True, exist_ok=True)
+        label = f"{source}/{setup}"
+
+        edge_csv, csv_is_superset = _edge_csv_from_kwargs(kwargs)
+        if csv_is_superset:
+            typer.echo(
+                f"  [{label}] WARNING: this arm filters traffic on the fly, so no file "
+                f"holds its edge set. target_space.json records the mesh CSV and flags "
+                f"it a superset — `build-bipartite-graph` would report mesh density "
+                f"here. Derive a weighted CSV "
+                f"(scripts/processing/source/derive_traffic_weighted_cbg_data.smk) and "
+                f"point `weighted_csv_path` at it for an exact edge set.",
+                err=True,
+            )
+
+        if len(vps):
+            vps.to_csv(setup_dir / "vps.csv", index=False)
+        else:
+            typer.echo(f"  [{label}] source yielded no VPs; skipping vps.csv", err=True)
+        if geo_col is not None:
+            cc = _reverse_geocode_cc(targets["target_lat"].to_numpy(), targets["target_lon"].to_numpy())
+            targets["target_country"] = cc
+            targets["target_continent"] = [continent_of(c) for c in cc]
+        targets.to_csv(setup_dir / "targets.csv", index=False)
+
+        _write_target_space_manifest(setup_dir, {
+            "run_id": run_id,
+            "source": source,
+            "setup": setup,
+            "derived_from": "config",
+            "config": _repo_relative(configfile),
+            "slices": slices,
+            "csv": _repo_relative(edge_csv) if edge_csv else None,
+            "csv_is_mesh_superset": csv_is_superset,
+            "n_targets": int(len(targets)),
+            "n_vps": int(len(vps)),
+        })
+        _write_target_space(
+            setup_dir=setup_dir, targets=targets, radius_km=radius_km,
+            geo_level=geo_level, geo_col=geo_col, geo_value=geo_value, label=label,
+        )
+
+        if with_eval_source:
+            if edge_csv is None:
+                typer.echo(
+                    "--with-eval-source: the config's source_kwargs name no CSV "
+                    "(expected csv_path / mesh_csv_path / weighted_csv_path).",
+                    err=True,
+                )
+                raise typer.Exit(code=2)
+            from scripts.benchmark.v2.eval_source import eval_source as _eval_source
+
+            eval_dir = outputs_root / run_id / "eval_source"
+            eval_dir.mkdir(parents=True, exist_ok=True)
+            # Weight filters are forwarded only when scoring the mesh. A
+            # precomputed weighted CSV has the cut baked in, and re-deriving a
+            # threshold over its already-pruned weights would cut it twice.
+            _eval_source(
+                edge_csv,
+                eval_dir,
+                cluster_radius_km=radius_km,
+                min_obs=kwargs.get("min_obs"),
+                eval_pair_weight_min=kwargs.get("eval_pair_weight_min") if csv_is_superset else None,
+                eval_kept_traffic_fraction=kwargs.get("eval_kept_traffic_fraction") if csv_is_superset else None,
+            )
+            typer.echo(f"  [{label}] eval-source → {eval_dir}")
+
+        typer.echo("materialize-target-space done for 1 (source, setup) tree(s).")
+        return
+
+    # ---- run-id mode: derive from the run's fold outputs --------------------
     run_root = outputs_root / run_id
     if not run_root.exists():
         typer.echo(f"No such run dir: {run_root}", err=True)
@@ -670,7 +1027,12 @@ def cmd_materialize_target_space(
             continue
         setup_dirs.setdefault(tp.parents[2], []).append(tp)
     if not setup_dirs:
-        typer.echo(f"No targets.parquet found under {run_root}", err=True)
+        typer.echo(
+            f"No completed targets.parquet found under {run_root}. "
+            f"Pass --configfile <config> to build the target space from the "
+            f"canonical CSV instead, without a run.",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     for setup_dir, tpaths in sorted(setup_dirs.items()):
@@ -692,6 +1054,7 @@ def cmd_materialize_target_space(
         # Merge unique VPs across the matching inputs folds (best-effort).
         in_dir = inputs_root / source / run_id / setup
         vp_paths = sorted(in_dir.glob("**/vp_configs.parquet"))
+        n_vps = None
         if vp_paths:
             vframes = [pq.read_table(vp).to_pandas() for vp in vp_paths]
             vps = (pd.concat(vframes, ignore_index=True)
@@ -699,58 +1062,23 @@ def cmd_materialize_target_space(
                    .rename(columns={"lat": "vp_lat", "lon": "vp_lon",
                                     "asn": "vp_asn", "country": "vp_country"}))
             vps.to_csv(setup_dir / "vps.csv", index=False)
+            n_vps = int(len(vps))
         else:
             typer.echo(f"  [{source}/{setup}] no inputs vp_configs under {in_dir}; skipping vps.csv", err=True)
         targets.to_csv(setup_dir / "targets.csv", index=False)
 
-        # Cluster the (optionally geo-filtered) targets into the answer space.
-        if geo_col is not None:
-            sub = targets[targets[geo_col] == geo_value].reset_index(drop=True)
-            safe = str(geo_value).replace(" ", "_").replace("/", "_")
-            out_dir = setup_dir / "clusters" / "geo" / geo_level / safe
-        else:
-            sub = targets
-            out_dir = setup_dir / "clusters"
-        if len(sub) == 0:
-            typer.echo(f"  [{source}/{setup}] no targets for {geo_level}={geo_value}; skipping", err=True)
-            continue
-
-        # Memory guard: cluster only unique coordinates, then broadcast the
-        # resulting cluster assignment back to every target_id at that location.
-        uniq = (
-            sub[["target_lat", "target_lon"]]
-            .drop_duplicates()
-            .reset_index(drop=True)
-            .copy()
-        )
-        uniq["target_id"] = [f"loc_{i}" for i in range(len(uniq))]
-
-        res = cluster_ground_truth(
-            uniq["target_lat"].to_numpy(), uniq["target_lon"].to_numpy(), radius_km=radius_km
-        )
-        _, assignments_path, meta_path = _write_outputs(uniq, res, out_dir)
-
-        assignments_uniq = pd.read_csv(assignments_path)
-        assignments_all = (
-            sub[["target_id", "target_lat", "target_lon"]]
-            .merge(
-                assignments_uniq[["target_lat", "target_lon", "cluster_id", "dist_to_centroid_km"]],
-                on=["target_lat", "target_lon"],
-                how="left",
-                validate="many_to_one",
-            )
-            .drop_duplicates("target_id")
-            .reset_index(drop=True)
-        )
-        assignments_all.to_csv(assignments_path, index=False)
-
-        meta = json.loads(meta_path.read_text())
-        meta["n_targets"] = int(len(sub))
-        meta["n_unique_target_locations"] = int(len(uniq))
-        meta_path.write_text(json.dumps(meta, indent=2))
-        typer.echo(
-            f"  [{source}/{setup}] {len(sub)} targets ({len(uniq)} unique locations) → {res.n_clusters} centroids "
-            f"(R={radius_km:.0f} km) → {out_dir}"
+        _write_target_space_manifest(setup_dir, {
+            "run_id": run_id,
+            "source": source,
+            "setup": setup,
+            "derived_from": "run_outputs",
+            "n_targets": int(len(targets)),
+            "n_vps": n_vps,
+        })
+        _write_target_space(
+            setup_dir=setup_dir, targets=targets, radius_km=radius_km,
+            geo_level=geo_level, geo_col=geo_col, geo_value=geo_value,
+            label=f"{source}/{setup}",
         )
 
     typer.echo(f"materialize-target-space done for {len(setup_dirs)} (source, setup) tree(s).")

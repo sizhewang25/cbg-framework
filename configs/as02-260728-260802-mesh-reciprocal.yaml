@@ -1,0 +1,121 @@
+# Reciprocal (topology-matched) finals run for as02-260728-260802.
+#
+#   ./cli.sh --configfile configs/as02-260728-260802-mesh-reciprocal.yaml
+#
+# The PRIVATE half of the §7.3 best-effort VP-topology match against the public
+# as7018 RIPE mesh. Both datasets are cut to the H3 res-4 cells they both occupy.
+# `run_finals.sh` writes `csv_path` below before this runs:
+#
+#   python -m scripts.processing.source.reciprocal_grid_filter \
+#       --public  datasets/ripe_as7018/as7018-us-test01.csv \
+#       --private datasets/final/as02-20260728-20260802.mainland.sanitized.csv
+#
+# Paired with configs/as7018-ripe-mesh-reciprocal.yaml -- the two are only
+# comparable to each other, since each side's footprint is defined by the other.
+#
+# A NEW run_id: this is a different target population from as02-260728-260802-mesh
+# (259 of 399 targets at the as01 match; see the step's summary JSON), so its
+# folds differ and nothing here writes to that tree.
+
+run_id: as02-260728-260802-mesh-reciprocal
+
+benchmark:
+  source: generic_csv
+  setup: anchors_to_probes
+  slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+  source_kwargs:
+    csv_path: datasets/final/as02-20260728-20260802.mainland.sanitized.reciprocal-as7018.csv
+    k: 5
+    seed: 42
+    asn_bucket_top_n: 20
+
+  enable_fallback: true
+  seed: 42
+
+  # The five combos the published as0X runs scored, with their exact kwargs
+  # (recovered from those runs' run.json). Kept identical across all finals
+  # configs so mesh and weighted arms are directly comparable.
+  combos:
+    - combo_id: vanilla_cbg
+      ltd: low_envelope
+      mtl: planar_circle
+      ctr: geometric_centroid
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+
+    # - combo_id: million_scale_cbg
+    #   ltd: speed_of_internet
+    #   mtl: planar_circle
+    #   ctr: geometric_centroid
+    #   ltd_kwargs:
+    #     speed_ratio: 0.6667
+    #   mtl_kwargs:
+    #     n_pts: 64
+    #     enable_circle_filter: true
+
+    # - combo_id: octant_cbg_hull
+    #   ltd: bounded_spline
+    #   mtl: planar_annulus_weighted
+    #   ctr: monte_carlo_medoid
+    #   ltd_kwargs:
+    #     fit_spline: false
+    #     cutoff_min_points: 5
+    #     bin_size_ms: 5.0
+    #   mtl_kwargs:
+    #     n_pts: 64
+    #     enable_circle_filter: true
+    #     weight_tau_ms: 50.0
+    #     highest_weight_only: true
+    #   ctr_kwargs:
+    #     n_samples: 1024
+
+    # - combo_id: octant_cbg_spl
+    #   ltd: bounded_spline
+    #   mtl: planar_annulus_weighted
+    #   ctr: monte_carlo_medoid
+    #   ltd_kwargs:
+    #     target_coverage: 0.9
+    #     cutoff_min_points: 5
+    #     fit_spline: true
+    #     spline_n_knots: 4
+    #     bin_size_ms: 5.0
+    #   mtl_kwargs:
+    #     n_pts: 64
+    #     enable_circle_filter: true
+    #     weight_tau_ms: 50.0
+    #     highest_weight_only: true
+    #   ctr_kwargs:
+    #     n_samples: 1024
+
+    # - combo_id: spotter_cbg
+    #   ltd: normal_dist
+    #   mtl: planar_annulus_weighted
+    #   ctr: monte_carlo_medoid
+    #   ltd_kwargs:
+    #     n_bins: 40
+    #     min_per_bin: 5
+    #     deg_mu: 3
+    #     deg_sigma: 2
+    #     bin_size_ms: 5.0
+    #     cutoff_min_points: 5
+    #   mtl_kwargs:
+    #     n_pts: 64
+    #     enable_circle_filter: true
+    #     weight_tau_ms: 50.0
+    #     highest_weight_only: true
+    #   ctr_kwargs:
+    #     n_samples: 1024
+
+
+analysis:
+  common:
+    grid: h3
+    resolution: [4]
+
+  plot-bipartite-graph:
+    # Flow map only — the topology map keeps the nearest-seed boundary,
+    # which is its subject; on the flow map it competes with the edge ink
+    # and shares its colour with the seed markers.
+    no_flow_voronoi: true

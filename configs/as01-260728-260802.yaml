@@ -24,6 +24,10 @@ analysis:
 
   plot-bipartite-graph:
     us_only: true
+    # Flow map only — the topology map keeps the nearest-seed boundary,
+    # which is its subject; on the flow map it competes with the edge ink
+    # and shares its colour with the seed markers.
+    no_flow_voronoi: true
 
   breakdown-accuracy:
     topn: "1,3"

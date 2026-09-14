@@ -29,6 +29,8 @@ it rather than assumed to comply.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from functools import cached_property
 from typing import ClassVar
 
 import numpy as np
@@ -58,6 +60,96 @@ def ring_lonlat(lon_deg, lat_deg) -> np.ndarray:
     lon = ((lon + 180.0) % 360.0) - 180.0
     lon = lon[0] + ((lon - lon[0] + 180.0) % 360.0) - 180.0
     return np.column_stack([lon, lat])
+
+
+@dataclass(frozen=True, eq=False)
+class Partition:
+    """One point set quantized onto one grid at one resolution.
+
+    `eq=False` on purpose: the generated `__eq__` would compare ndarray fields and
+    raise on the ambiguous truth value, and the generated `__hash__` would choke on
+    an unhashable array. Identity comparison is what callers actually want here.
+
+    **Two lengths live here and must not be confused.** `cell_id` and `cell_index` are
+    per *point* (`N`); `cells`, `counts` and `centers` are per occupied *cell* (`K`),
+    ordered by ascending cell id. `cell_index` is the bridge between them —
+    `cells[cell_index] == cell_id` elementwise — and is what `build_answer_space` uses
+    as `seed_id`. Because `cells` is sorted, that id is the rank of a sorted cell id and
+    so is a function of the coordinates alone, never of input row order.
+    """
+
+    #: The grid that produced this, carried so `centers` needs no argument and so
+    #: `member_mask` can coerce foreign ids back to this grid's dtype.
+    grid: Grid
+
+    #: Already through `validate_resolution`.
+    resolution: int
+
+    #: `(N,)` cell per input point, in the grid's native id dtype.
+    cell_id: np.ndarray
+
+    #: `(K,)` the occupied cells, strictly increasing, same dtype as `cell_id`.
+    cells: np.ndarray
+
+    #: `(N,)` int64 in `[0, K)` — where this point's cell sits in `cells`.
+    cell_index: np.ndarray
+
+    #: `(K,)` int64 points per occupied cell; `counts.sum() == N`.
+    counts: np.ndarray
+
+    @property
+    def n_points(self) -> int:
+        return int(self.cell_id.size)
+
+    @property
+    def n_occupied(self) -> int:
+        """Occupied cells.
+
+        Deliberately *not* named `n_cells`: on `Grid` that means every cell covering the
+        sphere (288,122 for H3 res 4), and the two differ by five orders of magnitude.
+        A ratio built from the wrong one looks plausible and is silently meaningless.
+        """
+        return int(self.cells.size)
+
+    @cached_property
+    def centers(self) -> np.ndarray:
+        """`(K, 2)` of `(lat, lon)` — one batched `cell_centers` call, computed at most once.
+
+        **Batched, never one call per cell.** Asking per cell would let a scalar-shaped
+        `cell_centers` implementation pass unnoticed, which is the reason the call is
+        made against `cells` as a whole.
+
+        **Lazy**, because most callers never look at it: `occupied_cell_hierarchy` walks
+        four rungs wanting only a count, and placing centres eagerly would put an H3
+        `cell_to_latlng` loop inside each one for a number nobody reads. `cached_property`
+        writes through to `__dict__`, which a frozen dataclass still has, so the freeze
+        holds for the declared fields and the cache still works.
+        """
+        return self.grid.cell_centers(self.cells, self.resolution)
+
+    @property
+    def center_lat(self) -> np.ndarray:
+        """`(K,)` — `centers[:, 0]`.
+
+        `cell_centers` is `(lat, lon)` while `cell_boundaries` is `(lon, lat)`; this and
+        `center_lon` are the one place that does the indexing, so callers never repeat it.
+        """
+        return self.centers[:, 0]
+
+    @property
+    def center_lon(self) -> np.ndarray:
+        return self.centers[:, 1]
+
+    def member_mask(self, cells) -> np.ndarray:
+        """`(N,)` bool: does each point sit in one of `cells`?
+
+        `cells` goes through `grid.coerce_cell_ids` first because it usually comes from
+        another partition that has been round-tripped through CSV, where HEALPix's int64
+        ids arrive back as strings. Comparing those against int64 is not an error — it is
+        a silently all-False mask, i.e. a filter that drops everything and reports success.
+        """
+        wanted = pd.Index(self.grid.coerce_cell_ids(cells))
+        return np.asarray(pd.Index(self.cell_id).isin(wanted))
 
 
 class Grid(ABC):
@@ -104,6 +196,45 @@ class Grid(ABC):
         `seeds.csv` is text, so `cell_id` comes back as whatever pandas inferred. This
         is the one place that knows which dtype was meant.
         """
+
+    # ---- partition --------------------------------------------------------
+
+    def partition(self, lat_deg, lon_deg, resolution: int) -> Partition:
+        """Quantize a point set: cell per point, occupied cells, counts, centres.
+
+        The `assign -> group -> count -> centre` pipeline, written once. Every caller
+        that needs more than a bare cell id goes through this rather than regrouping
+        the ids itself.
+
+        Grouping is `pd.factorize(..., sort=True)`, which returns the sorted uniques
+        *and* each point's rank among them in one pass. That is the same total order
+        `groupby(sort=True)` produced — both route through pandas' `safe_sort` —
+        lexicographic for H3's hex strings and numeric for HEALPix's ints.
+
+        **Layering:** this composes downward onto `cell_ids` and `validate_resolution`
+        only, which is what lets `occupied_cell_hierarchy` call it. A subclass override
+        must keep reaching downward; one written in terms of `occupied_cell_hierarchy`
+        would recurse forever.
+        """
+        r = self.validate_resolution(resolution)
+        ids = np.asarray(self.cell_ids(lat_deg, lon_deg, r))
+        codes, cells = pd.factorize(ids, sort=True)
+        if codes.size and codes.min() < 0:
+            # factorize codes a missing id as -1, which as a positional index into
+            # `cells` silently means "the last cell" — so a NaN coordinate would be
+            # assigned to the highest-id seed rather than rejected. The pre-refactor
+            # `.map(cell_to_seed).astype(int)` raised here; keep it raising.
+            raise ValueError(
+                "cell_ids produced a missing cell id; check the inputs for NaN coordinates"
+            )
+        return Partition(
+            grid=self,
+            resolution=r,
+            cell_id=ids,
+            cells=cells,
+            cell_index=codes.astype(np.int64, copy=False),
+            counts=np.bincount(codes, minlength=cells.size).astype(np.int64, copy=False),
+        )
 
     # ---- scale ------------------------------------------------------------
 
@@ -233,8 +364,7 @@ class Grid(ABC):
         (`test_degrade_matches_direct_ang2pix` pins that).
         """
         return {
-            int(r): int(np.unique(self.cell_ids(lat_deg, lon_deg, r)).size)
-            for r in resolutions
+            int(r): self.partition(lat_deg, lon_deg, r).n_occupied for r in resolutions
         }
 
 

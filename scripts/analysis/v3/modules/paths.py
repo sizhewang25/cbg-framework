@@ -78,6 +78,17 @@ class RunPaths:
         return self.setup_dir / "targets.csv"
 
     @property
+    def target_space_json(self) -> Path:
+        """Provenance of `targets.csv` / `vps.csv`, written by
+        `benchmark.v2.cli materialize-target-space`.
+
+        Its `csv` key is the only record of a run's canonical edge CSV when the
+        target space was built from a config before the benchmark ran, since
+        `eval_source/` does not exist yet at that point.
+        """
+        return self.setup_dir / "target_space.json"
+
+    @property
     def eval_source_dir(self) -> Path:
         return self.run_dir / "eval_source"
 

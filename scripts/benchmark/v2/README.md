@@ -93,6 +93,45 @@ DataSource ──→ inputs/<source>/<slice>/{vp_configs,fit_samples,eval_observ
 airport set or match definition changes, and it backfills runs produced before
 the metric existed (no need to re-run CBG).
 
+## Target space (answer space)
+
+`materialize-target-space` writes `targets.csv`, `vps.csv`, `clusters/` and a
+`target_space.json` provenance file under `<run_id>/<source>/<setup>/`. Those
+are what `scripts/analysis/v3`'s `build-answer-space`, `build-bipartite-graph`
+and `build-proximity` read. Two derivations of the same artifacts:
+
+```bash
+# From a FINISHED run — merges each fold's targets.parquet + vp_configs.parquet.
+python -m scripts.benchmark.v2.cli materialize-target-space --run-id smoke-001
+
+# From the config alone — BEFORE any combo runs.
+python -m scripts.benchmark.v2.cli materialize-target-space \
+    --configfile configs/<run_id>.yaml --with-eval-source
+```
+
+`--configfile` constructs the config's `DataSource` once per slice and unions
+`iter_eval_targets` / `iter_vp_configs`. That is deliberately **not** a
+`drop_duplicates` over the CSV: `min_obs` drops sparse targets and
+`traffic_weighted_csv` evaluates only the flow-filter survivors, so the source
+is what defines the target space. The two modes therefore agree exactly — the
+folds record the same union, just later.
+
+Because the dataset geometry is a property of the *data*, running it first lets
+§7.3's figures and the §8.1 strata be built and inspected before spending a run.
+
+`--with-eval-source` additionally scores the canonical CSV into
+`<run_id>/eval_source/`, which is where `build-proximity` reads the shortest-ping
+VP from. `eval-source`'s own default `--out-dir` is the CSV's directory, where
+nothing downstream looks.
+
+One caveat is recorded rather than hidden. A traffic-weighted arm in
+*on-the-fly* mode (`eval_kept_traffic_fraction`, no `weighted_csv_path`) has no
+file holding its pruned flows, so `target_space.json` records the mesh CSV with
+`csv_is_mesh_superset: true` — and `build-bipartite-graph` refuses it instead of
+reporting mesh density as that arm's. Derive a weighted CSV with
+[derive_traffic_weighted_cbg_data.smk](../../processing/source/derive_traffic_weighted_cbg_data.smk)
+and set `weighted_csv_path` for an exact edge set.
+
 ## Sources
 
 - **vultr_csv** — wraps `datasets/cbg_test/vultr_pings_us_only.csv`.

@@ -82,6 +82,7 @@ from scripts.analysis.v3.modules.grid import (
     RESOLUTION_HELP,
     SWEEP_HELP,
     Grid,
+    Partition,
     get_grid,
     resolve_cli_grid,
 )
@@ -529,11 +530,8 @@ def measurement_efficiency(
 
 
 def _node_block(
-    lat: np.ndarray,
-    lon: np.ndarray,
+    partition: Partition,
     *,
-    grid: Grid,
-    resolution: int,
     asns: pd.Series | None,
     pairwise: np.ndarray,
     pairwise_note: dict,
@@ -552,10 +550,15 @@ def _node_block(
     cannot tile hexagons, so a parent id is exact as an index but is not a
     geometric container, and the two routes genuinely disagree on 1-8% of nodes
     at res 3 (measured, `answer_space` meta's `parent_lineage_disagreements`).
+
+    `partition` arrives already built rather than being quantized here, so the
+    grid and resolution this block describes travel *with* the quantization
+    instead of beside it, and the caller's `cell_id` column cannot come from a
+    different binning than `dispersion` reports.
     """
     pw, pw_note = pairwise, pairwise_note
-    n = int(lat.size)
-    n_cells = int(np.unique(grid.cell_ids(lat, lon, resolution)).size)
+    n = partition.n_points
+    n_cells = partition.n_occupied
     block: dict = {
         "count": n,
         "asn_count": None if asns is None else int(asns.dropna().nunique()),
@@ -586,6 +589,10 @@ def resolve_source_csv(run: RunPaths, override: Path | None = None) -> Path:
     `csv` key, relative to the repo root — so that is read rather than
     reconstructed from `run_id`, which does not track the CSV stem.
 
+    Then `target_space.json`, which `materialize-target-space --configfile`
+    writes. That is the pre-benchmark case: the target space exists but no combo
+    has run, so there is no `eval_source/` to read the CSV off yet.
+
     Falls back to globbing `datasets/**/<eval_basename>.csv` for a run whose
     `eval_*` predates that key.
     """
@@ -604,6 +611,29 @@ def resolve_source_csv(run: RunPaths, override: Path | None = None) -> Path:
         p = p if p.is_absolute() else REPO_ROOT / p
         if p.exists():
             return p
+
+    if run.target_space_json.exists():
+        space = json.loads(run.target_space_json.read_text())
+        if space.get("csv"):
+            p = Path(space["csv"])
+            p = p if p.is_absolute() else REPO_ROOT / p
+            if p.exists():
+                # An on-the-fly traffic-weighted arm has no file holding its
+                # edge set, so this is the mesh -- a strict superset. Reporting
+                # its density as the weighted arm's would be wrong, and silently
+                # so, which is the one failure this whole resolution order is
+                # meant to avoid.
+                if space.get("csv_is_mesh_superset"):
+                    raise MissingArtifactError(
+                        f"{run.run_id}: target_space.json records {space['csv']} as a "
+                        f"MESH SUPERSET of this arm's edge set (the traffic filter runs "
+                        f"on the fly, so no file holds the pruned flows). Derive a "
+                        f"weighted CSV via "
+                        f"scripts/processing/source/derive_traffic_weighted_cbg_data.smk "
+                        f"and point the config's `weighted_csv_path` at it, or pass "
+                        f"--source-csv explicitly to accept the mesh graph."
+                    )
+                return p
 
     hits = sorted((REPO_ROOT / "datasets").rglob(f"{run.eval_basename}.csv"))
     if hits:
@@ -780,19 +810,17 @@ def build_bipartite(
     # --- VP nodes ---------------------------------------------------------
     vp_lat = vps["vp_lat"].to_numpy(dtype=float)
     vp_lon = vps["vp_lon"].to_numpy(dtype=float)
+    vp_part = grid.partition(vp_lat, vp_lon, resolution)
     vp_pw, vp_pw_note = _pairwise_distances(vp_lat, vp_lon)
     vp_block = _node_block(
-        vp_lat,
-        vp_lon,
-        grid=grid,
-        resolution=resolution,
+        vp_part,
         asns=vps["vp_asn"] if "vp_asn" in vps.columns else None,
         pairwise=vp_pw,
         pairwise_note=vp_pw_note,
     )
     by_vp = edges.groupby("vp_id")
     vp_nodes = vps.copy()
-    vp_nodes["cell_id"] = grid.cell_ids(vp_lat, vp_lon, resolution)
+    vp_nodes["cell_id"] = vp_part.cell_id
     # Named for the side it points at: there is no VP-to-VP edge, so a bare
     # "degree" invites reading this as one.
     vp_nodes["degree_to_target"] = (
@@ -821,10 +849,7 @@ def build_bipartite(
     )
     tg_pw, tg_pw_note = _pairwise_distances(tg_lat, tg_lon)
     tg_block = _node_block(
-        tg_lat,
-        tg_lon,
-        grid=grid,
-        resolution=resolution,
+        grid.partition(tg_lat, tg_lon, resolution),
         asns=tg_asns,
         pairwise=tg_pw,
         pairwise_note=tg_pw_note,

@@ -9,6 +9,8 @@ its non-nesting, and HEALPix's exact nesting (which lives in `test_healpix.py`).
 
 from __future__ import annotations
 
+from unittest import mock
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -438,3 +440,165 @@ def test_h3_pentagon_centres_are_well_formed():
     assert c.shape == (12, 2)
     assert np.isfinite(c).all()
     assert list(g.cell_ids(c[:, 0], c[:, 1], r)) == pents
+
+
+# ---- partition --------------------------------------------------------------
+# `Grid.partition` is the one `assign -> group -> count -> centre` pipeline; these
+# hold the invariants `build_answer_space` derives `seed_id` from.
+
+
+def _lats_lons(coords):
+    return [c[0] for c in coords], [c[1] for c in coords]
+
+
+def test_partition_cells_are_the_sorted_distinct_cell_ids(grid):
+    lat, lon = _lats_lons(US + US[:2])
+    p = grid.partition(lat, lon, grid.DEFAULT_RESOLUTION)
+    assert list(p.cells) == sorted(set(p.cell_id))
+    assert p.n_occupied == len(set(p.cell_id))
+    assert p.n_points == len(lat)
+
+
+def test_partition_matches_the_groupby_it_replaces(grid):
+    """The reference implementation, inline.
+
+    `partition` swapped `groupby(sort=True).size()` for `factorize(sort=True)`. Both
+    route through pandas' `safe_sort`, but a future switch to `sort=False` would
+    renumber every `seed_id` in a persisted `seeds.csv` while breaking nothing else.
+    """
+    lat, lon = _lats_lons(US + US[:3])
+    p = grid.partition(lat, lon, grid.DEFAULT_RESOLUTION)
+    ref = pd.Series(p.cell_id).groupby(pd.Series(p.cell_id), sort=True).size()
+    assert list(p.cells) == list(ref.index)
+    assert list(p.counts) == list(ref.to_numpy())
+
+
+def test_partition_preserves_the_grids_own_id_dtype(grid):
+    """H3 ids are `object`-of-`str`, HEALPix's are `int64`.
+
+    A "simplification" to `np.asarray(sorted(set(ids)))` turns H3's into numpy `<U15`,
+    which still writes, still reads and still round-trips — and then silently misses in
+    `member_mask`'s `isin` against an object Index. HEALPix is immune, so this has to
+    run on both grids to mean anything.
+    """
+    r = grid.DEFAULT_RESOLUTION
+    lat, lon = _lats_lons(US)
+    ids = grid.cell_ids(lat, lon, r)
+    p = grid.partition(lat, lon, r)
+    assert p.cell_id.dtype == ids.dtype
+    assert p.cells.dtype == ids.dtype
+    assert type(p.cells[0]) is type(ids[0])
+
+
+def test_cell_index_maps_every_point_back_to_its_own_cell(grid):
+    lat, lon = _lats_lons(US + [CHI, CHI, CHI])
+    p = grid.partition(lat, lon, grid.DEFAULT_RESOLUTION)
+    assert p.n_occupied < p.n_points
+    assert list(p.cells[p.cell_index]) == list(p.cell_id)
+    assert p.cell_index.min() == 0
+    assert p.cell_index.max() == p.n_occupied - 1
+    assert int(p.counts.sum()) == p.n_points
+
+
+def test_partition_is_independent_of_input_row_order(grid):
+    """What `seed_id` rests on: it is the rank of a sorted cell id, not a row number."""
+    r = grid.DEFAULT_RESOLUTION
+    lat, lon = _lats_lons(US)
+    fwd = grid.partition(lat, lon, r)
+    rev = grid.partition(lat[::-1], lon[::-1], r)
+    assert list(rev.cells) == list(fwd.cells)
+    assert list(rev.counts) == list(fwd.counts)
+    assert list(rev.cell_index) == list(fwd.cell_index)[::-1]
+
+
+def test_partition_computes_centres_once_in_one_batched_call(grid):
+    """Batched and cached.
+
+    Per-cell calls would let a scalar-shaped `cell_centers` pass unnoticed, and every
+    value would still be right — so nothing else can catch this.
+    """
+    lat, lon = _lats_lons(US)
+    p = grid.partition(lat, lon, grid.DEFAULT_RESOLUTION)
+    with mock.patch.object(grid, "cell_centers", wraps=grid.cell_centers) as spy:
+        first, second = p.centers, p.centers
+    assert spy.call_count == 1
+    assert spy.call_args.args[0] is p.cells
+    assert first is second
+
+
+def test_partition_does_not_place_cells_until_asked(grid):
+    """`occupied_cell_hierarchy` walks four rungs wanting only a count."""
+    lat, lon = _lats_lons(US)
+    with mock.patch.object(grid, "cell_centers", wraps=grid.cell_centers) as spy:
+        p = grid.partition(lat, lon, grid.DEFAULT_RESOLUTION)
+        assert p.n_occupied
+    assert spy.call_count == 0
+
+
+def test_partition_centres_are_lat_then_lon_and_round_trip(grid):
+    r = grid.DEFAULT_RESOLUTION
+    lat, lon = _lats_lons(US)
+    p = grid.partition(lat, lon, r)
+    assert p.centers.shape == (p.n_occupied, 2)
+    assert list(grid.cell_ids(p.center_lat, p.center_lon, r)) == list(p.cells)
+    tokyo = grid.partition([35.6812], [139.6917], r)
+    assert tokyo.center_lat[0] == pytest.approx(35.68, abs=1.0)
+    assert tokyo.center_lon[0] == pytest.approx(139.69, abs=1.0)
+
+
+def test_member_mask_selects_exactly_the_shared_cells(grid):
+    r = grid.DEFAULT_RESOLUTION
+    here = grid.partition(*_lats_lons([CHI, SJC, NYC]), r)
+    there = grid.partition(*_lats_lons([CHI]), r)
+    mask = here.member_mask(there.cells)
+    assert mask.dtype == bool
+    assert mask.shape == (here.n_points,)
+    assert list(mask) == [True, False, False]
+    assert set(here.cell_id[mask]) <= set(there.cells)
+
+
+def test_member_mask_survives_a_csv_round_trip_of_the_cells(grid, tmp_path):
+    """HEALPix ids come back from CSV as strings.
+
+    Compared against int64 that is not an error, it is an all-False mask — a filter
+    that drops everything and reports success. Only fires on the healpix param.
+    """
+    r = grid.DEFAULT_RESOLUTION
+    here = grid.partition(*_lats_lons([CHI, SJC, NYC]), r)
+    there = grid.partition(*_lats_lons([CHI, NYC]), r)
+
+    path = tmp_path / "cells.csv"
+    pd.DataFrame({"cell_id": there.cells}).to_csv(path, index=False)
+    reloaded = pd.read_csv(path)["cell_id"]
+
+    assert list(here.member_mask(reloaded)) == list(here.member_mask(there.cells))
+    assert here.member_mask(reloaded).sum() == 2
+
+
+def test_partition_of_nothing_is_empty_on_every_axis(grid):
+    p = grid.partition([], [], grid.DEFAULT_RESOLUTION)
+    assert p.n_points == 0
+    assert p.n_occupied == 0
+    assert p.centers.shape == (0, 2)
+    assert int(p.counts.sum()) == 0
+
+
+def test_partition_rejects_a_missing_cell_id(grid):
+    """`factorize` codes a missing id as -1, a legal index meaning "the last cell".
+
+    The pre-refactor `.map(cell_to_seed).astype(int)` raised on this; a silent
+    reassignment to the highest-id seed would be far worse than a crash.
+    """
+    ids = np.array([grid.cell_ids([41.97], [-87.90], grid.DEFAULT_RESOLUTION)[0], np.nan], dtype=object)
+    with mock.patch.object(grid, "cell_ids", return_value=ids):
+        with pytest.raises(ValueError, match="missing cell id"):
+            grid.partition([41.97, 0.0], [-87.90, 0.0], grid.DEFAULT_RESOLUTION)
+
+
+def test_partition_records_its_validated_resolution(grid):
+    lat, lon = _lats_lons(US)
+    p = grid.partition(lat, lon, grid.DEFAULT_RESOLUTION)
+    assert p.resolution == grid.DEFAULT_RESOLUTION
+    assert p.grid is grid
+    with pytest.raises(ValueError):
+        grid.partition(lat, lon, 7 if grid.name == "h3" else 100)
