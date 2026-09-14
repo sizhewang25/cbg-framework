@@ -47,38 +47,72 @@ benchmark:
       ltd: low_envelope
       mtl: planar_circle
       ctr: geometric_centroid
-      mtl_kwargs: {n_pts: 64, enable_circle_filter: true}
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
 
     - combo_id: million_scale_cbg
       ltd: speed_of_internet
       mtl: planar_circle
       ctr: geometric_centroid
-      ltd_kwargs: {speed_ratio: 0.6667}
-      mtl_kwargs: {n_pts: 64, enable_circle_filter: true}
+      ltd_kwargs:
+        speed_ratio: 0.6667
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
 
     - combo_id: octant_cbg_hull
       ltd: bounded_spline
       mtl: planar_annulus_weighted
       ctr: monte_carlo_medoid
-      ltd_kwargs: {fit_spline: false, cutoff_min_points: 5, bin_size_ms: 5.0}
-      mtl_kwargs: {n_pts: 64, enable_circle_filter: true, weight_tau_ms: 50.0, weight_threshold: 0.9}
-      ctr_kwargs: {n_samples: 1024}
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_tau_ms: 50.0
+        weight_threshold: 0.9
+      ctr_kwargs:
+        n_samples: 1024
 
     - combo_id: octant_cbg_spl
       ltd: bounded_spline
       mtl: planar_annulus_weighted
       ctr: monte_carlo_medoid
-      ltd_kwargs: {target_coverage: 0.9, cutoff_min_points: 5, fit_spline: true, spline_n_knots: 4, bin_size_ms: 5.0}
-      mtl_kwargs: {n_pts: 64, enable_circle_filter: true, weight_tau_ms: 50.0, weight_threshold: 0.9}
-      ctr_kwargs: {n_samples: 1024}
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_tau_ms: 50.0
+        weight_threshold: 0.9
+      ctr_kwargs:
+        n_samples: 1024
 
     - combo_id: spotter_cbg
       ltd: normal_dist
       mtl: planar_annulus_weighted
       ctr: monte_carlo_medoid
-      ltd_kwargs: {n_bins: 40, min_per_bin: 5, deg_mu: 3, deg_sigma: 2, bin_size_ms: 5.0, cutoff_min_points: 5}
-      mtl_kwargs: {n_pts: 64, enable_circle_filter: true, weight_tau_ms: 50.0, weight_threshold: 0.9}
-      ctr_kwargs: {n_samples: 1024}
+      ltd_kwargs:
+        n_bins: 40
+        min_per_bin: 5
+        deg_mu: 3
+        deg_sigma: 2
+        bin_size_ms: 5.0
+        cutoff_min_points: 5
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_tau_ms: 50.0
+        weight_threshold: 0.9
+      ctr_kwargs:
+        n_samples: 1024
 
 
 analysis:
