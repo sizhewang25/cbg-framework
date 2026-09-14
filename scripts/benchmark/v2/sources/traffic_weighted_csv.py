@@ -110,16 +110,17 @@ class TrafficWeightedCSVSource(GenericCSVSource):
                 f"is the fit corpus and the universe the weighted subset lives in)"
             )
 
+        # NB: "at least one mode" is checked at LOAD time, not here. `run-combo`
+        # constructs a source purely to derive the inputs/outputs paths and
+        # forwards only `source_kwargs`, so a top-level `eval_kept_traffic_fraction`
+        # never reaches this constructor. Requiring a mode here would make the
+        # source unconstructable in that path even though it needs no subset to
+        # answer name/setup_id/slice_id. Contradictory configs are still caught
+        # eagerly below, since that check needs no mode to be present.
         n_modes = sum(
             x is not None
             for x in (weighted_csv_path, eval_pair_weight_min, eval_kept_traffic_fraction)
         )
-        if n_modes == 0:
-            raise ValueError(
-                f"{self.name!r} needs the traffic-weighted subset defined exactly "
-                f"once: pass `weighted_csv_path` (precomputed) or one of "
-                f"`eval_kept_traffic_fraction` / `eval_pair_weight_min` (on-the-fly)"
-            )
         if n_modes > 1:
             # A weighted CSV already encodes a cut; re-cutting it would compose
             # two filters and the reported fraction would refer to neither.
@@ -178,6 +179,18 @@ class TrafficWeightedCSVSource(GenericCSVSource):
         return self._df
 
     def _build_weighted_flows(self) -> None:
+        if (
+            self._weighted_csv_path is None
+            and self._eval_pair_weight_min is None
+            and self._eval_kept_traffic_fraction is None
+        ):
+            raise ValueError(
+                f"{self.name!r} needs the traffic-weighted subset defined exactly "
+                f"once: pass `weighted_csv_path` (precomputed) or one of "
+                f"`eval_kept_traffic_fraction` / `eval_pair_weight_min` "
+                f"(on-the-fly). Note the latter two are TOP-LEVEL config keys, "
+                f"not `source_kwargs` entries."
+            )
         if self._weighted_csv_path is not None:
             self._weighted_flows = self._load_weighted_flows()
         else:

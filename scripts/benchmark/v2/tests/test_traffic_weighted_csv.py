@@ -500,9 +500,16 @@ class TestPrecomputedMode(_TwoModeBase):
 
 
 class TestModeSelection(_TwoModeBase):
-    def test_no_subset_definition_raises(self) -> None:
+    def test_no_subset_definition_constructs_but_raises_on_load(self) -> None:
+        """`run-combo` builds a source only to derive paths and forwards just
+        `source_kwargs`, so a top-level `eval_kept_traffic_fraction` never
+        reaches __init__. Construction must therefore stay cheap and legal; the
+        missing subset is a load-time error."""
+        src = self._src()
+        self.assertEqual(src.slice_id(), "all")
+        self.assertEqual(src.name, "traffic_weighted_csv")
         with self.assertRaises(ValueError) as ctx:
-            self._src()
+            list(src.iter_eval_targets())
         self.assertIn("exactly once", str(ctx.exception))
 
     def test_two_subset_definitions_raise(self) -> None:
