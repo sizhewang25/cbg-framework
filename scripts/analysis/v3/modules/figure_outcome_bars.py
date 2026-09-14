@@ -225,11 +225,22 @@ def outcome_table(
     disagree with the table beside them, and restricted to the aggregate rows —
     a bar per dataset type is what the hatch encodes, and the per-dataset view
     is `--layout compare`.
+
+    **Single dataset falls back to its DATASET rows.** `row_plan` suppresses the
+    aggregate for one dataset on the grounds that "a micro-average over one
+    dataset is that dataset" — which is exactly why the dataset row can stand in
+    here. Without the fallback a one-run invocation selects nothing, and the
+    empty frame surfaced as `KeyError: 'pending'` out of `guard_partition`.
     """
     by_run = {run_id: g.set_index("method") for run_id, g in accuracy.groupby("run_id")}
+    scope = (
+        H.AGGREGATE
+        if any(e["scope"] == H.AGGREGATE for e in plan)
+        else H.DATASET
+    )
     rows: list[dict] = []
     for entry in plan:
-        if entry["scope"] != H.AGGREGATE:
+        if entry["scope"] != scope:
             continue
         sources = [by_run.get(r) for r in entry["run_ids"]]
         placeholder = H.provisional_for(
@@ -301,6 +312,12 @@ def guard_partition(table: pd.DataFrame) -> None:
     partitions `n_solved`, so this holds by construction; it is asserted because
     "by construction" is what stops being true when someone adds a fifth status.
     """
+    # An empty frame has no columns either, so the membership test below would
+    # raise KeyError on the guard's own column name rather than report the real
+    # problem. Callers handle "nothing to draw"; they cannot handle a KeyError
+    # naming an internal column.
+    if table.empty:
+        return
     drawn = table[~table["pending"]]
     if drawn.empty:
         return

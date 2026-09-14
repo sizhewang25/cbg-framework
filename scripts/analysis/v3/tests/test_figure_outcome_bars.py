@@ -104,6 +104,30 @@ def test_the_correct_segment_is_the_top_n_accuracy_the_table_prints():
         assert bars.loc[method, "n_correct"] == agg.loc[method, "n_correct"]
 
 
+def test_one_dataset_still_yields_bars():
+    """`row_plan` suppresses the aggregate for a single dataset, and
+    `outcome_table` selects aggregates — so without a fallback a one-run
+    invocation selected nothing and died on `KeyError: 'pending'` inside the
+    partition guard. One dataset's row IS its own aggregate, which is the same
+    reasoning that suppresses the extra row."""
+    plan = H.row_plan({"as01-260728-260802": _Run("as01-260728-260802")}, {})
+    assert not any(e["scope"] == H.AGGREGATE for e in plan), "premise changed"
+
+    table = B.outcome_table(_frame(), plan, top_n=1, methods=METHODS)
+    assert not table.empty
+    drawn = table[~table["pending"]]
+    assert set(drawn["method"]) == set(METHODS)
+    # The mesh bar's denominator is that one dataset, not the two in _frame().
+    mesh = drawn[drawn["kind"] == H.MESH]
+    assert set(mesh["n_targets"]) == {400}
+
+
+def test_an_empty_table_is_not_a_keyerror_on_an_internal_column():
+    """`guard_partition` reported the absence of its own bookkeeping column
+    rather than the absence of data; callers can act on the latter."""
+    B.guard_partition(pd.DataFrame())
+
+
 def test_the_compare_layout_keeps_each_dataset_on_its_own_denominator():
     table = B.compare_table(_frame(), _plan(), top_n=1, methods=METHODS)
     mesh = table[(table["kind"] == H.MESH)].set_index(["dataset", "method"])
