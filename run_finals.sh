@@ -39,17 +39,19 @@ DERIVE_SMK="scripts/processing/source/derive_traffic_weighted_cbg_data.smk"
 # Mesh arms: run directly.
 MESH_CONFIGS=(
   as01-260728-260802-mesh
-  as02-260728-260802-mesh
-  as03-260728-260802-mesh
-  as7018_us_test01-mesh
+  # as02-260728-260802-mesh
+  # as03-260728-260802-mesh
+  as7018-ripe-mesh
 )
 
 # Weighted arms: derive the subset first, then run.
 WEIGHTED_CONFIGS=(
-  as01-260728-260802-weighted
-  as02-260728-260802-weighted
-  as03-260728-260802-weighted
+  # as01-260728-260802-weighted
+  # as02-260728-260802-weighted
+  # as03-260728-260802-weighted
 )
+
+ALL_CONFIGS=("${MESH_CONFIGS[@]}" "${WEIGHTED_CONFIGS[@]}")
 
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$SUMMARY"; }
 
@@ -62,6 +64,31 @@ d = yaml.safe_load(open(f"configs/{cfg}.yaml"))["benchmark"]["source_kwargs"]
 print(d.get(key, ""))
 PY
 }
+
+if (( ${#ALL_CONFIGS[@]} == 0 )); then
+  log "ABORT: every config is commented out in MESH_CONFIGS / WEIGHTED_CONFIGS."
+  exit 1
+fi
+
+# ---- preflight: nothing else may hold the Snakemake lock --------------------
+# Snakemake locks the whole working directory, so a concurrent run -- or a stale
+# lock left by a killed one -- makes every config here fail with a LockException
+# buried in its own log. Catch it once, up front, with the fix.
+if compgen -G ".snakemake/locks/*" >/dev/null; then
+  # `[s]nakemake` so the pattern cannot match this script's own command line --
+  # a bare -f pattern self-matches the invoking shell and always reports "a run
+  # is in progress", which would hide every stale lock.
+  if pgrep -f "[s]nakemake -s scripts/benchmark/v2/Snakefile" >/dev/null; then
+    log "ABORT: another Snakemake run holds the lock on $PWD"
+    log "       Wait for it to finish, or stop it, then re-run."
+  else
+    log "ABORT: a stale Snakemake lock remains in $PWD (no process is running)."
+    log "       Clear it with:"
+    log "         .venv/bin/snakemake -s scripts/benchmark/v2/Snakefile \\"
+    log "             --configfile configs/${ALL_CONFIGS[0]}.yaml --unlock"
+  fi
+  exit 1
+fi
 
 # ---- preflight: every input must exist before anything runs -----------------
 log "preflight: checking inputs for ${#MESH_CONFIGS[@]} mesh + ${#WEIGHTED_CONFIGS[@]} weighted runs"

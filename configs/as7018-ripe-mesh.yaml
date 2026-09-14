@@ -8,7 +8,7 @@
 # stored stratification, and re-materializing with (k, seed) would not reproduce
 # them. Nothing here writes to that tree.
 
-run_id: as7018_us_test01-mesh
+run_id: as7018-ripe-mesh
 
 benchmark:
   source: generic_csv

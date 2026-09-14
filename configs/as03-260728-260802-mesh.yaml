@@ -58,7 +58,7 @@ benchmark:
         n_pts: 64
         enable_circle_filter: true
         weight_tau_ms: 50.0
-        weight_threshold: 0.9
+        highest_weight_only: true
       ctr_kwargs:
         n_samples: 1024
 
@@ -76,7 +76,7 @@ benchmark:
         n_pts: 64
         enable_circle_filter: true
         weight_tau_ms: 50.0
-        weight_threshold: 0.9
+        highest_weight_only: true
       ctr_kwargs:
         n_samples: 1024
 
@@ -95,7 +95,7 @@ benchmark:
         n_pts: 64
         enable_circle_filter: true
         weight_tau_ms: 50.0
-        weight_threshold: 0.9
+        highest_weight_only: true
       ctr_kwargs:
         n_samples: 1024
 
