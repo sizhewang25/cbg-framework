@@ -34,10 +34,38 @@ falls, so two nodes 5 km apart across a boundary are different places -- the sam
 straddling cost §7.4.2 states for the answer space, and the reason `common_cells` is
 reported rather than assumed away.
 
-Retention is presence-only: every node whose cell the other dataset also occupies
-survives. There is deliberately no per-cell count balancing -- that would need an RNG
-and make the output seed-dependent, and the per-cell density mismatch is reported in the
-summary instead of being silently corrected.
+Two stages, and they fix different things
+-----------------------------------------
+1. **Presence** -- every node whose cell the other dataset also occupies survives. This
+   equalizes *geography*: the two footprints become the same set of cells.
+2. **Balancing** (on by default; `--no-balance` stops after stage 1) -- equalizes *size*.
+   Stage 1 leaves a cell holding 20 private targets against 2 public ones, so an accuracy
+   comparison across the pair still confounds dataset quality with dataset count.
+
+Balancing, per side and per cell: the quota is `k = min(n_public, n_private)`, the smaller
+side is kept whole, and the larger side keeps the `k` nodes that best match the smaller
+side's distribution of **nearest measured counterpart distance** -- for a target, the
+great-circle km to its nearest VP that actually measured it. §7.3 names that "the dominant
+scalar predictor of region size, since the smallest disk does most of the constraining",
+which is why it is the variable matched.
+
+**The matched variable is geometric, never RTT.** Two reasons, both measured on the real
+pair. Selecting on minRTT would keep the least RTT-inflated hosts per site on the side that
+gets pruned, while the other side keeps its own -- an asymmetric advantage on an axis the
+paper studies, so the inflation difference has to survive as a finding rather than be
+erased. And per-node RTT *variance* cannot mean measurement noise here at all: there is one
+row per (vp, target) pair, so a node's RTT spread is spread across counterparts, and it
+correlates 0.96 with the spread of its counterpart distances. Pruning high-variance nodes
+would delete the targets with the most diverse constraint radii -- the best-constrained
+ones for multilateration.
+
+Matching is **distribution matching, not best-k**: greedy 1-1 nearest matching keeps a
+representative slice of the larger side, so neither dataset is handed its easy cases. It is
+deterministic -- no RNG, no seed.
+
+What balancing does **not** equalize is edges. Node counts match; edge counts need not,
+because edge density is a property of the dataset (a near-complete operator mesh against a
+sparser public one), not a confound to remove.
 
 An edge survives only if **both** of its endpoints do, so pruning nodes prunes flows. As
 with `filter_weighted_flows`, that can push a surviving target below the 3 observing VPs
@@ -58,8 +86,10 @@ import json
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
+from scripts.analysis.v3.modules.answer_space import elementwise_km
 from scripts.analysis.v3.modules.grid import (
     DEFAULT_GRID,
     GRID_HELP,
@@ -201,6 +231,172 @@ def match_side(
     return keep, report
 
 
+def nearest_counterpart_km(edges: pd.DataFrame, side: str) -> pd.Series:
+    """Per node, great-circle km to the nearest counterpart that actually measured it.
+
+    `node_id -> km`. The *measured* nearest, not the latent one: a VP that exists but never
+    pinged this target does not constrain it, so it cannot count toward how well constrained
+    the target is. That is the quantity §7.3 calls the dominant scalar predictor of region
+    size, and it is what balancing matches on.
+
+    Frames arrive as text (see `read_canonical_csv`), hence the explicit float casts.
+    """
+    gc = elementwise_km(
+        edges["vp_lat"].to_numpy(dtype=float),
+        edges["vp_lon"].to_numpy(dtype=float),
+        edges["target_lat"].to_numpy(dtype=float),
+        edges["target_lon"].to_numpy(dtype=float),
+    )
+    return (
+        pd.Series(gc, index=pd.Index(edges[f"{side}_id"].astype(str), name=f"{side}_id"))
+        .groupby(level=0)
+        .min()
+    )
+
+
+def match_to_distribution(big_x, small_x) -> np.ndarray:
+    """Indices into `big_x` of the `len(small_x)` entries that best match `small_x`.
+
+    Greedy 1-1 nearest matching: walk `small_x` in ascending order and let each claim the
+    closest still-unclaimed entry of `big_x`. The result approximates the smaller side's
+    distribution rather than taking an extreme of the larger one, which is the whole point
+    -- keeping the `k` smallest would hand that dataset its easiest nodes.
+
+    **Determinism is the caller's job**: `np.argmin` returns the first minimum, so ties are
+    broken by position. `balance_side` pre-sorts by `(x, node_id)`, which turns that into a
+    tie-break by node id. Nothing here draws a random number.
+
+    NaN is rejected rather than tolerated: `argmin` over a NaN-bearing array returns the
+    NaN's position, so a single unmeasured node would silently win every match.
+    """
+    big = np.asarray(big_x, dtype=float)
+    small = np.asarray(small_x, dtype=float)
+    if small.size > big.size:
+        raise ValueError(
+            f"cannot match {small.size} values into {big.size}; the caller must pass the "
+            f"larger side as `big_x`"
+        )
+    if np.isnan(big).any() or np.isnan(small).any():
+        raise ValueError("match_to_distribution got NaN; every node must carry a distance")
+
+    used = np.zeros(big.size, dtype=bool)
+    picked = np.empty(small.size, dtype=np.int64)
+    for i, want in enumerate(np.sort(small, kind="stable")):
+        d = np.abs(big - want)
+        d[used] = np.inf
+        j = int(np.argmin(d))
+        used[j] = True
+        picked[i] = j
+    return np.sort(picked)
+
+
+def _quantiles(values: np.ndarray) -> dict:
+    """p50/p90 of the matched statistic, the evidence that matching moved the distribution."""
+    v = np.asarray(values, dtype=float)
+    if v.size == 0:
+        return {"n": 0, "p50": None, "p90": None}
+    return {
+        "n": int(v.size),
+        "p50": round(float(np.percentile(v, 50)), 3),
+        "p90": round(float(np.percentile(v, 90)), 3),
+    }
+
+
+def balance_side(
+    frames: dict[str, pd.DataFrame],
+    side: str,
+    *,
+    grid: Grid,
+    resolution: int,
+) -> tuple[dict[str, set[str]], dict]:
+    """Equalize one role's per-cell node counts. Returns (surviving ids per dataset, report).
+
+    Both datasets are already on the same cells (stage 1), so per cell the only question is
+    which `k = min(n_public, n_private)` nodes the larger side keeps. A cell where the two
+    already agree is left untouched, and which side is larger is decided **per cell** --
+    the public side can be the larger one in one cell and the smaller in another.
+    """
+    id_col, lat_col, lon_col = _GEO_COLUMNS[side]
+
+    nodes = {}
+    for name in _DATASETS:
+        x = nearest_counterpart_km(frames[name], side)
+        n = frames[name].drop_duplicates(id_col).loc[:, [id_col, lat_col, lon_col]].copy()
+        n[id_col] = n[id_col].astype(str)
+        n["x"] = n[id_col].map(x)
+        # The sort that makes `match_to_distribution` deterministic: ties in x resolve by id.
+        n = n.sort_values(["x", id_col], kind="stable").reset_index(drop=True)
+        part = grid.partition(
+            n[lat_col].to_numpy(dtype=float), n[lon_col].to_numpy(dtype=float), resolution
+        )
+        n["cell"] = [str(c) for c in part.cell_id]
+        nodes[name] = n
+
+    keep: dict[str, set[str]] = {name: set() for name in _DATASETS}
+    pruned_cells = {name: 0 for name in _DATASETS}
+    quota = 0
+    common = sorted(set(nodes["public"]["cell"]) & set(nodes["private"]["cell"]))
+    for cell in common:
+        sub = {
+            name: nodes[name][nodes[name]["cell"] == cell].reset_index(drop=True)
+            for name in _DATASETS
+        }
+        k = min(len(sub[name]) for name in _DATASETS)
+        quota += k
+        for name in _DATASETS:
+            if len(sub[name]) == k:
+                keep[name] |= set(sub[name][id_col])
+                continue
+            idx = match_to_distribution(
+                sub[name]["x"].to_numpy(dtype=float),
+                sub[_OTHER[name]]["x"].to_numpy(dtype=float),
+            )
+            keep[name] |= set(sub[name].loc[idx, id_col])
+            pruned_cells[name] += 1
+
+    report = {
+        "matched_statistic": f"nearest_measured_counterpart_km ({side} side)",
+        "common_cells": len(common),
+        "quota_total": quota,
+    }
+    for name in _DATASETS:
+        n_in, n_out = len(nodes[name]), len(keep[name])
+        before = nodes[name]["x"].to_numpy(dtype=float)
+        after = nodes[name].loc[nodes[name][id_col].isin(keep[name]), "x"].to_numpy(float)
+        report[f"{name}_nodes_in"] = n_in
+        report[f"{name}_nodes_out"] = n_out
+        report[f"{name}_nodes_dropped"] = n_in - n_out
+        report[f"{name}_retention_pct"] = round(100 * n_out / n_in, 3) if n_in else 0.0
+        report[f"{name}_cells_pruned"] = pruned_cells[name]
+        report[f"{name}_matched_stat_before"] = _quantiles(before)
+        report[f"{name}_matched_stat_after"] = _quantiles(after)
+    return keep, report
+
+
+def balance_pair(
+    frames: dict[str, pd.DataFrame], *, grid: Grid, resolution: int
+) -> tuple[dict[str, pd.DataFrame], dict]:
+    """Run both balancing phases. Returns (balanced frames, per-side report).
+
+    **The order is load-bearing.** A target's nearest *measured* VP depends on which VPs
+    survive, so VPs are balanced first and the target statistic is then recomputed on the
+    VP-pruned edge set -- a target's constraint set is defined by the VPs that remain, not
+    by the ones it started with. Reversing this would match targets against VPs that are
+    about to be dropped.
+
+    One pass per side. The quota is fixed by the cell counts, so iterating could only
+    reshuffle which nodes are kept, never how many.
+    """
+    work = dict(frames)
+    report = {}
+    for side in _SIDES:
+        keep, report[side] = balance_side(work, side, grid=grid, resolution=resolution)
+        for name in _DATASETS:
+            mask = work[name][f"{side}_id"].astype(str).isin(keep[name])
+            work[name] = work[name][mask].copy()
+    return work, report
+
+
 def _dataset_report(kept: pd.DataFrame, n_rows_in: int) -> dict:
     """Edge-level outcome for one filtered dataset.
 
@@ -231,11 +427,17 @@ def reciprocal_filter(
     *,
     grid: Grid,
     resolution: int,
+    balance: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """Filter both datasets to their common footprint.
+    """Filter both datasets to their common footprint, then to equal per-cell counts.
 
     Returns `(kept_public, kept_private, summary)`. Columns and row order are preserved
-    in both.
+    in both. `balance=False` stops after the presence stage.
+
+    The summary separates the two stages: `cells` describes the presence filter (stage 1)
+    and is therefore stated *before* balancing, while `balance` describes stage 2 and
+    carries the node counts that actually survived. The top-level `public` / `private`
+    blocks always describe the final output.
     """
     resolution = grid.validate_resolution(resolution)
     frames = {"public": public, "private": private}
@@ -263,9 +465,15 @@ def reciprocal_filter(
             )
         kept[name] = frames[name][mask].copy()
 
+    balance_report = None
+    if balance:
+        kept, balance_report = balance_pair(kept, grid=grid, resolution=resolution)
+
     summary = {
         "grid": grid.describe(resolution),
+        "balanced": bool(balance),
         "cells": cells_report,
+        "balance": balance_report,
         **{
             name: _dataset_report(kept[name], len(frames[name]))
             for name in _DATASETS
@@ -285,6 +493,9 @@ def main() -> None:
     parser.add_argument("--resolution", type=int, default=None,
                         help="Grid resolution. Defaults to the chosen grid's own default "
                              "(h3 res 4, ~45 km).")
+    parser.add_argument("--no-balance", dest="balance", action="store_false", default=True,
+                        help="Stop after the presence filter, leaving per-cell node counts "
+                             "unequal. Balancing is on by default.")
     parser.add_argument("--out-public", type=Path, default=None,
                         help=f"Filtered public CSV. Defaults to <public-stem>{_OUTPUT_SUFFIX}.")
     parser.add_argument("--out-private", type=Path, default=None,
@@ -312,6 +523,7 @@ def main() -> None:
         read_canonical_csv(args.private),
         grid=grid,
         resolution=resolution,
+        balance=args.balance,
     )
     kept = {"public": kept_public, "private": kept_private}
 
@@ -339,9 +551,10 @@ def main() -> None:
         json.dump(summary, f, indent=2, sort_keys=True)
 
     logger.info(
-        "reciprocal match on %s %s=%d (%.1f km cells)",
+        "reciprocal match on %s %s=%d (%.1f km cells)%s",
         grid.name, grid.resolution_arg, resolution,
         summary["grid"]["nominal_cell_km"],
+        "" if args.balance else "  [--no-balance: counts left unequal]",
     )
     for side in _SIDES:
         c = summary["cells"][side]
@@ -357,6 +570,22 @@ def main() -> None:
                 name, c[f"{name}_nodes_out"], c[f"{name}_nodes_in"],
                 c[f"{name}_retention_pct"],
             )
+    if summary["balance"] is not None:
+        for side in _SIDES:
+            b = summary["balance"][side]
+            logger.info(
+                "  balanced %-7s to %d per-cell quota over %d cells",
+                side + "s", b["quota_total"], b["common_cells"],
+            )
+            for name in _DATASETS:
+                logger.info(
+                    "      %-7s %d / %d kept (%.2f%%) | %d cells pruned | "
+                    "nearest-counterpart km p50 %s -> %s",
+                    name, b[f"{name}_nodes_out"], b[f"{name}_nodes_in"],
+                    b[f"{name}_retention_pct"], b[f"{name}_cells_pruned"],
+                    b[f"{name}_matched_stat_before"]["p50"],
+                    b[f"{name}_matched_stat_after"]["p50"],
+                )
     for name in _DATASETS:
         r = summary[name]
         logger.info(

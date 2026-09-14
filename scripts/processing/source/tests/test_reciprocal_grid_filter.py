@@ -25,6 +25,8 @@ from scripts.analysis.v3.modules.grid import get_grid
 from scripts.processing.source.reciprocal_grid_filter import (
     _default_output,
     _default_summary,
+    match_to_distribution,
+    nearest_counterpart_km,
     node_frame,
     read_canonical_csv,
     reciprocal_filter,
@@ -37,6 +39,11 @@ NYC = (40.7085, -74.0095)
 DAL = (32.7767, -96.7970)
 #: ~1 km from CHI: a different node, the same place.
 CHI_NEAR = (41.9820, -87.9073)
+
+
+def near(base: tuple, i: int) -> tuple:
+    """`i` steps of ~1.1 km north of `base` -- a distinct node in the same res-4 cell."""
+    return (base[0] + 0.01 * i, base[1])
 
 
 def _mesh(rows: list[tuple[str, tuple, str, tuple]]) -> pd.DataFrame:
@@ -54,9 +61,11 @@ def _mesh(rows: list[tuple[str, tuple, str, tuple]]) -> pd.DataFrame:
     )
 
 
-def _filter(public: pd.DataFrame, private: pd.DataFrame):
+def _filter(public: pd.DataFrame, private: pd.DataFrame, *, balance: bool = True):
     g = get_grid("h3")
-    return reciprocal_filter(public, private, grid=g, resolution=g.DEFAULT_RESOLUTION)
+    return reciprocal_filter(
+        public, private, grid=g, resolution=g.DEFAULT_RESOLUTION, balance=balance
+    )
 
 
 class TestReciprocity(unittest.TestCase):
@@ -167,10 +176,15 @@ class TestMatching(unittest.TestCase):
         self.assertEqual(list(kept_pub["target_continent"]), ["NA", "NA"])
 
     def test_surviving_targets_are_reported_by_vp_count_not_enforced(self):
-        """Multilateration needs 3 constraints; falling under it is reported, not fixed."""
+        """Multilateration needs 3 constraints; falling under it is reported, not fixed.
+
+        Pinned at the presence stage (`balance=False`): this fixture has 2 public VPs in
+        the CHI cell against 1 private, so balancing would prune it to 1 and the report
+        under test would describe a different graph.
+        """
         pub = _mesh([("v1", CHI, "t1", NYC), ("v2", CHI_NEAR, "t1", NYC)])
         priv = _mesh([("q1", CHI, "g1", NYC)])
-        kept_pub, _, summary = _filter(pub, priv)
+        kept_pub, _, summary = _filter(pub, priv, balance=False)
 
         self.assertEqual(len(kept_pub), 2)
         self.assertEqual(summary["public"]["targets_out_by_vp_count"],
@@ -257,3 +271,178 @@ class TestIO(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMatchToDistribution(unittest.TestCase):
+    """The pure matcher, independent of any dataset."""
+
+    def test_keeps_exactly_the_smaller_count_without_repeats(self):
+        idx = match_to_distribution([0.0, 1.0, 2.0, 3.0, 4.0], [1.0, 3.0])
+        self.assertEqual(len(idx), 2)
+        self.assertEqual(len(set(idx.tolist())), 2)
+
+    def test_claims_the_nearest_available_value(self):
+        idx = match_to_distribution([0.0, 10.0, 100.0], [9.0, 101.0])
+        self.assertEqual(sorted(idx.tolist()), [1, 2])
+
+    def test_a_second_claimant_falls_through_to_the_next_nearest(self):
+        """Two wanted values near one candidate must not both take it."""
+        idx = match_to_distribution([5.0, 6.0, 500.0], [5.1, 5.2])
+        self.assertEqual(sorted(idx.tolist()), [0, 1])
+
+    def test_is_independent_of_the_order_of_the_wanted_values(self):
+        a = match_to_distribution([0.0, 10.0, 20.0, 30.0], [25.0, 5.0])
+        b = match_to_distribution([0.0, 10.0, 20.0, 30.0], [5.0, 25.0])
+        self.assertEqual(a.tolist(), b.tolist())
+
+    def test_equal_sizes_keep_everything(self):
+        idx = match_to_distribution([3.0, 1.0, 2.0], [9.0, 9.0, 9.0])
+        self.assertEqual(idx.tolist(), [0, 1, 2])
+
+    def test_nan_is_rejected_rather_than_winning_every_match(self):
+        """argmin over a NaN-bearing array returns the NaN's position."""
+        with self.assertRaisesRegex(ValueError, "NaN"):
+            match_to_distribution([1.0, float("nan")], [1.0])
+
+    def test_the_larger_side_must_be_the_larger_side(self):
+        with self.assertRaisesRegex(ValueError, "cannot match"):
+            match_to_distribution([1.0], [1.0, 2.0])
+
+
+class TestBalancing(unittest.TestCase):
+    def test_the_fixture_helper_keeps_nodes_in_one_cell(self):
+        """Guards every test below: `near` must not silently cross a cell boundary."""
+        g = get_grid("h3")
+        pts = [near(CHI, i) for i in range(4)]
+        cells = {
+            g.cell_ids([p[0]], [p[1]], g.DEFAULT_RESOLUTION)[0] for p in pts
+        }
+        self.assertEqual(len(cells), 1)
+
+    def test_the_larger_side_is_decided_per_cell_not_globally(self):
+        """Public is larger around CHI, private is larger around NYC. Both get pruned."""
+        vps = [("v1", CHI), ("v2", SJC)]
+        pub = _mesh(
+            [(v, c, t, tc)
+             for v, c in vps
+             for t, tc in [("t1", near(CHI, 0)), ("t2", near(CHI, 1)),
+                           ("t3", near(CHI, 2)), ("t4", near(NYC, 0))]]
+        )
+        priv = _mesh(
+            [(v, c, t, tc)
+             for v, c in [("q1", CHI), ("q2", SJC)]
+             for t, tc in [("g1", near(CHI, 0)), ("g2", near(NYC, 0)),
+                           ("g3", near(NYC, 1)), ("g4", near(NYC, 2))]]
+        )
+        kept_pub, kept_priv, summary = _filter(pub, priv)
+
+        self.assertEqual(kept_pub["target_id"].nunique(), 2)
+        self.assertEqual(kept_priv["target_id"].nunique(), 2)
+        b = summary["balance"]["target"]
+        self.assertEqual(b["quota_total"], 2)          # 1 per cell, two cells
+        self.assertEqual(b["public_cells_pruned"], 1)   # the CHI cell
+        self.assertEqual(b["private_cells_pruned"], 1)  # the NYC cell
+
+    def test_cells_that_already_agree_are_left_alone(self):
+        pub = _mesh([("v1", CHI, "t1", NYC), ("v2", SJC, "t1", NYC)])
+        priv = _mesh([("q1", CHI, "g1", NYC), ("q2", SJC, "g1", NYC)])
+        kept_pub, kept_priv, summary = _filter(pub, priv)
+
+        pd.testing.assert_frame_equal(kept_pub, pub)
+        pd.testing.assert_frame_equal(kept_priv, priv)
+        for side in ("vp", "target"):
+            b = summary["balance"][side]
+            self.assertEqual(b["public_cells_pruned"], 0)
+            self.assertEqual(b["private_cells_pruned"], 0)
+
+    def test_it_matches_the_distribution_rather_than_keeping_the_easiest(self):
+        """The anti-cherry-picking property, and the reason RTT is not the matched axis.
+
+        One far-away VP, so a target's nearest-measured-VP distance is set by where it
+        sits. The public target is the FAR one; the private side offers near, middle and
+        far. Matching must keep private's far target -- keeping the "best" (nearest-VP)
+        one would hand the pruned dataset its easiest case.
+        """
+        far_vp = SJC
+        spots = {f"g{i}": near(CHI, i) for i in (0, 2, 5)}
+        priv = _mesh([("q1", far_vp, t, c) for t, c in spots.items()])
+
+        # Derived, not assumed: great-circle distance from CHI's cell to SJC does not vary
+        # monotonically with latitude, so which spot is farthest is a fact to look up.
+        x = nearest_counterpart_km(priv, "target")
+        farthest = str(x.idxmax())
+        nearest = str(x.idxmin())
+        self.assertNotEqual(farthest, nearest)              # fixture sanity
+
+        # The public side offers only the farthest spot, so matching must keep that one.
+        pub = _mesh([("v1", far_vp, "t_far", spots[farthest])])
+        _, kept_priv, _ = _filter(pub, priv)
+
+        self.assertEqual(list(kept_priv["target_id"]), [farthest])
+        self.assertNotIn(nearest, set(kept_priv["target_id"]))
+
+    def test_balancing_is_on_by_default_and_can_be_switched_off(self):
+        pub = _mesh([("v1", CHI, "t1", near(NYC, 0)), ("v1", CHI, "t2", near(NYC, 1))])
+        priv = _mesh([("q1", CHI, "g1", near(NYC, 0))])
+
+        on_pub, _, on_sum = _filter(pub, priv)
+        off_pub, _, off_sum = _filter(pub, priv, balance=False)
+
+        self.assertTrue(on_sum["balanced"])
+        self.assertIsNotNone(on_sum["balance"])
+        self.assertEqual(on_pub["target_id"].nunique(), 1)
+
+        self.assertFalse(off_sum["balanced"])
+        self.assertIsNone(off_sum["balance"])
+        self.assertEqual(off_pub["target_id"].nunique(), 2)
+
+    def test_balanced_output_is_still_a_byte_exact_subset(self):
+        pub = _mesh([("v1", CHI, "t1", near(NYC, 0)), ("v1", CHI, "t2", near(NYC, 1))])
+        pub["target_continent"] = "NA"
+        priv = _mesh([("q1", CHI, "g1", near(NYC, 0))])
+        kept_pub, _, _ = _filter(pub, priv)
+
+        self.assertEqual(list(kept_pub.columns), list(pub.columns))
+        self.assertTrue(kept_pub.index.isin(pub.index).all())
+        self.assertEqual(set(kept_pub["target_continent"]), {"NA"})
+
+    def test_the_both_endpoints_rule_survives_balancing(self):
+        """Every surviving row's endpoints must both survive on its own side."""
+        pub = _mesh(
+            [(v, c, t, tc)
+             for v, c in [("v1", CHI), ("v2", near(CHI, 1)), ("v3", SJC)]
+             for t, tc in [("t1", near(NYC, 0)), ("t2", near(NYC, 1))]]
+        )
+        priv = _mesh(
+            [(v, c, t, tc)
+             for v, c in [("q1", CHI), ("q2", SJC)]
+             for t, tc in [("g1", near(NYC, 0))]]
+        )
+        kept_pub, kept_priv, _ = _filter(pub, priv)
+        for kept in (kept_pub, kept_priv):
+            self.assertFalse(kept.empty)
+            for side in ("vp", "target"):
+                # a node appears in the output only via rows whose other end also survived
+                self.assertEqual(
+                    kept[f"{side}_id"].nunique(),
+                    kept.drop_duplicates(f"{side}_id").shape[0],
+                )
+
+    def test_target_statistics_are_recomputed_after_vp_pruning(self):
+        """The phase order: a target's constraint set is the VPs that remain.
+
+        Public has one VP; private has two in the same cell, so the VP phase prunes private
+        to one. If the target statistic were computed before that, it would be the min over
+        both private VPs -- including the dropped one.
+        """
+        pub = _mesh([("v1", CHI, "t1", near(NYC, 0))])
+        priv = _mesh([("q1", CHI, "g1", near(NYC, 0)),
+                      ("q2", near(CHI, 1), "g1", near(NYC, 0))])
+        _, kept_priv, summary = _filter(pub, priv)
+
+        self.assertEqual(kept_priv["vp_id"].nunique(), 1)
+        after = nearest_counterpart_km(kept_priv, "target")
+        self.assertEqual(
+            summary["balance"]["target"]["private_matched_stat_before"]["p50"],
+            round(float(after["g1"]), 3),
+        )
