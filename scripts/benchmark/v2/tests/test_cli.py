@@ -541,3 +541,64 @@ class TestMaterializeTargetSpaceFromConfig(unittest.TestCase):
         result = self._run("--run-id", "cfg-test")
         self.assertEqual(result.exit_code, 1)
         self.assertIn("--configfile", result.output)
+
+
+class TestResolveEdgeCsv(unittest.TestCase):
+    """The gate `cli.sh` uses to decide whether the dataset inspection applies.
+
+    Exit 3 ("no CSV, skip me") must stay distinct from exit 2 ("broken
+    config"): `cli.sh` skips on the former and aborts on the latter, so
+    collapsing them would let a typo'd config slip silently into a benchmark
+    run with no precheck.
+    """
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _cfg(self, body: dict) -> Path:
+        p = self.root / "cfg.yaml"
+        p.write_text(json.dumps(body))
+        return p
+
+    def _run(self, path) -> "object":
+        return self.runner.invoke(
+            app, ["resolve-edge-csv", "--configfile", str(path)]
+        )
+
+    def test_prints_the_mesh_csv(self) -> None:
+        cfg = self._cfg({"run_id": "r", "benchmark": {
+            "source": "generic_csv", "source_kwargs": {"csv_path": "a/b.csv"}}})
+        r = self._run(cfg)
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertEqual(r.output.strip(), "a/b.csv")
+
+    def test_prefers_the_weighted_csv(self) -> None:
+        """Precomputed mode's pruned flows ARE the run's edge set."""
+        cfg = self._cfg({"run_id": "r", "benchmark": {
+            "source": "traffic_weighted_csv",
+            "source_kwargs": {"mesh_csv_path": "m.csv", "weighted_csv_path": "w.csv"}}})
+        r = self._run(cfg)
+        self.assertEqual(r.exit_code, 0, r.output)
+        self.assertEqual(r.output.strip(), "w.csv")
+
+    def test_exits_3_when_the_source_has_no_csv(self) -> None:
+        """The `ripe_atlas*` shape: probe/anchor dirs, no canonical CSV."""
+        cfg = self._cfg({"run_id": "r", "benchmark": {
+            "source": "ripe_atlas_asn_corpora",
+            "source_kwargs": {"probe_data_dir": "d", "probe_asn": 7018}}})
+        r = self._run(cfg)
+        self.assertEqual(r.exit_code, 3, r.output)
+        self.assertIn("names no canonical CSV", r.output)
+
+    def test_exits_2_on_a_missing_config(self) -> None:
+        self.assertEqual(self._run(self.root / "nope.yaml").exit_code, 2)
+
+    def test_exits_2_on_a_malformed_benchmark_block(self) -> None:
+        p = self.root / "bad.yaml"
+        p.write_text("run_id: r\nbenchmark: [not, a, mapping]\n")
+        self.assertEqual(self._run(p).exit_code, 2)

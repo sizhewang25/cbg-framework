@@ -839,6 +839,43 @@ def _write_target_space_manifest(setup_dir: Path, fields: dict) -> None:
     path.write_text(json.dumps(existing, indent=2))
 
 
+@app.command("resolve-edge-csv")
+def cmd_resolve_edge_csv(
+    configfile: Path = typer.Option(..., "--configfile", help="Benchmark config to inspect."),
+) -> None:
+    """Print the canonical edge CSV a config names, or exit 3 if it names none.
+
+    A gate for callers that want to run a CSV-only step only where it applies.
+    `cli.sh` uses it to decide whether `inspect_dataset.smk` can run: the
+    `ripe_atlas*` sources read probe/anchor directories and have no canonical
+    CSV at all, so the inspection is not merely unconfigured for them — it is
+    meaningless, and making it mandatory would break every one of those configs.
+
+    Exit codes are the interface: 0 prints the path, 3 means "no CSV, skip me",
+    2 means the config could not be read. 3 is distinct from 2 so a caller can
+    skip the inspectable-only step without also swallowing a broken config.
+    """
+    if not configfile.exists():
+        typer.echo(f"No such config: {configfile}", err=True)
+        raise typer.Exit(code=2)
+    try:
+        cfg = _resolve_bench_config(configfile)
+    except (TypeError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2)
+    source = cfg.get("source")
+    kwargs = cfg.get("source_kwargs") or {}
+    path, _ = _edge_csv_from_kwargs(kwargs)
+    if path is None:
+        typer.echo(
+            f"{configfile}: source {source!r} names no canonical CSV "
+            f"(looked for weighted_csv_path / mesh_csv_path / csv_path / test_path)",
+            err=True,
+        )
+        raise typer.Exit(code=3)
+    typer.echo(str(path))
+
+
 @app.command("materialize-target-space")
 def cmd_materialize_target_space(
     run_id: Optional[str] = typer.Option(
