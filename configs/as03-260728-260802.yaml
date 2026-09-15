@@ -16,6 +16,31 @@ analysis:
     grid: h3
     resolution: [4]
 
+    # --- PNI stack (§7.3, §8.1) -----------------------------------------
+    # `common:` reaches exactly the two commands that declare these --
+    # detect-pni-strategy and build-pni-graph -- so they are stated once.
+    #
+    # `peer_asn` LABELS the peering, it does not verify it. The only hard
+    # check is that the site list declares a single ASN. `target_asn` is
+    # listed under `columns_unrecoverable` in every
+    # datasets/final/*.reconstruction.json, so nothing connects either value
+    # to this run's targets and the result is recorded as unverified
+    # (`run_target_asns: []`). Pointing a run at another peer's list
+    # therefore SUCCEEDS and yields a plausible-looking wrong answer --
+    # verified on as02-mesh with as01's list, which reported 44.1%. Getting
+    # this pair right is the operator's responsibility, not the tool's.
+    # TODO -- no interconnect list exists for this peer yet. Read the metros
+    # off the operator dashboard as was done for AS20940, write the CSV with
+    # pni_id, pni_lat, pni_lon, pni_asn (country/region/city optional), then
+    # uncomment both lines below. Leaving them present-but-empty is worse
+    # than absent: an empty value resolves to <repo>/None and errors with
+    # "File ... does not exist", where absent gives a clean
+    # "Missing option '--pni-csv'".
+    #
+    # as03's peer. No PNI work has ever run against this dataset.
+    # pni_csv: datasets/pni/as03-us-pni.approx.csv
+    # peer_asn: <fill from the dashboard; not recoverable from this repo>
+
   build-answer-space: {}
 
   build-bipartite-graph: {}
@@ -60,3 +85,18 @@ analysis:
     top_n: 1
     cost: runtime
     cost_stat: p50
+
+  # --- PNI stack, non-default policy ------------------------------------
+  # `strategy` is deliberately absent: argmin is already build-pni-graph's
+  # default, and pinning it here would keep argmin on a run whose
+  # detect-pni-strategy declares a pure rule. Pass --strategy on the command
+  # line when that verdict justifies it.
+  build-pni-feasibility:
+    # 200 gives the permutation null a reportable effect size; the default 0
+    # leaves n_feasible with no baseline to be surprising against.
+    decoy_trials: 200
+
+  # The graph is built under a detected --strategy, so scoring on the pairs
+  # the rule was chosen from would be a fit evaluated on itself.
+  compare-pni-linearity:
+    holdout_only: true

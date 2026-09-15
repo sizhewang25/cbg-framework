@@ -140,3 +140,23 @@ before being written down; both reproduced exactly. The flagged ratio anomaly
 (4.692 against a 4.462 heuristic) came with a correct explanation — `sqrt(n/R)`
 is an approximation, not a bound — which is the kind of self-flagging that
 earns the rest of a report more trust, not less.
+
+**`--peer-asn` labels the peering, it does not verify it — and I claimed the
+opposite without testing.** The assertion was described as "the guard that makes
+a wrong-peer list an error rather than a plausible answer," including in a
+config comment. False. The only hard check is that the site list declares one
+ASN; `target_asn` was dropped by the parquet reconstruction, so nothing ties
+either value to the run's targets and `pni.py` records `run_target_asns: []`
+as *unverified rather than silently blessed*. Running as02-mesh against as01's
+AS20940 list succeeded and reported "44.1% assigned the target's nearest
+site" — precisely the silent-wrong-answer mode the guard was credited with
+preventing. Reading the docstring would have been enough; it says so plainly.
+
+**A demonstration intended to prove a safety property destroyed an artifact.**
+The command run to show the refusal instead overwrote
+`as02-260728-260802-mesh/pni-graph/`, and `outputs/` is gitignored, so there was
+no recovery. Restored by rebuilding from the synthetic 9-site list at peer
+15169, which reproduced 45.2% and matched the sibling run exactly — good
+evidence of the prior state, but evidence rather than proof. A write command is
+not a way to test whether a write will be refused; inspect the validation path
+first, or run it against a throwaway `--analysis-root`.

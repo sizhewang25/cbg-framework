@@ -16,6 +16,22 @@ analysis:
     grid: h3
     resolution: [4]
 
+    # --- PNI stack (§7.3, §8.1) -----------------------------------------
+    # `common:` reaches exactly the two commands that declare these --
+    # detect-pni-strategy and build-pni-graph -- so they are stated once.
+    #
+    # `peer_asn` LABELS the peering, it does not verify it. The only hard
+    # check is that the site list declares a single ASN. `target_asn` is
+    # listed under `columns_unrecoverable` in every
+    # datasets/final/*.reconstruction.json, so nothing connects either value
+    # to this run's targets and the result is recorded as unverified
+    # (`run_target_asns: []`). Pointing a run at another peer's list
+    # therefore SUCCEEDS and yields a plausible-looking wrong answer --
+    # verified on as02-mesh with as01's list, which reported 44.1%. Getting
+    # this pair right is the operator's responsibility, not the tool's.
+    pni_csv: datasets/pni/as01-us-pni.approx.csv
+    peer_asn: 20940
+
   build-answer-space: {}
 
   build-bipartite-graph: {}
@@ -61,29 +77,17 @@ analysis:
     cost: runtime
     cost_stat: p50
 
-  # --- PNI stack (§7.3, §8.1) --------------------------------------------
-  # The 14-site AS20940 list read off the operator dashboard. Approximate:
-  # metro identity from a screenshot, coordinates substituted from known
-  # carrier hotels, CONUS-cropped. `peer_asn` is asserted explicitly because
-  # the reconstructed source CSV lost its `target_asn` column.
-  detect-pni-strategy:
-    pni_csv: datasets/pni/as01-us-pni.approx.csv
-    peer_asn: 20940
-
-  build-pni-graph:
-    pni_csv: datasets/pni/as01-us-pni.approx.csv
-    peer_asn: 20940
-    # `mixed` verdict (no policy took a majority), so the argmin fallback
-    # stands: it assumes no policy rather than asserting one.
-    strategy: argmin
-    split_csv: outputs/analysis/v3/as01-260728-260802/pni-strategy/pair_split.csv
-
+  # --- PNI stack, non-default policy ------------------------------------
+  # `strategy` is deliberately absent: argmin is already build-pni-graph's
+  # default, and pinning it here would keep argmin on a run whose
+  # detect-pni-strategy declares a pure rule. Pass --strategy on the command
+  # line when that verdict justifies it.
   build-pni-feasibility:
+    # 200 gives the permutation null a reportable effect size; the default 0
+    # leaves n_feasible with no baseline to be surprising against.
     decoy_trials: 200
 
-  # The graph was built under a detected --strategy, so scoring on the pairs
+  # The graph is built under a detected --strategy, so scoring on the pairs
   # the rule was chosen from would be a fit evaluated on itself.
   compare-pni-linearity:
     holdout_only: true
-
-  breakdown-sping-pni: {}
