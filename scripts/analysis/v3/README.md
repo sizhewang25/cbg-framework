@@ -188,11 +188,20 @@ python -m scripts.analysis.v3.cli plot-pni-delay \
 
 # 3i-2. The same artifact, read as a corner instead of a fit: how far the
 #       shortest-ping VP sat from its assigned site (x) against how far that
-#       site sat from the target (y), one point per target. Mesh grey, the
-#       traffic-weighted twin red on top. --marker count exposes the ~20 IP
-#       replicas per coordinate that a plain dot scatter stacks invisibly.
+#       site sat from the target (y), one point per target. --marker count
+#       exposes the ~20 IP replicas per coordinate that a plain dot scatter
+#       stacks invisibly.
+#
+#       Driven from the WEIGHTED arm: --run-id is the traffic-weighted run,
+#       drawn red on top, and --mesh-run-id its unweighted parent, grey
+#       underneath. Both required -- the figure is a subset against the
+#       population it was filtered from, so it cannot exist before a weighted
+#       arm does, and it is written into that arm's pni-graph/. In the configs
+#       the pairing is one key on the weighted side,
+#       `analysis.plot-pni-colocation.mesh_run_id`, so `--config` supplies both.
 python -m scripts.analysis.v3.cli plot-pni-colocation \
-  --run-id as01-260728-260802 --marker count --x-max 200 --y-max 200
+  --run-id as01-randweight-precomputed --mesh-run-id as01-260728-260802 \
+  --marker count --x-max 200 --y-max 200
 
 # 3j. Which sites a pair could *physically* have crossed, at 2/3 c. An exclusion
 #     rather than a fit, so it needs no model of routing policy. --decoy-trials
@@ -433,6 +442,67 @@ the contract and the two implementations supply only point→cell, cell→centre
 scale, and cell boundaries.
 `meta.json` carries the occupied-cell count down the grid's coarsening ladder —
 the multi-scale concentration diagnostic §7.3 asks for.
+
+### A traffic-weighted arm shares the mesh's class set
+
+`build-answer-space` normally quantizes the run's own `targets.csv`. A
+`traffic_weighted_csv` run is the exception, unconditionally: its classes come
+from the **pre-filter** mesh named by `benchmark.source_kwargs.mesh_csv_path`,
+and only its surviving targets are scored against them.
+
+The reason is that a weighted run's `targets.csv` is post-filter —
+`benchmark/v2/cli.py::_node_sets_from_config` says so outright: *"traffic_weighted_csv
+evaluates only the targets that survive the flow filter. The source is what the
+benchmark would run, so the source defines the target space."* Seed *positions*
+are grid-fixed, but the *occupied cell set* is whichever cells a surviving
+target lands in, so filtering targets deletes classes.
+
+Measured on as01 with 100 of 399 targets zeroed — every target more than 100 km
+from an AS20940 interconnect, which is the one property of real traffic that
+matters here (`configs/as01-pnizero-test.yaml`):
+
+| | classes from the mesh | classes from the filtered set |
+| --- | --: | --: |
+| classes (seeds) | **18** | 13 |
+| `margin_km` p50 | 150.5 km | 217.7 km |
+| `nearest_seed_km` p50 | 301.0 km | 435.3 km |
+| random-guess floor | 5.6% | 7.7% |
+
+Two independent channels, then. Fewer classes is an easier problem, and wider
+margins loosen `has_discriminative_vp`, so §8.2's strata drift with §8.1's
+accuracy.
+
+**The effect is not a uniform level shift, which is what makes it dangerous.**
+Scoring the same real as01 predictions on the 299 surviving targets under each
+class set:
+
+| method | 18 mesh classes | 13 filtered classes | inflation |
+| --- | --: | --: | --: |
+| SoI CBG | 0.849 | 0.849 | +0.000 |
+| Octant-Hull | 0.742 | 0.843 | **+0.100** |
+| Octant-Spline | 0.742 | 0.836 | **+0.094** |
+| Vanilla | 0.555 | 0.555 | +0.000 |
+| Spotter | 0.465 | 0.508 | +0.043 |
+
+SoI CBG's lead over Octant-Hull collapses from **10.7 points to 0.6** — a
+near-tie manufactured entirely by the missing classes. A paper reading the
+lower column would report the two as tied.
+
+So the behaviour is automatic and has no opt-out: `RunPaths.source` identifies
+a weighted run off the output tree, and a run whose `mesh_csv_path` is absent or
+unreadable **fails** rather than falling back to `targets.csv`. The
+counterfactual is recorded in `meta.json` under `targets_provenance`
+(`n_seeds_if_built_from_run_targets`), which covers the diagnostic need an
+opt-out would otherwise serve. `n_seeds_with_no_scored_target` is expected to be
+non-zero and is correct — a mesh cell with no surviving target still bounds the
+problem — but confusion matrices and density plots will contain those empty
+classes.
+
+Nothing downstream needs a flag: `classify`, `build-proximity`,
+`confusion-density`, `plot-error-vs-cells` and the rest all resolve
+`run.answer_space_dir()`, so repairing the space repairs everything that reads
+it. The `--answer-space` overrides on `classify` / `build-proximity` /
+`build-bipartite-graph` remain as a manual escape hatch.
 
 ### Choosing a grid
 

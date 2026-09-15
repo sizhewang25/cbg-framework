@@ -92,24 +92,15 @@ analysis:
   compare-pni-linearity:
     holdout_only: true
 
-  # §8.1's co-location corner: d(shortest-ping VP, selected PNI) against
-  # d(selected PNI, target), one point per target, the weighted arm in red on
-  # its own mesh in grey.
+  # No `plot-pni-colocation` block here, deliberately. The §8.1 co-location
+  # corner is a subset drawn against the population it was filtered from, so it
+  # is declared on the WEIGHTED side: `--run-id` is the weighted run and
+  # `--mesh-run-id` its parent, which is this run. See
+  # configs/as01-randweight-precomputed.yaml's `plot-pni-colocation.mesh_run_id`.
   #
-  # Both inputs are declared here. The mesh run is the top-level `run_id:`,
-  # which config.py injects into every command that declares the parameter, so
-  # restating it in this block would only create a second place to change it.
-  # The companion is a *run* rather than a CSV because this figure reads
-  # `pni-graph/`, so the weighted arm needs its own `build-pni-graph` first.
-  #
-  # NOTE the companion named here is the SYNTHETIC uniform-weight fixture --
-  # `assign_random_weights` draws weight ~ U[0,1] i.i.d. per row, which prunes
-  # ~22% of flows evenly and eliminates no VP and no target. Red sitting on
-  # grey is this pairing's PASS condition, not a finding about routing. The
-  # legend prints the run id, so a fixture-derived figure says so on its face.
-  # Repoint this at a real weighted run when one is collected.
-  plot-pni-colocation:
-    weighted_run_id: as01-randweight-precomputed
+  # Driving it from the arm that must exist last means a mesh run has no 5g at
+  # all, rather than emitting a grey-only panel under a filename and a pair of
+  # axis labels that both promise two populations.
 
   # Scatter min-RTT against the VP->PNI->TG propagation delay, with the
   # straight-line (no-PNI) control fitted beside it.

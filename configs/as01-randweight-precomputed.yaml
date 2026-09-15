@@ -126,3 +126,33 @@ analysis:
     pni_prefix: sel_pni
     tg_prefix: target
     where: is_holdout
+
+  # §8.1's co-location corner: d(shortest-ping VP, selected PNI) against
+  # d(selected PNI, target), one point per target, this weighted arm in red on
+  # its own mesh parent in grey.
+  #
+  # `mesh_run_id` names the BACKDROP, and the block lives here rather than on
+  # the mesh side because `--run-id` is the weighted run: the figure is a subset
+  # drawn against the population it was filtered from, so it cannot exist
+  # before this arm does, and it is written into this run's `pni-graph/`.
+  # Declaring it here puts the pairing beside `mesh_csv_path` /
+  # `weighted_csv_path`, which are the two files that same subsetting produced.
+  #
+  # A *run* rather than a CSV because the figure reads `pni-graph/`, so both
+  # runs need their own `build-pni-graph` (section 5b) first.
+  #
+  # LIVE today, and the only pairing that is: both runs have a `pni-graph/`.
+  #
+  # NOTE this arm is the SYNTHETIC uniform-weight fixture --
+  # `assign_random_weights` draws weight ~ U[0,1] i.i.d. per row, which prunes
+  # ~22% of flows evenly and eliminates no VP and no target. Red sitting
+  # uniformly on grey is this pairing's PASS condition, not a finding about
+  # routing. The command appends "(SYNTHETIC weights)" to the legend off the
+  # run id, so the figure says so on its face.
+  #
+  # The parent is the PUBLISHED as01 run rather than `as01-260728-260802-mesh`:
+  # this config's `mesh_csv_path` is the `.randweight` variant of the same
+  # canonical CSV the published run was reconstructed from (identical target
+  # ids and coordinates), and that run is the one with a built `pni-graph/`.
+  plot-pni-colocation:
+    mesh_run_id: as01-260728-260802

@@ -72,6 +72,16 @@ for R in "${RUNS[@]}"; do
   run table-headline $V3 table-headline --run-id "$R"   # paper shape: dataset types x methods
 
   # 3. Figures
+  #
+  #    The two dataset-geometry maps come first because they are the other
+  #    consumers of section 0's answer space. Every other figure below reads
+  #    *derived* artifacts (classification parquets, proximity labels), so
+  #    sections 0-1 refresh them transitively; these two read the space itself,
+  #    and while they were missing from this script any previously drawn map
+  #    stayed stale after a class-set change.
+  run plot-answer-space        $V3 plot-answer-space        --run-id "$R"  # occupied cells, targets, seeds
+  run plot-bipartite-graph     $V3 plot-bipartite-graph     --run-id "$R"  # topology + flow map, distance CDF
+
   run plot-outcome-bars        $V3 plot-outcome-bars        --run-id "$R"  # correct/wrong/fallback/error
   run plot-error-cdf           $V3 plot-error-cdf           --run-id "$R"  # error-distance CDF, log x
   run plot-error-vs-cells      $V3 plot-error-vs-cells      --run-id "$R"  # coord error vs class error
@@ -144,26 +154,35 @@ for R in "${RUNS[@]}"; do
         #     pair of legs rather than as a fit: d(sping VP, selected PNI) on x
         #     against d(selected PNI, target) on y, one point per target.
         #
-        #     Both inputs come from the config -- the mesh run as the top-level
-        #     `run_id:`, the companion as `plot-pni-colocation.weighted_run_id`
-        #     -- so the pairing is declared data rather than a path assembled
-        #     here. --run-id is still passed for section 5's own reason: $R is
-        #     the loop's authority on which run is being built.
+        #     Fires only when $R is a TRAFFIC-WEIGHTED run. The command takes
+        #     the weighted arm as --run-id and its unweighted parent as
+        #     --mesh-run-id, both required, because the figure IS the
+        #     subset-against-parent comparison and cannot exist before the
+        #     weighted arm does. So the pairing is declared in the weighted
+        #     config, as `plot-pni-colocation.mesh_run_id`, beside the two CSVs
+        #     the subset was derived from -- and every mesh run simply has no
+        #     5g rather than emitting half a comparison.
         #
-        #     Existence-checked rather than left to fail: the companion is a
+        #     --run-id is still passed explicitly for section 5's own reason:
+        #     $R is the loop's authority on which run is being built.
+        #
+        #     Existence-checked rather than left to fail: the parent is a
         #     separate run and needs its OWN build-pni-graph, which this loop
-        #     only performs when that run is itself in "$@". An uncollected
-        #     companion is expected state, so it is a SKIP.
+        #     only performs when that run is itself in "$@". An unbuilt parent
+        #     is expected state, so it is a SKIP.
         #
         #     Both scales ship. They are honest views of the same points, but
         #     the legs span four orders of magnitude (0.6 km to 3,100 km on
         #     as01), so the linear panel -- the one with an origin to put the
         #     corner at -- packs the co-located mode into a few percent of its
         #     height, and only the log panel resolves it.
-        TW=$(sed -nE 's/^[[:space:]]*weighted_run_id:[[:space:]]*([^[:space:]#]+).*/\1/p' "$CFG" | head -1)
-        if [ -n "$TW" ] && [ ! -f "outputs/analysis/v3/$TW/pni-graph/pni_edges.csv" ]; then
-          echo "skipping 5g: $CFG names weighted_run_id $TW, which has no pni-graph yet"
-          SKIPPED+=("$R :: 5g plot-pni-colocation, no pni-graph for $TW")
+        MESH=$(sed -nE 's/^[[:space:]]*mesh_run_id:[[:space:]]*([^[:space:]#]+).*/\1/p' "$CFG" | head -1)
+        if [ -z "$MESH" ]; then
+          echo "skipping 5g: $CFG declares no plot-pni-colocation.mesh_run_id (not a weighted arm, or no parent declared)"
+          SKIPPED+=("$R :: 5g plot-pni-colocation, no mesh parent declared")
+        elif [ ! -f "outputs/analysis/v3/$MESH/pni-graph/pni_edges.csv" ]; then
+          echo "skipping 5g: $CFG names mesh_run_id $MESH, which has no pni-graph yet"
+          SKIPPED+=("$R :: 5g plot-pni-colocation, no pni-graph for $MESH")
         else
           run plot-pni-colocation     $V3 plot-pni-colocation --run-id "$R"
           run plot-pni-colocation.log $V3 plot-pni-colocation --run-id "$R" --log-axes

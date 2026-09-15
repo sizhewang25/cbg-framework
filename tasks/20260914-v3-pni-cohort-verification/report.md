@@ -441,12 +441,49 @@ of the grid-resolution caveat and it weakens §1's "metro-granular" framing.
   which is an RTT-based exclusion and stays discriminating. Available today from
   as02: 63.3% singleton feasible, 58.5% singleton = TG's nearest, 13.6% empty
   (all unexplained by SOI violation, i.e. served off-list).
-- **Answer-space confound for any future weighted arm.** Seed *positions* are
-  grid-fixed, but the *occupied cell set* depends on the target set. A weighted
-  subset yields a strict subset of mesh seeds, enlarging the surviving Voronoi
-  cells — a monotone bias favouring every method. `cross.py` has no
-  answer-space-sharing mechanism. Score weighted targets against the **mesh**
-  seed set.
+- **Answer-space confound for any future weighted arm — FIXED 2026-09-15.**
+  Seed *positions* are grid-fixed, but the *occupied cell set* depends on the
+  target set, so a weighted subset yielded a strict subset of mesh seeds.
+  `build_for_run` now rebuilds a `traffic_weighted_csv` run's classes from the
+  config's pre-filter `mesh_csv_path`, unconditionally and with no opt-out;
+  filtered targets are still the only ones scored. One correction to the
+  original note: `cross.py` has no sharing mechanism, but `classify`,
+  `build-proximity` and `build-bipartite-graph` *do* expose `--answer-space` —
+  that route was rejected because five other commands resolve
+  `run.answer_space_dir()` with no override, so forgetting one fails silently.
+
+  **Measured with a fixture that actually drops targets**
+  (`configs/as01-pnizero-test.yaml`: weight 0 for all 100 as01 targets more
+  than 100 km from an AS20940 site, dropping 5 of 20 regions). The distance
+  distribution jumps 33 km → 182 km with nothing between, so the cut is
+  unambiguous, and each of the five far regions owned a unique seed.
+
+  | | mesh classes | filtered classes |
+  | --- | --: | --: |
+  | classes (seeds) | **18** | 13 |
+  | `margin_km` p50 | 150.5 km | 217.7 km |
+  | `nearest_seed_km` p50 | 301.0 km | 435.3 km |
+  | random-guess floor | 5.6% | 7.7% |
+
+  **The bias is not a uniform level shift**, which is what makes it dangerous.
+  Real as01 predictions, 299 surviving targets, scored under each class set:
+
+  | method | 18 classes | 13 classes | inflation |
+  | --- | --: | --: | --: |
+  | SoI CBG | 0.849 | 0.849 | +0.000 |
+  | Octant-Hull | 0.742 | 0.843 | **+0.100** |
+  | Octant-Spline | 0.742 | 0.836 | **+0.094** |
+  | Vanilla | 0.555 | 0.555 | +0.000 |
+  | Spotter | 0.465 | 0.508 | +0.043 |
+
+  SoI CBG's lead over Octant-Hull collapses from **10.7 points to 0.6** — a
+  near-tie manufactured entirely by the missing classes. §8.1 reading the lower
+  column would have reported the two as tied.
+
+  Why `as01-randweight-precomputed` never surfaced this: its uniform-random
+  weights drop no targets, so its two class sets coincide (399 targets, 18
+  seeds either way). It validates plumbing and is blind to node loss, exactly
+  as its config header says.
 
 ## Conclusions
 

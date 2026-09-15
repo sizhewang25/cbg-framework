@@ -160,3 +160,28 @@ no recovery. Restored by rebuilding from the synthetic 9-site list at peer
 evidence of the prior state, but evidence rather than proof. A write command is
 not a way to test whether a write will be refused; inspect the validation path
 first, or run it against a throwaway `--analysis-root`.
+
+**A fixture that cannot fail proves nothing.** The weighted answer-space bias
+sat undetected because the only weighted run,
+`as01-randweight-precomputed`, drops no targets — its post-filter and
+pre-filter class sets are identical, so every check passed. Building
+`as01-pnizero-test` (weight 0 for the 100 as01 targets more than 100 km from
+an interconnect) took minutes and immediately produced the number that matters:
+18 classes versus 13, and a 10.7-point method gap collapsing to 0.6. When a
+fixture's own header says it "deliberately" does not exercise something, that
+sentence is a to-do.
+
+**Ask whether a bias is uniform before calling it conservative.** The reduced
+class set was expected to lift every method's accuracy, which would have been
+tolerable — a level shift cancels in a comparison. It does not: SoI CBG and
+Vanilla gained nothing while both Octant arms gained ~10 points, because
+Octant's predictions sat near boundaries the deleted seeds defined. A
+non-uniform bias reorders methods, which is a different and worse failure than
+inflating them.
+
+**"No mechanism exists" deserves a grep before it is written down.** The
+earlier note claimed `cross.py` has no answer-space-sharing mechanism and left
+it there. True, but `classify`, `build-proximity` and `build-bipartite-graph`
+all expose `--answer-space`. The flag-threading route was still the wrong
+design — five other commands resolve `run.answer_space_dir()` with no override
+— but that is a reason to reject it, not a reason not to have known about it.

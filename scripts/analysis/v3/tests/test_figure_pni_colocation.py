@@ -220,21 +220,27 @@ def test_non_finite_legs_are_dropped_and_counted(tmp_path):
     assert diagnostics["n_plotted"] == 1
 
 
-def test_the_figure_renders_with_the_weighted_layer_absent(tmp_path):
-    """No traffic-weighted PNI graph exists yet, so mesh-only is the working
-    mode rather than an edge case."""
-    rows = [_edge(f"t{i}", 10.0 * i + 1, 2.0 * i + 1, is_sping=True) for i in range(5)]
-    points, _ = F.load_sping_legs(_graph(tmp_path, rows))
-    out_png = tmp_path / "out.png"
-
-    F.build(
-        points, None, mesh_label="as01 mesh", tw_label="traffic-weighted",
-        stats={"mesh": F.series_stats(points)}, marker=F.MARKER_FIXED,
-        point_size=26.0, alpha=0.55, x_max=None, y_max=None, log_axes=False,
-        title=None, out_png=out_png,
+def test_a_run_ids_role_suffix_is_not_printed_twice_in_the_legend():
+    """`short_dataset` only strips an all-numeric tail, which the finals run ids
+    do not have — they end in the role the label already states."""
+    assert F._layer_label("as01-260728-260802-mesh", "mesh") == "as01 mesh"
+    assert (
+        F._layer_label("as01-260728-260802-weighted", "traffic-weighted")
+        == "as01 traffic-weighted"
     )
+    # A run id that is not a finals one survives intact rather than being
+    # truncated at the first hyphen.
+    assert F._layer_label("as7018_us_test01", "mesh") == "as7018_us_test01 mesh"
 
-    assert out_png.exists() and out_png.stat().st_size > 0
+
+def test_a_randweight_overlay_says_its_weights_are_synthetic():
+    """The only run that can populate the red layer today is the `.randweight`
+    fixture, and a bare "traffic-weighted" legend would be read as evidence of
+    real weights. No weight-bearing export has been collected."""
+    assert F._weighted_label("as01-randweight-precomputed").endswith(
+        "(SYNTHETIC weights)"
+    )
+    assert "SYNTHETIC" not in F._weighted_label("as01-260728-260802-weighted")
 
 
 def test_the_figure_renders_both_layers_when_the_twin_is_supplied(tmp_path):
@@ -263,11 +269,16 @@ def test_log_axes_clamp_marks_below_the_floor_and_report_how_many(tmp_path):
         _edge("t2", 50.0, 5.0, is_sping=True),
     ]
     points, _ = F.load_sping_legs(_graph(tmp_path, rows))
+    # The overlay is a subset of the mesh, and `n_clamped` sums over both
+    # layers -- so this one is the single mesh position ABOVE the floor, which
+    # keeps the expected count attributable to the mesh layer alone.
+    tw = points.iloc[[2]]
     out_png = tmp_path / "out.log.png"
 
     n_clamped = F.build(
-        points, None, mesh_label="m", tw_label="w",
-        stats={"mesh": F.series_stats(points)}, marker=F.MARKER_FIXED,
+        points, tw, mesh_label="m", tw_label="w",
+        stats={"mesh": F.series_stats(points), "traffic_weighted": F.series_stats(tw)},
+        marker=F.MARKER_FIXED,
         point_size=26.0, alpha=0.55, x_max=None, y_max=None, log_axes=True,
         title=None, out_png=out_png,
     )
@@ -281,10 +292,12 @@ def test_the_log_floor_never_reaches_the_statistics(tmp_path):
     would report a co-location radius the measurement never showed."""
     rows = [_edge(f"t{i}", 0.0, 0.0, is_sping=True) for i in range(3)]
     points, _ = F.load_sping_legs(_graph(tmp_path, rows))
+    tw = points.iloc[:1]
 
     F.build(
-        points, None, mesh_label="m", tw_label="w",
-        stats={"mesh": F.series_stats(points)}, marker=F.MARKER_FIXED,
+        points, tw, mesh_label="m", tw_label="w",
+        stats={"mesh": F.series_stats(points), "traffic_weighted": F.series_stats(tw)},
+        marker=F.MARKER_FIXED,
         point_size=26.0, alpha=0.55, x_max=None, y_max=None, log_axes=True,
         title=None, out_png=tmp_path / "out.png",
     )
@@ -297,10 +310,12 @@ def test_linear_axes_clamp_nothing(tmp_path):
     """The default scale has an origin, so a zero leg is drawn where it is."""
     rows = [_edge("t0", 0.0, 0.0, is_sping=True), _edge("t1", 9.0, 9.0, is_sping=True)]
     points, _ = F.load_sping_legs(_graph(tmp_path, rows))
+    tw = points.iloc[:1]
 
     n_clamped = F.build(
-        points, None, mesh_label="m", tw_label="w",
-        stats={"mesh": F.series_stats(points)}, marker=F.MARKER_FIXED,
+        points, tw, mesh_label="m", tw_label="w",
+        stats={"mesh": F.series_stats(points), "traffic_weighted": F.series_stats(tw)},
+        marker=F.MARKER_FIXED,
         point_size=26.0, alpha=0.55, x_max=None, y_max=None, log_axes=False,
         title=None, out_png=tmp_path / "out.png",
     )

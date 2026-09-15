@@ -51,16 +51,34 @@ scales each mark's area by the replicas behind it so the multiplicity is visible
 rather than implied. Neither mode invents or drops a point; they differ only in
 whether coincident targets are stacked or summed.
 
+## Driven from the traffic-weighted run
+
+`--run-id` is the **traffic-weighted** run and `--mesh-run-id` its unweighted
+parent. Both are required, and the output lands in the weighted run's
+`pni-graph/`.
+
+The figure's content is a subset drawn against the population it was filtered
+from, so it has nothing to say about a campaign that was never weighted, and it
+cannot exist before a weighted arm does. Driving it from the arm that must
+exist *last* turns that into the command's own precondition instead of a
+caller's discipline, and lets the pairing be declared once — in the weighted
+config, beside the two CSVs the subset was derived from.
+
+The arrangement used to be the reverse: `--run-id` was the mesh run and the
+overlay an optional `--weighted-run-id`. Every mesh run was then a legal
+invocation, and one without a twin emitted a grey-only panel under a filename
+and a pair of axis labels that both promise two populations.
+
 ## No pooling across datasets
 
-One mesh run and, optionally, its traffic-weighted twin. Two peer ASNs do not
-share a site list — as01 runs against `as01-us-pni.approx.csv`, as02 against the
-synthetic carrier-hotel set — so an x of 40 km means a different thing in each
-and a pooled panel would average over that. Run the command once per dataset.
+One weighted run and one mesh run. Two peer ASNs do not share a site list —
+as01 runs against `as01-us-pni.approx.csv`, as02 against the synthetic
+carrier-hotel set — so an x of 40 km means a different thing in each and a
+pooled panel would average over that. Run the command once per dataset.
 
 Command: `plot-pni-colocation`. Writes `pni_colocation.png`,
-`pni_colocation_points.csv` and `pni_colocation_stats.json` into the mesh run's
-`pni-graph/`, or into `--out-dir`.
+`pni_colocation_points.csv` and `pni_colocation_stats.json` into the
+traffic-weighted run's `pni-graph/`, or into `--out-dir`.
 """
 
 from __future__ import annotations
@@ -127,6 +145,16 @@ MARKERS: tuple[str, ...] = (MARKER_FIXED, MARKER_COUNT)
 #: the only mapping under which the eye's "how much" matches the data's.
 _AREA_MIN = 10.0
 _AREA_MAX = 190.0
+
+#: The overlay's marks are scaled to this fraction of the backdrop's area.
+#:
+#: A weighted arm is a SUBSET of the mesh, so the two layers coincide almost
+#: everywhere and equal marks let red hide grey completely -- the figure then
+#: cannot show which targets the filter *dropped*, which is the overlay's whole
+#: purpose. Scaling the whole array preserves the within-layer count encoding
+#: while leaving a grey rim; a grey mark with no red centre is a dropped target.
+#: Same remedy, same reason as `figure_distance_rtt`'s two point sizes.
+_OVERLAY_AREA_SCALE = 0.34
 
 #: Log axes have no zero to put the corner at, and a VP sitting exactly on its
 #: site is a legal measurement. Marks below this are clamped to it for *drawing*
@@ -255,22 +283,70 @@ def marker_sizes(distinct: pd.DataFrame, *, point_size: float, marker: str) -> n
     return _AREA_MIN + (_AREA_MAX - _AREA_MIN) * (counts - 1.0) / (hi - 1.0)
 
 
+#: Run ids ending in one of these state the layer's ROLE, which the label
+#: already carries as its own argument. Stripped so a legend reads "as01 mesh"
+#: rather than "as01-260728-260802-mesh mesh".
+_ROLE_SUFFIXES = ("-mesh", "-weighted")
+
+#: A run id carrying this was built from the `.randweight` fixture, whose
+#: weights are synthetic uniform-random. See `_weighted_label`.
+_SYNTHETIC_MARKER = "randweight"
+
+
+def _layer_label(run_id: str, role: str) -> str:
+    """`as01-260728-260802-weighted` + `traffic-weighted` -> `as01 traffic-weighted`.
+
+    `short_dataset` alone is not enough here. It strips a trailing all-numeric
+    tail, and the finals run ids end in `-mesh` / `-weighted` instead, so it
+    hands them back whole and the legend prints the role twice.
+    """
+    stem = run_id
+    for suffix in _ROLE_SUFFIXES:
+        stem = stem.removesuffix(suffix)
+    return f"{short_dataset(stem)} {role}"
+
+
+def _weighted_label(run_id: str) -> str:
+    """The red layer's legend text, warning when its weights are synthetic.
+
+    A safeguard, not decoration. No weight-bearing export has been collected --
+    weights are enterprise-sensitive -- so the only run that can populate this
+    layer today is the `.randweight` fixture, and a legend reading
+    "traffic-weighted" would be taken as evidence of real weights. Derived here
+    rather than by the caller so it holds at every entry point;
+    `figure_distance_rtt` carries the same warning off the overlay's filename,
+    which is what names the dataset there.
+    """
+    label = _layer_label(run_id, "traffic-weighted")
+    if _SYNTHETIC_MARKER in run_id:
+        label += " (SYNTHETIC weights)"
+    return label
+
+
 def _series_label(label: str, stats: dict) -> str:
-    """`<name>  (n=399 targets, 26 distinct)` — both counts, always.
+    """`<name>` over `(n=399 targets, 26 distinct)` — both counts, always.
 
     The second count is not a footnote. Without it the panel asserts a sample
     size it does not have, and the replica structure is invisible in exactly the
     figures it distorts most.
+
+    Wrapped onto a second line rather than run on, because the legend sits
+    OUTSIDE the axes and so is not part of what `tight_layout` sizes: a single
+    long line is silently clipped at the figure edge instead of widening it.
+    A full run id plus the synthetic-weights warning plus both counts exceeds
+    5.8 in at 7.5 pt, and truncating a run id to fit would cost the panel its
+    identity. Unconditional so the two entries stay the same shape.
     """
     return (
-        f"{label}  (n={stats['n_targets']:,} targets, "
+        f"{label}\n"
+        f"(n={stats['n_targets']:,} targets, "
         f"{stats['n_distinct_points']:,} distinct)"
     )
 
 
 def build(
     mesh: pd.DataFrame,
-    tw: pd.DataFrame | None,
+    tw: pd.DataFrame,
     *,
     mesh_label: str,
     tw_label: str,
@@ -302,11 +378,13 @@ def build(
     fig, ax = plt.subplots(figsize=(5.8, 5.4), dpi=200)
     n_clamped = 0
 
-    layers = [(mesh, mesh_label, _C_MESH, "mesh", 2)]
-    if tw is not None and len(tw):
-        layers.append((tw, tw_label, _C_TW, "traffic_weighted", 3))
+    # (frame, label, colour, key, zorder, area_scale)
+    layers = [
+        (mesh, mesh_label, _C_MESH, "mesh", 2, 1.0),
+        (tw, tw_label, _C_TW, "traffic_weighted", 3, _OVERLAY_AREA_SCALE),
+    ]
 
-    for frame, label, colour, key, z in layers:
+    for frame, label, colour, key, z, area_scale in layers:
         distinct = collapse(frame)
         if log_axes:
             below = (distinct["x_km"] < _MIN_LOG_KM) | (distinct["y_km"] < _MIN_LOG_KM)
@@ -318,7 +396,8 @@ def build(
         ax.scatter(
             distinct["x_km"],
             distinct["y_km"],
-            s=marker_sizes(distinct, point_size=point_size, marker=marker),
+            s=marker_sizes(distinct, point_size=point_size, marker=marker)
+            * area_scale,
             alpha=alpha,
             color=colour,
             edgecolors="none",
@@ -386,15 +465,19 @@ def register(app: typer.Typer) -> None:
         run_id: str = typer.Option(
             ...,
             "--run-id",
-            help="Mesh run. One run is one peer ASN with its own site list, so "
-            "there is no --all-runs and no pooled panel.",
+            help="The TRAFFIC-WEIGHTED run, drawn in red on top. The figure is "
+            "written into this run's pni-graph/, and `--config "
+            "configs/<weighted-run>.yaml` supplies it automatically. One run is "
+            "one peer ASN with its own site list, so there is no --all-runs and "
+            "no pooled panel.",
         ),
-        weighted_run_id: str = typer.Option(
-            None,
-            "--weighted-run-id",
-            help="The traffic-weighted twin of --run-id, drawn in red on top. "
-            "Optional: with none, the mesh layer is drawn alone and the legend "
-            "says the comparison is half finished.",
+        mesh_run_id: str = typer.Option(
+            ...,
+            "--mesh-run-id",
+            help="The unweighted parent of --run-id, drawn grey underneath. "
+            "Required: the figure IS the subset-against-parent comparison, so a "
+            "lone population has no corner claim to support. Declare it once as "
+            "analysis.plot-pni-colocation.mesh_run_id in the weighted config.",
         ),
         marker: str = typer.Option(
             MARKER_FIXED,
@@ -425,7 +508,9 @@ def register(app: typer.Typer) -> None:
         ),
         title: str = typer.Option(None, "--title", help="Figure title. Default: none."),
         out_dir: Path = typer.Option(
-            None, "--out-dir", help="Where to write. Default: the mesh run's pni-graph/."
+            None,
+            "--out-dir",
+            help="Where to write. Default: the traffic-weighted run's pni-graph/.",
         ),
         outputs_root: Path = typer.Option(
             DEFAULT_OUTPUTS_ROOT, help="Root holding <run_id>/ benchmark outputs."
@@ -433,30 +518,41 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Scatter d(sping VP, selected PNI) against d(selected PNI, target).
 
-        One point per target, mesh grey underneath and traffic-weighted red on
-        top. Writes pni_colocation.png, _points.csv and _stats.json. Needs
-        `build-pni-graph` on every run named.
+        One point per target, the mesh parent grey underneath and the
+        traffic-weighted arm red on top. `--run-id` is the WEIGHTED run and the
+        output lands in its pni-graph/. Writes pni_colocation.png, _points.csv
+        and _stats.json. Needs `build-pni-graph` on both runs named.
         """
         if marker not in MARKERS:
             raise typer.BadParameter(
                 f"unknown --marker {marker!r}; pick from {list(MARKERS)}"
             )
 
-        mesh_run = resolve_run(run_id, outputs_root)
+        # A config typo naming the weighted run as its own parent would draw
+        # two perfectly coincident layers and report a comparison that never
+        # happened -- and with the overlay scaled down it would even look like
+        # a legitimate rim-and-centre plot. Cheap to refuse, invisible to
+        # diagnose afterwards.
+        if mesh_run_id == run_id:
+            raise typer.BadParameter(
+                f"--mesh-run-id {mesh_run_id} is --run-id itself; the two layers "
+                "are the weighted arm and the mesh it was filtered from, which "
+                "cannot be one run"
+            )
+
+        mesh_run = resolve_run(mesh_run_id, outputs_root)
         mesh, mesh_diag = load_sping_legs(mesh_run.pni_graph_dir())
         mesh["series"] = "mesh"
 
-        tw = None
-        tw_diag = None
-        if weighted_run_id:
-            tw_run = resolve_run(weighted_run_id, outputs_root)
-            tw, tw_diag = load_sping_legs(tw_run.pni_graph_dir())
-            tw["series"] = "traffic_weighted"
+        tw_run = resolve_run(run_id, outputs_root)
+        tw, tw_diag = load_sping_legs(tw_run.pni_graph_dir())
+        tw["series"] = "traffic_weighted"
 
         stats = {
             "mesh": series_stats(mesh),
-            "diagnostics": {"mesh": mesh_diag},
-            "runs": {"mesh": run_id, "traffic_weighted": weighted_run_id},
+            "traffic_weighted": series_stats(tw),
+            "diagnostics": {"mesh": mesh_diag, "traffic_weighted": tw_diag},
+            "runs": {"mesh": mesh_run_id, "traffic_weighted": run_id},
             "axes": {
                 "x": f"{X_COLUMN} — great-circle km from the shortest-ping VP to "
                      "the site build-pni-graph assigned that pair",
@@ -469,24 +565,12 @@ def register(app: typer.Typer) -> None:
                 f"top); marker = {marker}"
             ),
         }
-        if tw is not None:
-            stats["traffic_weighted"] = series_stats(tw)
-            stats["diagnostics"]["traffic_weighted"] = tw_diag
-        else:
-            stats["pending_note"] = (
-                "no --weighted-run-id given, so the red layer is uncollected "
-                "rather than empty; the corner claim cannot be read off a single "
-                "population"
-            )
 
-        dest = Path(out_dir) if out_dir else mesh_run.pni_graph_dir()
+        dest = Path(out_dir) if out_dir else tw_run.pni_graph_dir()
         dest.mkdir(parents=True, exist_ok=True)
-        mesh_label = f"{short_dataset(run_id)} mesh"
-        tw_label = (
-            f"{short_dataset(weighted_run_id)} traffic-weighted"
-            if weighted_run_id
-            else "traffic-weighted"
-        )
+        mesh_label = _layer_label(mesh_run_id, "mesh")
+        tw_label = _weighted_label(run_id)
+
         stem = PNG_NAME.removesuffix(".png") + (".log" if log_axes else "")
         out_png = dest / f"{stem}.png"
         n_clamped = build(
@@ -496,7 +580,7 @@ def register(app: typer.Typer) -> None:
             log_axes=log_axes, title=title, out_png=out_png,
         )
         stats["n_marks_clamped_to_log_floor"] = n_clamped
-        points = pd.concat([f for f in (mesh, tw) if f is not None], ignore_index=True)
+        points = pd.concat([mesh, tw], ignore_index=True)
         points.to_csv(dest / POINTS_NAME, index=False)
         (dest / STATS_NAME).write_text(json.dumps(stats, indent=2) + "\n")
 

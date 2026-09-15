@@ -198,3 +198,23 @@ analysis:
     pni_prefix: sel_pni
     tg_prefix: target
     where: is_holdout
+
+  # §8.1's co-location corner: d(shortest-ping VP, selected PNI) against
+  # d(selected PNI, target), one point per target, this weighted arm in red on
+  # its own mesh parent in grey.
+  #
+  # `mesh_run_id` names the BACKDROP, and the block lives here rather than on
+  # the mesh side because `--run-id` is the weighted run: the figure is a subset
+  # drawn against the population it was filtered from, so it cannot exist
+  # before this arm does, and it is written into this run's `pni-graph/`.
+  # Declaring it here puts the pairing beside `mesh_csv_path` /
+  # `weighted_csv_path`, which are the two files that same subsetting produced.
+  #
+  # A *run* rather than a CSV because the figure reads `pni-graph/`, so both
+  # runs need their own `build-pni-graph` (section 5b) first.
+  #
+  # Doubly inert today: this arm has no benchmark tree, and neither it nor its
+  # parent has a live `pni_csv`, so section 5 skips before 5g is reached. Both
+  # unblock independently.
+  plot-pni-colocation:
+    mesh_run_id: as02-260728-260802-mesh

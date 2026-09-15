@@ -173,3 +173,13 @@ analysis:
     pni_prefix: sel_pni
     tg_prefix: target
     where: is_holdout
+
+  # No `plot-pni-colocation` block here, deliberately. The §8.1 co-location
+  # corner is a subset drawn against the population it was filtered from, so it
+  # is declared on the WEIGHTED side: `--run-id` is the weighted run and
+  # `--mesh-run-id` its parent, which is this run. See
+  # configs/as01-260728-260802-weighted.yaml's `plot-pni-colocation.mesh_run_id`.
+  #
+  # Driving it from the arm that must exist last means a mesh run has no 5g at
+  # all, rather than emitting a grey-only panel under a filename and a pair of
+  # axis labels that both promise two populations.
