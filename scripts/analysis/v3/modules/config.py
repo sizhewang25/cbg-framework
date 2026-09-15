@@ -48,6 +48,12 @@ from scripts.analysis.v3.modules.paths import REPO_ROOT
 #: The sub-block whose keys apply to every command that declares them.
 COMMON_BLOCK = "common"
 
+#: Where a run's config lives, keyed by run id. `create_analysis_artifacts.sh`
+#: derives `configs/$R.yaml` the same way, and several commands resolve a run's
+#: benchmark inputs through `source_kwargs_for_run` below, so the convention is
+#: load-bearing rather than cosmetic.
+CONFIG_DIR = "configs"
+
 #: Sections + identity keys allowed at the top level.
 #:
 #: `run_id` is the only identity key here. `source` and `setup` are deliberately
@@ -92,12 +98,57 @@ def _command_params(app: typer.Typer) -> dict[str, dict[str, click.Parameter]]:
     }
 
 
+def resolve_repo_path(value: Any) -> Path:
+    """One config path value, absolute against `REPO_ROOT`.
+
+    The repo resolves config paths against three different bases -- cwd, the
+    config file's own directory, and repo root. v3 picks repo root and states
+    it, so every consumer must go through here rather than re-deciding.
+    """
+    p = Path(str(value))
+    return p if p.is_absolute() else REPO_ROOT / p
+
+
+def config_path_for_run(run_id: str) -> Path:
+    """`configs/<run_id>.yaml`, the path every consumer keys on."""
+    return REPO_ROOT / CONFIG_DIR / f"{run_id}.yaml"
+
+
+def source_kwargs_for_run(run_id: str, *, needed_for: str) -> tuple[dict, Path]:
+    """`(benchmark.source_kwargs, config_path)` for one run.
+
+    Shared by every consumer that needs a run's *benchmark inputs* rather than
+    its analysis parameters -- `figure_distance_rtt` (which CSVs to draw) and
+    `answer_space` (which target universe defines the classes).
+
+    Deliberately reads `benchmark:`, which `default_map` never touches. Those
+    paths are what the benchmark actually ran on; copying them into an
+    `analysis:` block would create a second declaration free to drift, and a
+    drifted copy would make an artifact describe a different dataset than the
+    arm it is labelled for -- silently, since both files would exist and parse.
+
+    Raises only for an absent config, because that failure is identical for
+    every caller. A config present but lacking the key the caller wants is
+    caller-specific -- `csv_path` vs `mesh_csv_path` mean different things to
+    different consumers -- so the returned dict is theirs to check, with their
+    own remedy in the message.
+    """
+    cfg_path = config_path_for_run(run_id)
+    if not cfg_path.exists():
+        raise typer.BadParameter(
+            f"{run_id}: no {cfg_path}, so {needed_for} cannot be resolved. "
+            f"Add the config, or pass the path explicitly where the command "
+            f"allows it."
+        )
+    cfg = load(cfg_path)
+    return ((cfg.get("benchmark") or {}).get("source_kwargs") or {}), cfg_path
+
+
 def _resolve(value: Any, *, multiple: bool) -> Any:
     """Make path values absolute against `REPO_ROOT`, leaving absolutes alone."""
     if multiple:
         return [_resolve(v, multiple=False) for v in value]
-    p = Path(str(value))
-    return str(p if p.is_absolute() else REPO_ROOT / p)
+    return str(resolve_repo_path(value))
 
 
 #: Sentinel for "this command cannot take the config's run_id".

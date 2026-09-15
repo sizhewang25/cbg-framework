@@ -246,3 +246,167 @@ def test_loading_a_target_centroid_answer_space_is_rejected(tmp_path, grid):
     stale.to_csv(tmp_path / "seeds.csv", index=False)
     with pytest.raises(MissingArtifactError, match="Rebuild"):
         load_answer_space(tmp_path)
+
+
+# ---- the traffic-weighted class set ----------------------------------------
+#
+# A weighted run's `targets.csv` is POST-filter, so building the answer space
+# from it drops classes and inflates every method's accuracy. `build_for_run`
+# therefore rebuilds a weighted run's classes from the config's pre-filter
+# `mesh_csv_path`. These pin that it happens, that it is refused rather than
+# silently defaulted when the mesh cannot be found, and that a non-weighted run
+# is untouched.
+
+
+def _canonical_csv(path, coords, *, ids=None, rows_per_target=3):
+    """A canonical (VP, target) CSV: several rows per target, as the real ones are."""
+    ids = ids or [f"tg-{i}" for i in range(len(coords))]
+    rec = []
+    for tid, (lat, lon) in zip(ids, coords):
+        for v in range(rows_per_target):
+            rec.append(
+                {"vp_id": f"vp-{v}", "vp_lat": 0.0, "vp_lon": 0.0,
+                 "target_id": tid, "target_lat": lat, "target_lon": lon,
+                 "rtt_ms": 10.0, "weight": 1.0}
+            )
+    pd.DataFrame(rec).to_csv(path, index=False)
+
+
+def _weighted_run(tmp_path, monkeypatch, *, mesh_coords, kept, cfg_body=None):
+    """A minimal `traffic_weighted_csv` run plus its config, both under tmp_path.
+
+    Returns `(RunPaths, mesh_csv)`. `kept` indexes into `mesh_coords` and becomes
+    the run's post-filter `targets.csv`.
+    """
+    import yaml
+    from scripts.analysis.v3.modules import config as config_mod
+    from scripts.analysis.v3.modules.paths import RunPaths
+
+    mesh_csv = tmp_path / "mesh.csv"
+    _canonical_csv(mesh_csv, mesh_coords)
+
+    setup = tmp_path / "outputs" / "wrun" / "traffic_weighted_csv" / "anchors_to_probes"
+    (setup / "fold_0").mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "target_id": [f"tg-{i}" for i in kept],
+            "target_lat": [mesh_coords[i][0] for i in kept],
+            "target_lon": [mesh_coords[i][1] for i in kept],
+        }
+    ).to_csv(setup / "targets.csv", index=False)
+
+    cfg_dir = tmp_path / "configs"
+    cfg_dir.mkdir()
+    body = cfg_body if cfg_body is not None else {
+        "run_id": "wrun",
+        "benchmark": {"source_kwargs": {"mesh_csv_path": str(mesh_csv)}},
+        "analysis": {},
+    }
+    (cfg_dir / "wrun.yaml").write_text(yaml.safe_dump(body))
+    # `config_path_for_run` is anchored on REPO_ROOT, so redirect it rather than
+    # writing a config into the real repo from a test.
+    monkeypatch.setattr(config_mod, "REPO_ROOT", tmp_path)
+
+    run = RunPaths(
+        run_id="wrun", root=tmp_path / "outputs",
+        source="traffic_weighted_csv", setup="anchors_to_probes",
+    )
+    return run, mesh_csv
+
+
+#: Five coordinates, each in its own cell on both grids, and far enough apart
+#: that dropping some strictly reduces the class count.
+_SPREAD = [(41.9742, -87.9073), (34.0489, -118.2570), (40.7178, -74.0090),
+           (29.7520, -95.3660), (47.6146, -122.3390)]
+
+
+def test_weighted_run_keeps_the_pre_filter_class_set(tmp_path, monkeypatch):
+    """The whole point: filtered targets, full mesh classes.
+
+    Scoring the survivors against their own cells would leave 2 classes; the
+    mesh universe keeps 5. That difference is the accuracy inflation the fix
+    exists to prevent.
+    """
+    from scripts.analysis.v3.modules.answer_space import build_for_run
+
+    run, _ = _weighted_run(tmp_path, monkeypatch, mesh_coords=_SPREAD, kept=[0, 1])
+    space = build_for_run(run, grid="h3", resolution=4)
+
+    assert space.n_seeds == 5
+    assert space.meta["n_targets"] == 5
+    prov = space.meta["targets_provenance"]
+    assert prov["n_targets_scored_by_run"] == 2
+    assert prov["n_targets_in_space"] == 5
+    assert prov["n_seeds_if_built_from_run_targets"] == 2
+    assert prov["n_seeds_with_no_scored_target"] == 3
+    # Every scored target must still be present, or `classify` would refuse it.
+    assert {"tg-0", "tg-1"} <= set(space.assignments["target_id"])
+
+
+def test_generic_run_is_untouched(tmp_path, monkeypatch):
+    """A non-weighted run still reads targets.csv and consults no config."""
+    from scripts.analysis.v3.modules.answer_space import build_for_run
+    from scripts.analysis.v3.modules.paths import RunPaths
+
+    run, _ = _weighted_run(tmp_path, monkeypatch, mesh_coords=_SPREAD, kept=[0, 1])
+    generic = RunPaths(
+        run_id="wrun", root=run.root, source="generic_csv", setup="anchors_to_probes",
+    )
+    (run.root / "wrun" / "generic_csv" / "anchors_to_probes").mkdir(parents=True)
+    (generic.setup_dir / "fold_0").mkdir()
+    pd.read_csv(run.targets_csv).to_csv(generic.targets_csv, index=False)
+
+    space = build_for_run(generic, grid="h3", resolution=4)
+    assert space.n_seeds == 2
+    assert "targets_provenance" not in space.meta
+
+
+def test_weighted_run_refuses_a_missing_mesh_path(tmp_path, monkeypatch):
+    """Absent `mesh_csv_path` must raise, never fall back to targets.csv.
+
+    The fallback is the bug: it would score 2 classes and look normal.
+    """
+    import typer
+    from scripts.analysis.v3.modules.answer_space import build_for_run
+
+    run, _ = _weighted_run(
+        tmp_path, monkeypatch, mesh_coords=_SPREAD, kept=[0, 1],
+        cfg_body={"run_id": "wrun", "benchmark": {"source_kwargs": {"k": 5}},
+                  "analysis": {}},
+    )
+    with pytest.raises(typer.BadParameter, match="mesh_csv_path"):
+        build_for_run(run, grid="h3", resolution=4)
+
+
+def test_weighted_run_refuses_a_nonexistent_mesh_csv(tmp_path, monkeypatch):
+    from scripts.analysis.v3.modules.answer_space import build_for_run
+
+    run, _ = _weighted_run(
+        tmp_path, monkeypatch, mesh_coords=_SPREAD, kept=[0, 1],
+        cfg_body={"run_id": "wrun",
+                  "benchmark": {"source_kwargs": {"mesh_csv_path": "nope/absent.csv"}},
+                  "analysis": {}},
+    )
+    with pytest.raises(MissingArtifactError, match="does not exist"):
+        build_for_run(run, grid="h3", resolution=4)
+
+
+def test_weighted_run_refuses_a_mesh_missing_a_scored_target(tmp_path, monkeypatch):
+    """The subset guard: a config pointing at the wrong mesh fails loudly."""
+    from scripts.analysis.v3.modules.answer_space import build_for_run
+
+    run, mesh_csv = _weighted_run(tmp_path, monkeypatch, mesh_coords=_SPREAD, kept=[0, 1])
+    # Rewrite the mesh without tg-1, which the run still scores.
+    _canonical_csv(mesh_csv, _SPREAD[2:], ids=["tg-2", "tg-3", "tg-4"])
+    with pytest.raises(ValueError, match="absent from"):
+        build_for_run(run, grid="h3", resolution=4)
+
+
+def test_weighted_mesh_roster_is_deduplicated(tmp_path, monkeypatch):
+    """A canonical CSV has many rows per target; the space takes one each."""
+    from scripts.analysis.v3.modules.answer_space import build_for_run
+
+    run, _ = _weighted_run(tmp_path, monkeypatch, mesh_coords=_SPREAD, kept=[0])
+    space = build_for_run(run, grid="h3", resolution=4)
+    assert space.meta["n_targets"] == len(_SPREAD)  # not 3x that
+    assert not space.assignments["target_id"].duplicated().any()

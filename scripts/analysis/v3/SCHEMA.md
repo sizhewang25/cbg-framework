@@ -132,6 +132,23 @@ resolution, whereas the linkage space can guarantee grouping within its radius.
 
 ### `target-answer-space/<grid>-<resolution>/` — the grid answer space
 
+> **`meta.json` → `targets_provenance`** — present only for a
+> `traffic_weighted_csv` run, whose classes are built from the pre-filter mesh
+> rather than its own post-filter `targets.csv` (see
+> [README](README.md#a-traffic-weighted-arm-shares-the-meshs-class-set)):
+>
+> | key | meaning |
+> | --- | --- |
+> | `targets_source` | resolved `benchmark.source_kwargs.mesh_csv_path` |
+> | `n_targets_in_space` | targets defining the classes (pre-filter) |
+> | `n_targets_scored_by_run` | targets actually scored (post-filter) |
+> | `n_seeds_if_built_from_run_targets` | the counterfactual class count, i.e. how many classes were retained |
+> | `n_seeds_with_no_scored_target` | mesh classes no surviving target falls in — expected non-zero and correct |
+>
+> `n_targets` / `n_seeds` describe the space itself, so for a weighted run they
+> are the **mesh** figures; the scored population is
+> `n_targets_scored_by_run`.
+
 Built by `build-answer-space`. One seed per occupied cell, **at the cell's own
 centre**, so a seed depends on the grid alone and not on which targets landed in
 the cell.

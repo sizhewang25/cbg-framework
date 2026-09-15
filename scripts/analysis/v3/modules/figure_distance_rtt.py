@@ -63,7 +63,6 @@ import typer
 from scripts.analysis.v3.modules import config as config_mod
 from scripts.analysis.v3.modules.answer_space import elementwise_km
 from scripts.analysis.v3.modules.diagram.common.draw import plt
-from scripts.analysis.v3.modules.paths import REPO_ROOT
 from scripts.analysis.v3.modules.diagram.common.palette import (
     _C_AXIS,
     _C_GRID,
@@ -93,11 +92,6 @@ STATS_SUFFIX = "_distance_rtt_stats.json"
 PNG_SUFFIX = "_distance_rtt.png"
 
 
-#: Where a run's config is expected to live, keyed by run id -- the same
-#: convention `create_analysis_artifacts.sh` uses.
-CONFIG_DIR = "configs"
-
-
 def csvs_from_config(run_id: str) -> tuple[Path, Path | None, dict]:
     """`(mesh_csv, tw_csv, provenance)` read off `configs/<run_id>.yaml`.
 
@@ -124,20 +118,13 @@ def csvs_from_config(run_id: str) -> tuple[Path, Path | None, dict]:
     them). Those raise, naming `--mesh-csv` as the way through, rather than
     guessing a path from the run id.
     """
-    cfg_path = REPO_ROOT / CONFIG_DIR / f"{run_id}.yaml"
-    if not cfg_path.exists():
-        raise typer.BadParameter(
-            f"--run-id {run_id}: no {cfg_path}. Pass --mesh-csv (and --tw-csv) "
-            f"explicitly, or add the config."
-        )
-    cfg = config_mod.load(cfg_path)
-    kwargs = ((cfg.get("benchmark") or {}).get("source_kwargs") or {})
-
-    def _abs(value: str) -> Path:
-        # Same rule as config.py: relative paths resolve against the repo root,
-        # not the cwd and not the config file's directory.
-        q = Path(str(value))
-        return q if q.is_absolute() else REPO_ROOT / q
+    # Shared with `answer_space`, which resolves the same block to decide a
+    # weighted run's class set. One copy of "where the config is" and "how a
+    # config path becomes absolute" -- see config.source_kwargs_for_run.
+    kwargs, cfg_path = config_mod.source_kwargs_for_run(
+        run_id, needed_for="the CSVs to draw"
+    )
+    _abs = config_mod.resolve_repo_path
 
     if "mesh_csv_path" in kwargs:
         mesh = _abs(kwargs["mesh_csv_path"])

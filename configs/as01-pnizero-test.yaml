@@ -1,0 +1,49 @@
+# Traffic-weighted ANSWER-SPACE test on a filter that actually drops targets.
+#
+# Exists because `as01-randweight-precomputed` cannot exercise the thing that
+# matters: its uniform-random weights keep ~78% of flows spread evenly over
+# every target and eliminate none, so its post-filter and pre-filter class sets
+# are identical and the bias is invisible.
+#
+# Here every flow to a target more than 100 km from any AS20940 interconnect is
+# given weight 0, mimicking the one property of real traffic that breaks the
+# comparison: concentration on the targets that sit at peering sites. The cut
+# is unambiguous -- as01's target-to-nearest-PNI distances jump from 33 km to
+# 182 km with nothing between.
+#
+#   100 of 399 targets zeroed -> 5 of 20 regions gone -> 5 of 18 classes gone
+#
+# Still SYNTHETIC. The surviving weights are uniform random, so this fixture
+# says nothing about routing; it exists solely to prove the answer space keeps
+# the pre-filter class set.
+
+run_id: as01-pnizero-test
+
+benchmark:
+  source: traffic_weighted_csv
+  setup: anchors_to_probes
+  slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+  source_kwargs:
+    mesh_csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.randweight.pnizero.csv
+    weighted_csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.randweight.pnizero.traffic-weighted.csv
+    k: 5
+    seed: 42
+    asn_bucket_top_n: 20
+
+  enable_fallback: true
+  seed: 42
+
+  combos:
+    - combo_id: vanilla_cbg
+      ltd: low_envelope
+      mtl: spherical_circle
+      ctr: boundary_vertex_mean
+      mtl_kwargs:
+        speed_ratio: 0.6667
+        enable_circle_filter: true
+
+analysis:
+  common:
+    grid: h3
+    resolution: [4]

@@ -200,8 +200,10 @@ def score_combo(run: RunPaths, space: AnswerSpace, combo_id: str) -> pd.DataFram
         missing = df.loc[unknown, "target_id"].unique()[:5].tolist()
         raise ValueError(
             f"combo {combo_id!r}: {int(unknown.sum())} target(s) absent from the answer "
-            f"space (e.g. {missing}). The answer space must be built from the same "
-            f"run's targets.csv."
+            f"space (e.g. {missing}). The space must CONTAIN every scored target; a "
+            f"space larger than the run's own targets.csv is fine and is the norm for "
+            f"a traffic-weighted arm, whose classes come from the pre-filter mesh so "
+            f"its accuracy stays comparable to the mesh arm's."
         )
     return _seed_distance_frame(
         space,

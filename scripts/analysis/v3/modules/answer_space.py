@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 import typer
 
-from scripts.analysis.v3.modules import io
+from scripts.analysis.v3.modules import config as config_mod, io
 from scripts.analysis.v3.modules.grid import (
     DEFAULT_GRID,
     GRID_HELP,
@@ -224,12 +224,18 @@ class AnswerSpace:
         return out_dir
 
 
+#: `RunPaths.source` for the traffic-weighted arm. Read off the output tree, so
+#: it identifies a weighted run without consulting any config.
+WEIGHTED_SOURCE = "traffic_weighted_csv"
+
+
 def build_answer_space(
     targets: pd.DataFrame,
     *,
     grid: Grid | str = DEFAULT_GRID,
     resolution: int | None = None,
     source_label: str | None = None,
+    provenance: dict | None = None,
 ) -> AnswerSpace:
     """Quantize `targets` and derive the seed set plus its geometry.
 
@@ -328,6 +334,10 @@ def build_answer_space(
 
     meta = {
         "source": source_label,
+        # Where the target universe came from, and what the class set would have
+        # been had it come from the run's own targets.csv. Supplied by
+        # `build_for_run`; absent when `build_answer_space` is called directly.
+        **({"targets_provenance": provenance} if provenance else {}),
         "grid": grid.describe(resolution),
         "grid_diagnostics": grid.occupancy_diagnostics(
             t["cell_id"].to_numpy(),
@@ -391,6 +401,86 @@ def build_answer_space(
     )
 
 
+def _mesh_targets_for_weighted_run(run: RunPaths) -> tuple[pd.DataFrame, str]:
+    """The **pre-filter** target universe for a traffic-weighted run.
+
+    A weighted run's `targets.csv` holds only the targets that survived the
+    flow filter -- `benchmark/v2/cli.py::_node_sets_from_config` says so
+    outright: *"traffic_weighted_csv evaluates only the targets that survive
+    the flow filter. The source is what the benchmark would run, so the source
+    defines the target space."*
+
+    Building the answer space from that file would make the weighted arm's
+    accuracy incomparable to the mesh's, in two independent ways:
+
+    * **Fewer classes.** Seed *positions* are grid-fixed, but the *occupied
+      cell set* is whichever cells a surviving target lands in. On as01 at h3-4,
+      keeping 25% of targets leaves ~4.8 classes rather than 18, lifting the
+      random-guess floor from 5.6% to 20.7% -- a monotone gain for every method.
+    * **Looser margins.** `margin_km` is half the distance to the nearest other
+      seed, so thinning the seed set widens it: as01's p50 goes 150.5 km (18
+      seeds) -> 495.2 km (5 seeds), and `proximity.has_discriminative_vp`
+      thresholds on exactly that.
+
+    So the universe is the config's own `mesh_csv_path` -- the file the filter
+    was applied to. Not the sibling `-mesh` run: the weighted arm's mesh is
+    `.tbweight.csv` while `<run>-mesh` uses `.sanitized.csv`, and depending on
+    another run having been analysed would be a needless coupling.
+
+    Raises rather than falling back to `targets.csv`. A weighted run whose
+    pre-filter universe cannot be recovered must fail loudly -- silently
+    scoring it on a reduced class set is the bug this function exists to
+    prevent.
+    """
+    kwargs, cfg_path = config_mod.source_kwargs_for_run(
+        run.run_id, needed_for="the pre-filter target universe"
+    )
+    raw = kwargs.get("mesh_csv_path")
+    if not raw:
+        raise typer.BadParameter(
+            f"{run.run_id} is a {WEIGHTED_SOURCE} run, so its answer space must "
+            f"be built from the pre-filter mesh, but {cfg_path} declares no "
+            f"benchmark.source_kwargs.mesh_csv_path (found {sorted(kwargs)}). "
+            f"Building from the run's own post-filter targets.csv would drop "
+            f"classes and make this arm's accuracy incomparable to the mesh's, "
+            f"so it is refused rather than defaulted."
+        )
+    mesh_csv = config_mod.resolve_repo_path(raw)
+    if not mesh_csv.exists():
+        raise MissingArtifactError(
+            f"{run.run_id}: {cfg_path} points mesh_csv_path at {mesh_csv}, "
+            f"which does not exist. For a *-weighted config this is expected "
+            f"until the weight-bearing export is collected."
+        )
+
+    need = ["target_id", "target_lat", "target_lon"]
+    df = pd.read_csv(mesh_csv, usecols=lambda c: c in need)
+    missing = [c for c in need if c not in df.columns]
+    if missing:
+        raise ValueError(f"{mesh_csv} lacks {missing}; it is not a canonical CSV")
+    # A canonical CSV is one row per (VP, target); `build_answer_space` refuses
+    # duplicate target_id, so collapse to the target roster here.
+    #
+    # Sorted by target_id, which is a choice rather than a restoration: a
+    # weighted run's `targets.csv` carries the benchmark source's *insertion*
+    # order, and that order cannot be recovered from a different file. Sorting
+    # at least makes `assignments.csv` deterministic and independent of how the
+    # mesh CSV happened to be written.
+    #
+    # Nothing downstream reads that order -- `seed_id` is the rank of a sorted
+    # cell id, and every consumer indexes by `target_id` -- so the observable
+    # invariant is semantic, not byte-level: when the filter drops no targets,
+    # every target keeps the same cell, seed and `cell_offset_km`, and
+    # `seeds.csv` / `seed_mesh_km.csv` come out byte-identical. Verified on
+    # as01-randweight-precomputed.
+    return (
+        df.drop_duplicates("target_id")
+        .sort_values("target_id")
+        .reset_index(drop=True),
+        str(mesh_csv),
+    )
+
+
 def build_for_run(
     run: RunPaths, *, grid: Grid | str = DEFAULT_GRID, resolution: int | None = None
 ) -> AnswerSpace:
@@ -399,14 +489,68 @@ def build_for_run(
     Reads `targets.csv`, which is fold-independent: K-fold splits targets, so
     the union over folds is exactly this file. Building the space once per run
     (rather than per fold) is what makes fold-pooled scoring coherent.
+
+    **A traffic-weighted run is the exception**, and unconditionally so: its
+    `targets.csv` is post-filter, so the classes come from the pre-filter mesh
+    instead -- see `_mesh_targets_for_weighted_run`. The filtered targets are
+    still the only ones *scored* (`classify` reads the run's own folds), which
+    is the intended semantics: filtered targets, full mesh class set.
     """
-    targets = io.load_targets(run)
-    return build_answer_space(
+    scored = io.load_targets(run)
+    provenance: dict | None = None
+    targets = scored
+
+    if run.source == WEIGHTED_SOURCE:
+        targets, mesh_csv = _mesh_targets_for_weighted_run(run)
+
+        # Guard against a config pointing at the wrong mesh: every target the
+        # run scores must exist in the space, or `classify` would refuse it
+        # later with a less informative message.
+        absent = sorted(set(scored["target_id"]) - set(targets["target_id"]))
+        if absent:
+            raise ValueError(
+                f"{run.run_id}: {len(absent)} of {len(scored)} scored target(s) "
+                f"are absent from {mesh_csv} (e.g. {absent[:5]}). The weighted "
+                f"subset must be a subset of the mesh it was filtered from; "
+                f"check benchmark.source_kwargs.mesh_csv_path."
+            )
+
+        # The counterfactual, so the artifact records how many classes were
+        # retained rather than leaving the reader to wonder.
+        g = get_grid(grid) if isinstance(grid, str) else grid
+        res = g.validate_resolution(g.DEFAULT_RESOLUTION if resolution is None else resolution)
+        would_be = g.partition(scored["target_lat"], scored["target_lon"], res).n_occupied
+        provenance = {
+            "targets_source": mesh_csv,
+            "why": (
+                "traffic-weighted run: classes come from the PRE-FILTER mesh so "
+                "this arm is comparable to the mesh arm. Only the run's own "
+                "filtered targets are scored against them."
+            ),
+            "n_targets_in_space": int(len(targets)),
+            "n_targets_scored_by_run": int(len(scored)),
+            "n_seeds_if_built_from_run_targets": int(would_be),
+        }
+
+    space = build_answer_space(
         targets,
         grid=grid,
         resolution=resolution,
         source_label=f"{run.run_id}/{run.source}/{run.setup}",
+        provenance=provenance,
     )
+    if provenance is not None:
+        # Empty classes are expected and correct -- a mesh cell with no
+        # surviving target still bounds the problem -- but confusion matrices
+        # and density plots will contain them, so the count is recorded.
+        scored_seeds = set(
+            space.assignments.loc[
+                space.assignments["target_id"].isin(set(scored["target_id"])), "seed_id"
+            ]
+        )
+        prov = space.meta["targets_provenance"]
+        prov["n_seeds_with_no_scored_target"] = int(space.n_seeds - len(scored_seeds))
+    return space
 
 
 def load_answer_space(path: Path) -> AnswerSpace:
