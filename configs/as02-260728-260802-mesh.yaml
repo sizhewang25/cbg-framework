@@ -150,3 +150,36 @@ analysis:
   # the rule was chosen from would be a fit evaluated on itself.
   compare-pni-linearity:
     holdout_only: true
+
+  # Scatter min-RTT against the VP->PNI->TG propagation delay, with the
+  # straight-line (no-PNI) control fitted beside it.
+  #
+  # Every key here is a SCHEMA MAPPING onto pni-graph/pni_edges.csv, which is
+  # the only CSV in the tree carrying (VP, PNI, TG) triples. Its column names
+  # differ from the command's defaults in three places, so all three must be
+  # stated or the command reads the wrong columns:
+  #   pni_edges.csv          command default
+  #   rtt_ms                 min_rtt
+  #   sel_pni_lat/lon        pni_lat/lon      <- the ASSIGNED site, per pair
+  #   target_lat/lon         tg_lat/lon
+  #
+  # `--csv` is deliberately absent: its path carries the run id, so it is
+  # passed on the command line like --split-csv rather than hardcoded here.
+  #
+  # `where: is_holdout` matches compare-pni-linearity's `holdout_only: true`,
+  # so the figure and that table are scored on the same pairs and report the
+  # same fit (verified on as01: via-PNI r2 0.6856, direct 0.6551). Two other
+  # subsets are available and both are worth knowing about:
+  #   is_sping_vp  -- one point per target, the VP shortest-ping picked. On
+  #                   as01 the two fits collapse (r2 0.9944 vs 0.9945),
+  #                   because that VP's assigned site sits on top of the
+  #                   target; informative about the floor, not about routing.
+  #   (unset)      -- all measured pairs, no holdout discipline.
+  #
+  # x_axis / x_unit are left at their defaults (via-pni, km); both fits are
+  # reported either way, so the choice only moves what goes on the x axis.
+  plot-pni-delay:
+    rtt_col: rtt_ms
+    pni_prefix: sel_pni
+    tg_prefix: target
+    where: is_holdout

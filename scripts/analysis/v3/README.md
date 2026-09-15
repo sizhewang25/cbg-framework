@@ -28,6 +28,7 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/pni_linearity.py](modules/pni_linearity.py) | cmd · `compare-pni-linearity` |
 | [modules/pni_sping.py](modules/pni_sping.py) | cmd · `breakdown-sping-pni` |
 | [modules/figure_pni_delay.py](modules/figure_pni_delay.py) | cmd · `plot-pni-delay` |
+| [modules/figure_pni_colocation.py](modules/figure_pni_colocation.py) | cmd · `plot-pni-colocation` |
 | [modules/breakdown.py](modules/breakdown.py) | cmd · `breakdown-accuracy` |
 | [modules/confusion.py](modules/confusion.py) | cmd · `confusion-density` |
 | [modules/accuracy_table.py](modules/accuracy_table.py) | cmd · `table-accuracy` |
@@ -184,6 +185,14 @@ python -m scripts.analysis.v3.cli build-pni-graph \
 python -m scripts.analysis.v3.cli plot-pni-delay \
   --csv outputs/analysis/v3/as01-260728-260802/pni-graph/pni_edges.csv \
   --pni-prefix sel_pni --tg-prefix target --rtt-col rtt_ms
+
+# 3i-2. The same artifact, read as a corner instead of a fit: how far the
+#       shortest-ping VP sat from its assigned site (x) against how far that
+#       site sat from the target (y), one point per target. Mesh grey, the
+#       traffic-weighted twin red on top. --marker count exposes the ~20 IP
+#       replicas per coordinate that a plain dot scatter stacks invisibly.
+python -m scripts.analysis.v3.cli plot-pni-colocation \
+  --run-id as01-260728-260802 --marker count --x-max 200 --y-max 200
 
 # 3j. Which sites a pair could *physically* have crossed, at 2/3 c. An exclusion
 #     rather than a fit, so it needs no model of routing policy. --decoy-trials
