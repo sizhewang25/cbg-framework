@@ -265,3 +265,117 @@ def test_an_unknown_x_axis_is_refused_by_name(tmp_path):
     )
     with pytest.raises(typer.BadParameter, match="sideways"):
         F.plot(df, tmp_path / "x.png", x_axis="sideways")
+
+
+def test_a_below_floor_row_can_clear_the_geodesic_and_is_listed_with_its_ids(tmp_path):
+    """The band between the two floors, which is where the outliers live.
+
+    Paris→London is 344 km, so 8 ms is a legal RTT on the geodesic — there is no
+    `min_rtt - 0.01 d(VP,TG)` violation anywhere in this row. Routed through
+    Frankfurt the path is 1,119 km, whose floor is 11.2 ms, so the same row is
+    below the bent floor. That is the assignment being refuted, not the
+    measurement, and `detour_ratio > air_inflation` is the arithmetic of it.
+    """
+    csv = _write(tmp_path, [_triple((48.85, 2.35), (50.11, 8.68), (51.51, -0.13), 8.0)])
+    df, _ = F.load_points(csv)
+
+    assert df.iloc[0]["residual_direct_ms"] > 0  # legal on the straight line
+    assert df.iloc[0]["residual_ms"] < 0  # illegal through Frankfurt
+    assert df.iloc[0]["detour_ratio"] > df.iloc[0]["air_inflation"]
+
+    below = F.below_floor(df)
+    assert len(below) == 1
+    row = below.iloc[0]
+    assert (row["vp_id"], row["pni_id"], row["tg_id"]) == ("v0", "p0", "t0")
+    assert row["below_by_ms"] == pytest.approx(-df.iloc[0]["residual_ms"])
+    # Ids lead, so the file opens on the identity of the offending triple.
+    assert list(below.columns)[:3] == ["vp_id", "pni_id", "tg_id"]
+
+    # The same row is *not* a direct-axis violation, since that floor is lower.
+    assert F.below_floor(df, x_axis="direct").empty
+
+
+def test_the_below_floor_listing_matches_the_count_the_figure_annotates(tmp_path):
+    """The listing and the figure's `n_below_floor` read the same mask."""
+    rng = np.random.default_rng(11)
+    rows = [
+        _triple(
+            (float(rng.uniform(40, 55)), float(rng.uniform(-8, 18))),
+            (50.11, 8.68),
+            (float(rng.uniform(40, 55)), float(rng.uniform(-8, 18))),
+            float(rng.uniform(1, 30)),
+            f"t{i}",
+        )
+        for i in range(60)
+    ]
+    df, _ = F.load_points(_write(tmp_path, rows))
+
+    for x_axis in ("via-pni", "direct"):
+        stats = F.plot(df, tmp_path / f"{x_axis}.png", x_axis=x_axis)
+        below = F.below_floor(df, x_axis=x_axis)
+        assert stats["n_below_floor"] == float(len(below))
+        # Worst first, and every listed row really is under that floor.
+        assert (below["below_by_ms"] > 0).all()
+        assert below["below_by_ms"].is_monotonic_decreasing
+    # The floors nest: via >= direct, so every direct violation is a via one.
+    via = set(F.below_floor(df)["tg_id"])
+    assert set(F.below_floor(df, x_axis="direct")["tg_id"]) <= via
+
+
+def test_a_csv_without_ids_is_listed_by_coordinates_instead(tmp_path):
+    """`--pni-prefix ixp` inputs may carry no id column; the row must still be
+    identifiable, so the listing falls back to the coordinates."""
+    rows = [{
+        "vp_lat": 48.85, "vp_lon": 2.35,
+        "pni_lat": 50.11, "pni_lon": 8.68,
+        "tg_lat": 51.51, "tg_lon": -0.13,
+        "min_rtt": 8.0,
+    }]
+    df, _ = F.load_points(_write(tmp_path, rows))
+    below = F.below_floor(df)
+
+    assert list(below.columns)[:6] == [
+        "vp_lat", "vp_lon", "pni_lat", "pni_lon", "tg_lat", "tg_lon"
+    ]
+    assert "48.850" in F.below_floor_table(below)
+
+
+def test_the_command_writes_and_prints_the_below_floor_rows(tmp_path):
+    from typer.testing import CliRunner
+
+    from scripts.analysis.v3.cli import app
+
+    rows = [
+        _triple((48.85, 2.35), (50.11, 8.68), (51.51, -0.13), 8.0, "bent"),
+        _triple((48.85, 2.35), (48.86, 2.36), (48.87, 2.37), 40.0, "fine"),
+    ]
+    csv = _write(tmp_path, rows)
+
+    result = CliRunner().invoke(app, ["plot-pni-delay", "--csv", str(csv)])
+
+    assert result.exit_code == 0, result.output
+    out_below = tmp_path / "pairs_pni_delay.via-pni.km_below_floor.csv"
+    assert out_below.exists()
+    listed = pd.read_csv(out_below)
+    assert listed["tg_id"].tolist() == ["bent"]
+    assert "1 of 2 rows below the via-pni floor" in result.output
+    assert "bent" in result.output
+
+
+def test_no_below_floor_rows_writes_no_file_and_prints_nothing(tmp_path):
+    """The absence of violations is the good case; it must not leave an empty
+    file behind for a downstream reader to mistake for a run that found none."""
+    from typer.testing import CliRunner
+
+    from scripts.analysis.v3.cli import app
+
+    csv = _write(tmp_path, [
+        _triple((48.85, 2.35), (48.86, 2.36), (48.87, 2.37), 40.0, "a"),
+        _triple((48.85, 2.35), (48.90, 2.40), (48.95, 2.45), 50.0, "b"),
+    ])
+
+    result = CliRunner().invoke(app, ["plot-pni-delay", "--csv", str(csv)])
+
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "pairs_pni_delay.via-pni.km_below_floor.csv").exists()
+    assert "below the via-pni floor" not in result.output

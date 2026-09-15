@@ -33,6 +33,24 @@ above the floor is the inflation left unexplained; a tight cloud parallel to the
 floor means the detour accounts for the bulk of the delay, which is the
 correlation this script is meant to show or fail to show.
 
+The two floors nest, which is why a point below the via-PNI line need not be a
+broken row. `via >= direct` puts the bent floor *above* the straight one, so a
+row can clear 2/3 c on the geodesic — no `min_rtt - 0.01·d(VP,TG)` violation
+anywhere — and still fall under the bent floor. The band between the two floors
+is exactly the rows whose detour is longer than their RTT has inflation to pay
+for, i.e. `detour_ratio > air_inflation`, and both ratios are emitted per row so
+a listed point carries its own arithmetic.
+
+What such a row rules out is the *triple*: this pair cannot have crossed this
+site. It does not say which of the three inputs is at fault, and this module
+does not try to attribute it — the pair, the assignment rule
+(`build-pni-graph --strategy`) and the site list itself are all candidates, and
+a list that is approximate or short of the peer's real footprint produces
+exactly these rows. `below_floor()` therefore just lists them: the ids, the
+three coordinates' pairwise distances and the RTT, which is what is needed to go
+look. `build-pni-feasibility` is the command that tests a site list by
+exclusion rather than by eye.
+
 Two fits are printed and drawn, both on the same axes:
 
 * **OLS** on (x, y) — the average relationship, what a correlation claim rests
@@ -56,7 +74,11 @@ missing coordinate or a non-positive RTT are dropped and counted, since a
 
 Writes `<csv stem>_pni_delay.png` and `<csv stem>_pni_delay_points.csv` (the
 input plus the computed distance/delay/residual columns) next to the input,
-unless `--out-dir` says otherwise.
+unless `--out-dir` says otherwise. When any row sits below the drawn floor, a
+third file `<csv stem>_pni_delay_below_floor.csv` holds just those rows, worst
+first, and `--show-below` prints the head of it — the (VP, TG) pair, the site it
+was assigned, and every pairwise distance among the three, which is what an
+outlier below the line has to be chased with.
 """
 
 from __future__ import annotations
@@ -186,6 +208,18 @@ def load_points(
     # Positive = RTT above the bent path's floor; negative = below it, i.e. this
     # PNI cannot be on the path.
     df["residual_ms"] = df["min_rtt_ms"] - df["prop_rtt_via_pni_ms"]
+    # The same margin against the geodesic. Negative here is a broken input --
+    # an RTT or a coordinate -- rather than a refuted PNI assignment.
+    df["residual_direct_ms"] = df["min_rtt_ms"] - df["prop_rtt_direct_ms"]
+
+    # The identity a via-PNI violation reduces to: the detour's length overhead
+    # versus the inflation the RTT has to spend on it. Carried per row so a
+    # below-floor listing explains itself instead of being a bare complaint.
+    # Colocated VP and target divide by zero; inf is the honest answer (any
+    # detour at all is unaffordable) and is left to propagate.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        df["detour_ratio"] = df["d_via_pni_km"] / df["d_vp_tg_km"]
+        df["air_inflation"] = df["min_rtt_ms"] / df["prop_rtt_direct_ms"]
 
     return df.reset_index(drop=True), n_in - len(df)
 
@@ -208,6 +242,96 @@ X_AXES = {
 #: and the slope dimensionless. Same points, same below-floor set, same fit
 #: quality -- only the units and the reference line's angle move.
 X_UNITS = ("km", "ms")
+
+#: Numbers a below-floor listing carries after the ids. All three pairwise
+#: distances among (VP, PNI, TG) are here, not just the two path totals, because
+#: which leg is long is the whole of reading one of these rows -- a far VP and a
+#: far site are different pictures with the same `d_via_pni_km`. The ratio pair
+#: follows, since its inequality *is* the below-floor condition, and
+#: `below_by_ms` is how far under the floor the row sits and what it sorts on.
+_BELOW_COLS = (
+    "min_rtt_ms",
+    "d_vp_tg_km",
+    "d_vp_pni_km",
+    "d_pni_tg_km",
+    "d_via_pni_km",
+    "detour_ratio",
+    "air_inflation",
+    "residual_direct_ms",
+    "below_by_ms",
+)
+
+
+def _label_cols(
+    df: pd.DataFrame, vp_prefix: str, pni_prefix: str, tg_prefix: str
+) -> list[str]:
+    """Columns that name the three roles of a row.
+
+    `<prefix>_id` when the input has one, else the coordinate pair — which
+    `load_points` has already required, so a row in a listing is always
+    identifiable even for a CSV that carries no ids.
+    """
+    cols: list[str] = []
+    for prefix in (vp_prefix, pni_prefix, tg_prefix):
+        if f"{prefix}_id" in df.columns:
+            cols.append(f"{prefix}_id")
+        else:
+            cols += [f"{prefix}_lat", f"{prefix}_lon"]
+    return cols
+
+
+def below_floor(
+    df: pd.DataFrame,
+    *,
+    x_axis: str = "via-pni",
+    vp_prefix: str = "vp",
+    pni_prefix: str = "pni",
+    tg_prefix: str = "tg",
+) -> pd.DataFrame:
+    """The rows under `x_axis`'s 2/3 c floor, worst first.
+
+    The mask is recomputed from the delay column the floor is drawn from rather
+    than read off `residual_ms`, so the listing cannot disagree with the count
+    the figure annotates itself with even if a caller has rewritten `min_rtt_ms`
+    in place. Ids, legs and the ratio pair are moved to the front; every other
+    input column is kept, since the point of the file is to chase the row back
+    to whatever produced it.
+    """
+    if x_axis not in X_AXES:
+        raise typer.BadParameter(
+            f"--x-axis must be one of {sorted(X_AXES)} (got {x_axis!r})"
+        )
+    _, ms_col, _, _ = X_AXES[x_axis]
+
+    out = df[df["min_rtt_ms"] < df[ms_col]].copy()
+    out["below_by_ms"] = out[ms_col] - out["min_rtt_ms"]
+
+    lead = _label_cols(out, vp_prefix, pni_prefix, tg_prefix)
+    lead += [c for c in _BELOW_COLS if c in out.columns and c not in lead]
+    rest = [c for c in out.columns if c not in lead]
+    return (
+        out[lead + rest]
+        .sort_values("below_by_ms", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def below_floor_table(
+    below: pd.DataFrame,
+    *,
+    n: int = 10,
+    vp_prefix: str = "vp",
+    pni_prefix: str = "pni",
+    tg_prefix: str = "tg",
+) -> str:
+    """The head of a `below_floor()` frame as a plain-text table."""
+    if below.empty:
+        return "no rows below the floor"
+    cols = _label_cols(below, vp_prefix, pni_prefix, tg_prefix)
+    cols += [c for c in _BELOW_COLS if c in below.columns and c not in cols]
+    return below.head(n)[cols].to_string(
+        index=False, float_format=lambda v: f"{v:,.3f}"
+    )
 
 
 def plot(
@@ -360,6 +484,13 @@ def register(app: typer.Typer) -> None:
             "as a sloped line (fitted slope in ms/km, so 2/slope is an implied "
             "speed). `ms` converts x at 2/3 c first, making the floor y = x.",
         ),
+        show_below: int = typer.Option(
+            10,
+            "--show-below",
+            help="Print this many below-floor rows, worst first, with the (VP, "
+            "TG) pair and the PNI each was assigned. All of them are written to "
+            "<stem>_below_floor.csv regardless; 0 prints none.",
+        ),
         log_axes: bool = typer.Option(
             False, "--log-axes", help="Log-log axes, for RTTs spanning orders of magnitude."
         ),
@@ -371,7 +502,8 @@ def register(app: typer.Typer) -> None:
         """Scatter min-RTT against the VP→PNI→TG propagation delay.
 
         Writes <stem>_pni_delay.png and <stem>_pni_delay_points.csv, and prints
-        the OLS fit plus a straight-line (no-PNI) control for comparison.
+        the OLS fit plus a straight-line (no-PNI) control for comparison. Rows
+        under the drawn floor also go to <stem>_pni_delay_below_floor.csv.
         """
         df, n_dropped = load_points(
             csv, vp_prefix=vp_prefix, pni_prefix=pni_prefix,
@@ -388,6 +520,7 @@ def register(app: typer.Typer) -> None:
         suffix = f"_pni_delay.{x_axis}.{x_unit}{'.' + where if where else ''}"
         out_png = dest / f"{csv.stem}{suffix}.png"
         out_csv = dest / f"{csv.stem}{suffix}_points.csv"
+        out_below = dest / f"{csv.stem}{suffix}_below_floor.csv"
 
         stats = plot(
             df, out_png, n_dropped=n_dropped, log_axes=log_axes, title=title,
@@ -395,10 +528,33 @@ def register(app: typer.Typer) -> None:
         )
         df.to_csv(out_csv, index=False)
 
+        below = below_floor(
+            df, x_axis=x_axis, vp_prefix=vp_prefix,
+            pni_prefix=pni_prefix, tg_prefix=tg_prefix,
+        )
+
         typer.echo(f"wrote {out_png}")
         typer.echo(f"wrote {out_csv}")
+        if not below.empty:
+            below.to_csv(out_below, index=False)
+            typer.echo(f"wrote {out_below}")
         for key, value in stats.items():
             typer.echo(
                 f"  {key:24s} {value}" if isinstance(value, str)
                 else f"  {key:24s} {value:.4g}"
+            )
+
+        if show_below and not below.empty:
+            shown = min(show_below, len(below))
+            typer.echo(
+                f"\n{len(below)} of {len(df)} rows below the {x_axis} floor "
+                f"(worst {shown} shown). residual_direct_ms >= 0 means the row "
+                f"is legal on the geodesic and it is the (VP, site, TG) triple "
+                f"that 2/3 c rules out, not the RTT:"
+            )
+            typer.echo(
+                below_floor_table(
+                    below, n=show_below, vp_prefix=vp_prefix,
+                    pni_prefix=pni_prefix, tg_prefix=tg_prefix,
+                )
             )
