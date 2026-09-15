@@ -59,6 +59,9 @@ from scripts.analysis.v3.modules.diagram.common.labels import (
     PUBLISHED_METHODS,
     short_label,
 )
+from scripts.analysis.v3.modules.diagram.common.membership import (
+    available_methods,
+)
 from scripts.analysis.v3.modules.diagram.common.palette import (
     _C_AXIS,
     _C_GRID,
@@ -78,6 +81,7 @@ from scripts.analysis.v3.modules.grid import (
 from scripts.analysis.v3.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
     DEFAULT_OUTPUTS_ROOT,
+    MissingArtifactError,
     RunPaths,
     discover_runs,
     grid_slug,
@@ -132,7 +136,22 @@ def load_errors(
     cls_dir = run.cls_accuracy_dir(
         root=analysis_root, grid=grid, resolution=resolution
     )
-    chosen = list(methods) if methods else list(PUBLISHED_METHODS)
+    # Default to the methods this run actually scored, not to the full
+    # published set. An explicit --method still raises on a missing parquet --
+    # that was asked for by name -- but the default must degrade, because a run
+    # that benchmarked a subset of combos is normal (a materialization test, a
+    # partial sweep) and every other consumer already tolerates it via
+    # `available_methods` (breakdown.py, pni_sping.py, venn.py). Order follows
+    # PUBLISHED_METHODS, matching this module's other intersection.
+    chosen = (
+        list(methods)
+        if methods
+        else [m for m in PUBLISHED_METHODS if m in set(available_methods(cls_dir))]
+    )
+    if not chosen:
+        raise MissingArtifactError(
+            f"{cls_dir} holds no *_seed_distances.parquet; run `classify` first"
+        )
     errors: dict[str, np.ndarray] = {}
     counts: dict[str, dict] = {}
     for method in chosen:

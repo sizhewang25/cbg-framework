@@ -49,8 +49,22 @@ for R in "${RUNS[@]}"; do
 
   V3="python -m scripts.analysis.v3.cli --config $CFG"
 
-  # 1. Score every method against the answer space (~2 s). Needs the answer
-  #    space and eval_source — cli.sh stage 1 already produced both.
+  # 0. Build what every later section reads. These are v3 ANALYSIS commands,
+  #    not benchmark stages: `cli.sh` runs inspect_dataset.smk and the
+  #    benchmark, which produce eval_source and the fold parquets, but the
+  #    answer space is built here. Omitting them made the script unusable on a
+  #    clean tree -- 24 of 25 commands failed with
+  #    "is not an answer space ... run `build-answer-space` first".
+  #
+  #    Ordered: the graph and the proximity labels are both keyed on the answer
+  #    space's seeds, and proximity additionally needs the shortest-ping VP that
+  #    eval_source supplies.
+  run build-answer-space    $V3 build-answer-space    --run-id "$R"
+  run build-bipartite-graph $V3 build-bipartite-graph --run-id "$R"
+  run build-proximity       $V3 build-proximity       --run-id "$R"
+
+  # 1. Score every method against the answer space (~2 s). Needs section 0's
+  #    answer space plus eval_source, which cli.sh stage 1 produced.
   run classify $V3 classify --run-id "$R"
 
   # 2. Tables
