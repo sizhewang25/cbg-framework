@@ -109,3 +109,38 @@ analysis:
     # which is its subject; on the flow map it competes with the edge ink
     # and shares its colour with the seed markers.
     no_flow_voronoi: true
+
+  # --- PNI stack (§7.3, §8.1) --------------------------------------------
+  # The 14-site AS20940 list read off the operator dashboard. Approximate:
+  # metro identity from a screenshot, coordinates substituted from known
+  # carrier hotels, CONUS-cropped. `peer_asn` is asserted explicitly because
+  # the source CSV has no `target_asn` column to check the list against.
+  #
+  # This run shares its source CSV with the published as01-260728-260802 tree,
+  # so the strategy, graph, feasibility and linearity numbers are the same
+  # there -- those four commands read the CSV and are fold-free. Only
+  # breakdown-sping-pni differs, because it joins classification, and the two
+  # runs materialize their folds differently.
+  detect-pni-strategy:
+    pni_csv: datasets/pni/as01-us-pni.approx.csv
+    peer_asn: 20940
+
+  build-pni-graph:
+    pni_csv: datasets/pni/as01-us-pni.approx.csv
+    peer_asn: 20940
+    # `mixed` verdict on as01 (no policy took a majority of determinate
+    # targets), so the argmin fallback stands: it assumes no policy rather
+    # than asserting one. Pass a pure rule only if the verdict declares one.
+    strategy: argmin
+
+  build-pni-feasibility:
+    # 200 gives the permutation null a reportable effect size; without it
+    # n_feasible has no baseline to be surprising against.
+    decoy_trials: 200
+
+  # The graph is built under a detected --strategy, so scoring on the pairs
+  # the rule was chosen from would be a fit evaluated on itself.
+  compare-pni-linearity:
+    holdout_only: true
+
+  breakdown-sping-pni: {}

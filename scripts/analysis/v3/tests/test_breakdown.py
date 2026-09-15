@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from scripts.analysis.v3.modules.places import REGION_COL
 from scripts.analysis.v3.modules.breakdown import (
     TAUTOLOGICAL_CELL,
     _phi,
@@ -143,3 +144,48 @@ def test_all_four_flags_are_reported_per_method():
     out = breakdown_by_flag(m, labels)
     assert set(out["flag"]) == set(FLAGS)
     assert len(out) == len(FLAGS) * 2
+
+
+def test_region_rate_equals_target_rate_when_labels_predate_region_id():
+    """Older labels still load, and the region column is visibly redundant.
+
+    The fallback is one region per target, so the two columns agree exactly.
+    That is wrong for an operator run and meant to look wrong — the alternative,
+    emitting NaN, would read as "not applicable" rather than "not available".
+    """
+    labels = _labels(
+        [
+            ("t1", True, True, True, True),
+            ("t2", True, True, False, False),
+        ]
+    )
+    m = _membership(["t1", "t2"], {"m": [True, False]})
+    out = breakdown_by_taxonomy(m, labels)
+    live = out[out["n_targets"] > 0]
+    assert (live["n_regions"] == live["n_targets"]).all()
+    assert (live["region_accuracy"] == live["accuracy"]).all()
+
+
+def test_region_rate_strips_replica_weighting():
+    """Twenty replicas of one site must not outvote a single-IP site.
+
+    `selection_hit` here is 21 targets across two regions: twenty correct
+    replicas at one coordinate and one wrong target at another. The
+    target-level rate reads 0.952; the region-level rate reads 0.500, which is
+    the number that generalizes.
+    """
+    rows = [(f"a{i}", True, True, True, True) for i in range(20)]
+    rows.append(("b0", True, True, True, True))
+    labels = _labels(rows)
+    labels[REGION_COL] = [0] * 20 + [1]
+
+    m = _membership(
+        [r[0] for r in rows], {"m": [True] * 20 + [False]}
+    )
+    out = breakdown_by_taxonomy(m, labels)
+    hit = out[out["term"] == "selection_hit"].iloc[0]
+
+    assert hit["n_targets"] == 21
+    assert hit["n_regions"] == 2
+    assert hit["accuracy"] == round(20 / 21, 4)
+    assert hit["region_accuracy"] == 0.5

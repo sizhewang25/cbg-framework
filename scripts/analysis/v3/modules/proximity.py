@@ -118,6 +118,7 @@ from scripts.analysis.v3.modules.grid import (
     get_grid,
     resolve_cli_grid,
 )
+from scripts.analysis.v3.modules import places
 from scripts.analysis.v3.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
     DEFAULT_OUTPUTS_ROOT,
@@ -357,6 +358,11 @@ def build_proximity(
     labels = pd.DataFrame(
         {
             "target_id": targets["target_id"].to_numpy(),
+            # The independent unit. Replicas of one coordinate share a seed and
+            # every VP distance, so a rate over target_id counts one
+            # observation many times; see places.py. Emitted here rather than
+            # recomputed downstream so every consumer groups on one definition.
+            places.REGION_COL: places.assign_region_ids(targets).to_numpy(),
             "tg_seed_id": targets["seed_id"].to_numpy(),
             "tg_seed_margin_km": np.round(margin, 3),
             "tg_seed_best_rank": np.where(
@@ -543,6 +549,10 @@ def _meta(
             "resolution": int(space.seeds["grid_resolution"].iloc[0]),
         },
         "n_targets": n,
+        # F1: the independent unit. n_targets counts IP replicas, of which the
+        # operator runs carry ~20 per coordinate, so every rate below has an
+        # effective sample size of n_regions rather than n_targets.
+        "regions": places.region_diagnostics(space.assignments),
         "n_seeds": space.n_seeds,
         "n_vps": n_vps,
         "n_obs": n_obs,

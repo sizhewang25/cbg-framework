@@ -62,6 +62,7 @@ from scripts.analysis.v3.modules.grid import (
     SWEEP_HELP,
     resolve_cli_grid,
 )
+from scripts.analysis.v3.modules import places
 from scripts.analysis.v3.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
     DEFAULT_OUTPUTS_ROOT,
@@ -117,6 +118,23 @@ def _rate(hits: np.ndarray) -> float:
     return round(float(hits.mean()), 4) if hits.size else np.nan
 
 
+def _round(x: float) -> float:
+    return round(x, 4) if np.isfinite(x) else np.nan
+
+
+def _regions_of(labels: pd.DataFrame) -> np.ndarray:
+    """`region_id` if `build-proximity` emitted it, else all-distinct ids.
+
+    Labels written before `region_id` existed still load. Falling back to one
+    region per target makes the region column equal the target column, which is
+    visibly wrong for an operator run rather than silently absent — and `-1`
+    would instead drop every row from the region rate.
+    """
+    if places.REGION_COL in labels.columns:
+        return labels[places.REGION_COL].to_numpy(dtype=int)
+    return np.arange(len(labels), dtype=int)
+
+
 def breakdown_by_flag(
     membership: dict[int, pd.DataFrame], labels: pd.DataFrame
 ) -> pd.DataFrame:
@@ -132,6 +150,7 @@ def breakdown_by_flag(
         common = matrix.index.intersection(lab.index)
         matrix = matrix.loc[common]
         sub = lab.loc[common]
+        regions = _regions_of(sub)
         for flag in FLAGS:
             mask = sub[flag].to_numpy(dtype=bool)
             for method in matrix.columns:
@@ -139,6 +158,8 @@ def breakdown_by_flag(
                 a, b = int((mask & correct).sum()), int((mask & ~correct).sum())
                 c, d = int((~mask & correct).sum()), int((~mask & ~correct).sum())
                 inside, outside = _rate(correct[mask]), _rate(correct[~mask])
+                r_in, n_reg_in = places.region_rate(regions[mask], correct[mask])
+                r_out, n_reg_out = places.region_rate(regions[~mask], correct[~mask])
                 rows.append(
                     {
                         "method": method,
@@ -147,8 +168,15 @@ def breakdown_by_flag(
                         "top_n": n,
                         "n_true": a + b,
                         "n_false": c + d,
+                        # F1: the independent unit. `n_true` counts IP
+                        # replicas, ~20 per coordinate on the operator runs, so
+                        # a stratum reading 1.000 over 160 targets is 8 sites.
+                        "n_regions_true": n_reg_in,
+                        "n_regions_false": n_reg_out,
                         "accuracy_when_true": inside,
                         "accuracy_when_false": outside,
+                        "region_accuracy_when_true": _round(r_in),
+                        "region_accuracy_when_false": _round(r_out),
                         "rate_difference": (
                             round(inside - outside, 4)
                             if np.isfinite(inside) and np.isfinite(outside)
@@ -177,10 +205,12 @@ def breakdown_by_taxonomy(
     for n, matrix in sorted(membership.items()):
         common = matrix.index.intersection(lab.index)
         matrix, t = matrix.loc[common], term.loc[common]
+        regions = _regions_of(lab.loc[common])
         for name in TAXONOMY:
             mask = (t == name).to_numpy()
             for method in matrix.columns:
                 correct = matrix[method].to_numpy(dtype=bool)[mask]
+                r_acc, n_reg = places.region_rate(regions[mask], correct)
                 rows.append(
                     {
                         "method": method,
@@ -188,8 +218,10 @@ def breakdown_by_taxonomy(
                         "term": name,
                         "top_n": n,
                         "n_targets": int(mask.sum()),
+                        "n_regions": n_reg,
                         "n_correct": int(correct.sum()),
                         "accuracy": _rate(correct),
+                        "region_accuracy": _round(r_acc),
                         "share_of_targets": round(float(mask.mean()), 4)
                         if mask.size
                         else np.nan,

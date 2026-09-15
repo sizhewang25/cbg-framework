@@ -161,6 +161,11 @@ def dataset_context(
             "setup": run.setup,
             "n_vps": meta.get("n_vps"),
             "n_targets": meta.get("n_targets"),
+            # The effective sample size. Operator runs carry ~20 IP replicas
+            # per coordinate, and replicas share a seed and every VP distance,
+            # so n_targets overstates the independent observations ~20-fold.
+            # Read from the same meta as everything else here, not recomputed.
+            "n_regions": (meta.get("regions") or {}).get("n_regions"),
             "n_seeds": meta.get("n_seeds"),
         }
         for term in TAXONOMY:
@@ -203,12 +208,18 @@ def render_markdown(
         "Per run, not per method. `geometry_only` targets have no measured VP whose",
         "nearest seed is theirs — a ceiling on Shortest-Ping, not on CBG.",
         "",
-        "| dataset | setup | VPs | targets | seeds | geometry_only | selection_miss | selection_hit |",
-        "| --- | --- | --: | --: | --: | --: | --: | --: |",
+        "`regions` is the count of distinct target coordinates and is the effective",
+        "sample size: the operator runs hold ~20 IP replicas per site, and replicas",
+        "share a seed and every VP distance, so they are one observation repeated.",
+        "Read every rate in the table above against `regions`, not against `targets`.",
+        "",
+        "| dataset | setup | VPs | targets | regions | seeds | geometry_only | selection_miss | selection_hit |",
+        "| --- | --- | --: | --: | --: | --: | --: | --: | --: |",
     ]
     for _, r in context.iterrows():
         lines.append(
-            f"| {r.dataset} | {r.setup} | {r.n_vps} | {r.n_targets} | {r.n_seeds} | "
+            f"| {r.dataset} | {r.setup} | {r.n_vps} | {r.n_targets} | "
+            f"{r.n_regions} | {r.n_seeds} | "
             + " | ".join(
                 f"{int(r[f'{t}_n'])} ({r[f'{t}_share']:.1%})" for t in TAXONOMY
             )
@@ -256,7 +267,8 @@ def build(
         "each run keeps its own row, so no cross-setup average can form.",
         "source": (
             "topn_accuracy.csv per run (classify) + target-proximity/meta.json "
-            "(build-proximity); nothing is recomputed here"
+            "(build-proximity, which also supplies n_regions); nothing is "
+            "recomputed here"
         ),
     }
     return accuracy, context, markdown, manifest

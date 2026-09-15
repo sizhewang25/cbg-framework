@@ -106,7 +106,7 @@ That residual is what the paper addresses. When canonical signals are absent, st
 
 ### 3.2 The data-access asymmetry cuts both ways
 
-The operator holds two assets no academic study can reproduce: topology knowledge (its own network graph and the geographic connectivity to peering hypergiants/CDNs) and private in-network traffic data (per-flow volume at ground-truthed vantage points, which tells the operator which targets and flows actually matter). That asymmetry is itself the challenge, and it breaks *both* research directions.
+The operator holds two assets no academic study can reproduce: topology knowledge (its own network graph and the geographic connectivity to peering hypergiants/CDNs) and private passive data (large-volume in-network RTT at ground-truthed vantage points). That asymmetry is itself the challenge, and it breaks *both* research directions.
 
 - **Academia cannot reproduce the operator setting.** Public platforms offer no way to recreate an operator's traffic pattern: VP sets are self-selected and heterogeneous in device and network type rather than sited at user planes, target sets are anchors rather than the hypergiant prefixes the operator actually carries, and the peering relationship that shapes the path (on-net embedded cache vs. off-net via IXP/transit) cannot be replicated at all. Published accuracy numbers are therefore measured on a topology no operator has, and whether they transfer is unknown.
 - **Operators cannot substitute public infrastructure.** An operator wanting to monitor its own network from RIPE Atlas finds that coverage does not reach its ASNs or its target sets, that probe placement is not controllable, and that probes sit at heterogeneous positions rather than where its traffic is actually observed.
@@ -119,7 +119,7 @@ Neither side can validate the other's results, and no dataset exists on which th
 
 ### 4.1 Gaps
 
-- **G1 · VP realism.** VP setups in existing CBG work do not reflect operator deployments (count, placement, on-net position, and which flows actually carry traffic).
+- **G1 · VP realism.** VP setups in existing CBG work do not reflect operator deployments (count, placement, on-net position, passive collection).
 - **G2 · No cross-variant comparison on operator-realistic data.** Variants are published against different datasets, VPs, and metrics; nobody has run them side by side under operator conditions.
 - **G3 · Results without mechanism.** Accuracy tables do not tell the reader *why* a variant wins or loses, so the result does not transfer to a new setting.
 - **G4 · Accuracy is not a deployment criterion.** Runtime, memory, and robustness decide what actually ships at million-IP scale, and they are largely unreported.
@@ -242,47 +242,22 @@ Two things follow from the decomposition. Variant comparison becomes phase attri
 **Fallbacks count as failures.** When the intersection is empty and no relaxation recovers it, the pipeline falls back to the Shortest-Ping VP. Scoring that fallback as a CBG success would floor CBG's measured accuracy at Shortest-Ping's, which is precisely the comparison RQ2 rests on (§5), so fallbacks are counted as failures. Fallback rate is reported as a first-class diagnostic, and accuracy is given both with and without fallback cases included.
 
 **Cost is measured per phase and per stage.** Fit cost and apply cost are reported separately, because they scale differently and are paid on different schedules. Fit cost grows with the number of (VP, peer ASN) pairs and the labels available per pair, and is paid once per recalibration. Apply cost grows with the number of targets, and at million-IP scale it is paid on every run. Separating them is also what lets the per-ASN vs. pooled ablation report a trade-off rather than a winner, since per-ASN calibration multiplies fit cost by the peer count.
-### 7.3 Datasets and experimental setup
 
+### 7.3 Datasets and experimental setup
 #### Experimental setup
 ##### Dataset generation
-For ground truth generation, we applied RDNS and GeoFeed to recognize IP locations from real traffic, validating them through speed-of-internet violation checks and manual confirmation over one week of data. 
+For ground truth generation, we applied RDNS and GeoFeed to recognize IP locations from real traffic, validating them through speed-of-internet violation checks and manual confirmation over one week of data.
 For each unique location, we picked the top 10 IPv4 and top 10 IPv6 addresses to serve as targets, repeating this across all known locations. We then conduct ping from all the mobile cores to the 20 targets per location, where we do 5 pings per hour, running this every hour of the day, seven days a week. Through this, we collected one week of data. And then we picked P5 latency per VP target pair to avoid the impact of congestion, thus better reflecting the best-case latency for approximating propagation delay.
 Meanwhile, we annotated the edges in the mesh dataset with the actual traffic volume (in TB) of each flow in the real traffic. Then we apply a threshold of 95% of cumulative total traffic among all the targets in the mesh dataset to filter flows that carry heavy traffic. As a consequence, we created our traffic-weighted dataset, which preserves only the traffic-heavy VPs and TGs with flows between them.【Show a demo image with mesh and traffic-weighted datasets】
 
 **Traffic volume is used to shape the edge set, not to re-measure delay.** A passively collected RTT dataset would differ from the mesh in two ways at once — which flows exist, and how delay is measured — and a single comparison could not separate them. We therefore hold the delays fixed at the mesh's p5 ping RTTs and let traffic volume select the edges alone, so the traffic-weighted arm differs from the mesh arm in exactly one respect. Traffic volume is a faithful stand-in for *which* pairs a passive collector would observe, since a pair is visible to it only if traffic traverses it; it is not a stand-in for the delay values themselves. Real passive RTT is congestion-exposed and carries no low-percentile filtering, so it would run higher and noisier than p5 ping, and the traffic-weighted results here should be read as optimistic with respect to a genuinely passive collection. We treat passive delay as out of scope for this phase, both because the data is sensitive and because its measurement characteristics are themselves under-explored.
+
 ##### Eval on Mesh datasets
-We adopt K-fold evaluation, which splits the mesh dataset into five folds. We take four folds for training and one fold for testing, and then we rotate until we have all targets evaluated. 
-
+We adopt K-fold evaluation, which splits the mesh dataset into five folds. We take four folds for training and one fold for testing, and then we rotate until we have all targets evaluated.
 By splitting, we mean we apply geostratification (as used by reference "Selection of Landmarks for Efficient Active Geolocation") to stratify the targets by the distances between each other. This guarantees that within a fold, targets will be distributed far enough apart, hence avoiding insufficient distance bins in the RTT distance modeling.
-#####  Eval on Traffic-weighted datasets
-We also adopt K-fold evaluation, but the difference compared to the evaluation for mesh is that we will filter the evaluation fold to keep only the flows that appear in the traffic-weighted dataset. 
+##### Eval on Traffic-weighted datasets
+We also adopt K-fold evaluation, but the difference compared to the evaluation for mesh is that we will filter the evaluation fold to keep only the flows that appear in the traffic-weighted dataset.
 And then we still do the rotation for all the folds to get evaluated. In this way, we are able to keep the scores only on the traffic-weighted targets.
-
-**Best-effort VP-topology matching.** Where the public dataset allows it, we select probes to approximate the operator's VP count, geographic spread, and pairwise distance distribution, so that a cross-dataset accuracy difference is less likely to be an artifact of VP placement alone. This is a mitigation rather than a control, and we report the residual mismatch instead of claiming it away. 【TODO: operationalize the matching criteria.】
-#### Metric List:
-*Node-set geometry, computed identically for VPs and for targets, printed side by side.*
-- Count, plus ASN count on the target side only, since each VP set is single-ASN by construction as described above.
-- **Geographic diameter** (max pairwise great-circle distance), reported with **p95 pairwise distance** alongside it, since a diameter is a maximum and one near-antipodal node sets it single-handedly. Diameter 19,400 km with p95 8,100 km is a regional cloud plus an outlier, not a global deployment. The full pairwise distance CDF is the figure behind those two scalars.
-- **Occupied cell count**, on the resolution-4 grid defined above, so "location" here is exactly the merge scale that generates the classes. This is what is left after near-coincident points collapse: on the VP side, how many distinct constraint disks the set can produce, and on the target side, $K$ itself. "60 VPs in 31 occupied cells" is the honest denominator for any claim resting on independent observations.
-- Reported up the hierarchy at H3 resolutions 5, 4, 3 and 2 (17, 45, 120 and 316 km). The shape of that curve is a multi-scale concentration diagnostic: a steep climb toward fine cells means the set only separates at intra-metro scales, while a flat curve means genuinely distinct metros.
-- Each rung is computed by re-binning the coordinates, not by coarsening the cell identifiers, because H3's hierarchy is aperture-7 and hexagons cannot tile hexagons: a parent's six outer children each straddle its boundary, so the parent identifier is exact as an index but is not a geometric container. The two routes genuinely disagree, on 1% to 8% of targets at resolution 3 and 3% to 10% at resolution 2 across the four RIPE-derived sets we have, so the cheaper route would report a partition that no resolution actually produces. On HEALPix the coarsening is a bit shift and the two routes coincide exactly; we re-bin on both grids so the diagnostic means the same thing regardless of which is in use.
-- **Degree distributions, both sides**, as median/IQR/p90 rather than bare means, since both are heavily skewed. VP degree is measurement effort spent; target degree is constraints available.
-- 【Optional appendix: Clark-Evans index · anisotropy ratio and major-axis bearing · CV of nearest-neighbour distances.】
-
-*Edge-set geometry.*
-- **Density** $|E| / (|VP| \times |\text{targets}|)$, stated as measurement completeness.
-- **Connected Components**: as traffic could concentrated regionally, edges might only appear as separated components.
-- **Observed edge-length distribution**: great-circle distance over measured pairs (median, IQR, p90, CDF).
-- **Nearest measured VP distance per target**: distance to the closest VP that actually carries an edge. The dominant scalar predictor of region size, since the smallest disk does most of the constraining.
-- **Measurement efficiency**: nearest-measured-VP distance over nearest-VP distance, median across targets. This separates "the VP set is badly placed" from "the VP set is fine but the campaign allocated probes badly", two findings that a latent-only or observed-only description conflates, and only the second is actionable by reallocating measurement. It is also the readable form of campaign bias, which is a live risk here since probe failure is plausibly distance-correlated, and it is why the all-pairs latent distance distribution enters as a denominator rather than as a result of its own.
-- 【Optional: degree assortativity, to show whether the best-observed VPs and best-observed targets coincide.】
-
-*Angular geometry, over measured neighbours only. This is the arrangement term.*
-- **Max angular gap per target**: the largest empty wedge among bearings from the target to its measured VPs, as median and p90. VPs at bearings 10°, 40°, 75° leave a 295° gap and barely constrain the target; VPs at 20°, 140°, 260° leave 120° and bracket it. Identical degree, different precision, which is the whole point.
-- **Circular variance of bearings**: near 0 means every landmark lies in one direction, near 1 means well surrounded. Smoother than max gap, so this is the form used in the §8.3 regressions.
-
-*[Remaining §7 subsections: leakage-free K-fold protocol · the SoI validation primitive and its k-of-N threshold · metric definitions (error distance, classification accuracy, classification confidence, practicality, diagnostics) · whether per-VP calibration geometry earns a place · the runtime and memory measurement protocol (hardware, whether the million-IP figure is measured or extrapolated, calibration time counted separately from inference; memory defined as per-phase peak libc-heap allocation, with process peak RSS reported alongside it — see §8.3). Material to migrate and tighten from [[CBG-Benchmark-Paper-Flow-v1]] §5.]*
 
 - **Proprietary Mesh Unicast IP dataset** 
 	- VPs: Mobile cores of AS7018
@@ -350,6 +325,32 @@ And then we still do the rotation for all the folds to get evaluated. In this wa
 **Latent and observed geometry are reported as a pair.** Because an edge records a measurement, the edge set is an artifact of the campaign rather than a property of the deployment, and every distance quantity therefore has two values: the latent one over all VP × target pairs, which describes where the infrastructure sits, and the observed one over measured edges only, which describes what the dataset can actually deliver. The pairing applies to distances and not to degree, whose latent value is the VP count for every target and so carries nothing. The gap between the two is a property of the campaign, and reporting only one of them is what allows sampling bias to be misread as an algorithmic result.
 
 **Degree is a precision covariate, and no feasibility gate arises.** Every CBG constraint is a distance upper bound, so the feasible region is an intersection of disks: bounded, convex, and nonempty with a well-defined centroid at any degree of one or more. There is no threshold at three constraints. A target also enters either dataset only by having been measured, so degree is at least one everywhere by construction and degree zero is not a case that occurs. That guarantee is a property of how the datasets are assembled rather than of the method, and it does not extend to deployment, where an unmeasured target is an ordinary case; §10 takes that up. Precision degrades continuously as degree falls, and it degrades far more sharply under a poor angular arrangement than under a low count, since two landmarks on opposite sides of a target constrain it better than five clustered in one metro. Degree is therefore carried forward purely as a covariate that §8.3 regresses error and region area against, jointly with the angular statistics, and the expectation to be tested is that the angular term dominates the count term.
+
+**Best-effort VP-topology matching.** Where the public dataset allows it, we select probes to approximate the operator's VP count, geographic spread, and pairwise distance distribution, so that a cross-dataset accuracy difference is less likely to be an artifact of VP placement alone. This is a mitigation rather than a control, and we report the residual mismatch instead of claiming it away. 【TODO: operationalize the matching criteria.】
+#### Metric List:
+*Node-set geometry, computed identically for VPs and for targets, printed side by side.*
+- Count, plus ASN count on the target side only, since each VP set is single-ASN by construction as described above.
+- **Geographic diameter** (max pairwise great-circle distance), reported with **p95 pairwise distance** alongside it, since a diameter is a maximum and one near-antipodal node sets it single-handedly. Diameter 19,400 km with p95 8,100 km is a regional cloud plus an outlier, not a global deployment. The full pairwise distance CDF is the figure behind those two scalars.
+- **Occupied cell count**, on the resolution-4 grid defined above, so "location" here is exactly the merge scale that generates the classes. This is what is left after near-coincident points collapse: on the VP side, how many distinct constraint disks the set can produce, and on the target side, $K$ itself. "60 VPs in 31 occupied cells" is the honest denominator for any claim resting on independent observations.
+- Reported up the hierarchy at H3 resolutions 5, 4, 3 and 2 (17, 45, 120 and 316 km). The shape of that curve is a multi-scale concentration diagnostic: a steep climb toward fine cells means the set only separates at intra-metro scales, while a flat curve means genuinely distinct metros.
+- Each rung is computed by re-binning the coordinates, not by coarsening the cell identifiers, because H3's hierarchy is aperture-7 and hexagons cannot tile hexagons: a parent's six outer children each straddle its boundary, so the parent identifier is exact as an index but is not a geometric container. The two routes genuinely disagree, on 1% to 8% of targets at resolution 3 and 3% to 10% at resolution 2 across the four RIPE-derived sets we have, so the cheaper route would report a partition that no resolution actually produces. On HEALPix the coarsening is a bit shift and the two routes coincide exactly; we re-bin on both grids so the diagnostic means the same thing regardless of which is in use.
+- **Degree distributions, both sides**, as median/IQR/p90 rather than bare means, since both are heavily skewed. VP degree is measurement effort spent; target degree is constraints available.
+- 【Optional appendix: Clark-Evans index · anisotropy ratio and major-axis bearing · CV of nearest-neighbour distances.】
+
+*Edge-set geometry.*
+- **Density** $|E| / (|VP| \times |\text{targets}|)$, stated as measurement completeness.
+- **Connected Components**: as traffic could concentrated regionally, edges might only appear as separated components.
+- **Observed edge-length distribution**: great-circle distance over measured pairs (median, IQR, p90, CDF).
+- **Nearest measured VP distance per target**: distance to the closest VP that actually carries an edge. The dominant scalar predictor of region size, since the smallest disk does most of the constraining.
+- **Measurement efficiency**: nearest-measured-VP distance over nearest-VP distance, median across targets. This separates "the VP set is badly placed" from "the VP set is fine but the campaign allocated probes badly", two findings that a latent-only or observed-only description conflates, and only the second is actionable by reallocating measurement. It is also the readable form of campaign bias, which is a live risk here since probe failure is plausibly distance-correlated, and it is why the all-pairs latent distance distribution enters as a denominator rather than as a result of its own.
+- 【Optional: degree assortativity, to show whether the best-observed VPs and best-observed targets coincide.】
+
+*Angular geometry, over measured neighbours only. This is the arrangement term.*
+- **Max angular gap per target**: the largest empty wedge among bearings from the target to its measured VPs, as median and p90. VPs at bearings 10°, 40°, 75° leave a 295° gap and barely constrain the target; VPs at 20°, 140°, 260° leave 120° and bracket it. Identical degree, different precision, which is the whole point.
+- **Circular variance of bearings**: near 0 means every landmark lies in one direction, near 1 means well surrounded. Smoother than max gap, so this is the form used in the §8.3 regressions.
+
+*[Remaining §7 subsections: leakage-free K-fold protocol · the SoI validation primitive and its k-of-N threshold · metric definitions (error distance, classification accuracy, classification confidence, practicality, diagnostics) · whether per-VP calibration geometry earns a place · the runtime and memory measurement protocol (hardware, whether the million-IP figure is measured or extrapolated, calibration time counted separately from inference; memory defined as per-phase peak libc-heap allocation, with process peak RSS reported alongside it — see §8.3). Material to migrate and tighten from [[CBG-Benchmark-Paper-Flow-v1]] §5.]*
+
 ---
 
 ### 7.4 Answer space construction
@@ -400,32 +401,32 @@ Observations:
 2. Top-4 rank candidates do not change: Octant family, SoI and shortest ping.
 3. Shortest-ping and SoI near perfect classification.
 
-**【Why shortest ping achieves near-perfect classification accuracy】**
+**【Why shortest ping achieves near-perfect classification accuracy under traffic-weighted datasets】**
+- **Traffic filtering**: **traffic weight filtering mostly preserves flows where VPs are close to TGs (good content routing) with direct routing (good interconnect design)
+	- 【Show scatter plot of VP's distance and RTT per target, traffic-weighted stacking on mesh overall / per ASN】-> traffic-weighted should concentrate in bottom-left region -> VPs are close to TGs
+	- 【Show Pearson LCC of minRTT with d(VP, TG) for traffic-weighted dataset vs mesh dataset】-> Higher pearson linearity in TW -> RTTs agree with better direct routing)
+- **Shortest Ping selects VP nearest to TG's nearest PNI**: minRTT between Shortest-ping VP and TG bounds a PNI to be the closest, and the distances d(VP, PNI) and d(PNI, TG) are all small.
+	- Show distribution of targets allowed top PNI candidate index by closeness to TG via speed-of-internet violation check with (sping VP, TG) pairs【Bar plots with percentages of targets allowing top-1, top-2, top-3, and beyond PNI, categorized by datasets】
+	- Show co-location:【Scatter plot of d(sping VP, TG's nearest PNI) vs d(TG's nearest PNI, TG)】
+- If TG's nearest PNI falls in TG's voronoi cell, then Nearest-answer snapping makes shortest ping VP location correct
+	- 【Show percentage of TG's nearest PNI in TG cell vs not in TG cell, should be identical to Sping Accuracy】
 
-The explanation is a three-link chain, and the third link is exact rather than approximate:
+Explain traffic-weighted dataset formation: traffic-weighting preserves heavy flows and target location where peering resides. Mention properties of geometry and routing proximity, and define VP proximity of target, VP discrimination power of target, shortest-ping VP of target AND min-RTT inflation. 
 
-1. **Co-location.** Where interconnect design and content routing are both good, traffic-weight filtering preserves targets sitting *at* PNI locations, measured by VPs that also sit there.
-2. **Ranking.** min-RTT ranks VPs by proximity to the serving site, so the argmin VP is one near that site — and by (1), near the target.
-3. **Snapping.** Under nearest-answer snapping the baseline is correct **iff** its VP shares an answer region with the target. This is an identity, not an approximation: Shortest-Ping's top-1 accuracy *is* the answer-region co-location rate.
 
-So the chain reduces to a claim about **three-way VP/TG/PNI co-location**, and the operative quantity is `d(sping VP, TG)` measured against answer-region membership rather than against a kilometre threshold. Note what this implies for §7.3's inflation machinery: if link 1 holds then `d(PNI,TG) ≈ 0`, the detour ratio is 1, and there is almost nothing left to decompose. Inflation is the *CBG* story — those methods convert an RTT into a distance and inherit its level — while Shortest-Ping is sensitive only to inflation's dispersion, which is what keeps the RTT ranking faithful.
+> TODO section
+State it as a constancy claim instead of a threshold claim:
+> If min-RTT is linear in routing distance, then `routing_inflation` is **approximately constant across pairs** — independent of distance, of detour magnitude, and of which site was selected.
+That single statement carries everything you wanted and nothing you didn't:
+- If `routing ≈ c₀` constant, then `air ≈ c₀ × detour`, i.e. inflation _is_ geometry up to one scale factor. Your intuition, confirmed, in its strong form.
+- The `c₀ ≈ 1.6` is then not a failure — it's the internet's speed constant, a calibration term, orthogonal to the routing story.
+- It also dissolves the caveat I raised last turn about 122 vs 130 km/ms. Under this framing the implied speed is a nuisance parameter; what matters is which axis makes the residual **tighter and flatter**, not which lands nearer 200.
+- It's falsifiable in the right direction: if `routing` still trends with distance or with detour after conditioning, the PNI path is not what min-RTT is measuring.
+And it connects to the metric question directly. Under the constancy claim, the thing to report is the **dispersion** of `routing_inflation`, not its mean — which is exactly the `var(log routing) / var(log air)` decomposition. Two framings, one number.
+There's also a clean calibration subset hiding in draft line 291's premise: pairs where the VP and the target both effectively sit at a site have `detour ≈ 1` by construction, so their `routing_inflation` distribution _is_ `c₀`, measured with geometry held constant. Estimate `c₀` there, then ask whether the rest of the pairs sit at `c₀ × detour`. That's a proper out-of-sample test rather than a fit evaluated on itself.
+ What it buys the operator section
+If `routing ≈ c₀`, the operator prescription becomes concrete: min-RTT converts to _routing_ distance at a fixed 1/c₀, and CBG's geolocation error is then entirely the gap between routing distance and air distance — the detour ratio. Method error stops being a black box and becomes a topology measurement. That's a much stronger claim than "inflation hurts accuracy," and it's the version your figure actually supports.
 
-**The mechanism is invisible in the successes.** When the target sits at a site, `d(sping VP, PNI)` and `d(sping VP, TG)` are the same number, so "the shortest-ping VP is near the interconnect" and "the shortest-ping VP is near the target" are the *same observation*. The PNI account and the plain closest-VP account make identical predictions exactly where the mechanism works, and under §7.3's premise that is most of the population — so any pooled statistic is dominated by the cases that cannot discriminate. A scatter of `d(sping VP, PNI)` against `d(TG, PNI)` degenerates for the same reason: its x-axis collapses to zero wherever the premise holds.
-
-The two accounts separate only where the target is **far** from every listed site. There the naive account still predicts a win; the PNI account predicts a loss, because min-RTT is then ranking VPs by proximity to a site the target is not at. **The test is therefore a trend in the failures, not a correlation among the successes.**
-
-Four things to show, each tied to the artifact that produces it:
-
-- **The premise.** The distribution of `d(TG, nearest PNI)`, unweighted now and traffic-weighted when that dataset lands, beside the answer-region co-location rate. 【`sping_failure_strata.csv`; 【NEED WEIGHTED DATA】 for the weighted arm】
-- **Link 3, threshold-free.** The ECDF of `d(sping VP, TG)` split by whether the baseline was right, plus the exact membership rate. 【`sping_error_ecdf.csv`】
-- **Only nearby interconnects are physically possible.** For each target's shortest-ping VP, the set of sites inside the ⅔ c ellipse with foci VP and TG. This is an *exclusion*, so it needs no model of the CDN's site-selection policy: if only near sites are reachable within the observed RTT, then whatever policy is in force chose a near one. Reported against a permutation null over site lists of the same size, because with a short list a singleton feasible set says as much about sparsity as about the network. 【`build-pni-feasibility` → `headline_sping_only`, `null_model`】
-- **The discriminating test.** Shortest-Ping's error rate against `d(TG, nearest PNI)`, as a continuous rank correlation. Scored for **every** method over the same strata: a trend present in all of them is target difficulty rather than a Shortest-Ping mechanism. `d(TG, nearest PNI)` does correlate with rural, hence with VP sparsity and seed margin, so those covariates are reported per stratum on the same table. 【`sping_accuracy_by_pni_distance.csv`, `sping_failure_strata.csv`】
-
-**What this buys the operator section.** If `routing_inflation ≈ c₀`, the prescription becomes concrete: min-RTT converts to *routing* distance at a fixed `1/c₀`, and a CBG variant's geolocation error is then exactly the gap between routing distance and air distance — the detour ratio. Method error stops being a black box and becomes a topology measurement, which is a considerably stronger claim than "inflation hurts accuracy".
-
-**A calibration subset for `c₀`.** Pairs whose VP and target both effectively sit at a site have `detour ≈ 1` by construction, so their `routing_inflation` distribution *is* `c₀`, measured with geometry held constant. Estimating `c₀` there and then asking whether the remaining pairs sit at `c₀ × detour` is a genuine out-of-sample test rather than a fit evaluated on itself. 【NEEDS THE PER-ASN ENVELOPE COMMAND】
-
-Explain traffic-weighted dataset formation: traffic-weighting preserves heavy flows and target locations where peering resides. Define VP proximity of target, VP discrimination power of target, shortest-ping VP of target, and min-RTT inflation.
 
 
 Then characterize "targets that are close to peering locations": 
@@ -609,6 +610,20 @@ Runtime
 Data requirement: Shortest ping / SoI CBG do not need training data
 
 TODO: error distance
+## 9. Improvement
+Distance metric uses d(VP, PNI, TG) instead of d(VP, TG)
+
+- SoI CBG (2/3c) -> Calibrated SoI CBG (measured Low-quantile (5th pct, not min) envelope on the **routing** axis)
+- Vanilla CBG (top-weight selection):
+	- remove failure rate
+- Octant CBG (top-weight selection, tune)
+	- improve RTT-distance modeling
+	- reduce drifting due to more intersection/segmented regions
+- Spotter CBG (top-weight selection, tune normal distribution param)
+	- improve RTT-distance modeling
+	- reduce drifting due to more intersection/segmented regions
+
+
 ## 9. Practical Insights · 10. Limitations · 11. Conclusion
 
 *[Pending. v1 §7 to §9 hold the current material; migrate after §8 is settled. Limitations must name the XGBoost candidate classifier as the designated follow-up.]*

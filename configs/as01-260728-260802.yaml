@@ -60,3 +60,30 @@ analysis:
     top_n: 1
     cost: runtime
     cost_stat: p50
+
+  # --- PNI stack (§7.3, §8.1) --------------------------------------------
+  # The 14-site AS20940 list read off the operator dashboard. Approximate:
+  # metro identity from a screenshot, coordinates substituted from known
+  # carrier hotels, CONUS-cropped. `peer_asn` is asserted explicitly because
+  # the reconstructed source CSV lost its `target_asn` column.
+  detect-pni-strategy:
+    pni_csv: datasets/pni/as01-us-pni.approx.csv
+    peer_asn: 20940
+
+  build-pni-graph:
+    pni_csv: datasets/pni/as01-us-pni.approx.csv
+    peer_asn: 20940
+    # `mixed` verdict (no policy took a majority), so the argmin fallback
+    # stands: it assumes no policy rather than asserting one.
+    strategy: argmin
+    split_csv: outputs/analysis/v3/as01-260728-260802/pni-strategy/pair_split.csv
+
+  build-pni-feasibility:
+    decoy_trials: 200
+
+  # The graph was built under a detected --strategy, so scoring on the pairs
+  # the rule was chosen from would be a fit evaluated on itself.
+  compare-pni-linearity:
+    holdout_only: true
+
+  breakdown-sping-pni: {}

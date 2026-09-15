@@ -121,6 +121,7 @@ from scripts.analysis.v3.modules.paths import (
     grid_slug,
     resolve_run,
 )
+from scripts.analysis.v3.modules.proximity import load_proximity
 
 #: Same family as `table-accuracy` — one dataset set, one directory.
 CROSS_KIND = "accuracy-table"
@@ -453,7 +454,12 @@ def pool_method_counts(per_run: list[dict | None], datasets: list[str] | None = 
 
 
 def headline_long(
-    accuracy: pd.DataFrame, plan: list[dict], *, top_n: int, methods: list[str]
+    accuracy: pd.DataFrame,
+    plan: list[dict],
+    *,
+    top_n: int,
+    methods: list[str],
+    regions_by_run: dict[str, int] | None = None,
 ) -> pd.DataFrame:
     """One row per (plan row, method): the table in long form.
 
@@ -480,6 +486,16 @@ def headline_long(
         sources = [by_run.get(r) for r in run_ids]
         n_row_targets = sum(
             int(src["n_targets"].iloc[0]) for src in sources if src is not None and len(src)
+        )
+        # The effective sample size behind `n_row_targets`. Regions are
+        # disjoint across runs -- `build` already guards disjoint target sets
+        # for any pooled row -- so summing them is sound. `None` where
+        # build-proximity has not run or predates the column, which prints as
+        # a dash rather than as a zero.
+        n_row_regions = (
+            sum(regions_by_run.get(r, 0) for r in run_ids)
+            if regions_by_run
+            else 0
         )
         per_method = {
             m: pool_method_counts(
@@ -544,6 +560,7 @@ def headline_long(
                     "n_runs": len(run_ids),
                     "n_expected": entry["n_expected"],
                     "n_row_targets": n_row_targets or np.nan,
+                    "n_row_regions": n_row_regions or np.nan,
                     "n_targets": n_cell or np.nan,
                     "n_correct": counts["n_correct"] if counts else np.nan,
                     "n_wrong": counts["n_wrong"] if counts else np.nan,
@@ -693,8 +710,14 @@ def render_markdown(
         f"not lead every dataset it pools, and `{PENDING}` a row that is reserved with",
         "no data yet — never a measured zero.",
         "",
-        "| dataset | n | " + " | ".join(headers) + " |",
-        "| --- | --: | " + " | ".join("--:" for _ in headers) + " |",
+        "`n` is targets; `regions` is distinct target coordinates and is the",
+        "**effective** sample size — the operator runs hold ~20 IP replicas per",
+        "site, and replicas share a seed and every VP distance, so they are one",
+        "observation repeated. Accuracy is quantized in steps of 1/regions, and an",
+        "interval taken over `n` would be ~sqrt(n/regions) too narrow.",
+        "",
+        "| dataset | n | regions | " + " | ".join(headers) + " |",
+        "| --- | --: | --: | " + " | ".join("--:" for _ in headers) + " |",
     ]
 
     incomplete: list[str] = []
@@ -709,6 +732,7 @@ def render_markdown(
         label = str(group["row_label"].iloc[0])
         scope = str(group["scope"].iloc[0])
         n = group["n_row_targets"].iloc[0]
+        n_regions = group["n_row_regions"].iloc[0]
         cells = []
         for m in methods:
             provisional = bool(indexed["provisional"].get(m, False))
@@ -763,7 +787,10 @@ def render_markdown(
         if scope == AGGREGATE:
             label = f"**{label}**"
         n_text = f"{int(n):,}" if np.isfinite(n) else PENDING
-        lines.append(f"| {label} | {n_text} | " + " | ".join(cells) + " |")
+        regions_text = f"{int(n_regions):,}" if np.isfinite(n_regions) else PENDING
+        lines.append(
+            f"| {label} | {n_text} | {regions_text} | " + " | ".join(cells) + " |"
+        )
 
     pending = sorted(
         long.loc[
@@ -931,7 +958,26 @@ def build(
             f"none of {wanted} appear in the selected runs' topn_accuracy.csv"
         )
 
-    longs = {n: headline_long(accuracy, plan, top_n=n, methods=printed) for n in top_ns}
+    # Read off each run's proximity meta rather than recomputed, so this column
+    # and `table-accuracy`'s `n_regions` are the same number by construction.
+    regions_by_run = {}
+    for run_id, run in all_runs.items():
+        try:
+            meta = load_proximity(
+                run.proximity_dir(root=analysis_root, grid=grid, resolution=resolution)
+            ).meta
+        except MissingArtifactError:
+            continue
+        n_reg = (meta.get("regions") or {}).get("n_regions")
+        if n_reg:
+            regions_by_run[run_id] = int(n_reg)
+
+    longs = {
+        n: headline_long(
+            accuracy, plan, top_n=n, methods=printed, regions_by_run=regions_by_run
+        )
+        for n in top_ns
+    }
     markdowns = {
         n: render_markdown(
             longs[n], top_n=n, grid=grid, resolution=resolution, methods=printed

@@ -315,6 +315,34 @@ per-target/cluster geometry from `eval_source`, dataset rollup from
 > | `shortest_ping_vp_is_discriminative` | `has_discriminative_sping_vp` | as above |
 > | — | `has_proximate_vp`, `has_proximate_sping_vp` | new: the argmin axis |
 > | `proximity_label` | — | dropped; derive from the four flags |
+> | — | `region_id` | new: the independent unit — see below |
+>
+> #### `region_id` — the independent unit
+>
+> A **region** is one distinct target coordinate and the IP replicas sharing it.
+> Assigned by `modules/places.py` on the rounded coordinate, ids ordered by
+> `(lat, lon)` so they do not depend on row order; `-1` marks a missing
+> coordinate and stays in the denominator.
+>
+> The operator runs carry roughly twenty replicas per coordinate — 399 / 412 /
+> 458 `target_id`s over **20 / 22 / 23** regions — and replicas share a seed and
+> every VP distance, so they are one observation repeated. Read every rate
+> against the region count: accuracy is quantized in steps of `1/n_regions`, and
+> an interval taken over targets is about `sqrt(n_targets/n_regions)` too narrow.
+> The count is identical at 2 through 6 decimal places on all three runs, so
+> region identity here is exact coordinate equality rather than a clustering
+> choice; `regions.region_count_is_rounding_stable` in `meta.json` says so per
+> run.
+>
+> **Three distinct things are called "region" in this repo.** This one is a
+> target coordinate. `pni_region` in the PNI CSVs is a US state. Prior work's
+> answer-space clusters were also called regions and are unrelated to both.
+>
+> Consumers: `target-proximity/meta.json` carries `regions` (the F1 diagnostics),
+> `accuracy_by_flag.csv` carries `n_regions_true/false` and
+> `region_accuracy_when_true/false`, `accuracy_by_taxonomy.csv` carries
+> `n_regions` and `region_accuracy`, `dataset_context.csv` carries `n_regions`,
+> and the headline table prints a `regions` column beside `n`.
 >
 > The two `*_to_tg_km` columns are kept for audit and for the RTT-vs-geography
 > story, and are deliberately **not** the quantities the flags threshold: a min

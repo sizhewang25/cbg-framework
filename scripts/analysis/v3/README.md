@@ -944,6 +944,53 @@ as02 and as7018 do vary (`372/412` and `49/78` proximate), so the left column is
 not dead — it separates on exactly the runs where VP placement is the binding
 constraint.
 
+### The independent unit is the site, not the IP
+
+`modules/places.py` assigns a `region_id` per distinct target coordinate, and
+`build-proximity` emits it. It exists because the three operator runs report
+399 / 412 / 458 targets over only **20 / 22 / 23 distinct coordinates** — about
+twenty IP addresses per facility, which is what a CDN deployment looks like.
+
+Replicas of one coordinate share a seed, share every VP distance, and receive
+an identical Shortest-Ping verdict. They are one observation repeated, so three
+things follow that no rate states on its own:
+
+* accuracy is **quantized** in steps of `1/n_regions` — 5% on as01, so a
+  stratum reading `1.000` is eight sites, not 160 targets;
+* an interval taken over targets is about `sqrt(n_targets/n_regions)` — roughly
+  4.4x on the pooled row — **too narrow**;
+* a per-target correlation is a correlation over ~20 points.
+
+The count is identical at 2 through 6 decimal places on all three runs, so this
+is exact coordinate equality rather than a clustering choice with a threshold to
+defend. `region_count_is_rounding_stable` in `target-proximity/meta.json` states
+it per run, so a future dataset whose replicas are jittered announces itself
+instead of silently collapsing distinct sites.
+
+`region_level_accuracy` pairs the target-level rate with the region-level one
+and a **clustered bootstrap over regions**. The cluster-robust sandwich
+estimator is deliberately not offered: at ~20 clusters its asymptotics do not
+hold, and it would print an interval whose nominal coverage the data cannot
+support. The bootstrap is approximate at this count too, so `n_regions` travels
+with every interval and `ci_is_underpowered` flags it outright.
+
+Two estimators are reported because they answer different questions.
+`target_accuracy` describes the measured addresses; `region_accuracy` is what
+generalizes to a deployment with different replica counts. They diverge only
+when replica counts correlate with correctness, and printing both makes that
+dependence visible. `region_homogeneity` is the share of regions whose replicas
+agree — below 1.0 means something target-specific (RTT noise, a per-IP
+fallback) is entering, and the region rate is then a mean of fractions rather
+than a mean of verdicts.
+
+A related fact the same module measures: **every region spans all five folds**
+on all three runs (`fold_region_overlap`, `share_regions_in_all_folds` = 1.0,
+min = max = 5). `fold_assignments` splits `target_id`, not coordinate, so each
+test fold's geometry is also in all five training folds and a location-sensitive
+calibration — LTD is one — is fit on what it is scored on. Reported as a
+statistic, not raised: whether it *moves* a number needs a re-cut run to answer,
+and this is what decides whether that run is worth its cost.
+
 ## PNI sites and the hairpin (§7.3)
 
 `build-bipartite-graph` excludes RTT; `build-proximity` lets it in only to name

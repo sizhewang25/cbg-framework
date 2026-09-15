@@ -312,7 +312,9 @@ def test_a_reserved_row_prints_the_pending_dash_never_a_number():
     text = _rendered()
     row = next(l for l in text.splitlines() if l.startswith("| AS01 TRAFFIC-WEIGHTED"))
     assert "%" not in row  # no rate of any value, not merely no zero
-    assert row.count(H.PENDING) == 3  # the n column plus both method cells
+    # n, regions, and both method cells: a reserved row has no denominator of
+    # either kind, so neither count column may invent one.
+    assert row.count(H.PENDING) == 4
 
 
 def test_the_pending_rows_are_explained_under_the_table():
