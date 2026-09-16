@@ -28,6 +28,73 @@ def available_methods(cls_dir: Path) -> list[str]:
     return ordered + sorted(found - set(ordered))
 
 
+#: Set on the returned frame: how many baseline-only targets `build_membership`
+#: dropped to reach a common denominator. Non-zero only on an arm whose
+#: benchmark ran on a subset of the eval source — see `_align_to_scored_targets`.
+#: An attribute rather than a return value because three commands call this and
+#: only the ones that report a denominator need to look.
+DROPPED_ATTR = "n_baseline_only_targets"
+
+
+def _align_to_scored_targets(
+    cols: dict[str, pd.Series], methods: list[str], *, baseline: str = SHORTEST_PING
+) -> tuple[pd.Index | None, int]:
+    """The population every column is read over: the targets the CBG arms scored.
+
+    **The CBG arms must agree with each other; the baseline is aligned to them.**
+    The asymmetry is not a convenience, it is where the two populations come
+    from. A CBG column is the run's fold parquets — the targets the benchmark
+    actually evaluated. The baseline column is `eval_source/*_eval_per_target.csv`,
+    read straight off the eval source and never passed through the benchmark, so
+    it covers every target the eval CSV describes.
+
+    On a mesh run those coincide and this function changes nothing. On a
+    **traffic-weighted** arm they cannot: the filter prunes flows, a target that
+    loses every flow vanishes from the weighted CSV, and the eval source is the
+    pre-filter mesh — so the baseline carries targets no CBG variant has an
+    answer for. Those targets cannot enter a set-overlap figure (there is no
+    membership to record for five of the six columns) and they cannot stay in
+    the denominator either, so they are dropped and counted.
+
+    Two disagreeing *CBG* arms are still an error. They read the same fold
+    parquets of the same run, so a difference there is a broken run rather than
+    a filtered one, and silently intersecting it would hide that.
+
+    Returns the population index and how many baseline-only targets it excludes;
+    `(None, 0)` when there is nothing to align — no CBG columns, or no baseline.
+    """
+    cbg = [m for m in methods if m != baseline]
+    if not cbg:
+        return None, 0
+
+    first = set(cols[cbg[0]].index)
+    disagree = [m for m in cbg[1:] if set(cols[m].index) != first]
+    if disagree:
+        counts = {m: int(len(cols[m])) for m in cbg}
+        raise ValueError(
+            f"CBG methods cover different target sets ({counts}); cannot form "
+            f"set overlaps over a common denominator. These read the same run's "
+            f"fold parquets, so they should not differ — re-run `classify`, or "
+            f"pin a consistent set with --method"
+        )
+    if baseline not in cols:
+        return None, 0
+
+    scored = cols[cbg[0]].index
+    missing = scored.difference(cols[baseline].index)
+    if len(missing):
+        # The other direction, and not alignable: a target the benchmark scored
+        # but the eval source does not describe has no baseline answer to
+        # compare against, and dropping it would shrink the CBG arms' own
+        # denominator to hide an inconsistent run.
+        raise ValueError(
+            f"{len(missing)} target(s) scored by the CBG arms are absent from "
+            f"the {baseline!r} baseline (e.g. {missing[:5].tolist()}); the "
+            f"baseline is read from eval_source, so it should be a superset"
+        )
+    return scored, int(len(cols[baseline].index.difference(scored)))
+
+
 def build_membership(
     cls_dir: Path, methods: list[str], *, top_n: int = 1
 ) -> pd.DataFrame:
@@ -35,6 +102,13 @@ def build_membership(
 
     True means the method placed that target in a seed ranked better than
     `top_n`, and that the pipeline actually solved it (fallbacks are failures).
+
+    Rows are the targets the CBG arms scored. Where the Shortest-Ping baseline
+    covers more than that — a traffic-weighted arm, whose benchmark ran on the
+    traffic-carrying subset while its eval source spans the pre-filter mesh —
+    the extra rows are dropped and counted in `frame.attrs[DROPPED_ATTR]`, so
+    every column is read over one denominator. `_align_to_scored_targets` is
+    where that rule and its limits live.
     """
     cls_dir = Path(cls_dir)
     cols: dict[str, pd.Series] = {}
@@ -51,16 +125,24 @@ def build_membership(
         rank = df["tg_seed_rank"]
         cols[method] = (rank >= 0) & (rank < top_n) & solved
 
+    scored, dropped = _align_to_scored_targets(cols, methods)
     membership = pd.DataFrame(cols)
+    if scored is not None and dropped:
+        # Masked rather than reindexed: `.loc[scored]` would reorder the rows to
+        # the CBG arms' order, rewriting every existing membership CSV for a
+        # change that drops nothing on a mesh run.
+        membership = membership[membership.index.isin(set(scored))]
     if membership.isna().any().any():
-        # Methods disagreeing on the target set would make every intersection
-        # count ambiguous.
+        # Unreachable once aligned, kept as the backstop for the paths
+        # `_align_to_scored_targets` returns `(None, 0)` on.
         counts = {m: int(membership[m].notna().sum()) for m in methods}
         raise ValueError(
             f"methods cover different target sets ({counts}); cannot form set "
             f"overlaps over a common denominator"
         )
-    return membership.astype(bool)
+    membership = membership.astype(bool)
+    membership.attrs[DROPPED_ATTR] = dropped
+    return membership
 
 
 def restrict_to_baseline_failures(
@@ -194,6 +276,10 @@ def pooled_membership(
         origins.append(pd.Series(run_id, index=one.index, name="run_id"))
 
     pooled = pd.concat(frames)
+    # Summed explicitly: `concat` only carries `attrs` through when every input
+    # agrees, and a pool of a mesh run with a weighted one is exactly the case
+    # where they do not.
+    pooled.attrs[DROPPED_ATTR] = sum(int(f.attrs.get(DROPPED_ATTR, 0)) for f in frames)
     if not pooled.index.is_unique:
         dupes = pooled.index[pooled.index.duplicated()].unique().tolist()
         raise ValueError(

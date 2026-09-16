@@ -334,6 +334,85 @@ def _make_cls_dir(
 _TWO = (venn.SHORTEST_PING, "vanilla_cbg")
 
 
+# ---- the baseline's population vs the CBG arms' -----------------------------
+
+
+def test_baseline_is_aligned_to_the_targets_the_cbg_arms_scored(tmp_path):
+    """A traffic-weighted arm: the benchmark ran on a subset of the eval source.
+
+    The baseline is read from `eval_source/*_eval_per_target.csv` and never
+    passes through the benchmark, so it carries targets the traffic filter
+    pruned out of every CBG arm. Those cannot be a row in a set-overlap figure
+    and cannot stay in the denominator; they are dropped and counted.
+    """
+    run = _make_cls_dir(
+        tmp_path, "tw", {venn.SHORTEST_PING: [True, False, True]},
+        ["t0", "t1", "t_pruned"],
+    )
+    _make_cls_dir(tmp_path, "tw", {"vanilla_cbg": [True, True],
+                                   "spotter_cbg": [False, True]}, ["t0", "t1"])
+    cls_dir = run.cls_accuracy_dir(root=tmp_path / "analysis", grid="h3", resolution=4)
+
+    m = venn.build_membership(
+        cls_dir, [venn.SHORTEST_PING, "vanilla_cbg", "spotter_cbg"]
+    )
+    assert list(m.index) == ["t0", "t1"]
+    assert m.attrs[venn.DROPPED_ATTR] == 1
+    # The baseline's surviving rows keep their own values, not the CBG arms'.
+    assert m[venn.SHORTEST_PING].tolist() == [True, False]
+
+
+def test_two_cbg_arms_over_different_targets_is_still_an_error(tmp_path):
+    """They read the same run's fold parquets, so a difference is a broken run."""
+    run = _make_cls_dir(tmp_path, "broken", {"vanilla_cbg": [True, True]}, ["t0", "t1"])
+    _make_cls_dir(tmp_path, "broken", {"spotter_cbg": [True]}, ["t0"])
+    cls_dir = run.cls_accuracy_dir(root=tmp_path / "analysis", grid="h3", resolution=4)
+
+    with pytest.raises(ValueError, match="CBG methods cover different target sets"):
+        venn.build_membership(cls_dir, ["vanilla_cbg", "spotter_cbg"])
+
+
+def test_a_target_the_baseline_lacks_is_not_alignable(tmp_path):
+    """The other direction: nothing to compare the CBG arms against there."""
+    run = _make_cls_dir(tmp_path, "odd", {venn.SHORTEST_PING: [True]}, ["t0"])
+    _make_cls_dir(tmp_path, "odd", {"vanilla_cbg": [True, True]}, ["t0", "t1"])
+    cls_dir = run.cls_accuracy_dir(root=tmp_path / "analysis", grid="h3", resolution=4)
+
+    with pytest.raises(ValueError, match="absent from the .* baseline"):
+        venn.build_membership(cls_dir, [venn.SHORTEST_PING, "vanilla_cbg"])
+
+
+def test_matching_populations_drop_nothing_and_keep_their_row_order(tmp_path):
+    """The mesh case: alignment is a no-op, down to the order of the rows."""
+    run = _make_cls_dir(
+        tmp_path, "mesh", {m: [True, False, True] for m in _TWO}, ["t2", "t0", "t1"]
+    )
+    cls_dir = run.cls_accuracy_dir(root=tmp_path / "analysis", grid="h3", resolution=4)
+
+    m = venn.build_membership(cls_dir, list(_TWO))
+    assert list(m.index) == ["t2", "t0", "t1"]
+    assert m.attrs[venn.DROPPED_ATTR] == 0
+
+
+def test_pooling_sums_the_dropped_counts_across_runs(tmp_path):
+    """`concat` only carries attrs when every input agrees; a mixed pool does not."""
+    for rid, extra in (("as01", []), ("as02", ["t_pruned"])):
+        _make_cls_dir(
+            tmp_path, rid, {venn.SHORTEST_PING: [True, False] + [True] * len(extra)},
+            ["t0", "t1"] + extra,
+        )
+        _make_cls_dir(tmp_path, rid, {"vanilla_cbg": [True, True]}, ["t0", "t1"])
+    runs = {
+        rid: RunPaths(run_id=rid, root=tmp_path, source="src", setup="setup")
+        for rid in ("as01", "as02")
+    }
+    pooled, _ = venn.pooled_membership(
+        runs, analysis_root=tmp_path / "analysis", grid="h3", resolution=4
+    )
+    assert len(pooled) == 4  # 2 + 2, the pruned target gone
+    assert pooled.attrs[venn.DROPPED_ATTR] == 1
+
+
 def _two_run_fixture(tmp_path):
     a = _make_cls_dir(
         tmp_path, "as01", {m: [True, False] for m in _TWO}, ["t0", "t1"]

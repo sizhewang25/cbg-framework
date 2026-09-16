@@ -119,6 +119,7 @@ from scripts.analysis.v3.modules.paths import (
 # `render_*` functions below use nearly all of it anyway. The definitions live
 # under `diagram/`.
 from scripts.analysis.v3.modules.diagram.common import (
+    DROPPED_ATTR,
     LABELS,
     PREFERRED_ORDER,
     RING_LETTERS,
@@ -183,6 +184,7 @@ CROSS_KIND = "venn-diagram"
 #: functions below, and without this they read as dead imports.
 __all__ = [
     "CBG_ANY_LABEL",
+    "DROPPED_ATTR",
     "COLUMN_METRIC_LABEL",
     "CROSS_KIND",
     "EULER_CAPTION",
@@ -237,6 +239,26 @@ __all__ = [
     "set_shares",
     "venn_spec",
 ]
+
+
+def _warn_if_aligned(membership: pd.DataFrame, where: str) -> None:
+    """Say out loud that the baseline was cut down to the CBG arms' targets.
+
+    Echoed rather than logged, and from the two `render_*` functions rather than
+    from `build_membership`, because it is a statement about the *denominator*
+    of the artifact set about to be written — a reader comparing a share here
+    against one from the mesh arm needs to know the populations differ. The
+    cross-run manifest records the same number; the per-run directory has no
+    manifest, so this line is the only channel it has.
+    """
+    dropped = int(membership.attrs.get(DROPPED_ATTR, 0))
+    if dropped:
+        typer.echo(
+            f"{where}: {dropped} target(s) carried by {LABELS[SHORTEST_PING]} "
+            f"alone were dropped; every share below is over the "
+            f"{len(membership)} targets the CBG arms scored. Expected on a "
+            f"traffic-weighted arm, whose eval source spans the pre-filter mesh."
+        )
 
 
 #: Filename stem for the full-population artifact set, and for the rescue
@@ -572,6 +594,7 @@ def render_overlap(
         _guard_rescue(chosen)
 
     membership = build_membership(cls_dir, chosen, top_n=top_n)
+    _warn_if_aligned(membership, run.run_id)
 
     n = len(membership)
     suffix = "" if top_n == 1 else f", top-{top_n}"
@@ -640,6 +663,7 @@ def render_cross_overlap(
         methods=methods,
     )
     chosen = list(membership.columns)
+    _warn_if_aligned(membership, "+".join(sorted(runs)))
     if rescue_view:
         _guard_rescue(chosen)
 
@@ -692,6 +716,13 @@ def render_cross_overlap(
                 "setups": {rid: r.setup for rid, r in sorted(runs.items())},
                 "n_targets_total": n,
                 "n_targets_per_run": {r: int(c) for r, c in per_run.items()},
+                # Non-zero on a traffic-weighted arm: the baseline is read from
+                # eval_source and covers the pre-filter mesh, the CBG arms cover
+                # what the benchmark scored. Recorded because it is the
+                # denominator every share in this file is taken over.
+                "n_baseline_only_targets_dropped": int(
+                    membership.attrs.get(DROPPED_ATTR, 0)
+                ),
                 "methods": chosen,
                 "labels": {m: label_for(m) for m in chosen},
                 "grid": grid,

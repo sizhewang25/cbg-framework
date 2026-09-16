@@ -19,6 +19,7 @@ from scripts.analysis.v3.modules.diagram.common.labels import (
 from scripts.analysis.v3.modules.diagram.common.membership import (
     RUN_KEY_SEP,
     available_methods,
+    DROPPED_ATTR,
     build_membership,
     pooled_membership,
     restrict_to_baseline_failures,
@@ -41,6 +42,7 @@ __all__ = [
     "SET_IDS",
     "artifact_name",
     "available_methods",
+    "DROPPED_ATTR",
     "build_membership",
     "exact_combination_counts",
     "intersection_table",
