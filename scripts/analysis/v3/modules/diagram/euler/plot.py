@@ -30,14 +30,20 @@ from scripts.analysis.v3.modules.diagram.common.palette import (
     _SURFACE,
     method_colors,
 )
-from scripts.analysis.v3.modules.diagram.euler.layout import EulerLayout
+from scripts.analysis.v3.modules.diagram.euler.layout import (
+    DISJOINT_MARGIN,
+    EulerLayout,
+    circle_radii,
+)
 
 
 #: Printed on every Euler figure. The counterpart to `RING_CAVEAT`, and its
 #: mirror image: there, nothing but the labels carried data; here, nothing *but*
 #: the geometry does.
 EULER_CAPTION = (
-    "Circle area = share of targets correct; shared area = share both get right."
+    "Circle area = share of targets correct; shared area = share both get right.\n"
+    "Dashed circle: the share no method got right — same area scale, set apart "
+    "because it meets none of them."
 )
 
 
@@ -58,6 +64,14 @@ LABEL_MIN_GAP = 0.26
 #: share of its circle. Below it the lobe is a crescent, and a name centred in a
 #: crescent reads as belonging to whatever fills the rest of the circle.
 LOBE_LABEL_SHARE = 0.12
+
+#: Clear space between the `None` circle and the nearest set circle, in layout
+#: units. `DISJOINT_MARGIN` alone would do for the geometry — it is what the fit
+#: leaves between two sets that never co-occur — but the set nearest the `None`
+#: circle is usually labelled on its *outward* arc, and that name overhangs its
+#: own boundary by roughly half its width. Sized to clear it: on the pooled
+#: operator runs "Spotter CBG" is the label in question.
+OUTSIDE_STANDOFF = 0.24
 
 
 def _spread_angles(angles: list[float], min_gap: float) -> list[float]:
@@ -153,11 +167,48 @@ def _euler_label_points(layout: EulerLayout) -> list[tuple[float, float]]:
 #: invites reading the union of the circles as the whole population when on the
 #: pooled operator runs it is 85% of it.
 #:
-#: Its percentage is `observed[0]` and is exact, but — unlike every circle — its
-#: **area is not to scale**: the space outside the union is whatever frame is
-#: left over after the layout, not a fitted share. It is the one label here whose
-#: number and ink are unrelated, which is why it is drawn muted and outside.
+#: Its percentage is `observed[0]`, and it gets a circle of its own on the same
+#: area scale as every set (`outside_circle`), so the comparison a reader makes
+#: by eye — "is the never-correct share bigger than Vanilla's?" — is a
+#: comparison of two areas that both mean the same thing.
 OUTSIDE_LABEL = "None"
+
+
+def outside_circle(layout: EulerLayout) -> tuple["np.ndarray", float]:
+    """Centre and radius of the `None` circle: area to scale, position not.
+
+    The region outside every set is as real as any of them — on the pooled
+    operator runs it is 14.9% of the targets — and drawing it as leftover frame
+    made it the one quantity on the figure whose number and ink were unrelated.
+    Its radius comes from the same `circle_radii` as every set, so its area *is*
+    its share and can be compared against theirs directly.
+
+    What its position cannot carry is a relationship, because it has none: the
+    never-correct targets are by construction in no set, so the circle meets
+    nothing. It is placed on the layout's horizontal midline, as far left as it
+    can sit while clearing every circle by `DISJOINT_MARGIN` — the standoff the
+    fit puts between two sets that never co-occur, so "these do not meet" looks
+    the same wherever it appears — or by `OUTSIDE_STANDOFF` where that is wider,
+    which is what keeps the nearest circle's own label off it. `plot_euler`
+    draws it dashed and muted to say that the placement itself is not fitted.
+
+    A share of zero returns a zero radius: nothing to draw, and `plot_euler`
+    prints the label alone rather than a dot at the point a circle would start.
+    """
+    radius = float(circle_radii(np.array([float(layout.observed[0])]))[0])
+    lo = (layout.centres - layout.radii[:, None]).min(axis=0)
+    hi = (layout.centres + layout.radii[:, None]).max(axis=0)
+    y = float((lo[1] + hi[1]) / 2)
+    # Clear of the layout's own bounding box to begin with, then pushed right
+    # by whichever circle the midline actually runs closest to.
+    x = float(hi[0]) + radius + OUTSIDE_STANDOFF
+    for centre, r in zip(layout.centres, layout.radii):
+        gap = max(DISJOINT_MARGIN * min(float(r), radius), OUTSIDE_STANDOFF)
+        reach = float(r) + radius + gap
+        dy = y - float(centre[1])
+        if abs(dy) < reach:
+            x = max(x, float(centre[0]) + math.sqrt(reach * reach - dy * dy))
+    return np.array([x, y]), radius
 
 
 def plot_euler(
@@ -186,17 +237,26 @@ def plot_euler(
     sets — and a figure that says nothing about that asserts an exactness it
     does not have.
     """
+    from matplotlib.patches import Circle
     from matplotlib.patheffects import withStroke
 
     order = layout.order
     colors = method_colors(order)
+    out_centre, out_radius = outside_circle(layout)
 
     # Window the union, not the origin: the fit centres the circles on their own
-    # mean, which is not the middle of what they cover. The canvas then takes the
-    # window's aspect, because a fitted layout is rarely square and a square
-    # figure would pad the short axis with blank canvas.
-    lo = (layout.centres - layout.radii[:, None]).min(axis=0)
-    hi = (layout.centres + layout.radii[:, None]).max(axis=0)
+    # mean, which is not the middle of what they cover. The `None` circle is
+    # part of what has to fit: it always extends the window rightwards, and
+    # dominates it when few targets are solved. The canvas takes the window's
+    # aspect, because
+    # a fitted layout is rarely square and a square figure would pad the short
+    # axis with blank canvas.
+    lo = np.minimum(
+        (layout.centres - layout.radii[:, None]).min(axis=0), out_centre - out_radius
+    )
+    hi = np.maximum(
+        (layout.centres + layout.radii[:, None]).max(axis=0), out_centre + out_radius
+    )
     mid = (lo + hi) / 2
     half = (hi - lo) / 2 + EULER_MARGIN
     fig, ax = plt.subplots(
@@ -209,14 +269,23 @@ def plot_euler(
     _draw_circles(ax, order, colors, layout.centres, layout.radii)
 
     halo = [withStroke(linewidth=2.6, foreground=_SURFACE)]
-    # Centred just under the lowest circle rather than at the foot of the frame:
-    # in data units, so it tracks the layout instead of drifting with the margin.
-    # `EULER_MARGIN` guarantees the band below `lo[1]` is clear of every circle
-    # whatever the fit produced.
+    # The never-correct region, on the same area scale as every set but drawn
+    # dashed: the area is to scale, the position is not, and the dash is what
+    # says so. Skipped entirely at a zero share — there is no circle to draw,
+    # and a dot would read as a very small one.
+    if out_radius > 0:
+        ax.add_patch(
+            Circle(out_centre, out_radius, facecolor=_C_MUTED,
+                   edgecolor="none", alpha=0.10, zorder=1)
+        )
+        ax.add_patch(
+            Circle(out_centre, out_radius, facecolor="none", edgecolor=_C_MUTED,
+                   linewidth=1.5, linestyle=(0, (6, 4)), zorder=2)
+        )
     ax.annotate(
         f"{OUTSIDE_LABEL}\n{100 * float(layout.observed[0]):.1f}%",
-        xy=(mid[0], lo[1] - 0.03),
-        ha="center", va="top", zorder=6,
+        xy=tuple(out_centre),
+        ha="center", va="center", zorder=6,
         fontsize=10.5, fontweight="bold", color=_C_MUTED,
         linespacing=1.35, path_effects=halo,
     )

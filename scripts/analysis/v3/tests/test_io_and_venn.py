@@ -844,6 +844,67 @@ def test_the_outside_label_carries_the_never_correct_share():
     assert venn.OUTSIDE_LABEL == "None"
 
 
+def test_the_outside_circle_is_on_the_same_area_scale_as_the_sets():
+    """Its drawn area *is* its share, the rule every set circle already follows.
+
+    Without it the one region the figure cannot fit would also be the one whose
+    ink said nothing, and a reader comparing it against a set by eye would be
+    comparing a share to leftover frame.
+    """
+    m = _euler_membership([{0}, {0, 1}, {0, 1, 2}, {2}, set(), set()])
+    layout = venn.fit_euler_layout(
+        m, list(m.columns), restarts=1, grid=140, fit_grid=200
+    )
+    _, radius = venn.outside_circle(layout)
+    assert math.pi * radius ** 2 == pytest.approx(float(layout.observed[0]), abs=1e-9)
+
+
+def test_the_outside_circle_meets_no_set_circle():
+    """It shares no target with any set, so it must share no area with one either."""
+    m = _euler_membership([{0}, {0, 1}, {0, 1, 2}, {2}, {1, 2}, set(), set(), set()])
+    layout = venn.fit_euler_layout(
+        m, list(m.columns), restarts=1, grid=140, fit_grid=200
+    )
+    centre, radius = venn.outside_circle(layout)
+    for c, r in zip(layout.centres, layout.radii):
+        assert float(np.hypot(*(centre - c))) >= float(r) + radius
+
+
+def test_a_zero_outside_share_draws_no_circle(tmp_path, monkeypatch):
+    """Every target solved by someone: a dot would read as a very small share."""
+    from matplotlib.patches import Circle
+
+    from scripts.analysis.v3.modules.diagram.common import draw as draw_mod
+
+    m = _euler_membership([{0}, {0, 1}, {1}, {0, 1, 2}, {2}])
+    layout = venn.fit_euler_layout(
+        m, list(m.columns), restarts=1, grid=140, fit_grid=200
+    )
+    assert float(layout.observed[0]) == 0.0
+    _, radius = venn.outside_circle(layout)
+    assert radius == 0.0
+
+    drawn: list[float] = []
+    real_subplots = draw_mod.plt.subplots
+
+    def spy(*args, **kwargs):
+        fig, ax = real_subplots(*args, **kwargs)
+        real_add = ax.add_patch
+
+        def add(patch):
+            if isinstance(patch, Circle):
+                drawn.append(float(patch.get_radius()))
+            return real_add(patch)
+
+        monkeypatch.setattr(ax, "add_patch", add)
+        return fig, ax
+
+    monkeypatch.setattr(draw_mod.plt, "subplots", spy)
+    venn.plot_euler(layout, tmp_path / "euler.png", title="t")
+    # A fill and an outline for each set, and nothing else.
+    assert len(drawn) == 2 * len(layout.order)
+
+
 def test_the_caption_is_a_choice_and_names_the_error_when_on(tmp_path):
     """Default on: the layout misplaces targets and must say so."""
     m = _euler_membership([{0}, {0, 1}, {0, 1, 2}, {2}])

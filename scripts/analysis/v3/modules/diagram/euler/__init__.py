@@ -27,6 +27,7 @@ from scripts.analysis.v3.modules.diagram.euler.plot import (
     EULER_CAPTION,
     LABEL_MIN_GAP,
     OUTSIDE_LABEL,
+    outside_circle,
     plot_euler,
 )
 
@@ -42,6 +43,7 @@ __all__ = [
     "euler_fit_table",
     "fit_euler_layout",
     "lens_area",
+    "outside_circle",
     "plot_euler",
     "separation_for_overlap",
     "set_shares",

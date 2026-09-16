@@ -2115,14 +2115,23 @@ stack and the smallest on top. At equal `zorder` matplotlib draws in insertion
 order, so this is the whole mechanism; without it Octant-Hull at 60.4% is laid
 over Vanilla at 34.0% and buries its outline.
 
-The space outside every circle is labelled **None**, with its share — the targets
-no method placed correctly, 14.9% here, the complement of the union's 85.1%. It
-is named because blank space otherwise reads as "nothing here". The label sits
-centred just below the lowest circle, in data units so it tracks the layout;
-`EULER_MARGIN` guarantees that band is clear of every circle whatever the fit
-produced. **Its area alone is not to scale** — the space outside the union is
-leftover frame rather than a fitted share, making it the one label here whose
-number and ink are unrelated, which is why it is drawn muted and outside.
+The targets **no method placed correctly** get a circle of their own, labelled
+**None** with its share — 13.4% on the pooled runs at top-1, the complement of
+the union. It is drawn rather than left as blank space because blank space reads
+as "nothing here", and it is drawn as a *circle* because its area then means
+what every other area on the figure means: `outside_circle` sizes it with the
+same `circle_radii`, so "is the never-correct share bigger than Vanilla's?" is
+answered by looking, the way it is for any two sets.
+
+Its **position**, unlike its area, carries nothing — there is nothing for it to
+carry, since those targets are by construction in no set and the circle
+therefore meets none of the others. It sits on the layout's horizontal midline,
+as far left as it can while clearing every circle by `DISJOINT_MARGIN` (the
+standoff the fit itself puts between two sets that never co-occur) or by
+`OUTSIDE_STANDOFF` where that is wider, which is what keeps the nearest
+circle's own boundary label off it. The dashed muted stroke is the signal that
+the placement is not fitted. A zero share draws no circle at all — the label
+alone, since a dot would read as a very small share.
 
 The two figures are complements and neither replaces the other. The ring can
 state that the six-way region holds exactly 12.7% and cannot show that
