@@ -135,8 +135,17 @@ for R in "${RUNS[@]}"; do
       #     Scored on the held-out half only.
       run compare-pni-linearity $V3 compare-pni-linearity --run-id "$R"
 
-      # 5e. Cross every method's correctness with distance to the nearest PNI.
+      # 5e. Cross every method's correctness with two cuts on the nearest PNI:
+      #     quantile bins of d(TG, nearest PNI), and the threshold-free test of
+      #     whether that site falls inside the target's OWN Voronoi cell -- the
+      #     exact geometric precondition for nearest-answer snapping to be able
+      #     to land on the right class. The second emits a 2x2 against
+      #     Shortest-Ping top-1 plus region-level counts.
+      #
       #     Unlike 5a-5d this one joins classification, so it is fold-dependent.
+      #     It also reads the ANSWER SPACE, for the cell boundaries the scoring
+      #     was done against -- section 0 rebuilds that before this runs, so a
+      #     class-set change cannot leave the cell test on stale seeds.
       run breakdown-sping-pni $V3 breakdown-sping-pni --run-id "$R"
 
       # 5f. The §7.3 figure: min-RTT against VP->PNI->TG propagation delay, with

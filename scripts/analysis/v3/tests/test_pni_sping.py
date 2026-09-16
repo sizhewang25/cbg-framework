@@ -63,6 +63,41 @@ def _nodes(rows, *, drop=()):
     )
 
 
+#: Two seeds ~1,100 km apart, so a site near one is unambiguously in its cell
+#: and the nearest-seed argmin has no tie to resolve.
+_SEEDS = pd.DataFrame(
+    {
+        "seed_id": ["seed-a", "seed-b"],
+        "seed_lat": [40.0, 40.0],
+        "seed_lon": [-74.0, -61.0],
+        "grid_scheme": "h3",
+        "grid_resolution": 4,
+    }
+)
+
+#: `pni-a` sits on seed-a, `pni-b` on seed-b. Which one a target's nearest site
+#: is decides whether the site is in the target's own cell.
+_PNI_NODES = pd.DataFrame(
+    {
+        "pni_id": ["pni-a", "pni-b"],
+        "pni_lat": [40.05, 40.05],
+        "pni_lon": [-74.05, -61.05],
+    }
+)
+
+
+def _cell_labels(rows, *, seed_of):
+    """`_labels` but with `tg_seed_id` and `region_id` under the caller's control.
+
+    `_labels` gives every target its own seed, which cannot express "the site is
+    in another target's cell" -- the thing the cell test is about.
+    """
+    out = _labels(rows)
+    out["tg_seed_id"] = [seed_of[r[0]] for r in rows]
+    out["region_id"] = range(len(rows))
+    return out
+
+
 def _membership(rows, *, extra=None, top_ns=(1,)):
     """One boolean column per method, indexed by target id."""
     idx = pd.Index([r[0] for r in rows], name="target_id")
@@ -87,14 +122,41 @@ _ROWS = [
 ]
 
 
-def _build(rows=_ROWS, *, drop=(), extra=None, labels=None):
+def _build(rows=_ROWS, *, drop=(), extra=None, labels=None, nodes=None, seeds=None):
     return S.build_breakdown(
         labels if labels is not None else _labels(rows),
-        _nodes(rows, drop=drop),
+        nodes if nodes is not None else _nodes(rows, drop=drop),
         _membership(rows, extra=extra),
+        _PNI_NODES,
+        _SEEDS if seeds is None else seeds,
         run_id="run-x",
         grid_meta={"scheme": "h3", "resolution": 4},
     )
+
+
+def _cell_case():
+    """Four targets in seed-a, two with their nearest site in seed-a and two not.
+
+    Shortest-Ping is right on one target of each pair, so necessity is violated
+    by exactly one row -- the arrangement that distinguishes "counted the 2x2"
+    from "assumed the implication".
+    """
+    rows = [
+        ("tg-0", True, 5.0, 10.0, True),
+        ("tg-1", False, 8.0, 900.0, True),
+        ("tg-2", True, 700.0, 20.0, True),
+        ("tg-3", False, 800.0, 950.0, True),
+    ]
+    nodes = pd.DataFrame(
+        {
+            "target_id": ["tg-0", "tg-1", "tg-2", "tg-3"],
+            "tg_nearest_pni_id": ["pni-a", "pni-a", "pni-b", "pni-b"],
+            "tg_to_nearest_pni_km": [r[2] for r in rows],
+            "sping_vp_to_tg_km": [r[3] for r in rows],
+        }
+    )
+    labels = _cell_labels(rows, seed_of=dict.fromkeys([r[0] for r in rows], "seed-a"))
+    return rows, nodes, labels
 
 
 def test_the_colocation_rate_equals_shortest_ping_top1_accuracy():
@@ -197,7 +259,13 @@ def test_the_strata_carry_the_geometry_confounds():
         "answer_region_colocation_rate",
     }
     assert wanted <= set(out.strata.columns)
-    assert out.strata[list(wanted)].notna().all().all()
+    # Every POPULATED stratum. A cell stratum can legitimately be empty -- a
+    # dataset where every target's nearest site is in its own cell has no
+    # out-of-cell row to describe -- and the n=0 row is kept rather than
+    # dropped so "0 targets" stays a fact the CSV states.
+    populated = out.strata[out.strata["n_targets"] > 0]
+    assert len(populated) < len(out.strata)  # this fixture is one-sided
+    assert populated[list(wanted)].notna().all().all()
 
 
 def test_the_taxonomy_shares_come_from_breakdowns_partition():
@@ -230,7 +298,7 @@ def test_the_two_carried_copies_of_the_sping_distance_are_compared():
     rows = [(r[0], r[1], r[2], r[3], r[4]) for r in _ROWS]
     nodes = _nodes(rows)
     nodes.loc[0, "sping_vp_to_tg_km"] = 12345.0
-    drifted = S.build_breakdown(_labels(rows), nodes, _membership(rows))
+    drifted = _build(rows, nodes=nodes)
     assert drifted.manifest["checks"]["n_sping_vp_to_tg_km_disagreements"] == 1
 
 
@@ -283,3 +351,130 @@ def test_the_command_declares_the_grid_options_because_it_is_answer_space_keyed(
     cmd = get_command(app).commands["breakdown-sping-pni"]
     names = {p.name for p in cmd.params}
     assert {"grid", "resolution", "sweep"} <= names
+
+
+def test_the_cell_test_is_the_nearest_seed_to_the_site_not_to_the_target():
+    """The site is placed in a cell by the same nearest-seed rule the classes
+    are defined by; a site 700 km away in another cell is out, a site 5 km away
+    in the target's own cell is in."""
+    rows, nodes, labels = _cell_case()
+    cell = _build(rows, labels=labels, nodes=nodes).manifest["colocation"]["pni_in_tg_cell"]
+
+    assert cell["n_in_cell"] == 2 and cell["n_out_of_cell"] == 2
+    assert cell["n_undetermined"] == 0
+    assert cell["rate"] == 0.5
+
+
+def test_the_two_by_two_is_counted_rather_than_the_implication_assumed():
+    """Necessity and sufficiency are separate cells of the table, and the
+    fixture violates both -- so a bug that derived one from the other, or read
+    only the marginals, changes the answer."""
+    rows, nodes, labels = _cell_case()
+    cell = _build(rows, labels=labels, nodes=nodes).manifest["colocation"]["pni_in_tg_cell"]
+    c = cell["confusion_vs_shortest_ping_top1"]
+
+    assert c == {
+        "in_cell_correct": 1,
+        "in_cell_wrong": 1,
+        "out_of_cell_correct": 1,
+        "out_of_cell_wrong": 1,
+    }
+    # Equal marginals (2 in-cell, 2 sping-correct) over different sets: the
+    # trap a rate comparison alone walks into.
+    assert cell["necessity_holds"] is False
+    assert cell["sufficiency_holds"] is False
+    assert cell["p_shortest_ping_correct_given_in_cell"] == 0.5
+
+
+def test_no_out_of_cell_success_reads_as_necessity_holding():
+    """§8.1's prediction, and the shape as01 actually has: the out-of-cell
+    stratum holds no Shortest-Ping successes at all."""
+    rows, nodes, labels = _cell_case()
+    rows = [(r[0], r[1] and r[0] != "tg-2", *r[2:]) for r in rows]
+
+    cell = _build(rows, labels=labels, nodes=nodes).manifest["colocation"]["pni_in_tg_cell"]
+    assert cell["confusion_vs_shortest_ping_top1"]["out_of_cell_correct"] == 0
+    assert cell["necessity_holds"] is True
+
+
+def test_every_method_is_scored_over_the_cell_strata_too():
+    """The same control the distance bins get: a split that all methods share
+    is target difficulty, not a Shortest-Ping mechanism -- which the reader can
+    only check if every method has both rows."""
+    rows, nodes, labels = _cell_case()
+    extra = {OCTANT: [True, True, True, True]}
+    acc = S.build_breakdown(
+        labels, nodes, _membership(rows, extra=extra), _PNI_NODES, _SEEDS
+    ).accuracy
+
+    cells = acc[acc["stratum_kind"] == S.PNI_IN_CELL_KIND]
+    for method in (SHORTEST_PING, OCTANT):
+        got = cells[cells["method"] == method]["stratum"].tolist()
+        assert sorted(map(str, got)) == ["False", "True"], method
+    # Octant is right everywhere, so its cell strata are flat -- the reader's
+    # evidence that the split is not doing the work.
+    oct_rows = cells[cells["method"] == OCTANT]
+    assert set(oct_rows["accuracy"]) == {1.0}
+
+
+def test_the_cell_strata_leave_the_bin_edge_columns_empty():
+    """`tg_to_nearest_pni_km_lo/hi` mean "bin edge" on every other row. The cell
+    strata are not intervals, so filling them with an observed min/max would
+    overload the column; the range lives in the manifest instead."""
+    rows, nodes, labels = _cell_case()
+    result = _build(rows, labels=labels, nodes=nodes)
+    cells = result.accuracy[result.accuracy["stratum_kind"] == S.PNI_IN_CELL_KIND]
+
+    assert cells["tg_to_nearest_pni_km_lo"].isna().all()
+    assert cells["tg_to_nearest_pni_km_hi"].isna().all()
+    km = result.manifest["colocation"]["pni_in_tg_cell"]["distance_km"]
+    assert km["in_cell_max"] == 8.0 and km["out_of_cell_min"] == 700.0
+    assert km["gap"] == 692.0
+
+
+def test_a_site_that_cannot_be_placed_is_undetermined_not_out_of_cell():
+    """Counting an unplaceable site as out-of-cell would inflate the very
+    asymmetry the cut is testing, so it is NA and absent from both strata."""
+    rows, nodes, labels = _cell_case()
+    nodes = nodes.assign(tg_nearest_pni_id=["pni-a", "pni-a", "pni-b", "pni-ghost"])
+
+    cell = _build(rows, labels=labels, nodes=nodes).manifest["colocation"]["pni_in_tg_cell"]
+    assert cell["n_undetermined"] == 1
+    assert cell["n_in_cell"] + cell["n_out_of_cell"] == 3
+    assert cell["n_targets"] == 4
+
+
+def test_the_cut_is_reported_per_region_because_replicas_share_a_coordinate():
+    """`pni_in_tg_cell` is a function of the coordinate a region is defined by,
+    so all its replicas agree by construction and the effective denominator is
+    the region count."""
+    rows, nodes, labels = _cell_case()
+    # Two regions of two replicas each, split along the cell boundary.
+    labels = labels.assign(region_id=[0, 0, 1, 1])
+    nodes = nodes.assign(tg_nearest_pni_id=["pni-a", "pni-a", "pni-b", "pni-b"])
+
+    reg = _build(rows, labels=labels, nodes=nodes).manifest["colocation"]["pni_in_tg_cell"]["regions"]
+    assert reg["n_regions"] == 2
+    assert reg["n_regions_in_cell"] == 1
+    assert reg["n_regions_homogeneous_in_cell"] == 2
+    assert reg["replicas_per_region"] == {"min": 2, "p50": 2, "max": 2}
+
+
+def test_the_confound_panel_covers_the_cell_strata():
+    """"Far from a site" travels with "far from everything", so the method-free
+    geometry of both strata has to sit beside the claim."""
+    rows, nodes, labels = _cell_case()
+    result = _build(rows, labels=labels, nodes=nodes)
+
+    strata = result.strata[result.strata["stratum_kind"] == S.PNI_IN_CELL_KIND]
+    assert sorted(map(str, strata["stratum"])) == ["False", "True"]
+    assert strata["tg_seed_nearest_vp_km_p50"].notna().all()
+    check = result.manifest["colocation"]["pni_in_tg_cell"]["confound_check"]
+    assert check["in_cell"]["n_targets"] == 2
+    assert check["out_of_cell"]["tg_seed_nearest_vp_km_p50"] == 20.0
+
+
+def test_a_malformed_site_or_seed_frame_names_what_it_lacks():
+    rows, nodes, labels = _cell_case()
+    with pytest.raises(MissingArtifactError, match="seed_lon"):
+        _build(rows, labels=labels, nodes=nodes, seeds=_SEEDS.drop(columns=["seed_lon"]))

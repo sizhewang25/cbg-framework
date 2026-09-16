@@ -225,8 +225,19 @@ python -m scripts.analysis.v3.cli compare-pni-linearity \
   --run-id as01-260728-260802 --holdout-only
 
 # 3l. Does Shortest-Ping fail where the target sits far from an interconnect?
-#     Grid-keyed, unlike 3h-3j: correctness is scored against seeds. Needs
-#     classify + build-proximity + build-pni-graph on the same quantization.
+#     Two cuts, every method scored over both: quantile bins of
+#     d(TG, nearest PNI), and the threshold-free test of whether that site
+#     falls inside the target's OWN Voronoi cell. The second is the exact
+#     precondition for nearest-answer snapping to be ABLE to land right, so it
+#     is necessary and not sufficient -- the prediction is that the out-of-cell
+#     stratum holds no top-1 successes, and the manifest counts the 2x2 rather
+#     than comparing two rates. Reported per region too, since the flag is a
+#     function of the coordinate ~20 IP replicas share.
+#
+#     Grid-keyed, unlike 3h-3j: correctness is scored against seeds, and it
+#     reads the answer space directly for the cell boundaries. Needs classify +
+#     build-proximity + build-pni-graph + build-answer-space on the same
+#     quantization.
 python -m scripts.analysis.v3.cli breakdown-sping-pni \
   --run-id as01-260728-260802 --grid h3 -r 4
 
