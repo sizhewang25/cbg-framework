@@ -1199,9 +1199,16 @@ each other in ranks.
 
 **A point below the floor localizes to a triple, not to a cause.**
 `plot-pni-delay` writes the below-floor rows to `<stem>_below_floor.csv` and
-prints the worst of them: the three ids, all three pairwise distances among (VP,
-PNI, TG), the RTT, and `detour_ratio`/`air_inflation`, whose inequality is the
-below-floor condition. `residual_direct_ms >= 0` on such a row — which is the
+prints the worst of them: each of the three ids followed by its place as one
+`country-region-city` column, then all three pairwise distances among (VP, PNI,
+TG), the RTT, and `detour_ratio`/`air_inflation`, whose inequality is the
+below-floor condition. The measured pair leads and the assigned site comes last,
+so a row reads "this pair, between these two places, was given that site" --
+which is usually enough on its own: a Tucson VP reaching a Dallas target through
+Los Angeles does not need a statistic. `sel_pni_loc` is the operator site
+list's own label; `vp_loc` and `tg_loc` are the nearest GeoNames city to the
+coordinate, since nothing upstream names either, and the command prints which is
+which. `residual_direct_ms >= 0` on such a row — which is the
 usual case, since the bent floor sits above the geodesic one — says the RTT is
 legal on the straight line and it is the *triple* that 2/3 c rules out. Which of
 the three inputs is at fault is not decided there: the pair, the assignment rule

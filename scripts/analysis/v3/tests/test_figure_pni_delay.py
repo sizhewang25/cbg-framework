@@ -288,8 +288,11 @@ def test_a_below_floor_row_can_clear_the_geodesic_and_is_listed_with_its_ids(tmp
     row = below.iloc[0]
     assert (row["vp_id"], row["pni_id"], row["tg_id"]) == ("v0", "p0", "t0")
     assert row["below_by_ms"] == pytest.approx(-df.iloc[0]["residual_ms"])
-    # Ids lead, so the file opens on the identity of the offending triple.
-    assert list(below.columns)[:3] == ["vp_id", "pni_id", "tg_id"]
+    # The file opens on the identity of the offending triple, each id followed
+    # by its place, measured pair first and the assigned site last.
+    assert list(below.columns)[:6] == [
+        "vp_id", "vp_loc", "tg_id", "tg_loc", "pni_id", "pni_loc",
+    ]
 
     # The same row is *not* a direct-axis violation, since that floor is lower.
     assert F.below_floor(df, x_axis="direct").empty
@@ -334,10 +337,12 @@ def test_a_csv_without_ids_is_listed_by_coordinates_instead(tmp_path):
     df, _ = F.load_points(_write(tmp_path, rows))
     below = F.below_floor(df)
 
-    assert list(below.columns)[:6] == [
-        "vp_lat", "vp_lon", "pni_lat", "pni_lon", "tg_lat", "tg_lon"
+    assert list(below.columns)[:9] == [
+        "vp_lat", "vp_lon", "vp_loc",
+        "tg_lat", "tg_lon", "tg_loc",
+        "pni_lat", "pni_lon", "pni_loc",
     ]
-    assert "48.850" in F.below_floor_table(below)
+    assert "48.850" in F.below_floor_table(below, width=400)
 
 
 def test_the_command_writes_and_prints_the_below_floor_rows(tmp_path):
@@ -521,3 +526,78 @@ def test_the_command_takes_the_cuts_and_records_them(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "n_outside_view" in result.output
+
+
+def test_a_declared_place_is_used_and_a_missing_one_is_looked_up(tmp_path):
+    """`pni_edges.csv` names the site's city off the operator's list, and that
+    label is authoritative. Nothing upstream names a VP's or a target's, so
+    those come from the coordinate — and the two must not be confused."""
+    rows = [{
+        "vp_id": "v0", "vp_lat": 33.7556, "vp_lon": -84.3915,
+        "pni_id": "p0", "pni_lat": 40.0, "pni_lon": -75.0,
+        "pni_country": "US", "pni_region": "Georgia", "pni_city": "Atlanta",
+        "tg_id": "t0", "tg_lat": 25.7932, "tg_lon": -80.2906,
+        "min_rtt": 8.0,
+    }]
+    df, _ = F.load_points(_write(tmp_path, rows))
+
+    assert F.loc_provenance(df, "pni") == "declared"
+    assert F.loc_provenance(df, "vp") == "derived"
+    assert F.loc_provenance(df, "tg") == "derived"
+
+    placed = F.add_loc_columns(df, "vp", "tg", "pni")
+    # Declared: carried through verbatim, not re-derived. The site's own
+    # coordinate is in Philadelphia here, so a lookup would disagree.
+    assert placed.loc[0, "pni_loc"] == "US-Georgia-Atlanta"
+    # Derived: country and region from the nearest cities1000 entry.
+    assert placed.loc[0, "vp_loc"].startswith("US-Georgia-")
+    assert placed.loc[0, "tg_loc"].startswith("US-Florida-")
+
+
+def test_a_partial_declared_place_does_not_emit_empty_separators(tmp_path):
+    """A site list may carry a country and no city."""
+    rows = [{
+        "vp_id": "v0", "vp_lat": 48.85, "vp_lon": 2.35,
+        "pni_id": "p0", "pni_lat": 50.11, "pni_lon": 8.68, "pni_country": "DE",
+        "tg_id": "t0", "tg_lat": 51.51, "tg_lon": -0.13,
+        "min_rtt": 8.0,
+    }]
+    df, _ = F.load_points(_write(tmp_path, rows))
+
+    assert F.add_loc_columns(df, "pni").loc[0, "pni_loc"] == "DE"
+
+
+def test_the_printed_table_wraps_instead_of_running_off_the_terminal(tmp_path):
+    """Three ids, three places and nine numbers is wider than a terminal, and a
+    row the emulator soft-wraps is unreadable in a way a stacked block is
+    not."""
+    rows = [_triple((48.85, 2.35), (40.71, -74.01), (51.51, -0.13), 8.0, "t0")]
+    df, _ = F.load_points(_write(tmp_path, rows))
+    below = F.below_floor(df)
+
+    narrow = F.below_floor_table(below, width=100)
+    assert max(len(line) for line in narrow.splitlines()) <= 100
+    # Every column survives the wrap; it is stacked, not truncated.
+    for col in ("vp_loc", "tg_loc", "pni_loc", "below_by_ms", "air_inflation"):
+        assert col in narrow
+
+
+def test_an_empty_below_floor_set_still_gets_its_columns(tmp_path):
+    """The regression this file missed the first time: zero listed rows is the
+    NORMAL case for argmin, and a row-wise join over an empty frame returns a
+    DataFrame that cannot be assigned to a column."""
+    rows = [{
+        "vp_id": "v0", "vp_lat": 48.85, "vp_lon": 2.35,
+        "pni_id": "p0", "pni_lat": 48.86, "pni_lon": 2.36,
+        "pni_country": "FR", "pni_region": "Ile-de-France", "pni_city": "Paris",
+        "tg_id": "t0", "tg_lat": 48.87, "tg_lon": 2.37,
+        "min_rtt": 40.0,
+    }]
+    df, _ = F.load_points(_write(tmp_path, rows))
+    assert df.loc[0, "residual_ms"] > 0  # nothing is below the floor
+
+    below = F.below_floor(df)
+
+    assert below.empty
+    assert {"vp_loc", "tg_loc", "pni_loc"} <= set(below.columns)
+    assert F.below_floor_table(below) == "no rows below the floor"

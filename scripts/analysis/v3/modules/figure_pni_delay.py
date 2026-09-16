@@ -81,6 +81,11 @@ Input is one canonical CSV, one row per (VP, PNI, TG) triple:
 
     vp_id,vp_lat,vp_lon,pni_id,pni_lat,pni_lon,tg_id,tg_lat,tg_lon,min_rtt
 
+`<prefix>_country` / `_region` / `_city` are read where present and merged into
+one `<prefix>_loc` for the below-floor listing; roles that carry none -- every
+VP and target in this tree -- get theirs from the coordinate instead, and the
+command says which is which.
+
 Column prefixes and the RTT column are options, so a CSV that calls its
 intermediate `ixp_*` needs `--pni-prefix ixp` rather than a rename. Rows with a
 missing coordinate or a non-positive RTT are dropped and counted, since a
@@ -99,6 +104,10 @@ outlier below the line has to be chased with.
 
 from __future__ import annotations
 
+import contextlib
+import io
+import shutil
+from functools import reduce
 from pathlib import Path
 
 import numpy as np
@@ -278,21 +287,123 @@ _BELOW_COLS = (
 )
 
 
+#: The three place parts, in the order they read as one label.
+_LOC_PARTS = ("country", "region", "city")
+
+
+def loc_provenance(df: pd.DataFrame, prefix: str) -> str:
+    """Whether a role's `_loc` is the input's own label or a lookup.
+
+    A column check, not a recompute, so a caller can footnote the distinction
+    without re-deriving anything.
+    """
+    return (
+        "declared"
+        if any(f"{prefix}_{part}" in df.columns for part in _LOC_PARTS)
+        else "derived"
+    )
+
+
+def _join_nonempty(left: pd.Series, right: pd.Series) -> pd.Series:
+    """`a-b` elementwise, or whichever side is non-empty.
+
+    Vectorised rather than a row-wise `apply`, which on an EMPTY frame returns
+    a DataFrame instead of a Series and so cannot be assigned to a column. That
+    is not a corner case here: a run whose assignment rule puts nothing below
+    the floor -- argmin, routinely -- lists zero rows.
+    """
+    sep = pd.Series("-", index=left.index).where((left != "") & (right != ""), "")
+    return left + sep + right
+
+
+def _geocoded_loc(lat: pd.Series, lon: pd.Series) -> pd.Series:
+    """`country-region-city` of the nearest GeoNames cities1000 entry.
+
+    This is a NEIGHBOURHOOD, not a claim about where the host is registered:
+    the nearest populated place to a VP in an outer suburb is the suburb's
+    name. It is here because a coordinate pair is not something a reader can
+    place at a glance, and placing the row is the whole point of the listing.
+
+    Deduplicated on the coordinate: the operator datasets hold ~20 IP replicas
+    per facility, so a few hundred listed rows carry a handful of distinct
+    positions. `mode=1` for the reason `benchmark/v2/geo_eval.py` uses it --
+    the multiprocess path forks, and a figure command should not. The library
+    announces its kdtree load on stdout, which is swallowed here so it cannot
+    land in the middle of a printed table.
+    """
+    try:
+        import reverse_geocoder as rg
+    except ImportError:  # pragma: no cover - a declared dependency
+        return pd.Series([""] * len(lat), index=lat.index, dtype=object)
+
+    coords = pd.DataFrame({"lat": lat.astype(float), "lon": lon.astype(float)})
+    if coords.empty:
+        return pd.Series([], index=coords.index, dtype=object)
+    uniq = [tuple(row) for row in coords.drop_duplicates().to_numpy()]
+    with contextlib.redirect_stdout(io.StringIO()):
+        hits = rg.search(uniq, mode=1)
+    label = {
+        key: "-".join(
+            str(hit[k]) for k in ("cc", "admin1", "name") if hit.get(k)
+        )
+        for key, hit in zip(uniq, hits)
+    }
+    return pd.Series(
+        [label[tuple(row)] for row in coords.to_numpy()],
+        index=coords.index,
+        dtype=object,
+    )
+
+
+def add_loc_columns(df: pd.DataFrame, *prefixes: str) -> pd.DataFrame:
+    """Add `<prefix>_loc`, one readable place per role, in place on a copy.
+
+    Declared parts win where the input has them: `pni_edges.csv` carries
+    `sel_pni_country/_region/_city` straight off the operator's site list, and
+    an operator's own label for its own facility is not something to
+    second-guess with a lookup. Nothing upstream carries the same for a VP or a
+    target -- the canonical CSV has `vp_country` at most, and the target has
+    nothing -- so those are derived from the coordinates. `loc_provenance` says
+    which a column is.
+    """
+    out = df.copy()
+    for prefix in prefixes:
+        present = [
+            f"{prefix}_{part}" for part in _LOC_PARTS if f"{prefix}_{part}" in out.columns
+        ]
+        if present:
+            parts = [out[c].fillna("").astype(str).str.strip() for c in present]
+            out[f"{prefix}_loc"] = reduce(_join_nonempty, parts)
+        else:
+            out[f"{prefix}_loc"] = _geocoded_loc(
+                out[f"{prefix}_lat"], out[f"{prefix}_lon"]
+            )
+    return out
+
+
 def _label_cols(
     df: pd.DataFrame, vp_prefix: str, pni_prefix: str, tg_prefix: str
 ) -> list[str]:
-    """Columns that name the three roles of a row.
+    """Columns that name and place the three roles of a row.
 
     `<prefix>_id` when the input has one, else the coordinate pair — which
     `load_points` has already required, so a row in a listing is always
-    identifiable even for a CSV that carries no ids.
+    identifiable even for a CSV that carries no ids. Each id is followed by its
+    `_loc`, since an id alone is not something a reader can place.
+
+    Role order is the measured pair first and the assigned site last: the row
+    says "this pair, between these two places, was given that site". The
+    VP→PNI→TG path order would put the thing under question in the middle of
+    the thing it is being questioned against.
     """
     cols: list[str] = []
-    for prefix in (vp_prefix, pni_prefix, tg_prefix):
+    for prefix in (vp_prefix, tg_prefix, pni_prefix):
         if f"{prefix}_id" in df.columns:
             cols.append(f"{prefix}_id")
         else:
             cols += [f"{prefix}_lat", f"{prefix}_lon"]
+        if f"{prefix}_loc" in df.columns:
+            cols.append(f"{prefix}_loc")
     return cols
 
 
@@ -321,6 +432,9 @@ def below_floor(
 
     out = df[df["min_rtt_ms"] < df[ms_col]].copy()
     out["below_by_ms"] = out[ms_col] - out["min_rtt_ms"]
+    # Only the listed rows are placed. Reverse geocoding every point would load
+    # a kdtree to label 20,000 rows nobody is going to read.
+    out = add_loc_columns(out, vp_prefix, tg_prefix, pni_prefix)
 
     lead = _label_cols(out, vp_prefix, pni_prefix, tg_prefix)
     lead += [c for c in _BELOW_COLS if c in out.columns and c not in lead]
@@ -339,14 +453,23 @@ def below_floor_table(
     vp_prefix: str = "vp",
     pni_prefix: str = "pni",
     tg_prefix: str = "tg",
+    width: int | None = None,
 ) -> str:
-    """The head of a `below_floor()` frame as a plain-text table."""
+    """The head of a `below_floor()` frame as a plain-text table.
+
+    Wrapped into column blocks at `width` (default: the terminal, floor 120)
+    rather than printed flat. Three ids, three places and nine numbers is wider
+    than a terminal, and a table the emulator soft-wraps mid-row is unreadable
+    in a way a stacked one is not.
+    """
     if below.empty:
         return "no rows below the floor"
     cols = _label_cols(below, vp_prefix, pni_prefix, tg_prefix)
     cols += [c for c in _BELOW_COLS if c in below.columns and c not in cols]
+    if width is None:
+        width = max(shutil.get_terminal_size((160, 24)).columns, 120)
     return below.head(n)[cols].to_string(
-        index=False, float_format=lambda v: f"{v:,.3f}"
+        index=False, float_format=lambda v: f"{v:,.3f}", line_width=width
     )
 
 
@@ -685,3 +808,16 @@ def register(app: typer.Typer) -> None:
                     pni_prefix=pni_prefix, tg_prefix=tg_prefix,
                 )
             )
+            # Which `_loc` columns the input named and which were looked up.
+            # They sit in identical columns and only one of them is a claim
+            # about where the host is, so the difference is stated rather than
+            # left to be inferred from the schema.
+            derived = [
+                f"{prefix}_loc" for prefix in (vp_prefix, tg_prefix, pni_prefix)
+                if loc_provenance(df, prefix) == "derived"
+            ]
+            if derived:
+                typer.echo(
+                    f"  ({', '.join(derived)}: nearest GeoNames city to the "
+                    f"coordinate, not a registered location)"
+                )
