@@ -249,6 +249,8 @@ python -m scripts.analysis.v3.cli plot-answer-space --all-runs --us-only
 python -m scripts.analysis.v3.cli plot-mtl-map --run-id as01-260728-260802
 python -m scripts.analysis.v3.cli plot-mtl-map --run-id as01-260728-260802 \
     -m octant_cbg_hull --no-regions        # seconds, minus the region layer
+#     Across runs, with the same argument handling as the artifact sweep:
+./scripts/analysis/v3/create_mtl_map.sh as0{1,2,3}-260728-260802
 
 # 6. Accuracy vs cost across datasets (colour = variant, symbol = dataset)
 python -m scripts.analysis.v3.cli plot-pareto \
@@ -2297,6 +2299,46 @@ post-filter constraint set with `vp_lat`/`vp_lon`/`rtt_ms` inline, which is
 exactly what an `LTDResult` carries, so re-running
 `MTL_REGISTRY[run.json["mtl"]](**mtl_kwargs)` over it reproduces the bench-time
 `mtl_intersection_kind` and `n_mtl_participants`.
+
+### Batch rendering: `create_mtl_map.sh`
+
+[create_mtl_map.sh](create_mtl_map.sh) renders the viewer across runs, with the
+same multi-run argument handling as
+[create_analysis_artifacts.sh](create_analysis_artifacts.sh) — no arguments for
+the default `as0{1,2,3}-260728-260802` set, or explicit run ids, brace expansion
+included. Run it from the repo root.
+
+```bash
+./scripts/analysis/v3/create_mtl_map.sh                            # the default set
+./scripts/analysis/v3/create_mtl_map.sh as01-260728-260802-mesh    # named runs
+NO_REGIONS=1 ./scripts/analysis/v3/create_mtl_map.sh               # seconds, not minutes
+METHODS="octant_cbg_hull" WORKERS=4 ./scripts/analysis/v3/create_mtl_map.sh as01-260728-260802
+```
+
+`NO_REGIONS` / `WORKERS` / `METHODS` / `RESOLUTION` are appended only when set,
+because an explicit flag outranks the config — exporting `WORKERS` unasked would
+override every run's declared `plot-mtl-map.workers`.
+
+**It is a separate script for three reasons.** The cost is minutes to tens of
+minutes per run against seconds for everything in the artifact sweep, and a
+sweep that takes an hour is a sweep people stop running. Nothing consumes its
+output, so it sits outside the ordered pipeline and splitting it out forfeits no
+ordering guarantee. And it is an artifact you *look at*, one case at a time,
+rather than one the paper's numbers are computed from.
+
+**It invokes the CLI once per method**, though `plot-mtl-map` loops methods
+itself and shares the run-level build across them — 5.2 s for six methods on
+as01 against 3.2 s for one. The duplicated ~3 s is bought for failure
+isolation: inside one call the methods run in sorted order and the first to
+raise ends the run, so one permanently broken combo would permanently block
+every method after it in the alphabet. It also puts the failing *method* in the
+summary rather than just the run.
+
+**A missing config is a note, not a skip** — the opposite of
+`create_analysis_artifacts.sh`, whose commands need the config to say what the
+run *is*. This one needs it only for `workers`, and finds its canonical CSV
+through the run's own `eval_source/`, so demanding a config would make the map
+unrenderable for a run that has benchmark output and none.
 
 ### CONUS is built here because the repo has no CONUS
 
