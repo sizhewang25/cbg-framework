@@ -475,6 +475,10 @@ def test_our_columns_do_not_collide_with_the_figures_derived_names(tmp_path):
     derived = {
         "d_vp_pni_km", "d_pni_tg_km", "d_vp_tg_km", "d_via_pni_km",
         "prop_rtt_via_pni_ms", "prop_rtt_direct_ms", "min_rtt_ms", "residual_ms",
+        # Our ratios are `vp_to_tg_`-prefixed and the figure's are not, which is
+        # the only reason these two pairs coexist. `below_by_ms` is assigned by
+        # `below_floor`, on a copy, but is listed here for the same reason.
+        "residual_direct_ms", "detour_ratio", "air_inflation", "below_by_ms",
     }
     assert derived & set(_graph().edges.columns) == set()
 
@@ -588,6 +592,26 @@ def test_a_pure_strategy_assigns_a_fixed_site_per_target_or_per_vp():
     assert tg["via_km"] == pytest.approx(
         tg["vp_to_sel_pni_km"] + tg["sel_pni_to_tg_km"], abs=1e-9
     )
+
+
+def test_out_dir_diverts_a_side_arm_without_touching_the_canonical_graph(tmp_path):
+    """`create_analysis_artifacts.sh` draws the §7.3 figure under all three
+    assignment rules. Only argmin may own pni-graph/: build-pni-feasibility,
+    compare-pni-linearity, breakdown-sping-pni and plot-pni-colocation all
+    resolve that directory from the run id, so an arm written there would
+    reparameterize them with no record of it."""
+    from scripts.analysis.v3.cli import app
+
+    params = {
+        p.name: p for p in typer.main.get_command(app).commands["build-pni-graph"].params
+    }
+    assert "out_dir" in params and not params["out_dir"].required
+
+    # The override is a plain directory swap: same artifacts, chosen place.
+    canonical, arm = tmp_path / "pni-graph", tmp_path / "pni-graph-tg_nearest"
+    _graph().write(arm)
+    assert (arm / pni.PNI_EDGES_CSV).exists()
+    assert not canonical.exists()
 
 
 def test_an_unknown_strategy_is_refused():

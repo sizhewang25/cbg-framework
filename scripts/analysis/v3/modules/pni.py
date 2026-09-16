@@ -1048,6 +1048,16 @@ def register(app: typer.Typer) -> None:
         analysis_root: Path = typer.Option(
             DEFAULT_ANALYSIS_ROOT, help="Root for v3 analysis outputs."
         ),
+        out_dir: Path = typer.Option(
+            None,
+            "--out-dir",
+            help="Override the artifact directory. Use it to build a "
+            "non-default --strategy as a SIDE arm: every consumer "
+            "(build-pni-feasibility, compare-pni-linearity, "
+            "breakdown-sping-pni, plot-pni-colocation) resolves pni-graph/ from "
+            "the run id, so writing an alternative rule there would "
+            "reparameterize all of them silently.",
+        ),
     ) -> None:
         """Assign each measured pair the PNI it most plausibly crossed (§7.3).
 
@@ -1058,7 +1068,7 @@ def register(app: typer.Typer) -> None:
         run = resolve_run(run_id, outputs_root)
         if strategy not in STRATEGIES:
             raise typer.BadParameter(f"--strategy must be one of {list(STRATEGIES)}")
-        graph, out_dir = build_for_run(
+        graph, default_dir = build_for_run(
             run,
             pni_csv=pni_csv,
             analysis_root=analysis_root,
@@ -1067,7 +1077,7 @@ def register(app: typer.Typer) -> None:
             strategy=strategy,
             split_csv=split_csv,
         )
-        graph.write(out_dir)
+        graph.write(Path(out_dir) if out_dir else default_dir)
 
         verified = graph.meta["inputs"]["peer_asn_verified_against"]
         if verified.startswith("unverified"):
@@ -1080,5 +1090,6 @@ def register(app: typer.Typer) -> None:
         typer.echo(
             f"{run.run_id}: {graph.meta['inputs']['n_pairs']} pairs over "
             f"{graph.meta['inputs']['n_pni']} sites under --strategy {strategy}, "
-            f"{agreement:.1%} assigned the target's nearest site -> {out_dir}"
+            f"{agreement:.1%} assigned the target's nearest site -> "
+            f"{Path(out_dir) if out_dir else default_dir}"
         )

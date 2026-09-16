@@ -144,11 +144,48 @@ for R in "${RUNS[@]}"; do
       #     config pins `where: is_holdout` to match its `holdout_only: true`,
       #     so both report the same fit.
       #
-      #     Alone among these commands it takes no --run-id: it reads a CSV
-      #     directly, so the path is built from $R here rather than hardcoded in
-      #     the config. Its input is 5b's output, which is why it sits last.
+      #     Drawn once per ASSIGNMENT RULE, not once per run. The x axis IS the
+      #     assignment -- changing the rule moves every point and every fit --
+      #     so argmin alone shows how well ONE rule's paths explain the RTTs
+      #     while leaving the reader no way to see whether that is the rule's
+      #     doing or the site list's. All three ship as three views; which rule
+      #     is actually in force stays 5a's verdict to declare, since these
+      #     figures cannot separate "wrong rule" from "incomplete list" and
+      #     detect-pni-strategy scores the rules against each other directly.
+      #
+      #     argmin reuses 5b's canonical pni-graph/. The other two are built as
+      #     SIDE arms into pni-graph-<strategy>/ via --out-dir: 5c, 5d, 5e and
+      #     5g all resolve pni-graph/ from the run id, so an alternative rule
+      #     written there would silently reparameterize every one of them.
+      #     --split-csv is repeated per arm because `where: is_holdout` needs
+      #     the column, and it is the SAME split as 5b's -- the halves come from
+      #     5a, so the arms stay comparable to the canonical figure.
+      #
+      #     Alone among these commands plot-pni-delay takes no --run-id: it
+      #     reads a CSV directly, so the path is built from $R here rather than
+      #     hardcoded in the config. Its input is 5b's output, which is why it
+      #     sits last. Each figure is titled with its rule, because the three
+      #     PNGs are otherwise identically named under different directories.
+      #     The run id is left out of the title: the path already carries it,
+      #     and the string is what has to fit across a 6-inch axes.
       if [ -f "$GRAPH/pni_edges.csv" ]; then
-        run plot-pni-delay $V3 plot-pni-delay --csv "$GRAPH/pni_edges.csv"
+        run plot-pni-delay $V3 plot-pni-delay --csv "$GRAPH/pni_edges.csv" \
+          --title "min-RTT vs two-leg delay -- strategy argmin"
+
+        for S in tg_nearest vp_nearest; do
+          ARM=$GRAPH-$S
+          # Gated directly rather than through `run`, which reports a failure
+          # but always returns 0: plotting an arm whose build failed would draw
+          # a stale figure from a previous invocation's edge list.
+          if $V3 build-pni-graph --run-id "$R" --strategy "$S" \
+               --split-csv "$PNI/pair_split.csv" --out-dir "$ARM"; then
+            N_OK=$((N_OK + 1))
+            run "plot-pni-delay[$S]" $V3 plot-pni-delay --csv "$ARM/pni_edges.csv" \
+              --title "min-RTT vs two-leg delay -- strategy $S"
+          else
+            FAILED+=("$R :: build-pni-graph --strategy $S (5f arm)")
+          fi
+        done
 
         # 5g. The §8.1 co-location corner, over the same 5b artifact read as a
         #     pair of legs rather than as a fit: d(sping VP, selected PNI) on x

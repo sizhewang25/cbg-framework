@@ -250,6 +250,8 @@ def build(
     *,
     x_max: float | None,
     y_max: float | None,
+    x_tick: float | None,
+    y_tick: float | None,
     mesh_label: str,
     tw_label: str,
     title: str | None,
@@ -285,6 +287,18 @@ def build(
 
     ax.set_xlim(0, x_max)
     ax.set_ylim(0, y_max)
+    if x_tick or y_tick:
+        # Fixed spacing, not just a fixed cut. This figure and
+        # `plot-pni-delay`'s are read side by side -- one has d(VP,TG) on x and
+        # the other d(VP,PNI)+d(PNI,TG), which is the SAME quantity bent -- so
+        # matplotlib choosing each panel's step from its own range would put
+        # two comparable pictures on two rulers.
+        from matplotlib.ticker import MultipleLocator
+
+        if x_tick:
+            ax.xaxis.set_major_locator(MultipleLocator(float(x_tick)))
+        if y_tick:
+            ax.yaxis.set_major_locator(MultipleLocator(float(y_tick)))
     ax.set_xlabel("d(VP, target)  [km]")
     ax.set_ylabel("min-RTT  [ms]")
     ax.set_title(title or "min-RTT vs VP-to-target distance", color=_C_INK)
@@ -351,8 +365,17 @@ def register(app: typer.Typer) -> None:
                  "synthetic uniform fixture, so its overlay validates the code "
                  "path and is not evidence.",
         ),
-        x_max: float = typer.Option(4000.0, "--x-max", help="x axis cut, km. Clips the VIEW only."),
+        # 5,000 km / 100 ms, stepped 1,000 / 20, is the shared frame with
+        # `plot-pni-delay`: x there is this same VP-to-target line bent through
+        # an interconnect, so the two figures are only comparable at a glance
+        # if they are cut and ruled alike. 5,000 km clears a mainland-US target
+        # set; an intercontinental peer needs a larger cut in both places.
+        x_max: float = typer.Option(5000.0, "--x-max", help="x axis cut, km. Clips the VIEW only."),
         y_max: float = typer.Option(100.0, "--y-max", help="y axis cut, ms. Clips the VIEW only."),
+        x_tick: float = typer.Option(
+            1000.0, "--x-tick", help="x gridline spacing, km. Fixes the ruler, not just the cut."
+        ),
+        y_tick: float = typer.Option(20.0, "--y-tick", help="y gridline spacing, ms."),
         mesh_label: str = typer.Option("mesh", "--mesh-label"),
         tw_label: str = typer.Option(
             None, "--tw-label",
@@ -444,7 +467,7 @@ def register(app: typer.Typer) -> None:
 
         build(
             mesh, tw,
-            x_max=x_max, y_max=y_max,
+            x_max=x_max, y_max=y_max, x_tick=x_tick, y_tick=y_tick,
             mesh_label=mesh_label, tw_label=tw_label, title=title,
             mesh_point_size=mesh_point_size, tw_point_size=tw_point_size,
             mesh_alpha=mesh_alpha, tw_alpha=tw_alpha,
@@ -462,6 +485,7 @@ def register(app: typer.Typer) -> None:
                 "tg_prefix": tg_prefix,
             },
             "view": {"x_max_km": x_max, "y_max_km": None, "y_max_ms": y_max,
+                     "x_tick_km": x_tick, "y_tick_ms": y_tick,
                      "scale": "linear on both axes"},
             "policy": (
                 "every statistic is computed over ALL pairs; --x-max/--y-max clip "

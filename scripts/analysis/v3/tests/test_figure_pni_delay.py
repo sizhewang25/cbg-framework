@@ -379,3 +379,145 @@ def test_no_below_floor_rows_writes_no_file_and_prints_nothing(tmp_path):
     assert result.exit_code == 0, result.output
     assert not (tmp_path / "pairs_pni_delay.via-pni.km_below_floor.csv").exists()
     assert "below the via-pni floor" not in result.output
+
+
+def test_an_overlong_title_is_shrunk_to_fit_rather_than_clipped():
+    """matplotlib clips a too-wide title at both ends, which reads as a
+    deliberate label that happens to be missing its first and last words.
+
+    `--title` is free text and `create_analysis_artifacts.sh` passes a
+    per-strategy one, so the figure has to survive a caption longer than the
+    default. A title that already fits must be left exactly alone.
+    """
+    from scripts.analysis.v3.modules.diagram.common.draw import plt
+
+    fig, ax = plt.subplots(figsize=(6.0, 5.4), dpi=200)
+    try:
+        ax.set_title("min-RTT vs two-leg delay -- strategy vp_nearest")
+        default = ax.title.get_fontsize()
+        F._fit_title(fig, ax)
+        assert ax.title.get_fontsize() == default
+
+        ax.set_title("min-RTT vs two-leg propagation delay -- " + "long " * 30)
+        F._fit_title(fig, ax)
+        assert ax.title.get_fontsize() < default
+
+        # And it fits now, which is the property the caller actually wants.
+        fig.canvas.draw()
+        assert ax.title.get_window_extent().width <= ax.get_window_extent().width + 1
+    finally:
+        plt.close(fig)
+
+
+def _drawn_xlim(monkeypatch, df, out_png, **kwargs):
+    """The x limits `plot()` actually drew. It closes its own figure, so the
+    limits are read off the way out."""
+    captured = {}
+    real_close = F.plt.close
+
+    def spy(fig):
+        captured["xlim"] = fig.axes[0].get_xlim()
+        real_close(fig)
+
+    monkeypatch.setattr(F.plt, "close", spy)
+    F.plot(df, out_png, **kwargs)
+    return captured["xlim"]
+
+
+def test_the_x_axis_ends_at_the_data_not_at_the_floor_lines_reach(tmp_path, monkeypatch):
+    """The reference lines span the x DATA, not the y range.
+
+    Priced at 2/3 c the floor reaches an observed 80 ms only at 8,000 km, so
+    drawing the lines that far autoscaled x to several times the widest path in
+    the input: half the panel came out empty with the cloud squeezed into the
+    rest.
+    """
+    rows = [
+        _triple((40.0, -74.0), (41.0, -75.0), (42.0, -76.0), 80.0, "slow"),
+        _triple((40.0, -74.0), (40.1, -74.1), (40.2, -74.2), 5.0, "near"),
+    ]
+    df, _ = F.load_points(_write(tmp_path, rows))
+    widest = float(df["d_via_pni_km"].max())
+    floors_reach = 80.0 / THEORETICAL_SLOPE
+    assert floors_reach > 3 * widest  # the fixture reproduces the old blow-up
+
+    left, right = _drawn_xlim(monkeypatch, df, tmp_path / "fig.png")
+
+    assert left == 0.0
+    assert right == pytest.approx(widest * 1.02)
+
+
+def test_x_max_sets_the_right_edge_even_when_the_data_runs_past_it(tmp_path, monkeypatch):
+    """Otherwise the three per-strategy panels get three different scales."""
+    rows = [
+        _triple((40.0, -74.0), (41.0, -75.0), (42.0, -76.0), 60.0, "far"),
+        _triple((40.0, -74.0), (40.1, -74.1), (40.2, -74.2), 5.0, "near"),
+    ]
+    df, _ = F.load_points(_write(tmp_path, rows))
+
+    _, right = _drawn_xlim(monkeypatch, df, tmp_path / "fig.png", x_max=100.0)
+
+    assert right == pytest.approx(100.0)
+
+
+def test_x_max_clips_the_view_only(tmp_path):
+    """Clipping x compresses its range, which attenuates r on its own. The fit
+    has to stay over every row or two panels cannot be compared."""
+    rng = np.random.default_rng(3)
+    rows = [
+        _triple(
+            (float(rng.uniform(40, 55)), float(rng.uniform(-8, 18))),
+            (50.11, 8.68),
+            (float(rng.uniform(40, 55)), float(rng.uniform(-8, 18))),
+            float(rng.uniform(5, 40)),
+            f"t{i}",
+        )
+        for i in range(40)
+    ]
+    df, _ = F.load_points(_write(tmp_path, rows))
+    cut = float(df["d_via_pni_km"].quantile(0.6))
+
+    full = F.plot(df, tmp_path / "full.png")
+    clipped = F.plot(df, tmp_path / "clipped.png", x_max=cut)
+
+    for key in ("n", "via_pni_r2", "via_pni_slope", "direct_r2", "n_below_floor"):
+        assert clipped[key] == pytest.approx(full[key])
+    assert full["n_outside_view"] == 0.0
+    assert clipped["n_outside_view"] == float((df["d_via_pni_km"] > cut).sum())
+    assert clipped["n_outside_view"] > 0
+    assert clipped["share_outside_view"] == pytest.approx(
+        clipped["n_outside_view"] / len(df)
+    )
+
+
+def test_a_point_past_both_cuts_is_counted_once(tmp_path):
+    """`figure_distance_rtt`'s convention: y is counted only inside the x
+    window, so the off-view share cannot exceed 1."""
+    rows = [
+        _triple((40.0, -74.0), (41.0, -75.0), (42.0, -76.0), 90.0, "far_and_slow"),
+        _triple((40.0, -74.0), (40.1, -74.1), (40.2, -74.2), 5.0, "near"),
+    ]
+    df, _ = F.load_points(_write(tmp_path, rows))
+    cut = float(df["d_via_pni_km"].min()) + 1.0
+
+    stats = F.plot(df, tmp_path / "fig.png", x_max=cut, y_max=50.0)
+    assert stats["n_outside_view"] == 1.0
+
+
+def test_the_command_takes_the_cuts_and_records_them(tmp_path):
+    from typer.testing import CliRunner
+
+    from scripts.analysis.v3.cli import app
+
+    rows = [
+        _triple((40.0, -74.0), (41.0, -75.0), (42.0, -76.0), 60.0, "far"),
+        _triple((40.0, -74.0), (40.1, -74.1), (40.2, -74.2), 5.0, "near"),
+    ]
+    csv = _write(tmp_path, rows)
+
+    result = CliRunner().invoke(
+        app, ["plot-pni-delay", "--csv", str(csv), "--x-max", "100", "--y-max", "50"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "n_outside_view" in result.output

@@ -185,6 +185,15 @@ python -m scripts.analysis.v3.cli build-pni-graph \
 python -m scripts.analysis.v3.cli plot-pni-delay \
   --csv outputs/analysis/v3/as01-260728-260802/pni-graph/pni_edges.csv \
   --pni-prefix sel_pni --tg-prefix target --rtt-col rtt_ms
+# The x axis IS the assignment, so the other two rules are worth seeing. Build
+# them as SIDE arms -- pni-graph/ is resolved from the run id by 3j/3k/3l and
+# the co-location figure, so an alternative rule written there reparameterizes
+# all of them. create_analysis_artifacts.sh does this for all three.
+python -m scripts.analysis.v3.cli build-pni-graph \
+  --run-id as01-260728-260802 --pni-csv datasets/pni/as01.csv --peer-asn <asn> \
+  --strategy tg_nearest \
+  --split-csv outputs/analysis/v3/as01-260728-260802/pni-strategy/pair_split.csv \
+  --out-dir outputs/analysis/v3/as01-260728-260802/pni-graph-tg_nearest
 
 # 3i-2. The same artifact, read as a corner instead of a fit: how far the
 #       shortest-ping VP sat from its assigned site (x) against how far that
@@ -270,6 +279,9 @@ target-proximity/
 pni-strategy/              target_verdicts.csv  vp_verdicts.csv
                            pair_split.csv  meta.json
 pni-graph/                 pni_edges.csv  target_nodes.csv  pni_nodes.csv  meta.json
+pni-graph-<strategy>/      same four files, for a non-argmin assignment rule.
+                           Figure-only side arms: nothing resolves this path
+                           from a run id, so no other command reads them.
 pni-feasibility/           feasible_pairs.csv  feasible_sites.csv
                            feasible_null.csv  meta.json
 pni-linearity/             linearity_fits.csv  linearity_compare.csv
@@ -1170,6 +1182,32 @@ re-denominate the study it gates.
 Because `sel_pni` is now whichever rule was in force, `compare-pni-linearity`'s
 axis is `routing_selected` rather than `routing_argmin`;
 `routing_tg_nearest` stays beside it as the fixed-site guard either way.
+
+**The §7.3 scatter is drawn under all three rules, and it is not the verdict.**
+`create_analysis_artifacts.sh` rebuilds `tg_nearest` and `vp_nearest` into
+`pni-graph-<strategy>/` and plots each, because the x axis *is* the assignment:
+argmin alone shows how well one rule's paths explain the RTTs while leaving no
+way to tell that apart from the site list's own quality. What the three panels
+do show is the cost of the choice — on as01's holdout half the below-floor count
+is 0 under argmin, 10 under `tg_nearest` and 731 under `vp_nearest`, and a rule
+that puts pairs under the 2/3 c floor of its own paths is visibly not the one in
+force. What they cannot do is rank the rules: argmin minimizes the two-leg sum
+per pair, so it has the lowest floor violation rate by construction, exactly the
+self-fulfilment `compare-pni-linearity` keeps `routing_tg_nearest` around to
+guard. The verdict stays `detect-pni-strategy`'s, which scores the rules against
+each other in ranks.
+
+**A point below the floor localizes to a triple, not to a cause.**
+`plot-pni-delay` writes the below-floor rows to `<stem>_below_floor.csv` and
+prints the worst of them: the three ids, all three pairwise distances among (VP,
+PNI, TG), the RTT, and `detour_ratio`/`air_inflation`, whose inequality is the
+below-floor condition. `residual_direct_ms >= 0` on such a row — which is the
+usual case, since the bent floor sits above the geodesic one — says the RTT is
+legal on the straight line and it is the *triple* that 2/3 c rules out. Which of
+the three inputs is at fault is not decided there: the pair, the assignment rule
+and the site list are all candidates, and an approximate list or one short of
+the peer's real footprint produces the same rows. `build-pni-feasibility` is the
+command that tests the list by exclusion.
 
 
 ## Testing the Shortest-Ping mechanism (§8.1)

@@ -86,6 +86,12 @@ analysis:
   # default, and pinning it here would keep argmin on a run whose
   # detect-pni-strategy declares a pure rule. Pass --strategy on the command
   # line when that verdict justifies it.
+  #
+  # create_analysis_artifacts.sh already does that for the §7.3 figure: it
+  # rebuilds tg_nearest and vp_nearest as SIDE arms, `--out-dir
+  # pni-graph-<strategy>/`, so all three rules get plotted. The canonical
+  # pni-graph/ that every other command resolves from the run id stays argmin,
+  # which is why those arms need no key here.
   build-pni-feasibility:
     # 200 gives the permutation null a reportable effect size; the default 0
     # leaves n_feasible with no baseline to be surprising against.
@@ -128,3 +134,16 @@ analysis:
     pni_prefix: sel_pni
     tg_prefix: target
     where: is_holdout
+    # View only -- every fit, the below-floor count and the median residual are
+    # computed over all rows either way, and the off-view count is annotated.
+    # Pinned rather than left at the data's own extent because
+    # create_analysis_artifacts.sh draws one panel per assignment rule and
+    # vp_nearest bends paths further than argmin does, so data-driven axes would
+    # give the three panels three different scales. 5,000 km fits a mainland-US
+    # target set with room to spare; a peer with intercontinental paths needs a
+    # larger value here. `y_tick` fixes the gridline spacing too, so the panels
+    # share a ruler rather than merely a top.
+    x_max: 5000
+    x_tick: 1000
+    y_max: 100
+    y_tick: 20

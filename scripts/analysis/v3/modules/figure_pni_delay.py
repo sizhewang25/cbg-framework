@@ -23,6 +23,22 @@ the fit quality or which points fall below the floor.
 `--x-axis` chooses *which* path: `via-pni` for d(VP,PNI) + d(PNI,TG), or
 `direct` for d(VP,TG), which ignores the PNI and so is the control.
 
+`--x-max` / `--y-max` and the matching `--x-tick` / `--y-tick` set the view and
+nothing else, the contract `plot-distance-rtt` states at length: every fit, the
+below-floor count and the median residual are computed over all rows, and the
+off-view count is annotated beside them. Restricting x compresses its range,
+which attenuates Pearson r on its own, so a clipped-subset fit would not be
+comparable with an unclipped one.
+
+Pinning them matters twice over. `create_analysis_artifacts.sh` draws one panel
+per assignment rule, and `vp_nearest` bends paths further than `argmin` does, so
+data-driven axes would give the three panels three scales. And this figure is
+read beside `plot-distance-rtt`, whose x is the same VP-to-target line
+*unbent* — the two are cut and ruled alike (5,000 km / 100 ms, stepped 1,000 /
+20) so that the bend is the only difference between them. That command defaults
+to the frame; here it is per-run in `configs/*.yaml`, since a peer with
+intercontinental paths needs a wider one. Unset, the axes end at the data.
+
 Reading the figure: the floor line is the speed-of-internet limit, so points
 below it are physically impossible *for that path*. On the `direct` axis that is
 a statement about the data — a point below it means the RTT or a coordinate is
@@ -334,6 +350,29 @@ def below_floor_table(
     )
 
 
+def _fit_title(fig, ax) -> None:
+    """Shrink the title if it overruns the axes width.
+
+    `--title` is free text, and matplotlib neither wraps nor complains: an
+    overlong one is clipped at BOTH ends, so it loses a word at each side and
+    still looks deliberate. The per-strategy titles
+    `create_analysis_artifacts.sh` passes are long enough to hit this.
+
+    Measured against the drawn axes rather than capped at a character count,
+    which would be a guess about the string's own letters and about the figure
+    size. Called after `tight_layout`, since that is what fixes the width being
+    measured against.
+    """
+    title = ax.title
+    if not title.get_text():
+        return
+    fig.canvas.draw()
+    available = ax.get_window_extent().width
+    used = title.get_window_extent().width
+    if used > available:
+        title.set_fontsize(title.get_fontsize() * available / used)
+
+
 def plot(
     df: pd.DataFrame,
     out_png: Path,
@@ -343,6 +382,10 @@ def plot(
     title: str | None = None,
     x_axis: str = "via-pni",
     x_unit: str = "km",
+    x_max: float | None = None,
+    y_max: float | None = None,
+    x_tick: float | None = None,
+    y_tick: float | None = None,
 ) -> dict[str, float]:
     """Draw the scatter and return the fit statistics it reports.
 
@@ -350,6 +393,13 @@ def plot(
     which makes the same figure the control: the great-circle line every CBG
     variant's latency-to-distance model assumes. `x_unit` selects whether x
     carries that path's distance or its 2/3 c round-trip delay.
+
+    `x_max` / `y_max` clip the VIEW and nothing else, as on
+    `plot-distance-rtt`: every fit, the below-floor count and the median
+    residual are computed over all rows, and the share left off-view is
+    reported beside them. Unset, the axes end at the data. `x_tick` / `y_tick`
+    fix the gridline spacing, which is what makes two pinned panels read off the
+    same ruler rather than merely ending at the same number.
     """
     if x_axis not in X_AXES:
         raise typer.BadParameter(
@@ -385,9 +435,15 @@ def plot(
     fig, ax = plt.subplots(figsize=(6.0, 5.4), dpi=200)
     ax.scatter(x, y, s=14, alpha=0.45, color=_C_POINT, edgecolors="none", zorder=3)
 
-    lo = float(min(x.min(), y.min() / max(floor_slope, 1e-12))) if len(df) else 0.0
-    hi = float(max(x.max(), y.max() / max(floor_slope, 1e-12))) if len(df) else 1.0
-    span = np.array([max(lo, 1e-3) if log_axes else 0.0, hi * 1.05])
+    # The two reference lines span the x DATA, not the y range. Extending them
+    # to where the floor reaches `y.max()` -- which is what this did -- pushes
+    # the autoscaled x limit out to `y.max() / floor_slope`, and since min-RTT
+    # is inflated well above the floor that is roughly twice the widest path in
+    # the input: half the panel ends up empty and the cloud is squeezed into
+    # the rest.
+    lo = float(x.min()) if len(df) else 0.0
+    hi = float(x_max) if x_max is not None else (float(x.max()) * 1.02 if len(df) else 1.0)
+    span = np.array([max(lo, 1e-3) if log_axes else 0.0, hi])
     ax.plot(span, floor_slope * span, ls="--", lw=1.1, color=_C_INK_2, zorder=2,
             label=floor_label)
     if np.isfinite(slope):
@@ -400,6 +456,27 @@ def plot(
     if log_axes:
         ax.set_xscale("log")
         ax.set_yscale("log")
+        if x_max is not None:
+            ax.set_xlim(right=float(x_max))
+        if y_max is not None:
+            ax.set_ylim(top=float(y_max))
+    else:
+        # Left edge at 0 rather than at the smallest path: a co-located pair is
+        # the interesting end of this axis and an origin is what makes the
+        # floor line's slope readable. Same for the y origin, which is where
+        # the floor line starts and where an RTT axis belongs.
+        ax.set_xlim(0.0, hi)
+        ax.set_ylim(0.0, float(y_max) if y_max is not None else ax.get_ylim()[1])
+        if x_tick or y_tick:
+            # Fixed spacing, not just a fixed top: matplotlib picks the step
+            # from the range it is given, so two panels pinned to the same
+            # limits could still be read off different rulers.
+            from matplotlib.ticker import MultipleLocator
+
+            if x_tick:
+                ax.xaxis.set_major_locator(MultipleLocator(float(x_tick)))
+            if y_tick:
+                ax.yaxis.set_major_locator(MultipleLocator(float(y_tick)))
 
     ax.set_xlabel(x_label)
     ax.set_ylabel("observed min-RTT (VP → TG)  [ms]")
@@ -415,6 +492,22 @@ def plot(
     below_note = (
         "PNI not on that path" if x_axis == "via-pni" else "RTT beats 2/3 c on the geodesic"
     )
+    # Outside the drawn view. `y > y_max` is counted only inside the x window so
+    # a point past both cuts is one point, not two -- the same convention as
+    # `figure_distance_rtt.series_stats`.
+    outside = 0
+    if len(df):
+        if x_max is not None:
+            outside += int((x > float(x_max)).sum())
+        if y_max is not None:
+            in_x = x <= float(x_max) if x_max is not None else np.ones(len(x), dtype=bool)
+            outside += int(((y > float(y_max)) & in_x).sum())
+    clip_unit = "km" if x_unit == "km" else "ms"
+    clipped = [
+        f"x <= {float(x_max):,.0f} {clip_unit}" if x_max is not None else "",
+        f"y <= {float(y_max):,.0f} ms" if y_max is not None else "",
+    ]
+    clip_note = ", ".join(c for c in clipped if c)
     note = (
         f"n = {len(df)} triples"
         + (f"  ({n_dropped} dropped: missing coords or rtt ≤ 0)" if n_dropped else "")
@@ -422,12 +515,18 @@ def plot(
         + f"\ncontrol ({other_name}): r={d_r:.3f}, r²={d_r2:.3f}"
         + (f"\nimplied speed {2 / slope:,.0f} km/ms vs 2/3 c = 200 km/ms"
            if x_unit == "km" and np.isfinite(slope) and slope > 0 else "")
+        + (f"\naxes clipped to {clip_note}; every statistic is over ALL triples"
+           # The count, not only the share: 6 of 20,608 prints as 0.0%, and a
+           # reader cannot tell that from nothing being hidden at all.
+           f"\n{outside} off-view ({outside / max(len(df), 1):.1%})"
+           if clip_note else "")
     )
     ax.annotate(note, xy=(0.98, 0.02), xycoords="axes fraction", ha="right", va="bottom",
                 fontsize=7, color=_C_MUTED)
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
+    _fit_title(fig, ax)
     fig.savefig(out_png)
     plt.close(fig)
 
@@ -444,6 +543,8 @@ def plot(
         "n_below_floor": float(below),
         "x_axis": x_axis,
         "x_unit": x_unit,
+        "n_outside_view": float(outside),
+        "share_outside_view": outside / max(len(df), 1),
         **({"implied_km_per_ms": 2 / slope} if x_unit == "km" and slope else {}),
         **{f"via_pni_{k}": v for k, v in keyed["via_pni"].items()},
         **{f"direct_{k}": v for k, v in keyed["direct"].items()},
@@ -476,6 +577,31 @@ def register(app: typer.Typer) -> None:
             help="Path whose propagation delay goes on x: `via-pni` for "
             "d(VP,PNI)+d(PNI,TG), or `direct` for d(VP,TG) — the same figure as "
             "the no-PNI control. Both fits are reported either way.",
+        ),
+        x_max: float = typer.Option(
+            None,
+            "--x-max",
+            help="Cut the x axis here, in the unit --x-unit selects. Clips the "
+            "VIEW only: every fit and the below-floor count stay over all rows, "
+            "and the off-view share is annotated. Pin it to compare panels.",
+        ),
+        y_max: float = typer.Option(
+            None,
+            "--y-max",
+            help="Cut the y axis here, in ms. Clips the VIEW only, as --x-max.",
+        ),
+        x_tick: float = typer.Option(
+            None,
+            "--x-tick",
+            help="x gridline spacing, in the unit --x-unit selects. Ignored on "
+            "--log-axes.",
+        ),
+        y_tick: float = typer.Option(
+            None,
+            "--y-tick",
+            help="y gridline spacing, in ms. Pin it alongside --y-max so two "
+            "panels are read off the same ruler, not merely cut at the same "
+            "number. Ignored on --log-axes.",
         ),
         x_unit: str = typer.Option(
             "km",
@@ -524,7 +650,8 @@ def register(app: typer.Typer) -> None:
 
         stats = plot(
             df, out_png, n_dropped=n_dropped, log_axes=log_axes, title=title,
-            x_axis=x_axis, x_unit=x_unit,
+            x_axis=x_axis, x_unit=x_unit, x_max=x_max, y_max=y_max,
+            x_tick=x_tick, y_tick=y_tick,
         )
         df.to_csv(out_csv, index=False)
 
