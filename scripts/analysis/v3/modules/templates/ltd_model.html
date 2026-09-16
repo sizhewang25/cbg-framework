@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         margin: 16px; color: #222; }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 12px 0; }
+  .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+              margin-bottom: 10px; }
+  .controls label { font-size: 13px; }
+  .controls select, .controls input[type="search"] { font-size: 13px; padding: 4px 6px; }
+  .controls select.wide { min-width: 420px; }
+  .controls input.search { min-width: 200px; }
+  .count { font-size: 12px; color: #666; margin-left: 4px; }
+  .meta { font-size: 12px; color: #555; margin: 4px 0 10px 0; line-height: 1.5; }
+  .meta code { background: #f4f4f1; padding: 1px 4px; border-radius: 3px; }
+  #plot { width: 100%; height: 720px; }
+  .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+            margin-right: 3px; vertical-align: -1px; }
+  /* The target overlay is a multi-select, not a dropdown: the question it
+     answers is how several held-out targets sit against one VP's fit at once,
+     and a single-value control would force that comparison to be done from
+     memory. Sized to show ~8 rows without scrolling the page. */
+  #targets { min-width: 300px; height: 132px; font-size: 12px; }
+  .stack { display: flex; flex-direction: column; gap: 3px; }
+  .stack > span { font-size: 12px; color: #555; }
+  .warn { color: #a33; }
+</style>
+</head>
+<body>
+<h1>__TITLE__</h1>
+<div class="controls">
+  <label>Fold <select id="fold"></select></label>
+  <label>VP <select id="vp" class="wide"></select></label>
+  <label>Search <input id="vpSearch" class="search" type="search" placeholder="vp id"></label>
+  <span id="vpCount" class="count"></span>
+</div>
+<div class="controls">
+  <label><input type="checkbox" id="showScatter" checked> fit scatter</label>
+  <label><input type="checkbox" id="showBand" checked> fitted band</label>
+  <label><input type="checkbox" id="showCenter" checked> centre line</label>
+  <label title="rtt = 0.01 x km, i.e. a round trip at 2/3 the speed of light. No measurement can fall to the right of it; points that do are the RTT-inflation-free floor of the dataset."><input type="checkbox" id="showBaseline" checked> 2/3 c baseline</label>
+  <label><input type="checkbox" id="logY"> log distance axis</label>
+  <label><input type="checkbox" id="sharedAxes"> freeze axes across VPs</label>
+  <span class="count">
+    <span class="swatch" style="background:#898781"></span>fit samples
+    <span class="swatch" style="background:#2a78d6"></span>band
+    <span class="swatch" style="background:#4a3aa7"></span>centre
+    <span class="swatch" style="background:#0b0b0b"></span>2/3 c
+    <span class="swatch" style="background:#e34948"></span>eval target
+  </span>
+</div>
+<div class="controls">
+  <div class="stack">
+    <span>Overlay eval targets (ctrl/cmd-click for several; only their VPs that
+      participated in this target's multilateration are drawn)</span>
+    <select id="targets" multiple></select>
+  </div>
+  <div class="stack">
+    <span>Filter targets</span>
+    <input id="targetSearch" class="search" type="search" placeholder="target id or status">
+    <span id="targetCount" class="count"></span>
+    <label><input type="checkbox" id="onlyThisVp" checked> only targets this VP measured</label>
+  </div>
+</div>
+<div id="meta" class="meta"></div>
+<div id="plot"></div>
+<script id="data" type="application/json">__PAYLOAD__</script>
+<script>
+__SCRIPT__
+</script>
+</body>
+</html>

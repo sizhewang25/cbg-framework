@@ -35,6 +35,7 @@ from scripts.analysis.v3.modules import (
     figure_error_cdf,
     figure_distance_rtt,
     figure_error_scatter,
+    figure_ltd_model,
     figure_outcome_bars,
     figure_pni_colocation,
     figure_pni_delay,
@@ -86,6 +87,7 @@ _COMMAND_MODULES = (
     map_answer_space,
     map_bipartite,
     map_mtl,
+    figure_ltd_model,
     pareto,
     phase_cost,
 )

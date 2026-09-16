@@ -265,6 +265,22 @@ class RunPaths:
         """
         return self.analysis_dir("pni-linearity", root=root)
 
+    def ltd_model_dir(self, root: Path | None = None) -> Path:
+        """Interactive per-combo LTD fit viewers — grid-free.
+
+        Grid-free for `pni_graph_dir`'s reason, and specifically for the one
+        `pni_linearity_dir` states: what is drawn here is a property of the
+        measurement campaign, not of the answer space. The fit maps an RTT to a
+        distance in km; no seed, cell or quantization enters it, so filing these
+        under `<grid>-<resolution>/` would make `--sweep` write N byte-identical
+        copies of a 4 MB page.
+
+        Contrast `mtl_map_dir`, which *is* slugged: that viewer draws the
+        classification outcome against the seeds, so the grid is a parameter of
+        every colour on it.
+        """
+        return self.analysis_dir("ltd-model", root=root)
+
     def mtl_map_dir(
         self, root: Path | None = None, *, grid: str, resolution: int
     ) -> Path:

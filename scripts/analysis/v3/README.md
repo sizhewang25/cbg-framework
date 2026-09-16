@@ -40,6 +40,7 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/map_answer_space.py](modules/map_answer_space.py) | cmd · `plot-answer-space` |
 | [modules/map_bipartite.py](modules/map_bipartite.py) | cmd · `plot-bipartite-graph` |
 | [modules/map_mtl.py](modules/map_mtl.py) | cmd · `plot-mtl-map` |
+| [modules/figure_ltd_model.py](modules/figure_ltd_model.py) | cmd · `plot-ltd-model` |
 | [modules/pareto.py](modules/pareto.py) | cmd · `plot-pareto` |
 | [modules/phase_cost.py](modules/phase_cost.py) | cmd · `plot-phase-cost` |
 
@@ -262,6 +263,16 @@ python -m scripts.analysis.v3.cli plot-mtl-map --run-id as01-260728-260802 \
     -m octant_cbg_hull --no-regions        # seconds, minus the region layer
 #     Across runs, with the same argument handling as the artifact sweep:
 ./scripts/analysis/v3/create_mtl_map.sh as0{1,2,3}-260728-260802
+
+# 5c. The LTD fit viewer: one interactive HTML per combo, for asking whether the
+#     latency-to-distance stage explains a result. Needs no other v3 command --
+#     it reads the fold checkpoints and the dataset directly -- but it does need
+#     the fit scatter, which is not in the output tree (see below).
+python -m scripts.analysis.v3.cli plot-ltd-model --run-id as01-260728-260802
+python -m scripts.analysis.v3.cli plot-ltd-model --run-id as01-260728-260802 \
+    --method octant_cbg_spl --fold fold_4   # one combo, one fold
+#     Across runs, again with the artifact sweep's argument handling:
+./scripts/analysis/v3/create_ltd_modeling_html.sh as0{1,2,3}-260728-260802
 
 # 6. Accuracy vs cost across datasets (colour = variant, symbol = dataset)
 python -m scripts.analysis.v3.cli plot-pareto \
@@ -2456,6 +2467,142 @@ Everything that is a *classification* fact rather than an MTL one stays — the
 Voronoi partition, the seed regions and their top-1/2/3 ramp, the margin circle,
 the measured and latent VPs, the truth star, and the error connector, which for
 this method is exactly "how wrong the baseline's answer is in kilometres" (§8.1).
+
+## The LTD fit viewer
+
+`plot-ltd-model` is the only command here that looks at the *latency-to-distance
+stage* rather than at a prediction. For each fold and each VP it draws the
+RTT-vs-distance training scatter, the band the fitted model actually returns, and
+the 2/3 c baseline — the figure to open when a run's accuracy moves and the
+question is whether the fit is the cause. One self-contained HTML per combo, over
+`file://`:
+
+```
+outputs/analysis/v3/<run_id>/ltd-model/
+  ltd_model.<combo>.html      # fold + VP dropdowns, target overlay picker
+  manifest.json               # per combo: ltd, kwargs, folds, VP counts, provenance
+```
+
+`ltd-model/` carries no grid slug. What is drawn is a property of the measurement
+campaign, not of the answer space — the fit maps an RTT to kilometres and no
+seed or cell enters it — so `--sweep` would otherwise write N byte-identical
+copies of a 5 MB page. `mtl-map/` *is* slugged, because that viewer colours its
+marks by classification outcome.
+
+### The model is named, never inferred from the combo
+
+`run.json` records `ltd` and `ltd_kwargs` per combo, and that is what selects the
+rendering. `combo_id` cannot be pattern-matched: `octant_cbg_spl` and
+`octant_cbg_hull` are **the same class** (`bounded_spline`), differing only in
+`fit_spline`. Their `predict` bands coincide, so the spline centre line is the
+entire visible difference between the two pages — which is why a model exposing
+no centre reports that in the meta line rather than borrowing a flat one.
+
+`million_scale_cbg` writes a `.stateless` marker and no pickle at all, because
+`SpeedOfInternetLTD` has no post-fit state. That is not a missing model: the
+class plus `run.json`'s kwargs reconstructs an equivalent instance, and the page
+says so.
+
+### One uniform prediction API, evaluated in Python
+
+The band comes from `LTDModel.predict(vp_id, vp_coord, latency).tg_distance`,
+which every variant implements, sampled over a grid and shipped as a polyline.
+The browser computes nothing.
+
+This is the deliberate inversion of the legacy
+[scripts/visualization/benchmark/v2/rtt_distance_modeling.py](../../visualization/benchmark/v2/rtt_distance_modeling.py),
+which shipped `slope`/`intercept` and reimplemented the line in JS. That worked
+for `LowEnvelopeLTD` alone and raised `AttributeError` on `OctantRTTModel`; it
+also hardcoded the dead `scripts/benchmark/v2/{inputs,outputs}/` layout. Doing it
+here means a new LTD variant renders with no JS change, and no variant's geometry
+exists in two languages that can drift.
+
+### A declined RTT is a gap, never a zero
+
+`predict` legitimately fails on part of an axis: the pooled Spotter model
+declines every RTT below its fitted minimum. On as01 that is 1–4 grid points on
+413 of 670 VP panels. Those points are `null` in the payload, and the JS splits
+the band into separate filled traces at each one — Plotly would otherwise bridge
+straight across inside a single filled polygon, drawing a claim the model does
+not make at exactly the short RTTs the accuracy story turns on.
+
+The grid's endpoints are inset by 1e-4 of the observed span for a related but
+distinct reason. The Octant hull is built *through* a VP's extreme observations,
+so at exactly its first and last RTT the bounds coincide and `predict` returns
+`DEGENERATE_REGION`. Sampling the closed boundary is this module's choice, not
+the model's domain; uncorrected it put a spurious null on both ends of all 670
+octant panels. The inset is ~0.006 ms on a 59 ms range, and it removes exactly
+that artifact — Spotter's genuine leading gaps survive it unchanged, which is how
+we know it is not hiding one.
+
+### The fit scatter is not in the output tree
+
+This is the one input `plot-ltd-model` cannot read from the fold directory.
+`run.json` and `fit_checkpoint.pkl` describe the fit; the data it was fit on
+lives elsewhere. Two routes, tried in order, and **both are load-bearing**:
+
+1. `inputs/benchmark/v2/<source>/<run_id>/<setup>/<fold>/fit_samples.parquet` —
+   the exact artifact the runner consumed. `as7018-ripe-mesh` has only this.
+2. The dataset CSV (via `bipartite.resolve_source_csv`, off the run's own
+   `eval_source/`) filtered by its pinned `.stratification.json`: the fit set is
+   every row whose target is in one of the other K-1 folds. `as01/02/03-260728-260802`
+   have only this — no `inputs/` tree and `benchmark: {}` in their configs.
+
+Route 2 is a reconstruction, so it is **asserted, not trusted**: the row count
+must equal `run.json`'s `n_fit_samples` or the build fails. It holds exactly on
+every as01 fold (42627 / 42574 / 42564 / 42579 / 42704). A target the
+stratification does not mention is dropped rather than counted as "some other
+fold" — unassigned is not outside the evaluated fold, and counting it in would
+inflate the scatter with rows the model may have been scored on.
+
+Which route produced a page is printed in the page itself. The scatter is
+reconstructed for every operator run, and a reader has to be able to tell.
+
+### The target overlay is a multi-select
+
+Off by default; `--target` only decides what is already ticked on load. Each
+picked target contributes its `(rtt, true distance)` point on the current VP's
+axes, plus the LTD bound that VP echoed into the multilateration — the
+constraint the target had to satisfy, against where it actually was.
+
+These are **post-filter** participants, from `targets.parquet`'s
+`mtl_participants`: the MTL drops a disk that fully contains another before
+intersecting, so a target lists fewer VPs here than the fit had (27 of 134 on a
+sampled as01 row). That is the right set — it is what formed the region — but it
+is why this is an overlay on the fit rather than a substitute for it.
+
+### Batch rendering: `create_ltd_modeling_html.sh`
+
+[create_ltd_modeling_html.sh](create_ltd_modeling_html.sh) renders across runs
+with the same argument handling as its two siblings. Run it from the repo root.
+
+```bash
+./scripts/analysis/v3/create_ltd_modeling_html.sh                          # the default set
+./scripts/analysis/v3/create_ltd_modeling_html.sh as01-260728-260802-mesh  # named runs
+METHODS="vanilla_cbg octant_cbg_spl" FOLDS="fold_4" \
+  ./scripts/analysis/v3/create_ltd_modeling_html.sh as01-260728-260802     # narrowed
+```
+
+Separate from the artifact sweep for `create_mtl_map.sh`'s three reasons: ~11 s
+per run against seconds for everything in that sweep, nothing consumes its
+output, and it is looked at rather than computed over. A missing config is a
+**note, not a skip** — also `create_mtl_map.sh`'s rule — because this command
+needs nothing from the config and would otherwise be unrenderable for a run with
+benchmark output and none.
+
+Unlike `create_mtl_map.sh` it invokes the CLI **once per run**, not once per
+combo: the per-combo failure isolation that script buys with repeated setup is
+already inside `build_for_run`, and the folds' scatter cache is shared across a
+run's combos.
+
+### The page is tested by running it
+
+`tests/test_ltd_model_viewer.js` stubs enough DOM and Plotly to execute the
+viewer under node, then drives every fold, VP, layer toggle and target pick — a
+typo in `draw()` renders a blank page and passes every Python assertion about the
+payload. It fails if any filled trace carries a `null`, which is the band-gap
+invariant above, and `tests/test_figure_ltd_model.py` renders the fixture and
+skips when node is absent.
 
 ## Accuracy vs cost
 
