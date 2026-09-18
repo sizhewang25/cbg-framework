@@ -166,12 +166,27 @@ class NormalDistLTD(AnnulusLTDModel):
                 vp_coord=vp_coord,
                 latency=latency,
             )
+        # The band is what geometric MTLs consume; (mu, sigma) is the
+        # distribution it was derived from, carried alongside for
+        # DensityMTLMethod. Attached rather than re-derived downstream because
+        # the band is not invertible: inner clamps at 0, outer is clipped by
+        # 2/3*c, and the half-width is k*sigma for an internal k.
+        #
+        # A None here is not an error for this result -- the geometric path is
+        # unaffected -- so the bounds are returned either way and only a
+        # density MTL will notice the absence.
+        mu_sigma = self._model.predict_mu_sigma(latency)
+        mu_km = float(mu_sigma[0]) if mu_sigma is not None else None
+        sigma_km = float(mu_sigma[1]) if mu_sigma is not None else None
         return LTDResult(
             success=True,
             vp_id=vp_id,
             vp_coord=vp_coord,
             latency=latency,
             tg_distance=Distance(
-                upper_km=float(outer_km), lower_km=float(inner_km)
+                upper_km=float(outer_km),
+                lower_km=float(inner_km),
+                mu_km=mu_km,
+                sigma_km=sigma_km,
             ),
         )

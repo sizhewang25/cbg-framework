@@ -99,6 +99,132 @@ benchmark:
       ctr_kwargs:
         n_samples: 1024
 
+    # --- Spotter approximation arms --------------------------------------
+    # See notes/2026-09-18-spotter-mtl-fidelity-gap.md.
+    #
+    # Spotter (Laki et al. 2011) has NO hard constraints: SS IV-C's whole claim
+    # is a *product of densities*, where near-landmark space is low-density,
+    # never excluded. `spotter_cbg` above is Spotter's LTD inside Octant's
+    # geometry -- an outer-disk AND plus inner-disk subtraction, plus a circle
+    # filter that is an Octant patch with no Spotter counterpart. These arms
+    # approximate the paper's "region that maximizes the joint density" as
+    # "face of the annulus arrangement contained in the MOST annuli".
+    #
+    # max-count needs no code change, because:
+    #   * face weight is `sum(w_i for annuli containing the face rep point)`,
+    #     so with all w_i equal that sum IS the containment count;
+    #   * `highest_weight_only: true` then returns the argmax face.
+    # The wrapper computes w_i = exp(-rtt_i / weight_tau_ms), so "w_i = 1" is
+    # spelled as a huge tau. tau=1e9 over 134 VPs at rtt <= 92 ms leaves a
+    # total weight deviation of 1.2e-5 -- far below the >= 1 gap between count
+    # levels, so counts can never be flipped by it; the residual acts only as a
+    # deterministic tie-break favouring lower total RTT. (A `weight_mode:
+    # uniform` kwarg would say this more legibly; deferred to keep Phase 1
+    # config-only.)
+    #
+    # TWO arms because `spotter_appr` changes two things at once versus
+    # `spotter_cbg` (uniform weights AND filter off). `spotter_appr_fil` holds
+    # the filter ON so the two factors can be attributed separately, and it is
+    # nearly free: the filter prunes 134 annuli -> 18 on as01, a ~500x speedup
+    # (0.12 s vs 59 s per target, measured).
+    - combo_id: spotter_appr
+      ltd: normal_dist
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        n_bins: 40
+        min_per_bin: 5
+        deg_mu: 3
+        deg_sigma: 2
+        bin_size_ms: 5.0
+        cutoff_min_points: 5
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: false
+        weight_tau_ms: 1.0e+9
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+    - combo_id: spotter_appr_fil
+      ltd: normal_dist
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        n_bins: 40
+        min_per_bin: 5
+        deg_mu: 3
+        deg_sigma: 2
+        bin_size_ms: 5.0
+        cutoff_min_points: 5
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_tau_ms: 1.0e+9
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+    # --- Spotter, faithful (Phase 2) --------------------------------------
+    # See notes/2026-09-18-spotter-mtl-fidelity-gap.md.
+    #
+    # `gaussian_density` implements Eq. (2) directly: log P(x) = -1/2 * sum of
+    # ((s_i(x) - mu_i)/sigma_i)^2, evaluated per H3 cell. No AND, no inner-disk
+    # subtraction, no circle filter -- a badly-fitting VP lowers a score instead
+    # of emptying the region, which is the property SS IV-C claims for Spotter
+    # and the one the annular stack removes. EMPTY_REGION and EXCLUSIVE_REGION
+    # are not outcomes this MTL can produce.
+    #
+    # Two arms, because the paper and its own objective disagree by a grid cell:
+    #   spotter_true      -- density_mle: the EXACT continuous MAP, least squares
+    #                        on the same objective, seeded at the grid argmax.
+    #                        This is the reference other variants get scored
+    #                        against; no quantisation error.
+    #   spotter_true_grid -- density_argmax: the paper's literal reading, the
+    #                        single most probable cell. Its floor is the H3-4
+    #                        cell size (~20 km edge), which is the same order as
+    #                        the accuracy thresholds being reported -- so the
+    #                        gap between these two arms IS the grid's cost.
+    #
+    # Both are cheap: ~25 ms MTL + <20 ms CTR per target, against 59-73 s for
+    # one filter-off annular target. coarse_resolution 2 -> 4 was verified to
+    # give the identical argmax as a single global 288,122-cell pass.
+    - combo_id: spotter_true
+      ltd: normal_dist
+      mtl: gaussian_density
+      ctr: density_mle
+      ltd_kwargs:
+        n_bins: 40
+        min_per_bin: 5
+        deg_mu: 3
+        deg_sigma: 2
+        bin_size_ms: 5.0
+        cutoff_min_points: 5
+      mtl_kwargs:
+        resolution: 4
+        coarse_resolution: 2
+        top_k: 64
+        neighbor_ring: 1
+        credible_mass: 0.95
+
+    - combo_id: spotter_true_grid
+      ltd: normal_dist
+      mtl: gaussian_density
+      ctr: density_argmax
+      ltd_kwargs:
+        n_bins: 40
+        min_per_bin: 5
+        deg_mu: 3
+        deg_sigma: 2
+        bin_size_ms: 5.0
+        cutoff_min_points: 5
+      mtl_kwargs:
+        resolution: 4
+        coarse_resolution: 2
+        top_k: 64
+        neighbor_ring: 1
+        credible_mass: 0.95
+
 analysis:
   common:
     grid: h3

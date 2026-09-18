@@ -13,7 +13,12 @@ from typing import Callable, Type
 
 from scripts.framework.v2.ctr.base import CTRMethod
 from scripts.framework.v2.ltd.base import AnnulusLTDModel, CircleLTDModel, LTDModel
-from scripts.framework.v2.mtl.base import AnnulusMTLMethod, CircleMTLMethod, MTLMethod
+from scripts.framework.v2.mtl.base import (
+    AnnulusMTLMethod,
+    CircleMTLMethod,
+    DensityMTLMethod,
+    MTLMethod,
+)
 
 LTD_REGISTRY: dict[str, Type[LTDModel]] = {}
 MTL_REGISTRY: dict[str, Type[MTLMethod]] = {}
@@ -40,13 +45,14 @@ def register_ltd(name: str) -> Callable[[Type[LTDModel]], Type[LTDModel]]:
 
 def register_mtl(name: str) -> Callable[[Type[MTLMethod]], Type[MTLMethod]]:
     """Register an MTLMethod subclass under `name`. The class must subclass
-    CircleMTLMethod or AnnulusMTLMethod, not MTLMethod directly."""
+    CircleMTLMethod, AnnulusMTLMethod or DensityMTLMethod, not MTLMethod
+    directly."""
 
     def deco(cls: Type[MTLMethod]) -> Type[MTLMethod]:
-        if not issubclass(cls, (CircleMTLMethod, AnnulusMTLMethod)):
+        if not issubclass(cls, (CircleMTLMethod, AnnulusMTLMethod, DensityMTLMethod)):
             raise TypeError(
-                f"{cls.__name__} must subclass CircleMTLMethod or AnnulusMTLMethod "
-                f"(subclassing MTLMethod directly is not allowed)"
+                f"{cls.__name__} must subclass CircleMTLMethod, AnnulusMTLMethod or "
+                f"DensityMTLMethod (subclassing MTLMethod directly is not allowed)"
             )
         if name in MTL_REGISTRY:
             raise ValueError(f"Duplicate MTL registration: {name!r}")

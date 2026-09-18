@@ -258,6 +258,45 @@ class SpotterRTTModel:
             return None
         return float(np.polyval(self.p_mu, rtt))
 
+    def predict_mu_sigma(self, rtt: float) -> Optional[Tuple[float, float]]:
+        """The (mu, sigma) of f_d = N(mu(d), sigma(d)^2) at this RTT.
+
+        Spotter's model is a *distribution*, and a density-based evaluator needs
+        it directly rather than the [mu - k*sigma, mu + k*sigma] band that
+        `predict_distance_bounds` derives from it (the band is not invertible:
+        the inner side clamps at 0 and the outer is clipped by 2/3*c).
+
+        The polynomial is evaluated at `clip(rtt, rtt_min, cutoff_rtt)` — the
+        same refusal-to-extrapolate that the bounds path applies, expressed as
+        one clamp:
+
+        - Above `cutoff_rtt`: held flat, because deg-3 mu / deg-2 sigma diverge
+          in the sparse tail. Matches the bounds path exactly.
+        - Below `rtt_min`: also held flat. The bounds path instead switches to a
+          line through the origin, which is a statement about *limits* and has
+          no (mu, sigma) reading -- a Gaussian centred on a shrinking radius is
+          not what that construction means. Clamping keeps the density finite
+          and defined; it makes the model deliberately pessimistic (too wide,
+          too far) for sub-calibration RTTs rather than confidently wrong.
+
+        Returns None when unfitted, or when sigma is non-positive at this RTT
+        (the deg-2 polynomial is free to dip below zero, and a non-positive
+        sigma has no density).
+        """
+        if not self.fitted or self.p_mu is None or self.p_sigma is None:
+            return None
+        hi = self.cutoff_rtt if self.cutoff_rtt > 0 else self.rtt_max
+        eval_rtt = rtt
+        if self.rtt_min > 0:
+            eval_rtt = max(eval_rtt, self.rtt_min)
+        if hi > 0:
+            eval_rtt = min(eval_rtt, hi)
+        mu = float(np.polyval(self.p_mu, eval_rtt))
+        sigma = float(np.polyval(self.p_sigma, eval_rtt))
+        if not np.isfinite(mu) or not np.isfinite(sigma) or sigma <= 0:
+            return None
+        return max(0.0, mu), sigma
+
     def predict_distance_bounds(
         self, rtt: float
     ) -> Optional[Tuple[float, float]]:

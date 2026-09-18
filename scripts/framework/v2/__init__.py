@@ -19,6 +19,12 @@ bound discarded.
 from scripts.framework.v2.ctr.base import CTRMethod, CTRResult
 from scripts.framework.v2.ctr.boundary_vertex_mean import BoundaryVertexMeanCTR
 from scripts.framework.v2.ctr.geometric_centroid import GeometricCentroidCTR
+from scripts.framework.v2.ctr.density_point import (
+    DensityArgmaxCTR,
+    DensityMeanCTR,
+    DensityMLECTR,
+    DensityRegionCenterCTR,
+)
 from scripts.framework.v2.ctr.geometric_median import GeometricMedianCTR
 from scripts.framework.v2.ctr.monte_carlo_medoid import MonteCarloMedoidCTR
 from scripts.framework.v2.ltd.base import (
@@ -37,10 +43,13 @@ from scripts.framework.v2.model import CBGModel, GeoResult
 from scripts.framework.v2.mtl.base import (
     AnnulusMTLMethod,
     CircleMTLMethod,
+    DensityField,
+    DensityMTLMethod,
     Intersection,
     MTLMethod,
     MTLResult,
 )
+from scripts.framework.v2.mtl.gaussian_density import GaussianDensityMTL
 from scripts.framework.v2.mtl.planar_annulus import PlanarAnnulusMTL
 from scripts.framework.v2.mtl.planar_annulus_weighted import PlanarAnnulusWeightedMTL
 from scripts.framework.v2.mtl.planar_circle import PlanarCircleMTL
@@ -84,6 +93,9 @@ __all__ = [
     # mtl
     "AnnulusMTLMethod",
     "CircleMTLMethod",
+    "DensityField",
+    "DensityMTLMethod",
+    "GaussianDensityMTL",
     "Intersection",
     "MTLMethod",
     "MTLResult",
@@ -96,6 +108,10 @@ __all__ = [
     "CTRResult",
     "BoundaryVertexMeanCTR",
     "GeometricCentroidCTR",
+    "DensityArgmaxCTR",
+    "DensityMeanCTR",
+    "DensityMLECTR",
+    "DensityRegionCenterCTR",
     "GeometricMedianCTR",
     "MonteCarloMedoidCTR",
     # composition
