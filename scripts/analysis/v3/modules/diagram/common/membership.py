@@ -35,10 +35,19 @@ def available_methods(cls_dir: Path) -> list[str]:
 #: only the ones that report a denominator need to look.
 DROPPED_ATTR = "n_baseline_only_targets"
 
+#: Set on the returned frame: how many CBG-scored targets were dropped because
+#: the baseline has no answer for them. Only ever non-zero under
+#: `drop_unmatched=True`, since without it that case raises.
+UNMATCHED_ATTR = "n_unmatched_targets"
+
 
 def _align_to_scored_targets(
-    cols: dict[str, pd.Series], methods: list[str], *, baseline: str = SHORTEST_PING
-) -> tuple[pd.Index | None, int]:
+    cols: dict[str, pd.Series],
+    methods: list[str],
+    *,
+    baseline: str = SHORTEST_PING,
+    drop_unmatched: bool = False,
+) -> tuple[pd.Index | None, int, int]:
     """The population every column is read over: the targets the CBG arms scored.
 
     **The CBG arms must agree with each other; the baseline is aligned to them.**
@@ -60,12 +69,23 @@ def _align_to_scored_targets(
     parquets of the same run, so a difference there is a broken run rather than
     a filtered one, and silently intersecting it would hide that.
 
-    Returns the population index and how many baseline-only targets it excludes;
-    `(None, 0)` when there is nothing to align — no CBG columns, or no baseline.
+    The **reverse** direction — a target the CBG arms scored and the baseline
+    does not carry — is not explained by any of that, and by default raises. The
+    baseline comes from the eval source, every eval-source metric is a
+    per-target groupby over that CSV's own pairs, and the benchmark scores what
+    the source hands it; so a target on one side and not the other means the two
+    sides read *different files*, which is worth knowing rather than papering
+    over. `drop_unmatched=True` opts into dropping them anyway — the population
+    is then the targets every method has an answer for — and the count is
+    reported separately so it never hides inside the other one.
+
+    Returns the population index and the two exclusion counts;
+    `(None, 0, 0)` when there is nothing to align — no CBG columns, or no
+    baseline.
     """
     cbg = [m for m in methods if m != baseline]
     if not cbg:
-        return None, 0
+        return None, 0, 0
 
     first = set(cols[cbg[0]].index)
     disagree = [m for m in cbg[1:] if set(cols[m].index) != first]
@@ -78,25 +98,32 @@ def _align_to_scored_targets(
             f"pin a consistent set with --method"
         )
     if baseline not in cols:
-        return None, 0
+        return None, 0, 0
 
     scored = cols[cbg[0]].index
     missing = scored.difference(cols[baseline].index)
-    if len(missing):
-        # The other direction, and not alignable: a target the benchmark scored
-        # but the eval source does not describe has no baseline answer to
-        # compare against, and dropping it would shrink the CBG arms' own
-        # denominator to hide an inconsistent run.
+    if len(missing) and not drop_unmatched:
         raise ValueError(
             f"{len(missing)} target(s) scored by the CBG arms are absent from "
-            f"the {baseline!r} baseline (e.g. {missing[:5].tolist()}); the "
-            f"baseline is read from eval_source, so it should be a superset"
+            f"the {baseline!r} baseline (e.g. {missing[:5].tolist()}). The "
+            f"baseline is read from eval_source, whose per-target rows are a "
+            f"groupby over that CSV's own pairs, so this means the eval source "
+            f"and the benchmark read DIFFERENT CSVs — compare "
+            f"eval_source/*_eval_stats.json's `csv` key against the config's "
+            f"weighted_csv_path/mesh_csv_path. Pass --drop-unmatched-targets to "
+            f"score over the targets every method has instead"
         )
-    return scored, int(len(cols[baseline].index.difference(scored)))
+    if len(missing):
+        scored = scored.difference(missing)
+    return (
+        scored,
+        int(len(cols[baseline].index.difference(scored))),
+        int(len(missing)),
+    )
 
 
 def build_membership(
-    cls_dir: Path, methods: list[str], *, top_n: int = 1
+    cls_dir: Path, methods: list[str], *, top_n: int = 1, drop_unmatched: bool = False
 ) -> pd.DataFrame:
     """Boolean matrix: one row per target, one column per method.
 
@@ -125,9 +152,11 @@ def build_membership(
         rank = df["tg_seed_rank"]
         cols[method] = (rank >= 0) & (rank < top_n) & solved
 
-    scored, dropped = _align_to_scored_targets(cols, methods)
+    scored, dropped, unmatched = _align_to_scored_targets(
+        cols, methods, drop_unmatched=drop_unmatched
+    )
     membership = pd.DataFrame(cols)
-    if scored is not None and dropped:
+    if scored is not None and (dropped or unmatched):
         # Masked rather than reindexed: `.loc[scored]` would reorder the rows to
         # the CBG arms' order, rewriting every existing membership CSV for a
         # change that drops nothing on a mesh run.
@@ -142,6 +171,7 @@ def build_membership(
         )
     membership = membership.astype(bool)
     membership.attrs[DROPPED_ATTR] = dropped
+    membership.attrs[UNMATCHED_ATTR] = unmatched
     return membership
 
 
@@ -195,6 +225,7 @@ def pooled_membership(
     resolution: int,
     top_n: int = 1,
     methods: list[str] | None = None,
+    drop_unmatched: bool = False,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """One membership matrix over the targets of several runs.
 
@@ -270,7 +301,9 @@ def pooled_membership(
                 f"--method, or score the missing ones."
             )
 
-        one = build_membership(cls_dir, chosen, top_n=top_n)
+        one = build_membership(
+            cls_dir, chosen, top_n=top_n, drop_unmatched=drop_unmatched
+        )
         one.index = [f"{run_id}{RUN_KEY_SEP}{t}" for t in one.index]
         frames.append(one)
         origins.append(pd.Series(run_id, index=one.index, name="run_id"))
@@ -279,7 +312,8 @@ def pooled_membership(
     # Summed explicitly: `concat` only carries `attrs` through when every input
     # agrees, and a pool of a mesh run with a weighted one is exactly the case
     # where they do not.
-    pooled.attrs[DROPPED_ATTR] = sum(int(f.attrs.get(DROPPED_ATTR, 0)) for f in frames)
+    for attr in (DROPPED_ATTR, UNMATCHED_ATTR):
+        pooled.attrs[attr] = sum(int(f.attrs.get(attr, 0)) for f in frames)
     if not pooled.index.is_unique:
         dupes = pooled.index[pooled.index.duplicated()].unique().tolist()
         raise ValueError(

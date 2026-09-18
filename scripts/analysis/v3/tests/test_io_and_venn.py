@@ -378,8 +378,26 @@ def test_a_target_the_baseline_lacks_is_not_alignable(tmp_path):
     _make_cls_dir(tmp_path, "odd", {"vanilla_cbg": [True, True]}, ["t0", "t1"])
     cls_dir = run.cls_accuracy_dir(root=tmp_path / "analysis", grid="h3", resolution=4)
 
-    with pytest.raises(ValueError, match="absent from the .* baseline"):
+    with pytest.raises(ValueError, match="DIFFERENT CSVs"):
         venn.build_membership(cls_dir, [venn.SHORTEST_PING, "vanilla_cbg"])
+
+
+def test_drop_unmatched_opts_into_the_intersection_and_counts_it(tmp_path):
+    """The escape hatch: score over the targets every method has."""
+    run = _make_cls_dir(
+        tmp_path, "odd2", {venn.SHORTEST_PING: [True, False]}, ["t0", "t_extra"]
+    )
+    _make_cls_dir(tmp_path, "odd2", {"vanilla_cbg": [True, True]}, ["t0", "t1"])
+    cls_dir = run.cls_accuracy_dir(root=tmp_path / "analysis", grid="h3", resolution=4)
+
+    m = venn.build_membership(
+        cls_dir, [venn.SHORTEST_PING, "vanilla_cbg"], drop_unmatched=True
+    )
+    assert list(m.index) == ["t0"]
+    # The two exclusions are counted apart: one is the traffic filter, the
+    # other is two sides reading different CSVs.
+    assert m.attrs[venn.DROPPED_ATTR] == 1      # t_extra: baseline only
+    assert m.attrs[venn.UNMATCHED_ATTR] == 1    # t1: CBG only
 
 
 def test_matching_populations_drop_nothing_and_keep_their_row_order(tmp_path):
@@ -921,6 +939,41 @@ def test_the_outside_label_carries_the_never_correct_share():
     )
     assert float(layout.observed[0]) == pytest.approx(2 / 6)
     assert venn.OUTSIDE_LABEL == "None"
+
+
+def test_perfect_containment_never_reaches_the_bisection(tmp_path):
+    """A nested pair whose `pi * r**2` rounds *above* its own share.
+
+    `target` is an observed `k/n`; the radius it is compared against went
+    through `sqrt(share/pi)`, so the containment guard is an ulp away from
+    exact and rounds the wrong way for ~29% of shares at any n — 43 of the 149
+    at n=150. Before the bracket was endpoint-checked, such a pair reached
+    brentq with a target the lens cannot attain and was rejected outright with
+    "f(a) and f(b) must have different signs". What makes it a *weighted-arm*
+    crash is the other half: the pair must be perfectly nested, which is common
+    at n=150 and rare at n=1269.
+    """
+    import math
+
+    n, k_outer = 150, 120
+    misfiring = [
+        k for k in range(1, k_outer)
+        if (k / n) < math.pi * float(venn.circle_radii(np.array([k / n]))[0]) ** 2
+    ]
+    assert misfiring, "no share rounds the wrong way; the guard is exact now"
+
+    for k in misfiring:
+        r_small, r_big = venn.circle_radii(np.array([k / n, k_outer / n]))
+        d = venn.separation_for_overlap(float(r_small), float(r_big), k / n)
+        # Nested: the small circle sits wholly inside the big one.
+        assert d == pytest.approx(abs(float(r_big) - float(r_small)))
+
+
+def test_a_partial_overlap_still_solves_to_the_exact_target():
+    """The endpoint checks must not swallow the case the bisection is for."""
+    r1, r2 = venn.circle_radii(np.array([0.2, 0.5]))
+    d = venn.separation_for_overlap(float(r1), float(r2), 0.1)
+    assert venn.lens_area(float(r1), float(r2), d) == pytest.approx(0.1, abs=1e-9)
 
 
 def test_the_outside_circle_is_on_the_same_area_scale_as_the_sets():

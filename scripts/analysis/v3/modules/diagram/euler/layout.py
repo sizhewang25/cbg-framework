@@ -130,7 +130,27 @@ def separation_for_overlap(r1: float, r2: float, target: float) -> float:
         return hi + DISJOINT_MARGIN * min(r1, r2)
     if target >= math.pi * min(r1, r2) ** 2:
         return lo
-    return float(brentq(lambda d: lens_area(r1, r2, d) - target, lo + 1e-12, hi - 1e-12))
+
+    # The containment test above is exact in arithmetic and not in floats.
+    # `target` is an observed share `k/n`, while the radius it is compared
+    # against came from `circle_radii`, i.e. `sqrt(share/pi)` — so `pi*r**2`
+    # differs from `share` by up to an ulp, in either direction. When it lands
+    # *above*, a perfectly nested pair (`target == min(share)`, which is common
+    # once a set is small enough to sit entirely inside another) falls through
+    # to a bisection whose target the lens can never reach, and brentq rejects
+    # the bracket with "f(a) and f(b) must have different signs".
+    #
+    # Checking the ends rather than widening the guard by some epsilon: the
+    # bracket is the thing that has to be valid, so testing it directly is both
+    # the exact condition and self-evidently sufficient. Both fallbacks are the
+    # limiting geometry the unreachable target was asking for anyway —
+    # contained at `lo`, tangent at `hi`.
+    a, b = lo + 1e-12, hi - 1e-12
+    if lens_area(r1, r2, a) <= target:
+        return lo
+    if lens_area(r1, r2, b) >= target:
+        return hi
+    return float(brentq(lambda d: lens_area(r1, r2, d) - target, a, b))
 
 
 def _mds_centres(radii: "np.ndarray", pair_target: "np.ndarray") -> "np.ndarray":

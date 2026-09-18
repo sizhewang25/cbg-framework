@@ -1912,6 +1912,28 @@ which exposes the trade an aggregate accuracy number hides: which targets a
 variant *wins* over the baseline, and which it *loses* that the baseline already
 had.
 
+**One denominator, and it is the CBG arms'.** The columns come from two
+different places: a CBG column is the run's fold parquets — the targets the
+benchmark evaluated — while the Shortest-Ping column is read straight off
+`eval_source/*_eval_per_target.csv` and never passes through the benchmark. On
+a mesh run those describe the same targets. On a **traffic-weighted** arm they
+cannot: the filter prunes flows, a target that loses every flow vanishes from
+the weighted CSV, and the eval source is the pre-filter mesh. Those
+baseline-only targets have no membership to record for any CBG column, so
+`build_membership` drops them, counts them into
+`manifest.*.json`'s `n_baseline_only_targets_dropped`, and the command echoes
+the count — every share in the artifact set is then over the targets the CBG
+arms actually scored.
+
+Two *CBG* arms over different targets remain a hard error. They read the same
+run's fold parquets, so a difference there is a broken run rather than a
+filtered one, and intersecting it away would hide that. So is the reverse
+direction — a target scored by the CBG arms and absent from the baseline — since
+there is nothing to compare it against. Note that `classify` applies no such
+rule: `topn_accuracy.csv` takes each method's accuracy over its own `n_targets`,
+so on a weighted arm that table compares 183 baseline targets against 150 CBG
+ones and only the `n_targets` column says so.
+
 The headline is `overlap_venn.top<N>.png` — a 2-set Venn of **Shortest-Ping vs
 "≥1 CBG works"**. The CBG-only region counts rescues, the Shortest-Ping-only
 region counts regressions. Its subtitle names the CBG pool size, which is not

@@ -121,6 +121,7 @@ from scripts.analysis.v3.modules.paths import (
 from scripts.analysis.v3.modules.diagram.common import (
     DROPPED_ATTR,
     LABELS,
+    UNMATCHED_ATTR,
     PREFERRED_ORDER,
     RING_LETTERS,
     RUN_KEY_SEP,
@@ -185,6 +186,7 @@ CROSS_KIND = "venn-diagram"
 __all__ = [
     "CBG_ANY_LABEL",
     "DROPPED_ATTR",
+    "UNMATCHED_ATTR",
     "COLUMN_METRIC_LABEL",
     "CROSS_KIND",
     "EULER_CAPTION",
@@ -252,12 +254,23 @@ def _warn_if_aligned(membership: pd.DataFrame, where: str) -> None:
     manifest, so this line is the only channel it has.
     """
     dropped = int(membership.attrs.get(DROPPED_ATTR, 0))
+    unmatched = int(membership.attrs.get(UNMATCHED_ATTR, 0))
     if dropped:
         typer.echo(
             f"{where}: {dropped} target(s) carried by {LABELS[SHORTEST_PING]} "
             f"alone were dropped; every share below is over the "
             f"{len(membership)} targets the CBG arms scored. Expected on a "
             f"traffic-weighted arm, whose eval source spans the pre-filter mesh."
+        )
+    if unmatched:
+        # Louder than the other, and deliberately: this one is not explained by
+        # the traffic filter. It means the eval source and the benchmark read
+        # different CSVs, and --drop-unmatched-targets only suppresses the stop.
+        typer.echo(
+            f"{where}: WARNING {unmatched} target(s) scored by the CBG arms have "
+            f"no {LABELS[SHORTEST_PING]} answer and were dropped. This is not "
+            f"the traffic filter — check eval_source/*_eval_stats.json's `csv` "
+            f"against the CSV the benchmark ran on."
         )
 
 
@@ -584,6 +597,7 @@ def render_overlap(
     venn_methods: list[str] | None = None,
     top_n: int = 1,
     rescue_view: bool = False,
+    drop_unmatched: bool = False,
 ) -> dict[str, Path]:
     """Write the membership matrix, both count tables, and the figure(s)."""
     cls_dir = Path(cls_dir)
@@ -593,7 +607,9 @@ def render_overlap(
     if rescue_view:
         _guard_rescue(chosen)
 
-    membership = build_membership(cls_dir, chosen, top_n=top_n)
+    membership = build_membership(
+        cls_dir, chosen, top_n=top_n, drop_unmatched=drop_unmatched
+    )
     _warn_if_aligned(membership, run.run_id)
 
     n = len(membership)
@@ -641,6 +657,7 @@ def render_cross_overlap(
     top_n: int = 1,
     ring_order: list[str] | None = None,
     rescue_view: bool = False,
+    drop_unmatched: bool = False,
 ) -> dict[str, Path]:
     """Pool several runs into one artifact set under `_cross/venn-diagram/`.
 
@@ -661,6 +678,7 @@ def render_cross_overlap(
         resolution=resolution,
         top_n=top_n,
         methods=methods,
+        drop_unmatched=drop_unmatched,
     )
     chosen = list(membership.columns)
     _warn_if_aligned(membership, "+".join(sorted(runs)))
@@ -722,6 +740,12 @@ def render_cross_overlap(
                 # denominator every share in this file is taken over.
                 "n_baseline_only_targets_dropped": int(
                     membership.attrs.get(DROPPED_ATTR, 0)
+                ),
+                # Non-zero only under --drop-unmatched-targets, and a symptom
+                # rather than an expected filter: the eval source and the
+                # benchmark disagree about which targets exist.
+                "n_unmatched_targets_dropped": int(
+                    membership.attrs.get(UNMATCHED_ATTR, 0)
                 ),
                 "methods": chosen,
                 "labels": {m: label_for(m) for m in chosen},
@@ -805,6 +829,15 @@ def register(app: typer.Typer) -> None:
                  "Default: display order, so the figure means the same thing in "
                  "every run. Cross-run mode only.",
         ),
+        drop_unmatched_targets: bool = typer.Option(
+            False, "--drop-unmatched-targets",
+            help="Score over the targets EVERY method has, dropping any the CBG "
+                 "arms scored but the Shortest-Ping baseline lacks. Off by "
+                 "default, because that direction is not the traffic filter — "
+                 "it means the eval source and the benchmark read different "
+                 "CSVs, and the stop is how you find out. The count is echoed "
+                 "and recorded in the manifest either way.",
+        ),
         rescue_view: bool = typer.Option(
             False, "--rescue-view",
             help="Also write a second artifact set (rescue_overlap_*) over the "
@@ -868,6 +901,7 @@ def register(app: typer.Typer) -> None:
                     top_n=top_n,
                     ring_order=list(ring_order) if ring_order else None,
                     rescue_view=rescue_view,
+                    drop_unmatched=drop_unmatched_targets,
                 )
                 kinds = ", ".join(f"{k}={v.name}" for k, v in written.items())
                 typer.echo(
@@ -896,6 +930,7 @@ def register(app: typer.Typer) -> None:
                 venn_methods=list(venn_method) if venn_method else None,
                 top_n=top_n,
                 rescue_view=rescue_view,
+                drop_unmatched=drop_unmatched_targets,
             )
             kinds = ", ".join(f"{k}={v.name}" for k, v in written.items())
             typer.echo(
