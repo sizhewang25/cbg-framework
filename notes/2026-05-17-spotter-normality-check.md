@@ -3,7 +3,27 @@
 **Date:** 2026-05-17
 **Source paper:** Laki et al., *Spotter: A Model Based Active Geolocation Service*, 2011.
 **Script:** [scripts/libs/cbg_feasibility/spotter_normality_check.py](../scripts/libs/cbg_feasibility/spotter_normality_check.py)
-**Figures:** [scripts/libs/cbg_feasibility/outputs/spotter_normality/](../scripts/libs/cbg_feasibility/outputs/spotter_normality/)
+**Figures:** [scripts/libs/cbg_feasibility/outputs/spotter_normality/](../scripts/libs/cbg_feasibility/outputs/spotter_normality/) (regenerate; not committed)
+
+> **See also, and read the corrections first:**
+> [2026-09-18-spotter-normality-operator-mesh.md](2026-09-18-spotter-normality-operator-mesh.md)
+> re-runs this check on the as01/02/03 operator meshes with four fidelity fixes,
+> and lists five factual corrections to this note. The two load-bearing ones:
+>
+> 1. **The Q-Q slope below is read backwards.** `plot_panel_c` draws observed on
+>    x, so its slope is `sigma_pooled / sigma_anchor` — slope < 1 means the
+>    per-anchor sigma is **larger** than pooled, not smaller. Every claim here
+>    that depends on that direction is inverted, including the mechanism in
+>    §"Panel-by-panel mapping" item 3.
+> 2. **Panel (c) groups on the wrong endpoint.** It groups by `dst`, the
+>    *measured* endpoint; Spotter's landmark-independence claim is about the
+>    endpoint that *performed* the measurement (the probes here). The conclusion
+>    below may still hold, but this test is not the one that establishes it.
+>
+> Also: the paper's `sigma = 1.035` is a least-squares fit to the density, not
+> the truncated sample moment this note compares it against; its `mu(d)` is
+> convex rather than "near-linear"; and the "~100 PlanetLab landmarks" figure is
+> not in the paper.
 
 ## What Spotter claims
 
