@@ -454,6 +454,50 @@ class TestSpotterRTTModel(unittest.TestCase):
         self.assertAlmostEqual(center, 2500.0, delta=200.0)
         self.assertAlmostEqual(outer - inner, 2 * 200.0, delta=200.0)
 
+    def test_sigma_polynomial_can_go_negative_inside_the_calibration_range(self):
+        """The deg-2 sigma fit is unconstrained, and on real data it dips below
+        zero at the low-RTT end -- inside the range it was fitted on.
+
+        Documented here rather than fixed because `fit` is faithful to the
+        published recipe: Spotter fits `sigma(d)` as a polynomial and says
+        nothing about keeping it positive. The consequence is that the band
+        inverts and `predict_distance_bounds` returns a degenerate `(0, 0)`,
+        which `normal_dist` maps to Error.DEGENERATE_REGION -- so the VP
+        silently stops participating in the MTL for those RTTs.
+
+        Measured on the operator meshes by
+        `scripts.analysis.v3.modules.figure_spotter_normality`: roots at 5.51
+        ms (as01), 2.22 (as02), 2.40 (as03), affecting 2,088 / 444 / 565 rows.
+        See notes/2026-09-18-spotter-normality-operator-mesh.md.
+        """
+        model = SpotterRTTModel()
+        model.fitted = True
+        # as01's shape: both polynomials are negative at the left edge --
+        # mu(1 ms) = -153 km there, a negative mean distance.
+        model.p_mu = np.array([100.0, -400.0])    # mu = 100*d - 400
+        model.p_sigma = np.array([40.0, -200.0])  # sigma = 40*d - 200, root at 5 ms
+        model.rtt_min, model.rtt_max = 1.0, 80.0
+        model.cutoff_rtt = 80.0
+        model.k = 1.0
+
+        # Inside the fitted range, but left of the sigma root.
+        self.assertLess(float(np.polyval(model.p_sigma, 2.0)), 0.0)
+        # mu + sigma <= 0, so both ends clip to zero: a zero-radius disk, which
+        # normal_dist reads as DEGENERATE_REGION.
+        self.assertEqual(model.predict_distance_bounds(2.0), (0.0, 0.0))
+
+        # The subtler symptom, where only sigma is negative: the band inverts
+        # without either end hitting the clip, so `outer < inner` is the only
+        # signal that anything is wrong.
+        model.p_mu = np.array([100.0, 0.0])  # mu = 100*d, positive throughout
+        inner, outer = model.predict_distance_bounds(2.0)
+        self.assertLess(outer, inner)
+
+        # Right of the root the same model is well behaved, which is what makes
+        # this a fit-domain defect rather than a broken model.
+        inner_ok, outer_ok = model.predict_distance_bounds(40.0)
+        self.assertLess(inner_ok, outer_ok)
+
 
 if __name__ == "__main__":
     unittest.main()
