@@ -41,6 +41,7 @@ module and one name to `_COMMAND_MODULES`.
 | [modules/map_bipartite.py](modules/map_bipartite.py) | cmd · `plot-bipartite-graph` |
 | [modules/map_mtl.py](modules/map_mtl.py) | cmd · `plot-mtl-map` |
 | [modules/figure_ltd_model.py](modules/figure_ltd_model.py) | cmd · `plot-ltd-model` |
+| [modules/figure_spotter_normality.py](modules/figure_spotter_normality.py) | cmd · `plot-spotter-normality` |
 | [modules/pareto.py](modules/pareto.py) | cmd · `plot-pareto` |
 | [modules/phase_cost.py](modules/phase_cost.py) | cmd · `plot-phase-cost` |
 

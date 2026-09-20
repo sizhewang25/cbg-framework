@@ -281,6 +281,17 @@ class RunPaths:
         """
         return self.analysis_dir("ltd-model", root=root)
 
+    def spotter_normality_dir(self, root: Path | None = None) -> Path:
+        """Spotter Fig. 3 normality panels for a dataset — grid-free.
+
+        Grid-free for `ltd_model_dir`'s reason, and it is that command's static
+        companion: what is drawn is the delay-distance law of the measurement
+        campaign, fitted in kilometres against an RTT. No seed, cell or
+        quantization enters it, so slugging these under `<grid>-<resolution>/`
+        would make `--sweep` write N identical copies.
+        """
+        return self.analysis_dir("spotter-normality", root=root)
+
     def mtl_map_dir(
         self, root: Path | None = None, *, grid: str, resolution: int
     ) -> Path:

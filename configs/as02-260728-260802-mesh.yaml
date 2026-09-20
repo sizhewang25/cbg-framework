@@ -147,6 +147,28 @@ analysis:
   # pni-graph-<strategy>/`, so all three rules get plotted. The canonical
   # pni-graph/ that every other command resolves from the run id stays argmin,
   # which is why those arms need no key here.
+  # --- Spotter Fig. 3 normality diagnostics -----------------------------
+  # No `csv` key here: the command resolves it from
+  # `benchmark.source_kwargs.csv_path` above, so the dataset is declared once.
+  #
+  # `rtt_max` stays at its 0 default (off) deliberately, and it is the one
+  # knob here that FILTERS the population rather than the view -- contrast
+  # `plot-pni-delay`'s x_max. This mesh tops out near 92 ms, which is already
+  # the paper's 0-80 ms regime, so capping would discard rows for no fidelity
+  # gain. Pass `--rtt-max 80` on the command line for the literal comparison.
+  #
+  # The fit kwargs are NOT restated: the command's defaults are this config's
+  # own `spotter_cbg.ltd_kwargs`, and a test asserts the two still agree, so a
+  # copy here would be a second declaration free to drift.
+  plot-spotter-normality:
+    # The paper's claim is about the landmark that PERFORMED the measurement,
+    # and in this dataset that is unambiguously the VP.
+    group_by: vp_id
+    # 200 draws puts the permutation p-value's resolution at 0.005, which is
+    # enough to separate "outside the null" from "at its edge" without making
+    # the command's runtime the reason nobody runs it.
+    n_permutations: 200
+
   build-pni-feasibility:
     # 200 gives the permutation null a reportable effect size; the default 0
     # leaves n_feasible with no baseline to be surprising against.

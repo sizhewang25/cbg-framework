@@ -40,6 +40,7 @@ from scripts.analysis.v3.modules import (
     figure_pni_colocation,
     figure_pni_delay,
     figure_proximity_inflation,
+    figure_spotter_normality,
     headline_table,
     map_answer_space,
     map_bipartite,
@@ -88,6 +89,7 @@ _COMMAND_MODULES = (
     map_bipartite,
     map_mtl,
     figure_ltd_model,
+    figure_spotter_normality,
     pareto,
     phase_cost,
 )
