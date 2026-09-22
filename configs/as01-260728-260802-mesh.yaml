@@ -97,6 +97,22 @@ benchmark:
       ctr_kwargs:
         n_samples: 1024
 
+    - combo_id: spotter_true
+      ltd: normal_dist
+      mtl: gaussian_density
+      ctr: density_argmax
+      ltd_kwargs:
+        deg_mu: 3
+        deg_sigma: 2
+        bin_size_ms: 5.0
+        cutoff_min_points: 5
+      mtl_kwargs:
+        resolution: 4
+        coarse_resolution: 2
+        top_k: 8
+        neighbor_ring: 1
+        credible_mass: 0.95
+
 analysis:
   common:
     grid: h3

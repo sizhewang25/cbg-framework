@@ -38,29 +38,26 @@ the paper found four misalignments, all of which this command fixes:
   input* with no count. On these datasets that hides 0.8-3.9% of rows -- see
   below, it is the whole finding.
 
-## The sigma(d) <= 0 pathology -- FIXED, and this is what fixed it
+## The sigma(d) <= 0 pathology
 
-This command was written to chart a real defect. `mu(d)` and `sigma(d)` were
-unconstrained polynomials fitted to per-bin moments with **equal weight per
-bin** regardless of bin count. On the operator meshes the bins run 31 to 2,769
-points, and the sparse leftmost bin pulled the deg-2 `sigma` polynomial
-negative *inside* the calibration range: roots at 5.51 ms (as01), 2.22 (as02),
-2.40 (as03), costing 2,088 / 444 / 565 rows their `z`. as01's `mu(d)` was
-negative there too (`mu(1 ms) = -153 km`, a negative mean distance).
+`mu(d)` and `sigma(d)` are unconstrained polynomials fitted to per-bin moments
+with **equal weight per bin** regardless of bin count. On the operator meshes
+the bins run 31 to 2,769 points, and the sparse leftmost bin pulls the deg-2
+`sigma` polynomial negative *inside* the calibration range: roots at 5.51 ms
+(as01), 2.22 (as02), 2.40 (as03). as01's `mu(d)` is negative there too
+(`mu(1 ms) = -153 km`, a negative mean distance).
 
-`fit_mu_sigma` now fits `mu` as a monotone non-negative cubic on the raw pairs
-and `sigma` in **log** space from its residuals, so `sigma = exp(...) > 0`
-unconditionally and `mu(0) = 0` rather than -228 km. On as01 the primary pass
-now drops **0 rows** where it used to drop 3.9%.
+Rows in that interval have no usable `z`, and rows just outside it divide by a
+near-zero sigma, so the untruncated `sigma_z` comes out at 6-20. That is a
+property of the fit, not of the data: under a `sigma > 50 km` reference guard
+all three estimators collapse to ~1.0, i.e. the pooled normal describes these
+datasets about as well as it described PlanetLab.
 
-What that removes from this module: the `sigma_domain` diagnostic, the
-panel-(a) shading of the negative interval, and the per-bin dots (there is no
-binning left to attribute anything to). `REASON_SIGMA_NONPOS` survives as a
-reason code but is only reachable if `exp` underflows.
-
-What it does NOT remove: the `--sigma-ref-km` guard. A positive-but-tiny sigma
-still inflates `z`, and the guarded pass is still what makes the per-group
-moments interpretable. That objection was always separate from the sign one.
+So this command reports the affected counts and how the dropped rows differ
+from the kept ones, rather than truncating them away. Note the sigma<=0 regime
+this used to chart is gone: `sigma(d)` is now fitted in log space and is
+positive by construction, so the `sigma_domain` diagnostic and the panel-(a)
+shading that went with it were removed.
 
 ## Landmark-independence is reported as a number
 
@@ -867,9 +864,10 @@ def build_panel_a(
     Axis labels follow the paper's ("round trip time [ms]", "great circle
     distance [1000 km]") so the two figures can be read against each other.
 
-    No negative-sigma shading any more: `sigma` is fitted in log space, so the
-    band cannot invert. The `mu +/- sigma` dashes are drawn unconditionally and
-    `mu - sigma` now stays below `mu + sigma` everywhere by construction.
+    The negative-sigma interval is shaded rather than left to the JSON: a band
+    that inverts is the kind of thing a reader should see happen, and the dashed
+    `mu - sigma` curve crossing above `mu + sigma` is only legible if the
+    interval is marked.
     """
     model = fit.model
     hi = float(view_rtt_max) if view_rtt_max else float(model.rtt_max)
@@ -1191,8 +1189,8 @@ def analyse_one(
             f"{est['sigma_z_moment_trunc4']:.3f} |z|<{z_range:g} / "
             f"{est['sigma_z_density_ls']:.3f} density-LS (the paper's, = {PAPER['sigma_z']})\n"
             f"the paper's estimator buys a closer sigma and a worse mu\n"
-            f"{std.diagnostics['n_valid']:,}/{std.diagnostics['n_rows']:,} rows "
-            f"usable ({std.diagnostics['share_dropped']:.1%} dropped)\n"
+            f"{std.diagnostics['n_sigma_nonpos']:,} rows "
+            f"({std.diagnostics['share_dropped']:.1%}) have sigma(d) <= 0 and no z\n"
             f"primary pass: NO sigma guard (the paper's literal recipe)"
         ),
     )
@@ -1299,8 +1297,7 @@ def analyse_one(
             "reference is required rather than optional.",
             "At this n every classical normality test rejects; read the KS D/critical "
             "ratio as the effect size and treat the p-value as a footnote.",
-            "A positive-but-tiny sigma still inflates z even though sigma can no "
-            "longer go negative; compare "
+            "The primary sigma_z is dominated by rows near the sigma(d) root; compare "
             "standardized_guarded before drawing any conclusion from it.",
             "sd_of_group_mean_z and eta_squared both grow with the number of groups, so "
             "they cannot rank one --group-by against another. Use "
@@ -1392,7 +1389,7 @@ def register(app: typer.Typer) -> None:
         """Spotter Fig. 3 on a mesh CSV: normal fit + per-landmark Q-Q.
 
         Writes <stem>_spotter_fig3{a,b,c}*.png, <stem>_spotter_normality.json,
-        <stem>_landmark_independence.csv (every group).
+        <stem>_landmark_independence.csv (every group) and <stem>_bin_fit.csv.
 
         Panel (c) groups by the LANDMARK that took the measurement, which is
         what the paper's landmark-independence claim is about; the verdict is a
