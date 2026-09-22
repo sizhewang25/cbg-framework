@@ -196,8 +196,6 @@ combos:
     mtl: planar_annulus
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
-      min_per_bin: 5               # bins with fewer points are dropped before polyfit
       deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
       deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
       bin_size_ms: 5.0              # RTT bin width (ms)
@@ -216,8 +214,6 @@ combos:
     mtl: planar_annulus_weighted
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -235,8 +231,6 @@ combos:
     mtl: planar_annulus
     ctr: geometric_centroid
     ltd_kwargs:
-      n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
-      min_per_bin: 5               # bins with fewer points are dropped before polyfit
       deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
       deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
       bin_size_ms: 5.0              # RTT bin width (ms)

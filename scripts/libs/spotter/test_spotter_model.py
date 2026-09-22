@@ -7,7 +7,7 @@ notes/2026-05-17-spotter-normality-check.md:
   2. SpotterRTTModel: fit + predict_distance_bounds + range gating,
      plus the 2/3*c baseline clip and Octant-style cutoff_rtt.
 
-The model is *pooled*: one (p_mu, p_sigma) for all anchors, by design.
+The model is *pooled*: one (p_mu, p_log_sigma) for all anchors, by design.
 The annulus is mu(d) +/- sigma(d) -- the paper's published band (Figure 3a).
 
 Synthetic data uses slope 50 km/ms (mu = 50 * rtt) so every probe sits
@@ -22,6 +22,7 @@ import unittest
 import numpy as np
 
 from scripts.libs.spotter.spotter_model import (
+    DEFAULT_MONOTONE_MARGIN,
     SpotterRTTModel,
     THEORETICAL_SLOPE,
     calibrate_k,
@@ -31,21 +32,17 @@ from scripts.libs.spotter.spotter_model import (
 
 
 class TestFitMuSigma(unittest.TestCase):
-    """Bin-and-polyfit step (lifted from spotter_normality_check.fit_mu_sigma)."""
+    """Monotone mu on raw pairs + log-sigma from its residuals."""
 
     def test_returns_polynomial_coeff_shapes(self):
         rng = np.random.default_rng(42)
         rtts = rng.uniform(0, 100, size=5000)
         dists = 50.0 * rtts + rng.normal(0, 200, size=5000)
 
-        p_mu, p_sigma, centers, mus, sigmas = fit_mu_sigma(
-            rtts, dists, n_bins=40, min_per_bin=30, deg_mu=3, deg_sigma=2
-        )
+        p_mu, p_log_sigma = fit_mu_sigma(rtts, dists, deg_mu=3, deg_sigma=2)
 
-        self.assertEqual(p_mu.shape, (4,))  # deg 3 -> 4 coeffs
-        self.assertEqual(p_sigma.shape, (3,))  # deg 2 -> 3 coeffs
-        self.assertEqual(centers.shape, mus.shape)
-        self.assertEqual(centers.shape, sigmas.shape)
+        self.assertEqual(p_mu.shape, (4,))  # cubic -> 4 coeffs
+        self.assertEqual(p_log_sigma.shape, (3,))  # deg 2 -> 3 coeffs
 
     def test_mu_polynomial_recovers_linear_relationship(self):
         """If dist = 50 * rtt + noise, polyval(p_mu, rtt) ~ 50 * rtt."""
@@ -53,7 +50,7 @@ class TestFitMuSigma(unittest.TestCase):
         rtts = rng.uniform(0, 100, size=10000)
         dists = 50.0 * rtts + rng.normal(0, 100, size=10000)
 
-        p_mu, _, _, _, _ = fit_mu_sigma(rtts, dists, n_bins=40)
+        p_mu, _ = fit_mu_sigma(rtts, dists)
 
         # mu(50) should be approximately 2500 km
         self.assertAlmostEqual(float(np.polyval(p_mu, 50.0)), 2500.0, delta=100.0)
@@ -64,27 +61,32 @@ class TestFitMuSigma(unittest.TestCase):
         noise_std = 250.0
         dists = 50.0 * rtts + rng.normal(0, noise_std, size=10000)
 
-        _, p_sigma, _, _, sigmas = fit_mu_sigma(rtts, dists, n_bins=40)
+        _, p_log_sigma = fit_mu_sigma(rtts, dists)
 
-        # Mean of binned sigmas should be near the true noise std
-        self.assertAlmostEqual(float(np.mean(sigmas)), noise_std, delta=40.0)
-        # polyval at any RTT in the fit range should also be in that range
-        self.assertAlmostEqual(float(np.polyval(p_sigma, 50.0)), noise_std, delta=50.0)
-
-    def test_drops_underfilled_bins(self):
-        """Bins with < min_per_bin points are dropped before polyfit."""
-        rng = np.random.default_rng(2)
-        dense = rng.normal(10, 1, size=2000)
-        sparse = rng.uniform(50, 80, size=20)  # ~1 point per bin if 40 bins on [0, 80]
-        rtts = np.concatenate([dense, sparse])
-        dists = 50.0 * rtts + rng.normal(0, 100, size=len(rtts))
-
-        _, _, centers, _, _ = fit_mu_sigma(
-            rtts, dists, n_bins=40, min_per_bin=30
+        # p_log_sigma is log-space: exponentiate before comparing.
+        self.assertAlmostEqual(
+            float(np.exp(np.polyval(p_log_sigma, 50.0))), noise_std, delta=50.0
         )
 
-        # Sparse region bin centers should be excluded
-        self.assertTrue(np.all(centers < 40.0))
+    def test_binning_parameters_are_rejected_not_ignored(self):
+        """A stale `n_bins` in a config must fail loudly.
+
+        Silently accepting it would leave the YAML asserting a bandwidth that
+        has no effect, which is exactly the confusion the removal is meant to
+        end. The message has to name the offending key, because the caller is
+        usually a config file several layers away.
+        """
+        rng = np.random.default_rng(2)
+        rtts = rng.uniform(1.0, 80.0, size=500)
+        dists = 50.0 * rtts
+        for kwargs in ({"n_bins": 40}, {"min_per_bin": 5}, {"n_bins": 40, "min_per_bin": 5}):
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError) as ctx:
+                    fit_mu_sigma(rtts, dists, **kwargs)
+                for key in kwargs:
+                    self.assertIn(key, str(ctx.exception))
+        # None is the default and must stay accepted.
+        fit_mu_sigma(rtts, dists, n_bins=None, min_per_bin=None)
 
 
 class TestCalibrateK(unittest.TestCase):
@@ -99,8 +101,8 @@ class TestCalibrateK(unittest.TestCase):
         dists = true_mu + rng.normal(0, true_sigma, size=20000)
 
         p_mu = np.array([50.0, 0.0])
-        p_sigma = np.array([true_sigma])
-        k = calibrate_k(rtts, dists, p_mu, p_sigma, target_coverage=0.95)
+        p_log_sigma = np.array([np.log(true_sigma)])
+        k = calibrate_k(rtts, dists, p_mu, p_log_sigma, target_coverage=0.95)
 
         self.assertAlmostEqual(k, 1.96, delta=0.05)
 
@@ -109,9 +111,9 @@ class TestCalibrateK(unittest.TestCase):
         rtts = rng.uniform(0, 100, size=20000)
         dists = 50.0 * rtts + rng.normal(0, 200, size=20000)
         p_mu = np.array([50.0, 0.0])
-        p_sigma = np.array([200.0])
+        p_log_sigma = np.array([np.log(200.0)])
 
-        k = calibrate_k(rtts, dists, p_mu, p_sigma, target_coverage=0.50)
+        k = calibrate_k(rtts, dists, p_mu, p_log_sigma, target_coverage=0.50)
 
         # |z| has half-normal-like distribution; 50th percentile ~ 0.674
         self.assertAlmostEqual(k, 0.674, delta=0.05)
@@ -122,9 +124,9 @@ class TestCalibrateK(unittest.TestCase):
         rtts = rng.uniform(0, 100, size=5000)
         dists = 50.0 * rtts + rng.normal(0, 200, size=5000)
         p_mu = np.array([50.0, 0.0])
-        p_sigma = np.array([200.0])
+        p_log_sigma = np.array([np.log(200.0)])
 
-        k = calibrate_k(rtts, dists, p_mu, p_sigma, target_coverage=0.95)
+        k = calibrate_k(rtts, dists, p_mu, p_log_sigma, target_coverage=0.95)
 
         self.assertIsInstance(k, float)
         self.assertGreater(k, 0.0)
@@ -177,7 +179,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         self.assertTrue(ok)
         self.assertTrue(model.fitted)
         self.assertIsNotNone(model.p_mu)
-        self.assertIsNotNone(model.p_sigma)
+        self.assertIsNotNone(model.p_log_sigma)
         # Range bounds reflect the data (after the baseline filter).
         self.assertGreaterEqual(model.rtt_min, float(rtts.min()))
         self.assertLessEqual(model.rtt_max, float(rtts.max()))
@@ -242,7 +244,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         """
         model = SpotterRTTModel(
             p_mu=np.array([50.0, 0.0]),
-            p_sigma=np.array([50.0]),
+            p_log_sigma=np.array([np.log(50.0)]),
             rtt_min=10.0,
             rtt_max=60.0,
             fitted=True,
@@ -261,7 +263,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         """
         model = SpotterRTTModel(
             p_mu=np.array([50.0, 0.0]),
-            p_sigma=np.array([50.0]),
+            p_log_sigma=np.array([np.log(50.0)]),
             k=2.0,
             rtt_min=10.0,
             rtt_max=60.0,
@@ -276,7 +278,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         """When mu - sigma < 0, inner clamps to 0; baseline cap may still apply."""
         model = SpotterRTTModel(
             p_mu=np.array([20.0, 0.0]),    # mu = 20 * rtt
-            p_sigma=np.array([50.0]),       # sigma = 50
+            p_log_sigma=np.array([np.log(50.0)]),  # sigma = 50 km
             rtt_min=0.0,
             rtt_max=20.0,
             fitted=True,
@@ -293,7 +295,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         """Outer = min(mu + sigma, rtt / THEORETICAL_SLOPE)."""
         model = SpotterRTTModel(
             p_mu=np.array([100.0, 0.0]),   # mu = 100 * rtt -- right on the baseline
-            p_sigma=np.array([50.0]),
+            p_log_sigma=np.array([np.log(50.0)]),
             rtt_min=0.0,
             rtt_max=100.0,
             fitted=True,
@@ -310,7 +312,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         below the inner band -- the wrapper reads that as a degenerate ring."""
         model = SpotterRTTModel(
             p_mu=np.array([100.0, 200.0]),  # mu = 100*rtt + 200
-            p_sigma=np.array([50.0]),
+            p_log_sigma=np.array([np.log(50.0)]),
             rtt_min=0.0,
             rtt_max=100.0,
             fitted=True,
@@ -329,7 +331,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         hull convention below the leftmost vertex."""
         model = SpotterRTTModel(
             p_mu=np.array([50.0, 0.0]),    # mu = 50 * rtt
-            p_sigma=np.array([50.0]),       # sigma = 50
+            p_log_sigma=np.array([np.log(50.0)]),  # sigma = 50 km
             rtt_min=10.0,
             rtt_max=60.0,
             fitted=True,
@@ -350,7 +352,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         """Legacy gate: with cutoff_rtt unset (0), rtt > rtt_max returns None."""
         model = SpotterRTTModel(
             p_mu=np.array([50.0, 0.0]),
-            p_sigma=np.array([50.0]),
+            p_log_sigma=np.array([np.log(50.0)]),
             rtt_min=10.0,
             rtt_max=60.0,
             fitted=True,
@@ -366,7 +368,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         sentinel_rtt = 10000.0
         model = SpotterRTTModel(
             p_mu=np.array([50.0, 0.0]),    # mu = 50 * rtt
-            p_sigma=np.array([50.0]),       # sigma = 50 (constant)
+            p_log_sigma=np.array([np.log(50.0)]),  # sigma = 50 km (constant)
             rtt_min=10.0,
             rtt_max=100.0,
             cutoff_rtt=cutoff_rtt,
@@ -397,7 +399,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         asymptotic 1/THEORETICAL_SLOPE slope (parallel to 2/3*c)."""
         model = SpotterRTTModel(
             p_mu=np.array([50.0, 0.0]),
-            p_sigma=np.array([50.0]),
+            p_log_sigma=np.array([np.log(50.0)]),
             rtt_min=10.0,
             rtt_max=100.0,
             cutoff_rtt=50.0,
@@ -414,7 +416,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         # rtt past the sentinel would push the outer above the 2/3*c bound.
         model = SpotterRTTModel(
             p_mu=np.array([50.0, 0.0]),
-            p_sigma=np.array([50.0]),
+            p_log_sigma=np.array([np.log(50.0)]),
             rtt_min=10.0,
             rtt_max=10000.0,
             cutoff_rtt=50.0,
@@ -428,7 +430,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         """predict_distance gives the pooled mean (no band)."""
         model = SpotterRTTModel(
             p_mu=np.array([50.0, 0.0]),
-            p_sigma=np.array([50.0]),
+            p_log_sigma=np.array([np.log(50.0)]),
             rtt_min=10.0,
             rtt_max=60.0,
             fitted=True,
@@ -454,49 +456,74 @@ class TestSpotterRTTModel(unittest.TestCase):
         self.assertAlmostEqual(center, 2500.0, delta=200.0)
         self.assertAlmostEqual(outer - inner, 2 * 200.0, delta=200.0)
 
-    def test_sigma_polynomial_can_go_negative_inside_the_calibration_range(self):
-        """The deg-2 sigma fit is unconstrained, and on real data it dips below
-        zero at the low-RTT end -- inside the range it was fitted on.
+    def test_sigma_is_positive_everywhere_by_construction(self):
+        """Regression guard for the pathology the log parameterisation removes.
 
-        Documented here rather than fixed because `fit` is faithful to the
-        published recipe: Spotter fits `sigma(d)` as a polynomial and says
-        nothing about keeping it positive. The consequence is that the band
-        inverts and `predict_distance_bounds` returns a degenerate `(0, 0)`,
-        which `normal_dist` maps to Error.DEGENERATE_REGION -- so the VP
-        silently stops participating in the MTL for those RTTs.
+        The old `deg_sigma=2` fit was unconstrained in linear space and on real
+        data dipped below zero at the low-RTT end -- *inside* the range it was
+        fitted on. Measured by
+        `scripts.analysis.v3.modules.figure_spotter_normality`: roots at 5.51 ms
+        (as01), 2.22 (as02), 2.40 (as03), affecting 2,088 / 444 / 565 rows. The
+        band then inverted and `predict_distance_bounds` returned a degenerate
+        `(0, 0)`, which `normal_dist` maps to DEGENERATE_REGION -- so the VP
+        silently stopped participating in the MTL at those RTTs. See
+        notes/2026-09-18-spotter-normality-operator-mesh.md.
 
-        Measured on the operator meshes by
-        `scripts.analysis.v3.modules.figure_spotter_normality`: roots at 5.51
-        ms (as01), 2.22 (as02), 2.40 (as03), affecting 2,088 / 444 / 565 rows.
-        See notes/2026-09-18-spotter-normality-operator-mesh.md.
+        Fitting `log sigma` makes that unreachable: `exp` has no zero. This test
+        pins that, using the same left-edge shape that used to break.
         """
+        rng = np.random.default_rng(17)
+        # Steep slope + wide spread at the left edge is what produced a negative
+        # sigma root under the old fit.
+        rtts = rng.uniform(1.0, 80.0, size=8000)
+        dists = np.abs(100.0 * rtts - 400.0 + rng.normal(0, 300, size=8000))
+
         model = SpotterRTTModel()
-        model.fitted = True
-        # as01's shape: both polynomials are negative at the left edge --
-        # mu(1 ms) = -153 km there, a negative mean distance.
-        model.p_mu = np.array([100.0, -400.0])    # mu = 100*d - 400
-        model.p_sigma = np.array([40.0, -200.0])  # sigma = 40*d - 200, root at 5 ms
-        model.rtt_min, model.rtt_max = 1.0, 80.0
-        model.cutoff_rtt = 80.0
-        model.k = 1.0
+        self.assertTrue(model.fit(rtts, dists, cutoff_min_points=5))
 
-        # Inside the fitted range, but left of the sigma root.
-        self.assertLess(float(np.polyval(model.p_sigma, 2.0)), 0.0)
-        # mu + sigma <= 0, so both ends clip to zero: a zero-radius disk, which
-        # normal_dist reads as DEGENERATE_REGION.
-        self.assertEqual(model.predict_distance_bounds(2.0), (0.0, 0.0))
+        grid = np.linspace(0.0, 300.0, 2000)
+        sigmas = np.array([model.sigma_at(float(r)) for r in grid])
+        self.assertTrue(np.all(sigmas > 0.0), "sigma must be positive everywhere")
+        self.assertTrue(np.all(np.isfinite(sigmas)))
 
-        # The subtler symptom, where only sigma is negative: the band inverts
-        # without either end hitting the clip, so `outer < inner` is the only
-        # signal that anything is wrong.
-        model.p_mu = np.array([100.0, 0.0])  # mu = 100*d, positive throughout
+        # And the band no longer inverts at the left edge.
         inner, outer = model.predict_distance_bounds(2.0)
-        self.assertLess(outer, inner)
+        self.assertLess(inner, outer)
 
-        # Right of the root the same model is well behaved, which is what makes
-        # this a fit-domain defect rather than a broken model.
-        inner_ok, outer_ok = model.predict_distance_bounds(40.0)
-        self.assertLess(inner_ok, outer_ok)
+    def test_mu_is_monotone_and_non_negative(self):
+        """More delay cannot mean less distance, and distance cannot be < 0.
+
+        The unconstrained `np.polyfit` guaranteed neither. On as01 it produced
+        mu(0) = -228.5 km and, extrapolating, mu(200 ms) = 891.7 km -- i.e. the
+        curve turned over and dived. notes/2026-05-17-spotter-normality-check.md
+        records the same failure reaching -60,000 km on a narrow-support slice.
+
+        The guarantee is scoped to [0, monotone_margin * max(rtt)], which is
+        where the NNLS constraint is imposed. Callers never evaluate beyond it
+        because `predict_*` clamps to `cutoff_rtt <= rtt_max`.
+        """
+        rng = np.random.default_rng(23)
+        # Saturating shape: the case most likely to make a cubic turn over.
+        rtts = rng.uniform(1.0, 80.0, size=6000)
+        dists = 3000.0 * (1.0 - np.exp(-rtts / 25.0)) + rng.normal(0, 250, size=6000)
+        dists = np.abs(dists)
+
+        p_mu, _ = fit_mu_sigma(rtts, dists)
+
+        hi = float(rtts.max()) * DEFAULT_MONOTONE_MARGIN
+        grid = np.linspace(0.0, hi, 4000)
+        self.assertGreaterEqual(float(np.polyval(np.polyder(p_mu), grid).min()), -1e-6)
+        self.assertGreaterEqual(float(np.polyval(p_mu, grid).min()), -1e-6)
+        self.assertGreaterEqual(float(np.polyval(p_mu, 0.0)), -1e-6)
+
+    def test_deg_mu_other_than_three_is_rejected(self):
+        """The Bernstein construction is cubic-specific; fail rather than
+        silently ignore the caller's degree."""
+        rng = np.random.default_rng(31)
+        rtts = rng.uniform(1.0, 80.0, size=500)
+        dists = 50.0 * rtts
+        with self.assertRaises(ValueError):
+            fit_mu_sigma(rtts, dists, deg_mu=1)
 
 
 if __name__ == "__main__":

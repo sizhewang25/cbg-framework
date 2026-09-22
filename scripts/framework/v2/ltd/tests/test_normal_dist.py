@@ -60,7 +60,7 @@ class TestNormalDistLTD(unittest.TestCase):
         ltd = self._ltd_with_model(
             make_fitted_spotter_model(
                 p_mu=np.array([20.0, 0.0]),
-                p_sigma=np.array([50.0]),
+                sigma_km=50.0,
                 rtt_min=0.0,
                 rtt_max=20.0,
             )
@@ -75,7 +75,7 @@ class TestNormalDistLTD(unittest.TestCase):
         self.assertAlmostEqual(result.tg_distance.upper_km, 70.0)
         self.assertFalse(result.tg_distance.is_annular)
 
-    def test_predict_returns_degenerate_region_on_zero_width_band(self):
+    def test_predict_returns_degenerate_region_when_band_inverts(self):
         ltd = self._ltd_with_model(make_fitted_degenerate_spotter_model())
 
         result = ltd.predict(
@@ -251,7 +251,7 @@ class TestNormalDistLTD(unittest.TestCase):
         Octant-style cutoff scan.
         """
         ltd = NormalDistLTD(
-            n_bins=5, min_per_bin=2, deg_mu=1, deg_sigma=0,
+            deg_mu=3, deg_sigma=0,
             cutoff_min_points=1,
         )
         samples = make_normal_dist_fit_samples(

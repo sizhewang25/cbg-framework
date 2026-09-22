@@ -477,3 +477,7 @@ python -m scripts.libs.cbg_feasibility.spotter_normality_by_asn_country
 
 # Optional flags: --max-rtt 80 --n-bins 40 --n-anchors 5 --top-k 5
 ```
+
+---
+
+**Conclusion note:** [2026-09-22-spotter-faithful-vs-harness-conclusion.md](2026-09-22-spotter-faithful-vs-harness-conclusion.md) consolidates this with the other Spotter investigations — what a faithful implementation changed, how it was measured, and what to conclude.

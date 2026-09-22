@@ -18,8 +18,67 @@ from scripts.framework.v2.types import Coord, Error, VpId
 
 # Output region representation. Planar methods (e.g. Shapely-based) return
 # a Polygon / MultiPolygon. Spherical methods return a list of (lat, lon)
-# vertices on the unit sphere. Centroid methods dispatch on the runtime type.
+# vertices on the unit sphere. Density methods return the credible region as a
+# list of cell centres, which reuses the same `list[Coord]` shape so existing
+# coord-consuming CTRs keep working (in a degraded, density-blind way).
+# Centroid methods dispatch on the runtime type.
 Intersection = Union[BaseGeometry, list[Coord], None]
+
+
+@dataclass(frozen=True)
+class DensityField:
+    """A discretised posterior over target position, plus the constraints for it.
+
+    The output of a DensityMTLMethod, and the thing that makes Spotter's
+    §III-B point-estimate options (argmax / distribution mean / region centre)
+    expressible as CTRs rather than baked into the MTL.
+
+    `log_density` is **unnormalised** and carries an arbitrary additive
+    constant: with Gaussian f_d the `Σ log σᵢ` term of Eq. (2) depends only on
+    the measured RTTs, which are fixed for one target, so it is constant across
+    cells and dropped. Anything comparing cells (argmax, credible mass, a
+    weighted mean) is unaffected; anything wanting absolute probability is not
+    available and should not be invented from this.
+
+    There is deliberately no per-VP constraint list. An earlier version carried
+    `(coord, mu_km, sigma_km)` triples so a CTR could refine the grid argmax by
+    continuous optimisation (`min Σ ((s_i(x) − µ_i)/σ_i)²`). That CTR was
+    removed, and with only `density_argmax` consuming the field, the triples had
+    no reader — a field nothing reads is a field that goes stale. Re-add it with
+    the solver if the exact MAP is wanted again.
+    """
+
+    cells: tuple[Coord, ...]
+    log_density: tuple[float, ...]
+    grid: Optional[str] = None
+    resolution: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if len(self.cells) != len(self.log_density):
+            raise ValueError(
+                f"cells ({len(self.cells)}) and log_density "
+                f"({len(self.log_density)}) must be the same length"
+            )
+
+    def probabilities(self) -> list[float]:
+        """Normalised cell probabilities, max-shifted before exponentiating.
+
+        Subtracting the maximum is not cosmetic: with ~100 VPs the summed
+        z-squared runs to thousands, and `exp` of that underflows every cell to
+        zero, which turns a well-determined posterior into 0/0. Shifting makes
+        the best cell exactly 1.0 and everything else a ratio to it, which is
+        all any caller here needs.
+        """
+        import math
+
+        if not self.log_density:
+            return []
+        top = max(self.log_density)
+        weights = [math.exp(v - top) for v in self.log_density]
+        total = sum(weights)
+        if total <= 0:
+            return [0.0] * len(weights)
+        return [w / total for w in weights]
 
 
 @dataclass(frozen=True)
@@ -42,6 +101,9 @@ class MTLResult:
     intersection: Intersection = None
     method: Optional[str] = None
     participating_vp_ids: Optional[tuple[VpId, ...]] = None
+    # Set only by DensityMTLMethod. None for every geometric method, which is
+    # what a density-aware CTR checks before refusing to run.
+    density: Optional[DensityField] = None
 
 
 class MTLMethod(ABC):
@@ -79,4 +141,29 @@ class AnnulusMTLMethod(MTLMethod, ABC):
     region collapses to a disk and the wrapper still produces a polygon —
     useful when downstream stages (e.g. GeometricCentroidCTR) require a
     polygon-shape output that the spherical Circle MTLs don't emit.
+    """
+
+
+class DensityMTLMethod(MTLMethod, ABC):
+    """Evaluates a posterior over position instead of intersecting constraints.
+
+    Reads `tg_distance.mu_km` / `.sigma_km` — so it pairs only with an LTD whose
+    predictions carry a distribution (`Distance.has_distribution`), today
+    NormalDistLTD alone. Pairing it with a bounds-only LTD is a configuration
+    error and the concrete method reports INSUFFICIENT_DATA rather than
+    inventing a sigma.
+
+    Why this is a third family rather than an AnnulusMTLMethod with extra
+    output: the annulus families answer "which points satisfy every
+    constraint", a set question whose answer is a region, and one violated
+    constraint empties it. This family answers "how plausible is each point",
+    a ranking whose answer is a field, where a badly-fitting constraint lowers
+    a score instead of vetoing it. Those are different objectives, they fail
+    differently, and the type system should not let a caller assume one and
+    get the other.
+
+    Contract additions on top of MTLMethod:
+      * `MTLResult.density` is populated on success.
+      * `MTLResult.intersection` is the credible region as cell centres
+        (`list[Coord]`), so density-blind CTRs still degrade rather than crash.
     """

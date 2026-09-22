@@ -87,8 +87,6 @@ combos:
       # sample_coverage isn't a kwarg on the current NormalDistLTD; band
       # width is implicit in (deg_mu, deg_sigma) fits. Re-add when/if the
       # LTD exposes a sigma-multiplier knob.
-      n_bins: 40                    # RTT bins used to estimate mu(d), sigma(d)
-      min_per_bin: 5               # bins with fewer points are dropped before polyfit
       deg_mu: 3                     # mu(rtt) is a deg-3 polynomial
       deg_sigma: 2                  # sigma(rtt) is a deg-2 polynomial
       bin_size_ms: 5.0              # RTT bin width (ms)

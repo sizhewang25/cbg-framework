@@ -42,8 +42,6 @@ combos:
     mtl: planar_annulus
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -60,8 +58,6 @@ combos:
     mtl: planar_annulus
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -78,8 +74,6 @@ combos:
     mtl: planar_annulus
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -96,8 +90,6 @@ combos:
     mtl: planar_annulus
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -114,8 +106,6 @@ combos:
     mtl: planar_annulus
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -132,8 +122,6 @@ combos:
     mtl: planar_annulus
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -151,8 +139,6 @@ combos:
     mtl: planar_annulus_weighted
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -172,8 +158,6 @@ combos:
     mtl: planar_annulus_weighted
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -193,8 +177,6 @@ combos:
     mtl: planar_annulus_weighted
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -214,8 +196,6 @@ combos:
     mtl: planar_annulus_weighted
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -235,8 +215,6 @@ combos:
     mtl: planar_annulus_weighted
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
@@ -256,8 +234,6 @@ combos:
     mtl: planar_annulus_weighted
     ctr: monte_carlo_medoid
     ltd_kwargs:
-      n_bins: 40
-      min_per_bin: 5
       deg_mu: 3
       deg_sigma: 2
       bin_size_ms: 5.0
