@@ -113,6 +113,34 @@ def _global_cells(resolution: int) -> list[str]:
     return out
 
 
+#: Global first-pass grids, keyed by H3 resolution, shared across instances.
+#:
+#: Process-lifetime and bounded: a run uses one or two resolutions, and the
+#: largest plausible entry (H3-4, 288,122 cells) is 4.6 MB of coordinates.
+#: Shared rather than per-instance so that constructing many models -- the test
+#: suite, a sweep over combos -- pays the build once.
+_GLOBAL_GRID_CACHE: dict[int, tuple[list[str], np.ndarray, np.ndarray]] = {}
+
+
+def _global_grid(resolution: int) -> tuple[list[str], np.ndarray, np.ndarray]:
+    """The global grid at `resolution` as (cells, lats, lons), memoised.
+
+    Arrays are marked read-only. They are shared by every instance and every
+    target, so an in-place write would not corrupt one result -- it would
+    silently corrupt all of them. Nothing writes to them today; this makes a
+    future attempt fail loudly instead.
+    """
+    hit = _GLOBAL_GRID_CACHE.get(resolution)
+    if hit is None:
+        cells = _global_cells(resolution)
+        lats, lons = _cell_coords(cells)
+        lats.flags.writeable = False
+        lons.flags.writeable = False
+        hit = (cells, lats, lons)
+        _GLOBAL_GRID_CACHE[resolution] = hit
+    return hit
+
+
 def _cell_coords(cells: list[str]) -> tuple[np.ndarray, np.ndarray]:
     ll = [h3.cell_to_latlng(c) for c in cells]
     return (
@@ -185,9 +213,8 @@ class GaussianDensityMTL(DensityMTLMethod):
         self.top_k = top_k
         self.neighbor_ring = neighbor_ring
         self.credible_mass = credible_mass
-        # Lazily-built coarse grid, reused across every target this instance
-        # scores. See `_coarse_grid`.
-        self._coarse: Optional[tuple[list[str], np.ndarray, np.ndarray]] = None
+        # Built EAGERLY, and that is the whole point -- see `_coarse_grid`.
+        self._coarse = _global_grid(min(coarse_resolution, resolution))
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
         constraints: list[tuple[Coord, float, float]] = []
@@ -237,29 +264,29 @@ class GaussianDensityMTL(DensityMTLMethod):
         )
 
     def _coarse_grid(self) -> tuple[list[str], np.ndarray, np.ndarray]:
-        """The global first-pass grid, built once per instance.
+        """The global first-pass grid. Built in `__init__`, never here.
 
         It depends only on `min(coarse_resolution, resolution)`, both fixed at
-        construction, so rebuilding it per target was pure waste. Measured cost
-        of one build: 7.6 ms at H3-2 (5,882 cells) and **346 ms at H3-4**
-        (288,122 cells) -- the latter being the `coarse_resolution >=
-        resolution` single-global-pass mode, where it dominated the call.
+        construction, so building it per target was pure waste: 7.6 ms at H3-2
+        (5,882 cells) and **346 ms at H3-4** (288,122 cells), the latter being
+        the single-global-pass mode where it dominated the call.
 
-        Built lazily rather than in `__init__` because the registry and the
-        test suite construct these freely, and paying 346 ms plus 4.6 MB for an
-        instance that is never asked to multilaterate is a worse trade than one
-        branch per call.
+        **Built eagerly specifically so it stays out of the instrumentation.**
+        `runner.py` constructs the model before `measure_block("fit")` and
+        before the per-target loop, so construction cost is measured by
+        nothing. A lazy build instead lands inside the first target's
+        `cm("mtl")` block, and that is not a rounding error: measured, it put
+        the first target at 113 ms against a 74 ms median -- making it the
+        *maximum* in most folds -- and its `mtl_alloc_peak_bytes` at 1.15 MB
+        against 0.53 MB. `analysis/v3/modules/cost.py` reduces memory across
+        stages with `max`, and its docstring already records a 22 MB warmup
+        artifact "single-handedly setting that combo's MTL memory figure". This
+        would have been the next one.
 
-        The arrays are marked read-only: they are shared by every subsequent
-        target, so an in-place write would silently corrupt all of them. Nothing
-        writes to them today, and this makes a future attempt fail loudly.
+        The per-instance construction cost is amortised by `_global_grid`'s
+        module-level cache, so a sweep or a test suite that builds many models
+        pays for each distinct resolution once.
         """
-        if self._coarse is None:
-            cells = _global_cells(min(self.coarse_resolution, self.resolution))
-            lats, lons = _cell_coords(cells)
-            lats.flags.writeable = False
-            lons.flags.writeable = False
-            self._coarse = (cells, lats, lons)
         return self._coarse
 
     def _evaluate(

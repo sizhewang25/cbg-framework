@@ -9,6 +9,7 @@ notes/2026-09-18-spotter-mtl-fidelity-gap.md).
 
 from __future__ import annotations
 
+import time
 import unittest
 
 from scripts.framework.geometry import haversine
@@ -233,3 +234,59 @@ class TestCredibleRegion(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGridIsBuiltOutsideInstrumentation(unittest.TestCase):
+    """The coarse grid must be built in `__init__`, not on first use.
+
+    `runner.py` constructs the model before `measure_block("fit")` and before
+    the per-target loop, so construction is measured by nothing. A lazy build
+    instead lands inside the first target's `cm("mtl")` block. Measured when it
+    was lazy: first target 113 ms against a 74 ms median -- the *maximum* in
+    most folds -- and `mtl_alloc_peak_bytes` 1.15 MB against 0.53 MB.
+    `analysis/v3/modules/cost.py` reduces memory across stages with `max` and
+    already records a 22 MB warmup artifact setting a combo's whole MTL memory
+    figure; this would have been the next one.
+    """
+
+    def test_the_grid_exists_before_any_multilateration(self):
+        mtl = GaussianDensityMTL(resolution=2, coarse_resolution=2)
+        cells, lats, lons = mtl._coarse_grid()
+        self.assertGreater(len(cells), 0)
+        self.assertEqual(len(lats), len(cells))
+        self.assertEqual(len(lons), len(cells))
+
+    def test_the_first_call_costs_no_more_than_the_second(self):
+        """The property the eager build buys, asserted on time directly.
+
+        Generously loose (2x) because a CI box's first pass through the numpy
+        code paths is not free either; when the build was lazy this ratio was
+        ~15x at this resolution.
+        """
+        mtl = GaussianDensityMTL(resolution=3, coarse_resolution=3)
+        cons = exact_constraints()
+
+        t0 = time.perf_counter()
+        mtl.multilaterate(cons)
+        first = time.perf_counter() - t0
+
+        rest = []
+        for _ in range(3):
+            t0 = time.perf_counter()
+            mtl.multilaterate(cons)
+            rest.append(time.perf_counter() - t0)
+
+        self.assertLess(first, 2.0 * min(rest))
+
+    def test_the_shared_grid_is_read_only(self):
+        """It is shared across instances, so an in-place write would corrupt
+        every model in the process, not one result."""
+        _, lats, lons = GaussianDensityMTL(resolution=2, coarse_resolution=2)._coarse_grid()
+        for arr in (lats, lons):
+            with self.assertRaises(ValueError):
+                arr[0] = 0.0
+
+    def test_instances_at_one_resolution_share_the_grid(self):
+        a = GaussianDensityMTL(resolution=2, coarse_resolution=2)._coarse_grid()
+        b = GaussianDensityMTL(resolution=2, coarse_resolution=2)._coarse_grid()
+        self.assertIs(a[1], b[1], "second instance rebuilt the grid")
