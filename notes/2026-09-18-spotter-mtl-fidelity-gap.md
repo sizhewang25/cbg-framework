@@ -290,3 +290,207 @@ variant too -- and tracked separately from the Spotter question.
    neither is an incremental add and neither has a `spotter_cbg` baseline.
 3. Recommendations 3-4 from the section above stand: relabel the published
    `spotter_*` results, and carry the caveat into SS8.1.
+
+## Why the faithful version wins: the filter selects the *worst* constraints
+
+Paired per-target on as01 (same target, same fold): `spotter_true` beats
+`spotter_cbg` on **329/399 (82.5%)**, median gain 217.5 km.
+
+The gain is not uniform, and its shape is the explanation. By closest-VP RTT:
+
+| closest-VP RTT quartile | median min-RTT | spotter_cbg p50 | spotter_true p50 | median gain |
+|---|---|---|---|---|
+| closest | 0.9 ms | 524.4 | 158.4 | 232.3 |
+| near | 1.5 ms | 492.9 | 178.9 | 341.7 |
+| far | 2.6 ms | 463.5 | 159.4 | 309.4 |
+| farthest | 59.1 ms | 2455.8 | 2262.2 | 189.5 |
+
+The first three quartiles have a VP within ~2.6 ms — effectively co-located —
+and `spotter_cbg` still returned ~500 km of error. That is not a hard-target
+problem; it is information being destroyed on easy targets.
+
+**The mechanism.** Over all 51,161 (target, VP) constraints in the run, scored
+against whether the annulus actually contains the true location:
+
+| | n | contains truth | median abs(z) |
+|---|---|---|---|
+| **kept** by `filter_redundant_outer_disks` | 9,487 | **37.8%** | 1.16 |
+| **dropped** by it | 41,674 | **72.3%** | 0.58 |
+| all | 51,161 | 65.9% | — |
+
+The filter keeps 18.4% of constraints and they are **twice as likely to be
+wrong** as the ones it throws away. This is not bad luck, it is structural:
+the rule drops disk `i` when `radius_i > dist(i,j) + radius_j`, i.e. it keeps
+the *smallest* outer disks. A small outer disk is a small `mu + k*sigma`, i.e. a
+short predicted distance. The pooled Spotter model systematically
+*under-predicts* distance on this VP population (worked example: a 6.78 ms VP
+481.5 km from its target gets the band [243, 297] km), so "smallest disk" and
+"most under-predicting" are the same set. **The filter is a bias amplifier: its
+selection criterion is correlated with the model's error direction.**
+
+Then the AND converts that selection into displacement. On the worked target,
+6 of the 8 surviving annuli exclude the truth; under an intersection each one
+is a veto, so the region is forced somewhere the truth is not, and the CTR
+faithfully reports the middle of the wrong place. Under the density product the
+same constraint contributes `z ~ 7.8` — a large penalty that the other 125
+constraints outvote.
+
+So three compounding effects, all removed at once:
+
+1. **Adverse selection** — 128.2 participants instead of 23.8, and the 41,674
+   constraints that were being discarded are the *accurate* ones.
+2. **Veto to penalty** — a wrong constraint lowers a score instead of moving a
+   hard boundary. No single VP can displace the estimate.
+3. **sigma restored** — tight constraints dominate via `1/sigma^2` continuously,
+   rather than a filter making a binary keep/drop decision as a proxy for it.
+
+**Caveat on the z column:** `mu` and `sigma` are reconstructed as
+`(lo+hi)/2` and `(hi-lo)/2`, exact at the default `k=1` except where the
+2/3*c clip or the zero-clamp bit, so a minority of low-RTT rows are approximate.
+The contains-truth column is exact.
+
+**What did not improve, and why.** The farthest quartile (59.1 ms) barely moves
+(2455.8 -> 2262.2), and p95 barely moves overall (2713.8 -> 2511.9). Where no VP
+is near, the binding error is the LTD's, not the geometry's — a pooled
+(mu, sigma) is simply the wrong distance model for those paths, exactly as
+[2026-05-17-spotter-normality-check.md](2026-05-17-spotter-normality-check.md)
+predicts. Geometry cannot rescue a wrong distance model. The fidelity fix
+recovers the cases the harness was throwing away; it does not fix Spotter's
+model.
+
+---
+
+# R4 tested: the per-VP offset is real, stable, and makes geolocation WORSE
+
+Answers "what would settle it" #2 of
+[2026-09-19-normal-dist-wrong-for-operator-hypergiant.md](2026-09-19-normal-dist-wrong-for-operator-hypergiant.md)
+— one additive RTT offset per VP (`normal_dist(per_vp_offset=true)`), fitted
+leakage-safe on the train folds, estimator deliberately mirroring that note's
+`spotter_assumption_breakdown.py`. Recorded here rather than in that note to
+avoid clobbering it.
+
+Hypothesis under test: R4 (landmark-independence failure) is the binding
+constraint on faithful Spotter, so correcting it should close the gap to
+`vanilla_cbg`, which absorbs the same offset into its per-VP bestline intercept.
+
+**It does not. The correction makes things worse.**
+
+| combo | p5 | p25 | p50 | p75 | p95 |
+|---|---|---|---|---|---|
+| vanilla_cbg | 2.2 | 28.1 | 49.2 | 281.9 | 2144.4 |
+| spotter_cbg | 208.9 | 383.0 | 527.1 | 935.8 | 2713.8 |
+| spotter_true | **18.6** | **140.9** | **218.6** | 609.1 | 2511.9 |
+| spotter_true_delta | 67.8 | 176.6 | 273.2 | **558.0** | 2514.5 |
+
+p50 218.6 -> 273.2, p5 18.6 -> 67.8. Only p75 improves (609.1 -> 558.0).
+
+## The offset itself is not the problem
+
+Both obvious explanations are ruled out:
+
+* **Estimator correctness.** On synthetic data with known per-VP offsets the
+  fit recovers them at corr 0.9997; after centring (delta is identifiable only
+  up to a global constant, since the mean offset is already absorbed by mu(d))
+  the median absolute error is 0.069 ms.
+* **Transfer / leakage.** delta_i is extremely stable across folds: pairwise
+  cross-fold correlation 0.995-1.000, sd across folds 0.08 ms against a
+  between-VP spread of 3.34 ms. It is exactly the reproducible topological
+  property R4 describes.
+
+## Why it hurts: least squares imports the skew as bias
+
+Per-constraint accuracy on held-out folds, 51k constraints, pooled over 5 folds:
+
+| | median bias (truth − mu) | median abs error | median abs(z) | within 1 sigma |
+|---|---|---|---|---|
+| pooled | **+39.1 km** | 289.6 km | **0.666** | 0.660 |
+| + delta_i | **+59.2 km** | **277.3 km** | 0.719 | 0.661 |
+
+delta_i does what it was asked to do — it **reduces scatter** (MAE −12 km,
+−4%) — while **increasing systematic under-prediction by 20 km** and degrading
+the standardized residual. Coverage is unchanged.
+
+The mechanism is R1. delta_i is fitted by least squares against a residual
+distribution with skew −0.75, i.e. a heavy left tail. Squared loss is dominated
+by that tail, so the fitted offset moves in whatever direction shrinks the large
+negative residuals — which shifts mu **down** for the typical case and deepens
+the under-prediction the model already had. The fit is minimising the right
+quantity for a symmetric density and the wrong one for this data.
+
+And multilateration is sensitive to the systematic component, not the scatter:
+a shared downward bias shrinks every VP's ring together, dragging the density
+product's peak toward the VP cloud. That is why a 4% scatter improvement buys a
+25% p50 regression.
+
+## Consequence for the note's plan
+
+R4's four reasons are **not separable in the order proposed**. "What would
+settle it" lists #2 (add delta_i) before #3 (a skewed or one-sided density), and
+measured here, #2 alone is actively counterproductive because its estimator
+inherits the defect #3 describes. The dependency runs the other way:
+
+> **Fix R1 first. R4's correction is only safe under a correctly-shaped density.**
+
+Concretely, re-fitting delta_i under a skewed or one-sided likelihood — or even
+just a quantile/envelope loss instead of squared loss — is the experiment that
+tests R4 properly. The current result is evidence about the *estimator*, not
+about whether R4 binds.
+
+Note also that the p75 improvement (609.1 -> 558.0) is real and in the expected
+direction: where the truth sits far out in the tail, shrinking scatter helps and
+the bias matters less. So delta_i is not inert, it is mis-signed for the bulk.
+
+## Scope
+
+One operator, one dataset, 20 distinct target coordinates. The estimator
+diagnostics (recovery, cross-fold stability) are solid; the "why it hurts"
+mechanism is measured on held-out folds but on this dataset only. The
+prediction it makes — that a skew-aware loss reverses the sign of the effect —
+is cheap to test and is the natural next step.
+
+## The 2x2 completes: geometry and calibration interact
+
+`spotter_cbg_delta` (annulus + delta) finished, so all four cells exist. p50, km:
+
+| | pooled (mu, sigma) | + per-VP delta | delta effect |
+|---|---|---|---|
+| **annulus** geometry | 527.1 | 410.4 | **−116.7 (helps)** |
+| **density** geometry | 218.6 | 273.2 | **+54.6 (hurts)** |
+| geometry effect | −308.5 | −137.2 | |
+
+**The factors are not additive — the sign of delta's effect flips with the
+geometry.** This is the methodologically important result, and it retroactively
+justifies doing Phase 2 first: run on the annulus alone, this experiment says
+"delta helps by 117 km"; run on the faithful geometry, it says "delta hurts by
+55 km". The pre-Phase-2 harness would have produced the opposite conclusion and
+it would have looked clean.
+
+**The density arm's mechanism is established** (scatter −4%, systematic
+under-prediction +20 km, median abs(z) 0.666 -> 0.719 — see above).
+
+**The annulus arm's is not, and two candidate explanations were tested and
+refuted:**
+
+* *Radius homogenisation weakening the filter's adverse selection* — refuted.
+  delta slightly **reduces** surviving participants (23.8 -> 23.5, p50 17 -> 13)
+  and **increases** outer-radius spread (CV 0.427 -> 0.472).
+* *Downward bias shrinking the spurious inner hole (R3), partially cancelling
+  the outward displacement* — refuted. Median inner radius moves only
+  1347 -> 1332 km, and the inner-hole miss rate goes **up** (17.5% -> 18.6%),
+  not down. Per-constraint containment is flat (65.9% -> 66.0%).
+
+So the honest status is: delta improves the annulus arm by 117 km for a reason
+not yet identified. The working interpretation — untested — is that perturbing
+a mis-specified hard-constraint system can improve it for reasons unrelated to
+the perturbation's merit, which is precisely why the annulus arm is not a valid
+instrument for evaluating an LTD change. Anyone wanting to use that 117 km
+should establish the mechanism first.
+
+(Incidental cross-validation: the 17.5% inner-hole miss rate measured here from
+the benchmark run's `ltd_predictions` reproduces
+[2026-09-19's](2026-09-19-normal-dist-wrong-for-operator-hypergiant.md) R3
+figure of 17.5% exactly, from a separately written script over different rows.)
+
+---
+
+**Conclusion note:** [2026-09-22-spotter-faithful-vs-harness-conclusion.md](2026-09-22-spotter-faithful-vs-harness-conclusion.md) consolidates this with the other Spotter investigations — what a faithful implementation changed, how it was measured, and what to conclude.

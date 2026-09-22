@@ -109,7 +109,7 @@ benchmark:
       mtl_kwargs:
         resolution: 4
         coarse_resolution: 2
-        top_k: 64
+        top_k: 8
         neighbor_ring: 1
         credible_mass: 0.95
 

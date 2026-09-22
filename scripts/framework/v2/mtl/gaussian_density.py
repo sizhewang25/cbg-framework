@@ -190,7 +190,7 @@ class GaussianDensityMTL(DensityMTLMethod):
         self,
         resolution: int = 4,
         coarse_resolution: int = 2,
-        top_k: int = 64,
+        top_k: int = 8,
         neighbor_ring: int = 1,
         credible_mass: float = 0.95,
     ) -> None:

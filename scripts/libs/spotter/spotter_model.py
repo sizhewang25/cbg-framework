@@ -416,8 +416,6 @@ class SpotterRTTModel:
                 rtt, dist,
                 deg_mu=deg_mu,
                 deg_sigma=deg_sigma,
-                n_bins=n_bins,
-                min_per_bin=min_per_bin,
             )
         except (ValueError, np.linalg.LinAlgError) as exc:
             self.fit_message = f"Polynomial fit failed: {exc}"
