@@ -39,14 +39,10 @@ class TestFitMuSigma(unittest.TestCase):
         rtts = rng.uniform(0, 100, size=5000)
         dists = 50.0 * rtts + rng.normal(0, 200, size=5000)
 
-        p_mu, p_log_sigma, centers, mus, sigmas = fit_mu_sigma(
-            rtts, dists, n_bins=40, min_per_bin=30, deg_mu=3, deg_sigma=2
-        )
+        p_mu, p_log_sigma = fit_mu_sigma(rtts, dists, deg_mu=3, deg_sigma=2)
 
         self.assertEqual(p_mu.shape, (4,))  # cubic -> 4 coeffs
         self.assertEqual(p_log_sigma.shape, (3,))  # deg 2 -> 3 coeffs
-        self.assertEqual(centers.shape, mus.shape)
-        self.assertEqual(centers.shape, sigmas.shape)
 
     def test_mu_polynomial_recovers_linear_relationship(self):
         """If dist = 50 * rtt + noise, polyval(p_mu, rtt) ~ 50 * rtt."""
@@ -54,7 +50,7 @@ class TestFitMuSigma(unittest.TestCase):
         rtts = rng.uniform(0, 100, size=10000)
         dists = 50.0 * rtts + rng.normal(0, 100, size=10000)
 
-        p_mu, _, _, _, _ = fit_mu_sigma(rtts, dists, n_bins=40)
+        p_mu, _ = fit_mu_sigma(rtts, dists)
 
         # mu(50) should be approximately 2500 km
         self.assertAlmostEqual(float(np.polyval(p_mu, 50.0)), 2500.0, delta=100.0)
@@ -65,30 +61,32 @@ class TestFitMuSigma(unittest.TestCase):
         noise_std = 250.0
         dists = 50.0 * rtts + rng.normal(0, noise_std, size=10000)
 
-        _, p_log_sigma, _, _, sigmas = fit_mu_sigma(rtts, dists, n_bins=40)
+        _, p_log_sigma = fit_mu_sigma(rtts, dists)
 
-        # `sigmas` stays a LINEAR descriptive per-bin std, so it is still
-        # directly comparable to the true noise level.
-        self.assertAlmostEqual(float(np.mean(sigmas)), noise_std, delta=40.0)
         # p_log_sigma is log-space: exponentiate before comparing.
         self.assertAlmostEqual(
             float(np.exp(np.polyval(p_log_sigma, 50.0))), noise_std, delta=50.0
         )
 
-    def test_drops_underfilled_bins(self):
-        """Bins with < min_per_bin points are dropped before polyfit."""
+    def test_binning_parameters_are_rejected_not_ignored(self):
+        """A stale `n_bins` in a config must fail loudly.
+
+        Silently accepting it would leave the YAML asserting a bandwidth that
+        has no effect, which is exactly the confusion the removal is meant to
+        end. The message has to name the offending key, because the caller is
+        usually a config file several layers away.
+        """
         rng = np.random.default_rng(2)
-        dense = rng.normal(10, 1, size=2000)
-        sparse = rng.uniform(50, 80, size=20)  # ~1 point per bin if 40 bins on [0, 80]
-        rtts = np.concatenate([dense, sparse])
-        dists = 50.0 * rtts + rng.normal(0, 100, size=len(rtts))
-
-        _, _, centers, _, _ = fit_mu_sigma(
-            rtts, dists, n_bins=40, min_per_bin=30
-        )
-
-        # Sparse region bin centers should be excluded
-        self.assertTrue(np.all(centers < 40.0))
+        rtts = rng.uniform(1.0, 80.0, size=500)
+        dists = 50.0 * rtts
+        for kwargs in ({"n_bins": 40}, {"min_per_bin": 5}, {"n_bins": 40, "min_per_bin": 5}):
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError) as ctx:
+                    fit_mu_sigma(rtts, dists, **kwargs)
+                for key in kwargs:
+                    self.assertIn(key, str(ctx.exception))
+        # None is the default and must stay accepted.
+        fit_mu_sigma(rtts, dists, n_bins=None, min_per_bin=None)
 
 
 class TestCalibrateK(unittest.TestCase):
@@ -481,7 +479,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         dists = np.abs(100.0 * rtts - 400.0 + rng.normal(0, 300, size=8000))
 
         model = SpotterRTTModel()
-        self.assertTrue(model.fit(rtts, dists, min_per_bin=5, cutoff_min_points=5))
+        self.assertTrue(model.fit(rtts, dists, cutoff_min_points=5))
 
         grid = np.linspace(0.0, 300.0, 2000)
         sigmas = np.array([model.sigma_at(float(r)) for r in grid])
@@ -510,7 +508,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         dists = 3000.0 * (1.0 - np.exp(-rtts / 25.0)) + rng.normal(0, 250, size=6000)
         dists = np.abs(dists)
 
-        p_mu, _, _, _, _ = fit_mu_sigma(rtts, dists, min_per_bin=5)
+        p_mu, _ = fit_mu_sigma(rtts, dists)
 
         hi = float(rtts.max()) * DEFAULT_MONOTONE_MARGIN
         grid = np.linspace(0.0, hi, 4000)
@@ -525,7 +523,7 @@ class TestSpotterRTTModel(unittest.TestCase):
         rtts = rng.uniform(1.0, 80.0, size=500)
         dists = 50.0 * rtts
         with self.assertRaises(ValueError):
-            fit_mu_sigma(rtts, dists, deg_mu=1, min_per_bin=5)
+            fit_mu_sigma(rtts, dists, deg_mu=1)
 
 
 if __name__ == "__main__":

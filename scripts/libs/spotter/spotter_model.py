@@ -147,18 +147,48 @@ def _monotone_nonneg_cubic(
     return np.array([a3, a2, a1, a0], dtype=float)
 
 
+#: Smallest sample count `fit` will attempt. The cubic needs 4 points and the
+#: log-sigma polynomial `deg_sigma + 1`; below that the system is
+#: under-determined. Replaces the old `min_per_bin` gate, which conflated "how
+#: many points per bin" with "how many points at all" back when the fit
+#: consumed bins.
+MIN_FIT_SAMPLES = 4
+
+
+def _reject_binning_kwargs(**kwargs) -> None:
+    """Raise on any surviving bin-summary parameter.
+
+    `n_bins` and `min_per_bin` configured the binning that `fit_mu_sigma` no
+    longer does: mu is fitted to the raw pairs and sigma to its residuals.
+    Silently ignoring them would leave 61 config files asserting a bandwidth
+    that has no effect, which is the failure mode this rejection exists to
+    prevent. Removing them from the signature outright would instead surface as
+    an opaque `TypeError`, so they are kept, defaulted to None, and refused
+    with an explanation.
+    """
+    offenders = {k: v for k, v in kwargs.items() if v is not None}
+    if offenders:
+        named = ", ".join(f"{k}={v!r}" for k, v in sorted(offenders.items()))
+        raise ValueError(
+            f"{named}: binning parameters are no longer supported. mu(d) is "
+            f"fitted to the raw (rtt, distance) pairs under a monotonicity "
+            f"constraint and sigma(d) to its residuals in log space, so there "
+            f"is no binning to configure. Remove these keys from the caller "
+            f"(including any ltd_kwargs in YAML)."
+        )
+
+
 def fit_mu_sigma(
     rtt: np.ndarray,
     dist: np.ndarray,
-    n_bins: int = 40,
-    min_per_bin: int = 30,
+    *,
     deg_mu: int = 3,
     deg_sigma: int = 2,
     monotone_margin: float = DEFAULT_MONOTONE_MARGIN,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    n_bins: Optional[int] = None,
+    min_per_bin: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
     """Fit mu(d) monotone on raw pairs, then log sigma(d) from its residuals.
-
-    Two changes from the original binned `np.polyfit` approach, both deliberate:
 
     **mu is fitted to the RAW (rtt, distance) pairs, monotonically.** Regression
     needs no binning, which removes bin count and bin width as unexamined
@@ -169,8 +199,8 @@ def fit_mu_sigma(
     downstream; this attacks it at source. See `_monotone_nonneg_cubic`.
 
     Note this also changes the *weighting*, not just the smoothing. Fitting bin
-    means weights every bin equally; fitting raw pairs weights every pair
-    equally. On as01 bin occupancy spans 31 to 2,769 points, so the two differ
+    means weighted every bin equally; fitting raw pairs weights every pair
+    equally. On as01 bin occupancy spanned 31 to 2,769 points, so the two differ
     materially in sparse RTT regions. The raw fit is the standard estimator of
     E[distance | delay], which is what Spotter's f_d is defined as, so this
     moves toward the paper rather than away from it.
@@ -178,33 +208,31 @@ def fit_mu_sigma(
     **sigma is fitted in LOG space, from mu's residuals.** `exp` is positive
     unconditionally, which removes the pathology where a deg-2 sigma polynomial
     dips below zero and prediction has to refuse. Binning the raw distance also
-    inflated sigma-hat by leaking the local slope into it -- at the deployed
-    `n_bins=40` the inflation measures +18.3% against a known truth, matching
+    inflated sigma-hat by leaking the local slope into it -- at the old
+    `n_bins=40` the inflation measured +18.3% against a known truth, matching
     sqrt(sigma^2 + slope^2 * width^2 / 12). Residuals carry no such term.
 
     `deg_mu` is accepted but must be 3: the Bernstein construction is
-    cubic-specific. It stays in the signature so the deployed YAML configs and
-    the kwargs pin in scripts/analysis/v3/tests/ need no change.
+    cubic-specific. `n_bins` / `min_per_bin` are **deprecated and rejected** --
+    see `_reject_binning_kwargs`.
 
     Args:
         rtt: RTT values in ms.
         dist: Great-circle distances in km, aligned with `rtt`.
-        n_bins: Bins for the DESCRIPTIVE summaries only -- no longer fit input.
-        min_per_bin: Bins with fewer points are dropped from those summaries.
         deg_mu: Must be 3.
         deg_sigma: Polynomial degree for log sigma(d).
         monotone_margin: mu is constrained on [0, monotone_margin * max(rtt)].
+        n_bins: Deprecated. Must be None.
+        min_per_bin: Deprecated. Must be None.
 
     Returns:
-        (p_mu, p_log_sigma, centers, mus, sigmas).
+        (p_mu, p_log_sigma).
 
         `p_mu` is standard `np.polyval` coefficients for mu in km.
         `p_log_sigma` is `np.polyval` coefficients for **log sigma** -- callers
         must exponentiate, and should prefer `SpotterRTTModel.sigma_at`.
-        `centers, mus, sigmas` are per-bin descriptive statistics in LINEAR
-        units, retained for plotting and diagnostics. They are no longer what
-        either polynomial was fitted to.
     """
+    _reject_binning_kwargs(n_bins=n_bins, min_per_bin=min_per_bin)
     if deg_mu != 3:
         raise ValueError(
             f"deg_mu must be 3 (the monotone fit is cubic), got {deg_mu}"
@@ -232,25 +260,7 @@ def fit_mu_sigma(
         np.log(np.abs(residual) + _LOG_SIGMA_FLOOR_KM) + LOG_ABS_NORMAL_BIAS,
         deg_sigma,
     )
-
-    # Descriptive bin summaries. Same binning as before so the figures that draw
-    # these dots keep their meaning, but they no longer feed either fit.
-    edges = np.linspace(rtt.min(), rtt.max(), n_bins + 1)
-    centers, mus, sigmas = [], [], []
-    for lo, hi_edge in zip(edges[:-1], edges[1:]):
-        mask = (rtt >= lo) & (rtt < hi_edge)
-        if mask.sum() < min_per_bin:
-            continue
-        centers.append(0.5 * (lo + hi_edge))
-        mus.append(float(np.mean(dist[mask])))
-        sigmas.append(float(np.std(dist[mask])))
-    return (
-        p_mu,
-        p_log_sigma,
-        np.asarray(centers),
-        np.asarray(mus),
-        np.asarray(sigmas),
-    )
+    return p_mu, p_log_sigma
 
 
 def calibrate_k(
@@ -320,20 +330,25 @@ class SpotterRTTModel:
         self,
         rtt: np.ndarray,
         dist: np.ndarray,
-        n_bins: int = 40,
-        min_per_bin: int = 30,
+        *,
         deg_mu: int = 3,
         deg_sigma: int = 2,
         target_coverage: Optional[float] = None,
         bin_size_ms: float = 5.0,
         cutoff_min_points: int = 30,
+        n_bins: Optional[int] = None,
+        min_per_bin: Optional[int] = None,
     ) -> bool:
-        """Fit the pooled mu(d), sigma(d) polynomials.
+        """Fit the pooled mu(d), log sigma(d) polynomials.
 
         Drops physically impossible rows (rtt < THEORETICAL_SLOPE * dist)
-        before binning. Computes a per-fit `cutoff_rtt` (right edge of the
-        last dense bin) so prediction can stop extrapolating into the sparse
-        tail.
+        first. Computes a per-fit `cutoff_rtt` (right edge of the last dense
+        RTT bin) so prediction can stop extrapolating into the sparse tail --
+        `bin_size_ms` / `cutoff_min_points` configure *that* scan only, and are
+        unrelated to the binning the fit itself no longer does.
+
+        `n_bins` / `min_per_bin` are deprecated and rejected; see
+        `_reject_binning_kwargs`.
 
         When `target_coverage` is None (default), `self.k` is left at 1.0
         and the predicted band is the paper's mu +/- sigma. When set, k is
@@ -354,29 +369,25 @@ class SpotterRTTModel:
         )
         rtt = rtt[valid]
         dist = dist[valid]
-        if len(rtt) < max(min_per_bin, deg_mu + 1, deg_sigma + 1):
+        need = max(MIN_FIT_SAMPLES, deg_sigma + 1)
+        if len(rtt) < need:
             self.fit_message = (
-                f"Too few valid points: {len(rtt)} (need >= {min_per_bin})"
+                f"Too few valid points: {len(rtt)} (need >= {need})"
             )
             self.fitted = False
             return False
         try:
-            p_mu, p_log_sigma, centers, _, _ = fit_mu_sigma(
+            p_mu, p_log_sigma = fit_mu_sigma(
                 rtt, dist,
-                n_bins=n_bins,
-                min_per_bin=min_per_bin,
                 deg_mu=deg_mu,
                 deg_sigma=deg_sigma,
+                n_bins=n_bins,
+                min_per_bin=min_per_bin,
             )
         except (ValueError, np.linalg.LinAlgError) as exc:
             self.fit_message = f"Polynomial fit failed: {exc}"
             self.fitted = False
             return False
-        # The old gate here required enough *populated bins*, because the bins
-        # were the fit input. They no longer are -- both curves come from the
-        # raw pairs, and the sample-count gate above already covers that. Bins
-        # are now only descriptive, so an under-populated binning is a thin
-        # diagnostic, not an unfittable model.
         self.p_mu = p_mu
         self.p_log_sigma = p_log_sigma
         if target_coverage is None:
@@ -392,7 +403,6 @@ class SpotterRTTModel:
         )
         self.metadata = {
             "n_pairs": int(len(rtt)),
-            "n_bins_used": int(len(centers)),
             "cutoff_rtt": float(self.cutoff_rtt),
             "k": float(self.k),
         }

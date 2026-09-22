@@ -38,7 +38,10 @@ from scripts.framework.v2.ltd.base import (
 from scripts.framework.v2.registry import register_ltd
 from scripts.framework.v2.types import Coord, Distance, Error, Latency, VpId
 from scripts.libs.cbg.rtt_model import haversine_distance
-from scripts.libs.spotter.spotter_model import SpotterRTTModel
+from scripts.libs.spotter.spotter_model import (
+    SpotterRTTModel,
+    _reject_binning_kwargs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,31 +52,26 @@ class NormalDistLTD(AnnulusLTDModel):
 
     def __init__(
         self,
-        n_bins: int = 40,
-        min_per_bin: int = 30,
         deg_mu: int = 3,
         deg_sigma: int = 2,
         bin_size_ms: float = 5.0,
         cutoff_min_points: int = 30,
         sentinel_rtt: float = 10000.0,
         target_coverage: Optional[float] = None,
-        per_vp_offset: bool = False,
-        offset_span_ms: float = 25.0,
-        offset_step_ms: float = 0.1,
+        n_bins: Optional[int] = None,
+        min_per_bin: Optional[int] = None,
     ) -> None:
-        self.n_bins = n_bins
-        self.min_per_bin = min_per_bin
+        # Rejected here as well as inside `fit_mu_sigma`, so a stale
+        # `ltd_kwargs` block fails at COMPOSITION time with a clear message
+        # rather than part-way through a benchmark run.
+        _reject_binning_kwargs(n_bins=n_bins, min_per_bin=min_per_bin)
         self.deg_mu = deg_mu
         self.deg_sigma = deg_sigma
         self.bin_size_ms = bin_size_ms
         self.cutoff_min_points = cutoff_min_points
         self.sentinel_rtt = sentinel_rtt
         self.target_coverage = target_coverage
-        self.per_vp_offset = per_vp_offset
-        self.offset_span_ms = offset_span_ms
-        self.offset_step_ms = offset_step_ms
         self._model: Optional[SpotterRTTModel] = None
-        self._deltas: dict[VpId, float] = {}
 
     def _fit(self, samples: list[FitSample]) -> FittingResult:
         if not samples:
@@ -98,8 +96,6 @@ class NormalDistLTD(AnnulusLTDModel):
             model.fit(
                 rtts,
                 dists,
-                n_bins=self.n_bins,
-                min_per_bin=self.min_per_bin,
                 deg_mu=self.deg_mu,
                 deg_sigma=self.deg_sigma,
                 target_coverage=self.target_coverage,
@@ -117,100 +113,14 @@ class NormalDistLTD(AnnulusLTDModel):
             )
 
         self._model = model
-        args = {
-            "rtt_min": model.rtt_min,
-            "rtt_max": model.rtt_max,
-            "cutoff_rtt": model.cutoff_rtt,
-        }
-
-        self._deltas = {}
-        if self.per_vp_offset:
-            self._deltas = self._fit_offsets(samples, model, rtts, dists)
-            if self._deltas:
-                vals = np.fromiter(self._deltas.values(), dtype=float)
-                args["n_vps_with_offset"] = int(vals.size)
-                args["delta_ms_p05"] = float(np.quantile(vals, 0.05))
-                args["delta_ms_p50"] = float(np.median(vals))
-                args["delta_ms_p95"] = float(np.quantile(vals, 0.95))
-
-        return FittingResult(success=True, args=args)
-
-    def _fit_offsets(
-        self,
-        samples: list[FitSample],
-        model: SpotterRTTModel,
-        rtts: np.ndarray,
-        dists: np.ndarray,
-    ) -> dict[VpId, float]:
-        """One additive RTT offset per VP: argmin_d SSE(dist - mu(rtt - d)).
-
-        Tests R4 of notes/2026-09-19-normal-dist-wrong-for-operator-hypergiant.md,
-        which measures that the per-VP residual is not exchangeable noise but a
-        reproducible property of each VP's position in a fixed topology, and that
-        its shape is a constant additive RTT offset: one scalar per VP removes
-        ~90% of the landmark effect (eta^2 10.8% -> 1.2% on as01), with the
-        per-VP mean residual correlating -0.93 with the fitted offset.
-
-        Physically the offset absorbs fixed access/backhaul latency or a fixed
-        detour to the VP's backbone ingress -- delay that is present on every
-        path from that VP and carries no distance information. Subtracting it
-        before evaluating mu/sigma is therefore the *propagation-relevant* RTT,
-        which is also why `_predict` applies it before the 2/3*c envelope rather
-        than after.
-
-        Grid search rather than a derivative method: mu is a deg-3 polynomial
-        composed with a clip, so the SSE is piecewise-smooth and not reliably
-        unimodal, and a 0.1 ms grid over +/-25 ms is cheap enough at this scale.
-        Deliberately mirrors the estimator in
-        scripts/libs/cbg_feasibility/spotter_assumption_breakdown.py so the
-        fitted offsets are comparable with that note's reported numbers.
-
-        LEAKAGE: `samples` is the training split only -- the framework calls
-        `fit` per fold with train data -- so the offsets inherit the same
-        leakage-safety as the pooled polynomials. VPs unseen at fit time get no
-        entry and fall back to offset 0 (the pooled model) at predict time.
-        """
-        grid = np.arange(
-            -self.offset_span_ms,
-            self.offset_span_ms + self.offset_step_ms,
-            self.offset_step_ms,
+        return FittingResult(
+            success=True,
+            args={
+                "rtt_min": model.rtt_min,
+                "rtt_max": model.rtt_max,
+                "cutoff_rtt": model.cutoff_rtt,
+            },
         )
-        # Rebuild the same validity mask `_fit` applied, so offsets are fitted
-        # on exactly the rows the pooled polynomials saw.
-        raw_rtt = np.array([float(s.latency) for s in samples], dtype=float)
-        raw_dist = np.array(
-            [
-                haversine_distance(
-                    s.vp_coord.lat, s.vp_coord.lon, s.probe_coord.lat, s.probe_coord.lon
-                )
-                for s in samples
-            ],
-            dtype=float,
-        )
-        valid = (
-            np.isfinite(raw_rtt)
-            & np.isfinite(raw_dist)
-            & (raw_rtt > 0)
-            & (raw_dist > 0)
-        )
-        vp_ids = np.array([s.vp_id for s in samples], dtype=object)[valid]
-        r_all, s_all = raw_rtt[valid], raw_dist[valid]
-
-        deltas: dict[VpId, float] = {}
-        for vp_id in set(vp_ids.tolist()):
-            m = vp_ids == vp_id
-            r, s = r_all[m], s_all[m]
-            if r.size < self.min_per_bin:
-                # Too few rows to estimate a stable offset; the pooled model is
-                # the safer answer, and 0 is exactly that.
-                continue
-            shifted = np.clip(
-                r[None, :] - grid[:, None], model.rtt_min, model.rtt_max
-            )
-            resid = s[None, :] - np.polyval(model.p_mu, shifted)
-            best = int(np.argmin(np.einsum("ij,ij->i", resid, resid)))
-            deltas[vp_id] = float(grid[best])
-        return deltas
 
     def _predict(
         self,
@@ -226,30 +136,8 @@ class NormalDistLTD(AnnulusLTDModel):
                 vp_coord=vp_coord,
                 latency=latency,
             )
-        # Per-VP offset: subtract this VP's fixed non-propagation delay before
-        # consulting the pooled model. Applied BEFORE the 2/3*c envelope inside
-        # predict_distance_bounds, because the corrected value is the
-        # propagation-relevant RTT -- bounding the speed of light with delay
-        # that is known not to be propagation would be the wrong envelope.
-        # Clipped into the calibration range for the same reason the model
-        # clamps internally: a shifted RTT can land outside it, and
-        # extrapolating a deg-3 polynomial there is exactly what `cutoff_rtt`
-        # exists to prevent. Unseen VPs get 0.0 and so behave as pooled.
-        eval_latency = latency
-        if self._deltas:
-            delta = self._deltas.get(vp_id, 0.0)
-            if delta:
-                eval_latency = Latency(
-                    float(
-                        np.clip(
-                            float(latency) - delta,
-                            self._model.rtt_min,
-                            self._model.rtt_max,
-                        )
-                    )
-                )
         try:
-            bounds = self._model.predict_distance_bounds(eval_latency)
+            bounds = self._model.predict_distance_bounds(latency)
         except Exception as exc:
             logger.debug(
                 "Spotter predict_distance_bounds failed for %s at RTT %.3f ms: %s",
@@ -290,7 +178,7 @@ class NormalDistLTD(AnnulusLTDModel):
         # A None here is not an error for this result -- the geometric path is
         # unaffected -- so the bounds are returned either way and only a
         # density MTL will notice the absence.
-        mu_sigma = self._model.predict_mu_sigma(eval_latency)
+        mu_sigma = self._model.predict_mu_sigma(latency)
         mu_km = float(mu_sigma[0]) if mu_sigma is not None else None
         sigma_km = float(mu_sigma[1]) if mu_sigma is not None else None
         return LTDResult(

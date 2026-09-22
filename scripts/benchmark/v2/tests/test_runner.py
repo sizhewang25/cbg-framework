@@ -160,8 +160,7 @@ class TestRunOneCombo(unittest.TestCase):
             # tiny fixture: mu is fitted to raw pairs, so it needs 4 *points*,
             # not 4 populated bins. deg_sigma=0 keeps log-sigma constant.
             ltd_kwargs={
-                "cutoff_min_points": 1, "min_per_bin": 1, "n_bins": 2,
-                "deg_mu": 3, "deg_sigma": 0,
+                "cutoff_min_points": 1, "deg_mu": 3, "deg_sigma": 0,
             },
             mtl_kwargs={}, ctr_kwargs={"n_samples": 256},
             base_seed=42,
