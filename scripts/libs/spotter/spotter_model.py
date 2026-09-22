@@ -263,6 +263,24 @@ def fit_mu_sigma(
     return p_mu, p_log_sigma
 
 
+def sigma_km(p_log_sigma: np.ndarray, rtt):
+    """sigma in km from log-sigma coefficients: `exp(polyval(p_log_sigma, rtt))`.
+
+    The **one** place the log parameterisation is undone. Module-level and
+    shape-preserving (scalar in, float out; array in, array out) because the
+    callers that need sigma are split between the two: `predict_*` want a
+    scalar, while `calibrate_k` and the diagnostic/figure modules evaluate it
+    over whole columns. An earlier scalar-only helper on the model failed for
+    exactly that reason -- every array caller bypassed it and hand-rolled
+    `np.exp(np.polyval(...))`, which is the duplication this exists to stop.
+
+    Overflow yields `inf` rather than raising; callers filter on `isfinite`.
+    """
+    with np.errstate(over="ignore"):
+        out = np.exp(np.polyval(p_log_sigma, rtt))
+    return float(out) if np.isscalar(rtt) or np.ndim(rtt) == 0 else out
+
+
 def calibrate_k(
     rtt: np.ndarray,
     dist: np.ndarray,
@@ -283,8 +301,7 @@ def calibrate_k(
     rtt = np.asarray(rtt, dtype=float)
     dist = np.asarray(dist, dtype=float)
     mu = np.polyval(p_mu, rtt)
-    with np.errstate(over="ignore"):
-        sig = np.exp(np.polyval(p_log_sigma, rtt))
+    sig = sigma_km(p_log_sigma, rtt)
     mask = np.isfinite(mu) & np.isfinite(sig) & (sig > 0)
     z = (dist[mask] - mu[mask]) / sig[mask]
     z = z[np.isfinite(z)]
@@ -313,6 +330,24 @@ class SpotterRTTModel:
     polynomially past the data (and could go negative), whereas `exp` of a
     growing quadratic diverges exponentially. On as01, sigma at 200 ms is
     8.3e3 km extrapolated against 2.4e3 km at the 91.9 ms support edge.
+
+    **The three accessors deliberately disagree about out-of-range RTTs.** They
+    share one evaluator (`_curves_at`) and differ only in range policy, which is
+    a property of what each is for:
+
+    | method | below `rtt_min` | above `cutoff_rtt` |
+    |---|---|---|
+    | `predict_distance` | `None` | `None` above `rtt_max` |
+    | `predict_mu_sigma` | clamp to `rtt_min` | clamp to `cutoff_rtt` |
+    | `predict_distance_bounds` | line through the origin | flat, then sentinel extension |
+
+    `predict_distance` refuses because a bare mu with no band has no honest
+    reading outside the data. `predict_mu_sigma` clamps because a density needs
+    a finite `(mu, sigma)` at every RTT it is asked about, and a pessimistic one
+    beats a missing one. `predict_distance_bounds` uses the origin line because
+    a *bound* below the calibration range is still meaningful even when the
+    polynomial is not. Do not "unify" these without changing what the callers
+    mean.
     """
 
     p_mu: Optional[np.ndarray] = None
@@ -412,21 +447,32 @@ class SpotterRTTModel:
         self.fit_message = "ok"
         return True
 
-    def sigma_at(self, rtt: float) -> float:
-        """sigma(rtt) in km, i.e. `exp(p_log_sigma(rtt))`.
+    def sigma_at(self, rtt):
+        """sigma(rtt) in km. Thin bound form of `sigma_km`.
 
-        The single place the log parameterisation is undone. Every caller should
-        come through here rather than writing `np.exp(np.polyval(...))` inline,
-        so that a future change of parameterisation is one edit and not a hunt.
-
-        No clamping: callers decide their own evaluation point (`predict_*`
-        clamp to the calibrated range first). Overflow yields `inf` rather than
-        raising, and callers filter on `isfinite`.
+        No clamping -- callers decide their own evaluation point, and the
+        `predict_*` methods clamp to the calibrated range before calling.
         """
         if self.p_log_sigma is None:
             raise ValueError("model has no p_log_sigma; fit it first")
-        with np.errstate(over="ignore"):
-            return float(np.exp(np.polyval(self.p_log_sigma, rtt)))
+        return sigma_km(self.p_log_sigma, rtt)
+
+    def _curves_at(self, eval_rtt: float) -> Tuple[float, float]:
+        """Both curves at an ALREADY-CLAMPED rtt: (mu_km, sigma_km).
+
+        Split out because the three public accessors below disagree about what
+        to do outside the calibrated range but agree exactly on how to evaluate
+        inside it. Keeping the evaluation in one place means a change of
+        parameterisation touches one line rather than three call sites that are
+        easy to update inconsistently.
+
+        No range logic and no guards: that is the caller's job, and the reason
+        this is private.
+        """
+        return (
+            float(np.polyval(self.p_mu, eval_rtt)),
+            float(sigma_km(self.p_log_sigma, eval_rtt)),
+        )
 
     def predict_distance(self, rtt: float) -> Optional[float]:
         """Return mu(rtt) only (no band)."""
@@ -472,8 +518,7 @@ class SpotterRTTModel:
             eval_rtt = max(eval_rtt, self.rtt_min)
         if hi > 0:
             eval_rtt = min(eval_rtt, hi)
-        mu = float(np.polyval(self.p_mu, eval_rtt))
-        sigma = self.sigma_at(eval_rtt)
+        mu, sigma = self._curves_at(eval_rtt)
         if not np.isfinite(mu) or not np.isfinite(sigma) or sigma <= 0:
             return None
         return max(0.0, mu), sigma
@@ -518,8 +563,7 @@ class SpotterRTTModel:
         if rtt < self.rtt_min:
             if self.rtt_min <= 0:
                 return None
-            mu_min = float(np.polyval(self.p_mu, self.rtt_min))
-            sigma_min = self.sigma_at(self.rtt_min)
+            mu_min, sigma_min = self._curves_at(self.rtt_min)
             outer_at_min = min(
                 max(0.0, mu_min + self.k * sigma_min),
                 self.rtt_min / THEORETICAL_SLOPE,
@@ -531,8 +575,7 @@ class SpotterRTTModel:
             if rtt > self.rtt_max:
                 return None
             eval_rtt = rtt
-        mu = float(np.polyval(self.p_mu, eval_rtt))
-        sigma = self.sigma_at(eval_rtt)
+        mu, sigma = self._curves_at(eval_rtt)
         inner = max(0.0, mu - self.k * sigma)
         outer = max(0.0, mu + self.k * sigma)
         if self.cutoff_rtt > 0 and rtt > self.cutoff_rtt:
