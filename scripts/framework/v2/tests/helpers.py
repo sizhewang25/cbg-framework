@@ -153,7 +153,7 @@ def normal_dist_pipeline() -> Tuple[NormalDistLTD, list]:
     ltd = NormalDistLTD(
         n_bins=5,
         min_per_bin=2,
-        deg_mu=1,
+        deg_mu=3,
         deg_sigma=0,
         cutoff_min_points=1,
     )

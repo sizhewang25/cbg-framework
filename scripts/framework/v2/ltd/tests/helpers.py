@@ -150,7 +150,8 @@ def make_unfitted_octant_model(anchor_ip: str = "anchor-a") -> "OctantRTTModel":
 def make_fitted_spotter_model(
     *,
     p_mu: Optional[np.ndarray] = None,
-    p_sigma: Optional[np.ndarray] = None,
+    sigma_km: Optional[float] = None,
+    p_log_sigma: Optional[np.ndarray] = None,
     rtt_min: float = 0.0,
     rtt_max: float = 100.0,
     cutoff_rtt: float = 0.0,
@@ -161,21 +162,29 @@ def make_fitted_spotter_model(
     Defaults: mu(d) = 50 * d, sigma(d) = 50 -> +/-sigma band of width 100 km.
     At RTT=20: inner=950, outer=1050. At RTT=30: inner=1450, outer=1550. The 50
     km/ms slope keeps every probe below the 2/3*c speed-of-internet line, so the
-    new baseline clip in predict_distance_bounds is a no-op at these RTTs.
+    baseline clip in predict_distance_bounds is a no-op at these RTTs.
+
+    Sigma is specified in **linear km** via `sigma_km`, and this factory takes
+    the log itself. The model stores `p_log_sigma`, so a test that passed a raw
+    50.0 through would silently get `exp(50)`; asking for km and converting here
+    keeps every call site readable and impossible to get wrong. Pass
+    `p_log_sigma` directly only when a test needs a non-constant sigma.
 
     `cutoff_rtt=0.0` (the default) preserves the legacy `rtt > rtt_max -> None`
     gate for tests that exercise that branch; set `cutoff_rtt > 0` to test the
-    new flat-extension regime.
+    flat-extension regime.
     """
     from scripts.libs.spotter.spotter_model import SpotterRTTModel
 
     if p_mu is None:
         p_mu = np.array([50.0, 0.0])
-    if p_sigma is None:
-        p_sigma = np.array([50.0])
+    if p_log_sigma is None:
+        p_log_sigma = np.array([np.log(50.0 if sigma_km is None else sigma_km)])
+    elif sigma_km is not None:
+        raise ValueError("pass either sigma_km or p_log_sigma, not both")
     return SpotterRTTModel(
         p_mu=np.asarray(p_mu, dtype=float),
-        p_sigma=np.asarray(p_sigma, dtype=float),
+        p_log_sigma=np.asarray(p_log_sigma, dtype=float),
         rtt_min=rtt_min,
         rtt_max=rtt_max,
         cutoff_rtt=cutoff_rtt,
@@ -185,12 +194,23 @@ def make_fitted_spotter_model(
 
 
 def make_fitted_degenerate_spotter_model() -> "SpotterRTTModel":
-    """Fitted Spotter model whose inner = outer (zero-width band)."""
+    """Fitted Spotter model whose band degenerates to inner >= outer.
+
+    Sigma is no longer the lever for this. Under the log parameterisation
+    sigma = exp(...) is strictly positive, so a zero-width band cannot be
+    expressed that way -- which is the point of the change, and `Distance`
+    rejects `sigma_km <= 0` anyway.
+
+    The degenerate case is still reachable through the other route the model
+    documents: when mu already exceeds the 2/3*c line, `predict_distance_bounds`
+    clips `outer` below `inner`. mu(d) = 400*d is far above the ~66.7 km/ms
+    baseline, so every RTT in range degenerates.
+    """
     from scripts.libs.spotter.spotter_model import SpotterRTTModel
 
     return SpotterRTTModel(
-        p_mu=np.array([50.0, 0.0]),
-        p_sigma=np.array([0.0]),
+        p_mu=np.array([400.0, 0.0]),
+        p_log_sigma=np.array([np.log(1.0)]),
         rtt_min=0.0,
         rtt_max=100.0,
         fitted=True,

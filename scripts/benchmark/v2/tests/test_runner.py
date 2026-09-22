@@ -155,11 +155,13 @@ class TestRunOneCombo(unittest.TestCase):
         spec = ComboSpec(
             combo_id="mc_combo",
             ltd="normal_dist", mtl="planar_annulus", ctr="monte_carlo_medoid",
-            # 3 fit pairs (k=4 → 3 fit probes vs 1 eval); deg_mu=1/deg_sigma=0
-            # keeps the polyfit well-determined at n_bins=2.
+            # 3 fit pairs (k=4 → 3 fit probes vs 1 eval). deg_mu is fixed at 3
+            # (the monotone fit is cubic) and no longer needs lowering for a
+            # tiny fixture: mu is fitted to raw pairs, so it needs 4 *points*,
+            # not 4 populated bins. deg_sigma=0 keeps log-sigma constant.
             ltd_kwargs={
                 "cutoff_min_points": 1, "min_per_bin": 1, "n_bins": 2,
-                "deg_mu": 1, "deg_sigma": 0,
+                "deg_mu": 3, "deg_sigma": 0,
             },
             mtl_kwargs={}, ctr_kwargs={"n_samples": 256},
             base_seed=42,
