@@ -127,6 +127,9 @@ def _log_density(
     constraints: list[tuple[Coord, float, float]],
 ) -> np.ndarray:
     """−½ Σ z² over cells, accumulated one constraint at a time.
+    H3 cells are the candidates (lats, lons).
+
+    constraints come from vantage points
 
     Accumulating in place rather than building an (n_cells × n_vps) matrix: a
     global H3-4 pass with ~130 VPs would be a 300 MB intermediate, and nothing
@@ -134,6 +137,7 @@ def _log_density(
     """
     acc = np.zeros(lats.shape, dtype=float)
     for coord, mu, sigma in constraints:
+        # s is a candidate-to-landmark distance set.
         s = _haversine_km_to_many(coord.lat, coord.lon, lats, lons)
         z = (s - mu) / sigma
         acc += z * z
@@ -181,6 +185,9 @@ class GaussianDensityMTL(DensityMTLMethod):
         self.top_k = top_k
         self.neighbor_ring = neighbor_ring
         self.credible_mass = credible_mass
+        # Lazily-built coarse grid, reused across every target this instance
+        # scores. See `_coarse_grid`.
+        self._coarse: Optional[tuple[list[str], np.ndarray, np.ndarray]] = None
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
         constraints: list[tuple[Coord, float, float]] = []
@@ -207,15 +214,14 @@ class GaussianDensityMTL(DensityMTLMethod):
                 participating_vp_ids=tuple(participating),
             )
 
-        cells, logp = self._evaluate(constraints)
-        if cells is None or logp is None or not len(cells):
+        lats, lons, logp = self._evaluate(constraints)
+        if lats is None or logp is None or not len(lats):
             return MTLResult(
                 success=False,
                 error=Error.NUMERICAL_FAILURE,
                 participating_vp_ids=tuple(participating),
             )
 
-        lats, lons = _cell_coords(cells)
         field = DensityField(
             cells=tuple(Coord(float(a), float(b)) for a, b in zip(lats, lons)),
             log_density=tuple(float(v) for v in logp),
@@ -230,13 +236,44 @@ class GaussianDensityMTL(DensityMTLMethod):
             participating_vp_ids=tuple(participating),
         )
 
+    def _coarse_grid(self) -> tuple[list[str], np.ndarray, np.ndarray]:
+        """The global first-pass grid, built once per instance.
+
+        It depends only on `min(coarse_resolution, resolution)`, both fixed at
+        construction, so rebuilding it per target was pure waste. Measured cost
+        of one build: 7.6 ms at H3-2 (5,882 cells) and **346 ms at H3-4**
+        (288,122 cells) -- the latter being the `coarse_resolution >=
+        resolution` single-global-pass mode, where it dominated the call.
+
+        Built lazily rather than in `__init__` because the registry and the
+        test suite construct these freely, and paying 346 ms plus 4.6 MB for an
+        instance that is never asked to multilaterate is a worse trade than one
+        branch per call.
+
+        The arrays are marked read-only: they are shared by every subsequent
+        target, so an in-place write would silently corrupt all of them. Nothing
+        writes to them today, and this makes a future attempt fail loudly.
+        """
+        if self._coarse is None:
+            cells = _global_cells(min(self.coarse_resolution, self.resolution))
+            lats, lons = _cell_coords(cells)
+            lats.flags.writeable = False
+            lons.flags.writeable = False
+            self._coarse = (cells, lats, lons)
+        return self._coarse
+
     def _evaluate(
         self, constraints: list[tuple[Coord, float, float]]
-    ) -> tuple[Optional[list[str]], Optional[np.ndarray]]:
-        """Coarse global pass, then descend into the best cells' children."""
+    ) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+        """Coarse global pass, then descend into the best cells' children.
+
+        Returns `(lats, lons, log_density)` rather than H3 indices: the caller
+        only ever wanted the coordinates, and returning the cell ids made it
+        call `_cell_coords` a second time on the same cells -- a full duplicate
+        of the most expensive step, per target.
+        """
         start = min(self.coarse_resolution, self.resolution)
-        cells = _global_cells(start)
-        lats, lons = _cell_coords(cells)
+        cells, lats, lons = self._coarse_grid()
         logp = _log_density(lats, lons, constraints)
 
         res = start
@@ -263,11 +300,12 @@ class GaussianDensityMTL(DensityMTLMethod):
 
         finite = np.isfinite(logp)
         if not finite.any():
-            return None, None
+            return None, None, None
         if not finite.all():
-            cells = [c for c, ok in zip(cells, finite) if ok]
-            logp = logp[finite]
-        return cells, logp
+            # Fancy indexing copies, so the cached coarse arrays are never
+            # aliased into the returned field.
+            lats, lons, logp = lats[finite], lons[finite], logp[finite]
+        return lats, lons, logp
 
     def _credible_region(self, field: DensityField) -> list[Coord]:
         """Cell centres of the smallest set reaching `credible_mass`.
