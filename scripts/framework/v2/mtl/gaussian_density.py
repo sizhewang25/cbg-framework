@@ -61,7 +61,7 @@ credible region — the smallest set of cells whose normalised mass reaches
 cells according to a required confidence level". Reusing the `list[Coord]` shape
 means a density-blind CTR (`boundary_vertex_mean`) still degrades to a mean over
 those centres instead of crashing; the point estimate the paper describes comes
-from a density-aware CTR (`density_argmax`, `density_mean`, `density_mle`).
+from a density-aware CTR (`density_argmax`).
 """
 
 from __future__ import annotations
@@ -252,7 +252,6 @@ class GaussianDensityMTL(DensityMTLMethod):
         field = DensityField(
             cells=tuple(Coord(float(a), float(b)) for a, b in zip(lats, lons)),
             log_density=tuple(float(v) for v in logp),
-            constraints=tuple(constraints),
             grid="h3",
             resolution=self.resolution,
         )

@@ -102,22 +102,25 @@ into the top-64 cells' children with a one-ring neighbour margin, to
 `resolution=4`. The pruning is the only approximation and it is recorded as one;
 `coarse_resolution >= resolution` disables it.
 
-**(d) Four CTRs** in
-[`ctr/density_point.py`](../scripts/framework/v2/ctr/density_point.py). §III-B names
-three estimators, so they are three classes rather than one with a mode flag — CTR
-is a benchmark factor, and a flag would hide the choice in a kwarg instead of
-naming it in the combo id:
+**(d) One CTR** in
+[`ctr/density_point.py`](../scripts/framework/v2/ctr/density_point.py):
+**`density_argmax`**, §III-B's "the maximum" — the MAP up to the grid's own
+resolution.
 
-| CTR | estimator | note |
-|---|---|---|
-| `density_argmax` | most probable cell | the paper's literal reading; floor is the cell size |
-| `density_mean` | probability-weighted mean | unit-vector averaging, so it survives the antimeridian |
-| `density_region_center` | centre of the credible region | ignores density *inside* the region by design |
-| `density_mle` | **exact continuous MAP** | not the paper's; `least_squares` on `min Σzᵢ²` seeded at the argmax, in a local tangent plane |
+Four were built and measured. `density_mean` (probability-weighted spherical
+mean), `density_region_center` (unweighted centre of the credible region) and
+`density_mle` (the exact continuous MAP, `least_squares` on `min Σzᵢ²` seeded at
+the argmax) were **removed** once argmax was chosen as the shipped estimator.
+Their numbers are in §2.3 and Addendum 3.
 
-`density_mle` exists to be the **reference**: it is the exact optimum of the
-paper's own objective, so any discretised or geometric approximation of Spotter can
-be scored against it rather than argued about.
+Argmax was the one kept because it is the only one of the four **invariant to
+how far the MTL truncated the field** — adding or dropping low-probability cells
+cannot move the maximum — which is exactly the right property under
+coarse-to-fine pruning. The cost is the grid's quantisation: an H3-4 cell is
+~20 km edge, and measured against `density_mle` on the same objective that was
+~21 km at p5 and ~20 km at p50 on as01. **That comparison is no longer
+reproducible in-tree**; re-running it means re-adding the solver *and*
+`DensityField.constraints`, which went with it.
 
 **(e) `per_vp_offset`** on `normal_dist` — one additive RTT offset per VP, used
 to test R4 (§3.5). **Removed.** It answered its question (δᵢ is real and stable
@@ -637,3 +640,46 @@ curve is fitted to, which is what the dots were standing in for.
 `test_the_bin_dots_belong_to_the_drawn_curve` became
 `test_the_fit_carries_no_bin_summary`, which asserts the fields and the CSV
 suffix are absent rather than consistent. 1443 tests pass.
+
+
+---
+
+# Addendum 3 (2026-09-22): one CTR, one density arm
+
+`density_argmax` is now the only density-aware CTR. `density_mean`,
+`density_region_center` and `density_mle` are deleted, and with them
+`_spherical_mean`, the `scipy.optimize` dependency in the CTR package, and
+`DensityField.constraints` — whose only reader was `density_mle`. A field
+nothing reads is a field that goes stale.
+
+`density_point.py` **218 → 66 lines**; its tests 185 → 88.
+
+**The two density arms merge.** `spotter_true` was `gaussian_density +
+density_mle` and `spotter_true_grid` was `gaussian_density + density_argmax`;
+under one CTR they are the same pipeline, so `spotter_true_grid` is gone and
+`spotter_true` now *is* the argmax arm. Verified identical to the retired grid
+arm: p50 198.1 either way. Three Spotter combos become two.
+
+| combo | p5 | p25 | p50 | p75 | p95 | mtl_ms | ctr_ms |
+|---|---|---|---|---|---|---|---|
+| vanilla_cbg | 2.2 | 28.1 | **49.2** | 281.9 | 2144.4 | 73 | 0.3 |
+| octant_cbg_hull | 0.8 | 6.2 | 71.5 | 313.3 | 559.3 | 1906 | 522 |
+| spotter_cbg | 46.9 | 92.4 | 209.4 | 750.2 | 2703.3 | 456 | 209 |
+| **spotter_true** | 54.6 | 144.8 | **198.1** | 647.9 | 2619.7 | **74** | **0.3** |
+
+`ctr_ms` drops 9.7 → 0.3 ms: argmax is an `max()` over a list where the MLE ran
+a least-squares solve per target.
+
+**What was kept despite looking dead.** `credible_mass`, `_credible_region`,
+`DensityField.probabilities()` and `MTLResult.intersection` all survive even
+though no density CTR reads the region any more:
+`analysis/v3/modules/map_mtl.py` serialises `intersection` for the world-map
+viewer, the benchmark writer records `mtl_intersection_kind` from it, and
+`DensityMTLMethod`'s contract promises it so a density-blind CTR degrades
+instead of crashing.
+
+**What this costs.** The exact-MAP reference is gone, so the ~20 km
+grid-quantisation figure above is now a recorded measurement rather than a
+reproducible one. A test asserts the three retired names are absent from
+`CTR_REGISTRY`, so a stale combo id fails at composition instead of silently
+resolving.

@@ -40,15 +40,16 @@ class DensityField:
     weighted mean) is unaffected; anything wanting absolute probability is not
     available and should not be invented from this.
 
-    `constraints` is the per-VP (coord, mu_km, sigma_km) triple the field was
-    built from, retained so a CTR can refine the grid argmax by continuous
-    optimisation — the exact MAP is `min Σ ((s_i(x) − µ_i)/σ_i)²`, which needs
-    the constraints and not the grid.
+    There is deliberately no per-VP constraint list. An earlier version carried
+    `(coord, mu_km, sigma_km)` triples so a CTR could refine the grid argmax by
+    continuous optimisation (`min Σ ((s_i(x) − µ_i)/σ_i)²`). That CTR was
+    removed, and with only `density_argmax` consuming the field, the triples had
+    no reader — a field nothing reads is a field that goes stale. Re-add it with
+    the solver if the exact MAP is wanted again.
     """
 
     cells: tuple[Coord, ...]
     log_density: tuple[float, ...]
-    constraints: tuple[tuple[Coord, float, float], ...]
     grid: Optional[str] = None
     resolution: Optional[int] = None
 

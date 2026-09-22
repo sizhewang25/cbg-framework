@@ -21,9 +21,6 @@ from scripts.framework.v2.ctr.boundary_vertex_mean import BoundaryVertexMeanCTR
 from scripts.framework.v2.ctr.geometric_centroid import GeometricCentroidCTR
 from scripts.framework.v2.ctr.density_point import (
     DensityArgmaxCTR,
-    DensityMeanCTR,
-    DensityMLECTR,
-    DensityRegionCenterCTR,
 )
 from scripts.framework.v2.ctr.geometric_median import GeometricMedianCTR
 from scripts.framework.v2.ctr.monte_carlo_medoid import MonteCarloMedoidCTR
@@ -109,9 +106,6 @@ __all__ = [
     "BoundaryVertexMeanCTR",
     "GeometricCentroidCTR",
     "DensityArgmaxCTR",
-    "DensityMeanCTR",
-    "DensityMLECTR",
-    "DensityRegionCenterCTR",
     "GeometricMedianCTR",
     "MonteCarloMedoidCTR",
     # composition
