@@ -54,11 +54,11 @@ from scripts.analysis.v3.modules.figure_spotter_normality import (
     standardize,
 )
 from scripts.libs.cbg.rtt_model import RTTDistanceModel
+from scripts.libs.spotter.spotter_model import sigma_km
 
 #: The mesh configs' `spotter_cbg.ltd_kwargs`, verbatim.
 FIT_KWARGS = dict(
-    n_bins=40, min_per_bin=5, deg_mu=3, deg_sigma=2,
-    bin_size_ms=5.0, cutoff_min_points=5,
+    deg_mu=3, deg_sigma=2, bin_size_ms=5.0, cutoff_min_points=5,
 )
 
 #: Rows whose fitted sigma is below this are excluded from the per-VP
@@ -80,7 +80,7 @@ def prepare(csv_path: Path):
     model = fit.model
     std = standardize(
         df.rtt_ms.values, df.distance_km.values,
-        model.p_mu, model.p_sigma, sigma_ref_km=SIGMA_REF_KM,
+        model.p_mu, model.p_log_sigma, sigma_ref_km=SIGMA_REF_KM,
     )
     d = df[std.valid].copy()
     d["z"] = std.z[std.valid]
@@ -179,7 +179,7 @@ def envelope(d: pd.DataFrame, model) -> dict:
 
     d = d.assign(cbg_r=pd.concat(radii).reindex(d.index)).dropna(subset=["cbg_r"])
     rtt = np.clip(d.rtt_ms.values, model.rtt_min, model.rtt_max)
-    mu, sg = np.polyval(model.p_mu, rtt), np.polyval(model.p_sigma, rtt)
+    mu, sg = np.polyval(model.p_mu, rtt), sigma_km(model.p_log_sigma, rtt)
     outer, inner = mu + sg, mu - sg
     truth, cbg_r = d.distance_km.values, d.cbg_r.values
     ratio = outer / cbg_r
@@ -246,7 +246,7 @@ def landmark(d: pd.DataFrame, model, offset_grid=np.linspace(-25, 25, 501)) -> d
         delta[v] = float(offset_grid[int(np.argmin(sse))])
     delta_s = pd.Series(delta)
     adj = np.clip(d.rtt_ms.values - d.vp.map(delta).values, model.rtt_min, model.rtt_max)
-    mu2, sg2 = np.polyval(model.p_mu, adj), np.polyval(model.p_sigma, adj)
+    mu2, sg2 = np.polyval(model.p_mu, adj), sigma_km(model.p_log_sigma, adj)
     ok = sg2 > SIGMA_REF_KM
     z2 = (d.distance_km.values[ok] - mu2[ok]) / sg2[ok]
     km_bias = (np.polyval(model.p_mu, np.clip(d.rtt_ms.values, model.rtt_min, model.rtt_max))

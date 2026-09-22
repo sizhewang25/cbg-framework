@@ -20,8 +20,6 @@ from scripts.analysis.v3.modules.config import REPO_ROOT
 #: command's defaults must equal these, or the diagnostic describes a model
 #: nobody deployed.
 DEPLOYED_FIT_KWARGS = {
-    "n_bins": 40,
-    "min_per_bin": 5,
     "deg_mu": 3,
     "deg_sigma": 2,
     "bin_size_ms": 5.0,
@@ -77,34 +75,41 @@ def test_the_population_defaults_keep_every_row_and_group_by_the_landmark():
 # ---- the drop contract ------------------------------------------------------
 
 
-def _sigma_root_fixture():
-    """A fit whose sigma polynomial is negative below 5 ms, as as01's is.
+def _tiny_sigma_fixture():
+    """A fit whose sigma is positive but small at the short-RTT end.
 
-    `p_sigma = [0, 10, -50]` is `10*d - 50`, so sigma <= 0 for d <= 5.
+    The old fixture made sigma *negative* below 5 ms, which is how as01's
+    unconstrained deg-2 polynomial actually behaved. That is unreachable now --
+    sigma is fitted as `log sigma`, so `exp` keeps it positive. The drop
+    machinery these tests guard is still live through `sigma_ref_km`, so the
+    fixture is restated in log space with sigma growing in d:
+
+        log sigma(d) = 0.25*d + 1.6
+        -> sigma(1, 2, 4) = 6.4, 8.2, 13.5   (below a 20 km reference)
+        -> sigma(6, 10, 20) = 22.2, 60.3, 734
     """
     rtt = np.array([1.0, 2.0, 4.0, 6.0, 10.0, 20.0])
     dist = np.array([50.0, 100.0, 300.0, 600.0, 1000.0, 2000.0])
     p_mu = np.array([0.0, 0.0, 100.0, 0.0])  # mu = 100*d
-    p_sigma = np.array([0.0, 10.0, -50.0])  # sigma = 10*d - 50
-    return rtt, dist, p_mu, p_sigma
+    p_log_sigma = np.array([0.25, 1.6])
+    return rtt, dist, p_mu, p_log_sigma
 
 
 def test_standardize_returns_a_full_length_array_and_names_every_drop():
     """The regression guard for `spotter_normality_check.standardize`, which
     returns a SHORTER array than its input with no count -- which is how a
     3.9% drop of as01's shortest-distance rows stayed invisible for months."""
-    rtt, dist, p_mu, p_sigma = _sigma_root_fixture()
+    rtt, dist, p_mu, p_log_sigma = _tiny_sigma_fixture()
 
-    s = F.standardize(rtt, dist, p_mu, p_sigma)
+    s = F.standardize(rtt, dist, p_mu, p_log_sigma, sigma_ref_km=20.0)
 
     assert len(s.z) == len(rtt)
     assert len(s.valid) == len(rtt)
     assert len(s.reason) == len(rtt)
-    # rtt 1, 2, 4 have sigma = -40, -30, -10; rtt 5 is the root.
     assert list(s.valid) == [False, False, False, True, True, True]
     assert np.isnan(s.z[~s.valid]).all()
-    assert set(s.reason[~s.valid]) == {F.REASON_SIGMA_NONPOS}
-    assert s.diagnostics["n_sigma_nonpos"] == 3
+    assert set(s.reason[~s.valid]) == {F.REASON_SIGMA_BELOW_REF}
+    assert s.diagnostics["n_sigma_below_ref"] == 3
     assert s.diagnostics["n_valid"] == 3
     assert s.diagnostics["share_dropped"] == pytest.approx(0.5)
 
@@ -113,45 +118,39 @@ def test_the_drop_is_reported_with_its_bias_not_just_its_size():
     """The dropped rows are the short-RTT, short-distance ones -- the
     near-target pairs a geolocation system is judged on -- so a bare count
     understates what removing them does to every downstream number."""
-    rtt, dist, p_mu, p_sigma = _sigma_root_fixture()
+    rtt, dist, p_mu, p_log_sigma = _tiny_sigma_fixture()
 
-    s = F.standardize(rtt, dist, p_mu, p_sigma)
+    s = F.standardize(rtt, dist, p_mu, p_log_sigma, sigma_ref_km=20.0)
 
     assert s.diagnostics["dropped"]["distance_km_p50"] < s.diagnostics["kept"]["distance_km_p50"]
     assert s.diagnostics["dropped"]["rtt_ms_max"] == pytest.approx(4.0)
 
 
-def test_a_sigma_below_the_reference_is_counted_apart_from_a_negative_one():
-    """Two different objections. A negative sigma is a broken fit; a positive
-    but tiny one is a fit whose z explodes. Collapsing them would hide which
-    of the two a given dataset suffers from."""
-    rtt, dist, p_mu, p_sigma = _sigma_root_fixture()
+def test_a_nonpositive_sigma_is_now_only_reachable_by_underflow():
+    """Two different objections, kept apart. A non-positive sigma used to mean
+    a broken fit; under `log sigma` it can only arise when `exp` underflows to
+    exactly zero, which needs log sigma around -745. A positive-but-tiny sigma
+    is a different complaint and keeps its own reason code.
 
-    s = F.standardize(rtt, dist, p_mu, p_sigma, sigma_ref_km=20.0)
+    This pins that the NONPOS branch still works -- it is unreachable from a
+    real fit, not dead -- and that the two reasons do not collapse into one.
+    """
+    rtt = np.array([1.0, 2.0, 10.0, 20.0])
+    dist = np.array([50.0, 100.0, 1000.0, 2000.0])
+    p_mu = np.array([0.0, 0.0, 100.0, 0.0])
+    # Deliberately extreme, because underflow is the only remaining route:
+    # log sigma = -6d^2 + 180d - 1196 is about -1022 at d=1 and -860 at d=2
+    # (both below the ~-745 underflow threshold, so exp is exactly 0.0), and
+    # exactly 4 at d=10 and d=20, i.e. sigma = 54.6 km.
+    p_log_sigma = np.array([-6.0, 180.0, -1196.0])
+    with np.errstate(over="ignore"):
+        assert np.exp(np.polyval(p_log_sigma, 1.0)) == 0.0
+        assert np.exp(np.polyval(p_log_sigma, 2.0)) == 0.0
 
-    # sigma(6) = 10, sigma(10) = 50, sigma(20) = 150 -> only rtt=6 is guarded.
-    assert s.diagnostics["n_sigma_nonpos"] == 3
-    assert s.diagnostics["n_sigma_below_ref"] == 1
-    assert s.diagnostics["n_valid"] == 2
-    reasons = set(s.reason[~s.valid])
-    assert reasons == {F.REASON_SIGMA_NONPOS, F.REASON_SIGMA_BELOW_REF}
+    s = F.standardize(rtt, dist, p_mu, p_log_sigma, sigma_ref_km=20.0)
 
-
-def test_the_sigma_domain_report_names_the_interval_not_just_a_flag():
-    """"sigma is negative between 0.58 and 5.51 ms" is checkable against panel
-    (a); "sigma_ok: false" is not."""
-    rtt = np.concatenate([np.linspace(1.0, 40.0, 400)])
-    dist = 100.0 * rtt + np.random.default_rng(0).normal(0, 50, rtt.size)
-    fit = F.fit_pooled(rtt, np.abs(dist), n_bins=8, min_per_bin=5, deg_mu=3,
-                       deg_sigma=2, bin_size_ms=5.0, cutoff_min_points=5)
-    fit.model.p_sigma = np.array([0.0, 10.0, -50.0])  # sigma = 10*d - 50
-
-    dom = F.sigma_domain(fit)
-
-    assert dom["roots_in_range_ms"] == [5.0]
-    lo, hi = dom["negative_intervals_ms"][0]
-    assert lo == pytest.approx(fit.model.rtt_min, abs=0.01)
-    assert hi == pytest.approx(5.0, abs=0.02)
+    assert s.diagnostics["n_sigma_nonpos"] == 2
+    assert set(s.reason[:2]) == {F.REASON_SIGMA_NONPOS}
 
 
 # ---- estimators -------------------------------------------------------------
@@ -241,8 +240,8 @@ def test_grouping_is_on_the_landmark_endpoint_and_coords_collapse_instances():
 def test_the_landmark_grouping_sees_a_split_the_target_grouping_cannot():
     df = _two_population_frame()
     p_mu = np.array([0.0, 1000.0])  # mu = 1000 km, flat
-    p_sigma = np.array([0.0, 300.0])  # sigma = 300 km, flat
-    std = F.standardize(df["rtt_ms"].to_numpy(), df["distance_km"].to_numpy(), p_mu, p_sigma)
+    p_log_sigma = np.array([0.0, np.log(300.0)])  # sigma = 300 km, flat
+    std = F.standardize(df["rtt_ms"].to_numpy(), df["distance_km"].to_numpy(), p_mu, p_log_sigma)
     qs = F.quantile_grid(21)
 
     by_vp, _, _ = F.landmark_stats(
@@ -285,8 +284,9 @@ def test_every_group_is_measured_and_only_the_named_ones_are_drawn():
 def test_a_group_below_the_minimum_is_measured_but_not_used():
     df = _two_population_frame()
     df = pd.concat([df, df.iloc[:3].assign(vp_id="vp-tiny")], ignore_index=True)
-    p_mu, p_sigma = np.array([0.0, 1000.0]), np.array([0.0, 300.0])
-    std = F.standardize(df["rtt_ms"].to_numpy(), df["distance_km"].to_numpy(), p_mu, p_sigma)
+    p_mu = np.array([0.0, 1000.0])
+    p_log_sigma = np.array([0.0, np.log(300.0)])
+    std = F.standardize(df["rtt_ms"].to_numpy(), df["distance_km"].to_numpy(), p_mu, p_log_sigma)
 
     stats, _, curves = F.landmark_stats(
         df, std, F.group_keys(df, "vp_id"), qs=F.quantile_grid(21), min_per_group=10
@@ -439,36 +439,40 @@ def test_panel_c_puts_the_pooled_reference_on_the_x_axis(tmp_path, monkeypatch):
     assert len(drawn["collections"]) >= 2
 
 
-def test_the_bin_dots_belong_to_the_drawn_curve():
-    """Panel (a) draws the per-bin moments beside the polynomial through them.
-    If the two came from different row sets the picture would be an argument
-    about nothing -- `fit_pooled` re-runs the binning on the model's own
-    masked rows and asserts the polynomials match."""
+def test_the_fit_carries_no_bin_summary():
+    """Panel (a) used to draw per-bin moments beside the polynomial through
+    them. There is no binning any more -- mu is fitted to the raw pairs -- so
+    `Fit` must not carry, and the figure must not promise, bin moments."""
     rng = np.random.default_rng(29)
     rtt = rng.uniform(1, 80, 5000)
     dist = 45 * rtt + rng.normal(0, 300, 5000)
 
     fit = F.fit_pooled(
-        rtt, np.abs(dist), n_bins=40, min_per_bin=5, deg_mu=3, deg_sigma=2,
+        rtt, np.abs(dist), deg_mu=3, deg_sigma=2,
         bin_size_ms=5.0, cutoff_min_points=5,
     )
 
-    fit.assert_consistent()  # explicit, though fit_pooled already ran it
-    assert len(fit.centers) == len(fit.mus) == len(fit.sigmas) == len(fit.counts)
-    assert fit.counts.min() >= 5
+    for gone in ("centers", "mus", "sigmas", "counts"):
+        assert not hasattr(fit, gone), f"Fit still carries {gone}"
+    # fit_rtt is the masked row set, so it may be shorter than the input
+    # (the noise pushes some pairs below the 2/3 c line); it must be the same
+    # length as fit_dist and non-empty.
+    assert 0 < fit.fit_rtt.size <= rtt.size
+    assert fit.fit_rtt.size == fit.fit_dist.size
+    assert not hasattr(F, "BIN_CSV_SUFFIX")
 
 
-def test_an_unphysical_row_is_counted_and_excluded_from_the_bins():
+def test_an_unphysical_row_is_counted_and_excluded_from_the_fit():
     """A sub-2/3-c pair is a data error, and `SpotterRTTModel.fit` drops it
-    silently. The count has to survive, and the bin dots have to come from the
-    same rows the polynomials did."""
+    silently. The count has to survive, and `fit_rtt` has to be the rows the
+    polynomials actually saw."""
     rng = np.random.default_rng(31)
     rtt = rng.uniform(10, 80, 2000)
     dist = 45 * rtt
     rtt[0], dist[0] = 1.0, 4000.0  # 4,000 km in 1 ms
 
     fit = F.fit_pooled(
-        rtt, dist, n_bins=20, min_per_bin=5, deg_mu=3, deg_sigma=2,
+        rtt, dist, deg_mu=3, deg_sigma=2,
         bin_size_ms=5.0, cutoff_min_points=5,
     )
 
@@ -552,12 +556,12 @@ def test_rtt_max_filters_the_population_unlike_plot_distance_rtts_view_cuts(tmp_
 
     unfiltered = F.fit_pooled(
         loaded["rtt_ms"].to_numpy(), loaded["distance_km"].to_numpy(),
-        n_bins=20, min_per_bin=5, deg_mu=3, deg_sigma=2,
+        deg_mu=3, deg_sigma=2,
         bin_size_ms=5.0, cutoff_min_points=5,
     )
     filtered = F.fit_pooled(
         capped["rtt_ms"].to_numpy(), capped["distance_km"].to_numpy(),
-        n_bins=20, min_per_bin=5, deg_mu=3, deg_sigma=2,
+        deg_mu=3, deg_sigma=2,
         bin_size_ms=5.0, cutoff_min_points=5,
     )
 

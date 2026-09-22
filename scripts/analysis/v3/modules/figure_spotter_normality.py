@@ -38,26 +38,29 @@ the paper found four misalignments, all of which this command fixes:
   input* with no count. On these datasets that hides 0.8-3.9% of rows -- see
   below, it is the whole finding.
 
-## The sigma(d) <= 0 pathology
+## The sigma(d) <= 0 pathology -- FIXED, and this is what fixed it
 
-`mu(d)` and `sigma(d)` are unconstrained polynomials fitted to per-bin moments
-with **equal weight per bin** regardless of bin count. On the operator meshes
-the bins run 31 to 2,769 points, and the sparse leftmost bin pulls the deg-2
-`sigma` polynomial negative *inside* the calibration range: roots at 5.51 ms
-(as01), 2.22 (as02), 2.40 (as03). as01's `mu(d)` is negative there too
-(`mu(1 ms) = -153 km`, a negative mean distance).
+This command was written to chart a real defect. `mu(d)` and `sigma(d)` were
+unconstrained polynomials fitted to per-bin moments with **equal weight per
+bin** regardless of bin count. On the operator meshes the bins run 31 to 2,769
+points, and the sparse leftmost bin pulled the deg-2 `sigma` polynomial
+negative *inside* the calibration range: roots at 5.51 ms (as01), 2.22 (as02),
+2.40 (as03), costing 2,088 / 444 / 565 rows their `z`. as01's `mu(d)` was
+negative there too (`mu(1 ms) = -153 km`, a negative mean distance).
 
-Rows in that interval have no usable `z`, and rows just outside it divide by a
-near-zero sigma, so the untruncated `sigma_z` comes out at 6-20. That is a
-property of the fit, not of the data: under a `sigma > 50 km` reference guard
-all three estimators collapse to ~1.0, i.e. the pooled normal describes these
-datasets about as well as it described PlanetLab.
+`fit_mu_sigma` now fits `mu` as a monotone non-negative cubic on the raw pairs
+and `sigma` in **log** space from its residuals, so `sigma = exp(...) > 0`
+unconditionally and `mu(0) = 0` rather than -228 km. On as01 the primary pass
+now drops **0 rows** where it used to drop 3.9%.
 
-So this command reports the interval, the affected counts, and how the dropped
-rows differ from the kept ones, rather than truncating them away. The same
-polynomial is what `normal_dist` deploys, where a negative sigma makes
-`predict_distance_bounds` return a degenerate band -- recorded here as
-`sigma_domain.n_degenerate_predictions`, fixed elsewhere.
+What that removes from this module: the `sigma_domain` diagnostic, the
+panel-(a) shading of the negative interval, and the per-bin dots (there is no
+binning left to attribute anything to). `REASON_SIGMA_NONPOS` survives as a
+reason code but is only reachable if `exp` underflows.
+
+What it does NOT remove: the `--sigma-ref-km` guard. A positive-but-tiny sigma
+still inflates `z`, and the guarded pass is still what makes the per-group
+moments interpretable. That objection was always separate from the sign one.
 
 ## Landmark-independence is reported as a number
 
@@ -100,7 +103,7 @@ from scripts.analysis.v3.modules.diagram.common.palette import (
     _C_MUTED,
     _VARIANT_HUES,
 )
-from scripts.libs.spotter.spotter_model import SpotterRTTModel, fit_mu_sigma
+from scripts.libs.spotter.spotter_model import SpotterRTTModel, fit_mu_sigma, sigma_km
 
 #: Round-trip ms per km at 2/3 c, the constant every CBG model here is anchored
 #: on. Drawn in panel (a) as the physical floor.
@@ -140,7 +143,6 @@ PNG_B_SUFFIX = "_spotter_fig3b_standardized.png"
 PNG_C_SUFFIX = "_spotter_fig3c_qq.png"
 MANIFEST_SUFFIX = "_spotter_normality.json"
 LANDMARK_CSV_SUFFIX = "_landmark_independence.csv"
-BIN_CSV_SUFFIX = "_bin_fit.csv"
 SUMMARY_JSON = "spotter_normality_summary.json"
 
 #: The four groupings, and which endpoint each one tests.
@@ -274,53 +276,38 @@ def discreteness(df: pd.DataFrame) -> dict:
 
 @dataclass
 class Fit:
-    """A fitted `SpotterRTTModel` plus the bin moments it threw away.
+    """A fitted `SpotterRTTModel` plus the rows it was fitted on.
 
-    `SpotterRTTModel.fit` keeps only the polynomials, so `fit_mu_sigma` is
-    called a second time with identical kwargs to recover the per-bin dots
-    panel (a) draws. `assert_consistent` is what makes those dots provably
-    belong to the drawn curve rather than to a separate fit -- which is only
-    true if the second call is given the same rows, hence `fit_rtt`/`fit_dist`
-    carrying the *masked* arrays rather than the caller's originals.
+    No bin moments. `fit_mu_sigma` fits mu to the raw pairs and sigma to its
+    residuals, so there are no per-bin means for panel (a) to draw and no
+    second call to recover them. The bin dots, the `*_bin_fit.csv` artifact and
+    the `n_bins_used` / `bin_counts` manifest keys went with the binning.
+
+    `fit_rtt` / `fit_dist` are the *masked* arrays the polynomials saw, kept so
+    the diagnostics below score the model on its own training rows.
     """
 
     model: SpotterRTTModel
-    centers: np.ndarray
-    mus: np.ndarray
-    sigmas: np.ndarray
-    counts: np.ndarray
     kwargs: dict
     n_unphysical: int
     fit_rtt: np.ndarray = field(repr=False, default_factory=lambda: np.empty(0))
     fit_dist: np.ndarray = field(repr=False, default_factory=lambda: np.empty(0))
 
-    def assert_consistent(self) -> None:
-        p_mu, p_sigma, *_ = fit_mu_sigma(
-            self.fit_rtt, self.fit_dist,
-            n_bins=self.kwargs["n_bins"],
-            min_per_bin=self.kwargs["min_per_bin"],
-            deg_mu=self.kwargs["deg_mu"],
-            deg_sigma=self.kwargs["deg_sigma"],
-        )
-        assert np.allclose(p_mu, self.model.p_mu), "bin dots belong to a different mu fit"
-        assert np.allclose(p_sigma, self.model.p_sigma), "bin dots belong to a different sigma fit"
-
 
 def fit_pooled(rtt: np.ndarray, dist: np.ndarray, **kwargs) -> Fit:
-    """Fit the deployed model, and recover its bin moments.
+    """Fit the deployed model.
 
     Calls `scripts.libs.spotter.spotter_model.SpotterRTTModel.fit` rather than
-    re-implementing the binning, so what this command diagnoses is the model
+    re-implementing it, so what this command diagnoses is the model
     `normal_dist` actually deploys. `target_coverage` is pinned to None -- not
     inherited as a default -- because that is what holds `k = 1.0`, and `k = 1`
     is what makes panel (a)'s band the paper's `mu(d) +/- sigma(d)` rather
     than a coverage-calibrated annulus. The mesh configs leave it unset too.
 
     The physical-validity mask is recomputed here rather than left to `fit()`,
-    for two reasons: `fit()` applies it internally and reports nothing, and a
-    non-zero count is a data error (a bad coordinate or a sub-2/3-c RTT) that
-    should not be invisible -- and the bin dots have to come from the same rows
-    the polynomials did, or `assert_consistent` is comparing two fits.
+    because `fit()` applies it internally and reports nothing, and a non-zero
+    count is a data error (a bad coordinate or a sub-2/3-c RTT) that should not
+    be invisible.
     """
     rtt = np.asarray(rtt, dtype=float)
     dist = np.asarray(dist, dtype=float)
@@ -331,94 +318,16 @@ def fit_pooled(rtt: np.ndarray, dist: np.ndarray, **kwargs) -> Fit:
     if not model.fitted:
         raise typer.BadParameter(f"the Spotter fit failed: {model.fit_message}")
 
-    # Exactly SpotterRTTModel.fit's mask, so the bins below are its bins.
     keep = (
         np.isfinite(rtt) & np.isfinite(dist) & (rtt > 0) & (dist > 0) & ~unphysical
     )
-    f_rtt, f_dist = rtt[keep], dist[keep]
-
-    _, _, centers, mus, sigmas = fit_mu_sigma(
-        f_rtt, f_dist,
-        n_bins=kwargs["n_bins"], min_per_bin=kwargs["min_per_bin"],
-        deg_mu=kwargs["deg_mu"], deg_sigma=kwargs["deg_sigma"],
+    return Fit(
+        model=model,
+        kwargs=dict(kwargs),
+        n_unphysical=int(unphysical.sum()),
+        fit_rtt=rtt[keep],
+        fit_dist=dist[keep],
     )
-    # Bin counts are not returned by `fit_mu_sigma`, and they are what shows
-    # that the leftmost bin -- the one that drags sigma negative -- carries two
-    # orders of magnitude fewer points than the modal bin while weighing the
-    # same in the polyfit.
-    edges = np.linspace(f_rtt.min(), f_rtt.max(), kwargs["n_bins"] + 1)
-    counts = np.array(
-        [int(((f_rtt >= lo) & (f_rtt < hi)).sum()) for lo, hi in zip(edges[:-1], edges[1:])]
-    )
-    counts = counts[counts >= kwargs["min_per_bin"]]
-
-    fit = Fit(
-        model=model, centers=centers, mus=mus, sigmas=sigmas, counts=counts,
-        kwargs=dict(kwargs), n_unphysical=int(unphysical.sum()),
-        fit_rtt=f_rtt, fit_dist=f_dist,
-    )
-    fit.assert_consistent()
-    return fit
-
-
-def sigma_domain(fit: Fit, *, sigma_ref_km: float = 50.0) -> dict:
-    """Where `sigma(d)` (and `mu(d)`) go non-positive inside the fit range.
-
-    The headline diagnostic. `p_sigma` is an unconstrained degree-2 polynomial
-    fitted to per-bin standard deviations with equal weight per bin, so nothing
-    keeps it positive; on all three operator meshes it has a real root a few ms
-    above `rtt_min`, and below that root the model's own band inverts.
-
-    Returned as explicit `[lo, hi]` ms intervals rather than a boolean, because
-    "the fitted standard deviation is negative between 0.58 and 5.51 ms" is a
-    statement a reader can check against panel (a), and "sigma_ok: false" is
-    not.
-    """
-    model = fit.model
-    lo, hi = float(model.rtt_min), float(model.rtt_max)
-    grid = np.linspace(lo, hi, 4001)
-    sig = np.polyval(model.p_sigma, grid)
-    mu = np.polyval(model.p_mu, grid)
-
-    roots = [
-        float(r.real)
-        for r in np.roots(model.p_sigma)
-        if abs(r.imag) < 1e-9 and lo <= r.real <= hi
-    ]
-    # Contiguous runs where the polynomial is <= 0, as ms intervals.
-    neg: list[list[float]] = []
-    inside = False
-    for x, s in zip(grid, sig):
-        if s <= 0 and not inside:
-            neg.append([round(float(x), 4), round(float(x), 4)])
-            inside = True
-        elif s <= 0:
-            neg[-1][1] = round(float(x), 4)
-        else:
-            inside = False
-
-    i_min = int(np.argmin(sig))
-    return {
-        "roots_in_range_ms": [round(r, 4) for r in sorted(roots)],
-        "negative_intervals_ms": neg,
-        "sigma_min_km": round(float(sig[i_min]), 3),
-        "rtt_at_sigma_min_ms": round(float(grid[i_min]), 4),
-        "sigma_at_rtt_min_km": round(float(np.polyval(model.p_sigma, lo)), 3),
-        "mu_at_rtt_min_km": round(float(np.polyval(model.p_mu, lo)), 3),
-        "mu_negative_below_ms": (
-            round(float(grid[mu > 0][0]), 4) if (mu <= 0).any() and (mu > 0).any() else None
-        ),
-        "sigma_ref_km": sigma_ref_km,
-        # The deployed consequence: `predict_distance_bounds` builds
-        # `outer = max(0, mu + k*sigma)` and `inner = max(0, mu - k*sigma)`, so
-        # wherever `mu + sigma <= 0` the band collapses and `normal_dist` maps
-        # it to Error.DEGENERATE_REGION -- the VP stops participating in the MTL.
-        "degenerate_prediction_interval_ms": (
-            [round(lo, 4), round(float(grid[(mu + sig) > 0][0]), 4)]
-            if ((mu + sig) <= 0).any() and ((mu + sig) > 0).any()
-            else None
-        ),
-    }
 
 
 # ---- standardization --------------------------------------------------------
@@ -453,7 +362,7 @@ def standardize(
     rtt: np.ndarray,
     dist: np.ndarray,
     p_mu: np.ndarray,
-    p_sigma: np.ndarray,
+    p_log_sigma: np.ndarray,
     *,
     sigma_ref_km: float = 0.0,
 ) -> Standardized:
@@ -467,17 +376,23 @@ def standardize(
 
     `sigma_ref_km` excludes rows whose fitted sigma is positive but tiny, under
     their own reason code. It is what makes the per-landmark statistics
-    interpretable: near the sigma root a 1,700 km residual divided by a 3 km
-    sigma produces |z| in the hundreds, and a handful of those rows dominate
-    every moment computed downstream. It does **not** refit anything.
+    interpretable: a 1,700 km residual divided by a 3 km sigma produces |z| in
+    the hundreds, and a handful of those rows dominate every moment computed
+    downstream. It does **not** refit anything.
+
+    `p_log_sigma` is log-space, so sigma is recovered by exponentiating.
+    REASON_SIGMA_NONPOS is retained as a reason code but is now unreachable
+    from the fit -- `exp` has no zero. It still fires for a hand-built model,
+    which is the only way to get a non-positive sigma now.
     """
     rtt = np.asarray(rtt, dtype=float)
     dist = np.asarray(dist, dtype=float)
     mu = np.polyval(p_mu, rtt)
-    sig = np.polyval(p_sigma, rtt)
+    with np.errstate(over="ignore"):
+        sig = sigma_km(p_log_sigma, rtt)
 
     reason = np.full(len(rtt), REASON_OK, dtype=object)
-    reason[sig <= 0] = REASON_SIGMA_NONPOS
+    reason[~(sig > 0)] = REASON_SIGMA_NONPOS
     if sigma_ref_km > 0:
         reason[(sig > 0) & (sig <= sigma_ref_km)] = REASON_SIGMA_BELOW_REF
 
@@ -941,7 +856,6 @@ def pick_groups(stats: pd.DataFrame, *, n: int, how: str, seed: int) -> list[str
 def build_panel_a(
     df: pd.DataFrame,
     fit: Fit,
-    sig_dom: dict,
     *,
     view_rtt_max: float | None,
     title: str | None,
@@ -953,10 +867,9 @@ def build_panel_a(
     Axis labels follow the paper's ("round trip time [ms]", "great circle
     distance [1000 km]") so the two figures can be read against each other.
 
-    The negative-sigma interval is shaded rather than left to the JSON: a band
-    that inverts is the kind of thing a reader should see happen, and the dashed
-    `mu - sigma` curve crossing above `mu + sigma` is only legible if the
-    interval is marked.
+    No negative-sigma shading any more: `sigma` is fitted in log space, so the
+    band cannot invert. The `mu +/- sigma` dashes are drawn unconditionally and
+    `mu - sigma` now stays below `mu + sigma` everywhere by construction.
     """
     model = fit.model
     hi = float(view_rtt_max) if view_rtt_max else float(model.rtt_max)
@@ -970,32 +883,25 @@ def build_panel_a(
 
     grid = np.linspace(model.rtt_min, hi, 400)
     mu = np.polyval(model.p_mu, grid)
-    sig = np.polyval(model.p_sigma, grid)
+    sig = sigma_km(model.p_log_sigma, grid)
     ax.plot(grid, mu / 1000.0, "-", lw=1.8, color=_C_FIT, zorder=5, label=r"$\mu(d)$")
     ax.plot(grid, (mu + sig) / 1000.0, "--", lw=1.0, color=_C_FIT, zorder=5,
             label=r"$\mu(d) \pm \sigma(d)$")
     ax.plot(grid, (mu - sig) / 1000.0, "--", lw=1.0, color=_C_FIT, zorder=5)
 
-    # The bin moments the polynomials were fitted to. Not in the paper, but
-    # they are what makes the left-edge misbehaviour attributable: the dots are
-    # well-behaved, the curve through them is not.
-    ax.scatter(
-        fit.centers, fit.mus / 1000.0,
-        s=16, facecolors="none", edgecolors=_C_INK_2, lw=0.8, zorder=6,
-        label=f"per-bin mean  ({len(fit.centers)} bins, {fit.counts.min():,}-{fit.counts.max():,} pts)",
-    )
+    # No per-bin dots. They existed to make the left-edge misbehaviour
+    # attributable -- well-behaved dots, misbehaving curve through them -- and
+    # both the misbehaviour and the binning are gone: mu is fitted to the raw
+    # pairs under a monotonicity constraint. The scatter cloud already shows
+    # the population the curve is fitted to.
 
     span = np.array([0.0, hi])
     ax.plot(span, span / THEORETICAL_SLOPE / 1000.0, ls=":", lw=1.1, color=_C_INK_2, zorder=4,
             label="2/3 c round-trip bound")
 
-    # One legend entry even if the polynomial dips twice: the label names the
-    # first (and in practice only) interval, the shading marks all of them.
-    for i, (lo_ms, hi_ms) in enumerate(sig_dom["negative_intervals_ms"]):
-        ax.axvspan(
-            lo_ms, hi_ms, color=_C_FIT, alpha=0.12, zorder=1,
-            label=f"$\\sigma(d) \\leq 0$  (rtt $\\leq$ {hi_ms:.2f} ms)" if i == 0 else None,
-        )
+    # No sigma<=0 shading: sigma is fitted in log space, so it is positive by
+    # construction and there is nothing left to mark. The shading, and the
+    # sigma_domain diagnostic that fed it, were removed with that fix.
 
     ax.set_xlim(0, hi)
     ax.set_ylim(0, max(5.0, float(df["distance_km"].max()) / 1000.0 * 1.05))
@@ -1138,7 +1044,7 @@ def _save(fig, out_png: Path) -> None:
 # ---- verdict ----------------------------------------------------------------
 
 
-def verdict(name: str, spread: dict, perm: dict, est: dict, sig_dom: dict) -> str:
+def verdict(name: str, spread: dict, perm: dict, est: dict) -> str:
     """One line, templated so it cannot be rounded into a stronger claim.
 
     Both halves of the paper's proposition get their own clause, because they
@@ -1147,10 +1053,6 @@ def verdict(name: str, spread: dict, perm: dict, est: dict, sig_dom: dict) -> st
     """
     p = perm["p_value"]
     held = p > 0.05
-    neg = sig_dom["negative_intervals_ms"]
-    sigma_clause = (
-        f"sigma(d) <= 0 below {neg[0][1]:.2f} ms" if neg else "sigma(d) > 0 throughout"
-    )
     return (
         f"{name}: landmark-independence {'HOLDS' if held else 'REJECTED'} "
         f"(sd of per-{spread.get('group_by', 'group')} mean z = {spread['sd_of_group_mean_z']:.3f} "
@@ -1161,7 +1063,7 @@ def verdict(name: str, spread: dict, perm: dict, est: dict, sig_dom: dict) -> st
         f"{spread['eta_squared']:.1%} of Var(z). "
         f"Pooled sigma_z = {est['sigma_z_density_ls']:.3f} (paper's estimator) / "
         f"{est['sigma_z_moment_trunc4']:.3f} (truncated moment) vs the paper's "
-        f"{PAPER['sigma_z']}. {sigma_clause}."
+        f"{PAPER['sigma_z']}."
     )
 
 
@@ -1217,14 +1119,13 @@ def analyse_one(
 
     fit = fit_pooled(rtt, dist, **fit_kwargs)
     model = fit.model
-    sig_dom = sigma_domain(fit, sigma_ref_km=sigma_ref_km)
 
     # Primary: the paper's literal recipe, pathology and all. The guarded pass
     # is computed beside it because the per-landmark statistics are
     # uninterpretable without it -- a handful of near-zero-sigma rows otherwise
     # dominate every group moment.
-    std = standardize(rtt, dist, model.p_mu, model.p_sigma, sigma_ref_km=0.0)
-    std_guard = standardize(rtt, dist, model.p_mu, model.p_sigma, sigma_ref_km=sigma_ref_km)
+    std = standardize(rtt, dist, model.p_mu, model.p_log_sigma, sigma_ref_km=0.0)
+    std_guard = standardize(rtt, dist, model.p_mu, model.p_log_sigma, sigma_ref_km=sigma_ref_km)
 
     est = estimators(std.z[std.valid], hist_bins=hist_bins, z_range=z_range)
     est_guard = estimators(std_guard.z[std_guard.valid], hist_bins=hist_bins, z_range=z_range)
@@ -1272,13 +1173,13 @@ def analyse_one(
         f"rtt-filtered={n_rtt_filtered:,}  unphysical={fit.n_unphysical:,}"
     )
     build_panel_a(
-        df, fit, sig_dom,
+        df, fit,
         view_rtt_max=view_rtt_max or (rtt_max if rtt_max > 0 else None),
         title=title, out_png=out_dir / f"{stem}{PNG_A_SUFFIX}",
         note=(
             f"{note_common}\n"
             f"k=1.0 (paper's band)  cutoff_rtt={model.cutoff_rtt:.2f} ms  "
-            f"bins used {len(fit.centers)}/{fit_kwargs['n_bins']}"
+            f"monotone cubic on {len(fit.fit_rtt):,} raw pairs"
         ),
     )
     build_panel_b(
@@ -1290,8 +1191,8 @@ def analyse_one(
             f"{est['sigma_z_moment_trunc4']:.3f} |z|<{z_range:g} / "
             f"{est['sigma_z_density_ls']:.3f} density-LS (the paper's, = {PAPER['sigma_z']})\n"
             f"the paper's estimator buys a closer sigma and a worse mu\n"
-            f"{std.diagnostics['n_sigma_nonpos']:,} rows "
-            f"({std.diagnostics['share_dropped']:.1%}) have sigma(d) <= 0 and no z\n"
+            f"{std.diagnostics['n_valid']:,}/{std.diagnostics['n_rows']:,} rows "
+            f"usable ({std.diagnostics['share_dropped']:.1%} dropped)\n"
             f"primary pass: NO sigma guard (the paper's literal recipe)"
         ),
     )
@@ -1309,17 +1210,6 @@ def analyse_one(
     )
 
     stats.to_csv(out_dir / f"{stem}{LANDMARK_CSV_SUFFIX}", index=False)
-    pd.DataFrame(
-        {
-            "rtt_center_ms": fit.centers,
-            "count": fit.counts,
-            "mean_km": fit.mus,
-            "std_km": fit.sigmas,
-            "mu_fit_km": np.polyval(model.p_mu, fit.centers),
-            "sigma_fit_km": np.polyval(model.p_sigma, fit.centers),
-        }
-    ).to_csv(out_dir / f"{stem}{BIN_CSV_SUFFIX}", index=False)
-
     manifest = {
         "command": "plot-spotter-normality",
         "paper": PAPER,
@@ -1358,19 +1248,12 @@ def analyse_one(
             "kwargs": dict(fit_kwargs),
             "target_coverage": None,
             "p_mu": [float(c) for c in model.p_mu],
-            "p_sigma": [float(c) for c in model.p_sigma],
+            "p_log_sigma": [float(c) for c in model.p_log_sigma],
             "rtt_min": round(float(model.rtt_min), 4),
             "rtt_max": round(float(model.rtt_max), 4),
             "cutoff_rtt": round(float(model.cutoff_rtt), 4),
             "k": float(model.k),
             "metadata": model.metadata,
-            "n_bins_requested": fit_kwargs["n_bins"],
-            "n_bins_used": int(len(fit.centers)),
-            "bin_counts": {
-                "min": int(fit.counts.min()),
-                "p50": int(np.median(fit.counts)),
-                "max": int(fit.counts.max()),
-            },
             "n_rows_above_cutoff": int((rtt > model.cutoff_rtt).sum()),
             "fitted": bool(model.fitted),
             "fit_message": model.fit_message,
@@ -1379,7 +1262,7 @@ def analyse_one(
         # merged in: the primary pass applies no guard, so its
         # `n_sigma_below_ref` is 0 by construction, and a reader scanning a
         # flattened block would read that as "no row has a small sigma".
-        "sigma_domain": {**sig_dom, "primary_pass": std.diagnostics},
+        "standardize": std.diagnostics,
         "standardized": est,
         "standardized_guarded": {
             "sigma_ref_km": sigma_ref_km,
@@ -1397,7 +1280,7 @@ def analyse_one(
             "goodness_of_fit": gof,
             "csv": f"{stem}{LANDMARK_CSV_SUFFIX}",
         },
-        "verdict": verdict(csv_path.stem, spread_guard, perm, est_guard, sig_dom),
+        "verdict": verdict(csv_path.stem, spread_guard, perm, est_guard),
         "policy": (
             "--rtt-max FILTERS the fit population, because the paper's calibration set "
             "is its RTT range and a fit over a wider range is a different model. "
@@ -1416,7 +1299,8 @@ def analyse_one(
             "reference is required rather than optional.",
             "At this n every classical normality test rejects; read the KS D/critical "
             "ratio as the effect size and treat the p-value as a footnote.",
-            "The primary sigma_z is dominated by rows near the sigma(d) root; compare "
+            "A positive-but-tiny sigma still inflates z even though sigma can no "
+            "longer go negative; compare "
             "standardized_guarded before drawing any conclusion from it.",
             "sd_of_group_mean_z and eta_squared both grow with the number of groups, so "
             "they cannot rank one --group-by against another. Use "
@@ -1457,8 +1341,6 @@ def register(app: typer.Typer) -> None:
         # Defaults are the mesh configs' spotter_cbg ltd_kwargs, verbatim, so
         # this command diagnoses the model those runs actually fitted. A test
         # cross-checks them against the YAML.
-        n_bins: int = typer.Option(40, "--n-bins", help="Equal-width RTT bins for the moment fit."),
-        min_per_bin: int = typer.Option(5, "--min-per-bin", help="Bins with fewer points are dropped."),
         deg_mu: int = typer.Option(3, "--deg-mu", help="Polynomial degree for mu(d)."),
         deg_sigma: int = typer.Option(2, "--deg-sigma", help="Polynomial degree for sigma(d)."),
         bin_size_ms: float = typer.Option(
@@ -1510,7 +1392,7 @@ def register(app: typer.Typer) -> None:
         """Spotter Fig. 3 on a mesh CSV: normal fit + per-landmark Q-Q.
 
         Writes <stem>_spotter_fig3{a,b,c}*.png, <stem>_spotter_normality.json,
-        <stem>_landmark_independence.csv (every group) and <stem>_bin_fit.csv.
+        <stem>_landmark_independence.csv (every group).
 
         Panel (c) groups by the LANDMARK that took the measurement, which is
         what the paper's landmark-independence claim is about; the verdict is a
@@ -1542,8 +1424,6 @@ def register(app: typer.Typer) -> None:
             raise typer.BadParameter(f"--group-by must be one of {GROUP_BY_CHOICES}")
 
         fit_kwargs = {
-            "n_bins": n_bins,
-            "min_per_bin": min_per_bin,
             "deg_mu": deg_mu,
             "deg_sigma": deg_sigma,
             "bin_size_ms": bin_size_ms,
@@ -1581,8 +1461,7 @@ def register(app: typer.Typer) -> None:
                         "sigma_z_moment_trunc4": m["standardized"]["sigma_z_moment_trunc4"],
                         "sigma_z_density_ls": m["standardized"]["sigma_z_density_ls"],
                         "sigma_z_guarded_moment": m["standardized_guarded"]["sigma_z_moment"],
-                        "n_sigma_nonpos": m["sigma_domain"]["primary_pass"]["n_sigma_nonpos"],
-                        "negative_intervals_ms": m["sigma_domain"]["negative_intervals_ms"],
+                        "n_sigma_nonpos": m["standardize"]["n_sigma_nonpos"],
                         "sd_of_group_mean_z": m["landmark_independence"]["sd_of_group_mean_z"],
                         "sd_of_group_mean_z_guarded": (
                             m["landmark_independence"]["guarded"]["sd_of_group_mean_z"]

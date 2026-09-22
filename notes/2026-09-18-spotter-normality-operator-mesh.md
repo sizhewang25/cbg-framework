@@ -9,6 +9,22 @@
 — this note is the measurement; that one is the four-part case that a pooled
 normal is the wrong model family for this regime.
 
+> **STATUS (2026-09-22): the `sigma(d) ≤ 0` half of this note is FIXED.**
+> `fit_mu_sigma` now fits `mu` as a monotone non-negative cubic on the raw
+> pairs and `sigma` in **log** space from its residuals, so `sigma = exp(...)`
+> is positive unconditionally and `mu(0) = 0` instead of −228 km. Re-running
+> `plot-spotter-normality` on as01 today drops **0 rows** where this note
+> measured 2,088 (3.9%); `n_sigma_nonpos` is 0 on all three meshes. The
+> `sigma_domain` diagnostic, the panel-(a) negative-interval shading and the
+> `*_bin_fit.csv` artifact described below were removed with the fix, so those
+> sections are a record of what was, not a description of the current command.
+>
+> What is **not** fixed and still reads true: the landmark-independence
+> rejection, the `--sigma-ref-km` guard (a positive-but-tiny sigma still
+> inflates `z`), and the discreteness caveats. See
+> [2026-09-22-spotter-faithful-vs-harness-conclusion.md](2026-09-22-spotter-faithful-vs-harness-conclusion.md)
+> for the fix and its measurements.
+
 ## Summary
 
 Spotter makes two claims. On clean single-tier operator data they come apart:
