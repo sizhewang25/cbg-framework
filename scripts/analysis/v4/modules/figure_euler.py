@@ -172,6 +172,7 @@ def _manifest(
     any_correct = membership.any(axis=1)
     body = {
         "runs": sorted(run_ids),
+        "arm": cross.arm(run_ids),
         "grid": H.describe(nside),
         "top_n": int(top_n),
         "correctness": (

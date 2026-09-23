@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from scripts.analysis.v4.modules import cross
 from scripts.analysis.v4.modules import classify as C
 from scripts.analysis.v4.modules import figure_outcome_bars as F
 from scripts.analysis.v4.modules import healpix as H
@@ -458,17 +459,29 @@ class TestRealRuns:
         orders = {tuple(v) for v in m["panel_order"].values()}
         assert len(orders) > 1, "no dataset disagreed; the per-panel rank is moot"
 
-    def test_the_manifest_records_the_absent_weighted_arm(self, built):
-        """Rather than drawing a placeholder. v3 filled that half from a
-        hard-coded dict and the figure showed 99.3% bars that measured
-        nothing."""
+    def test_the_manifest_records_which_arm_this_is(self, built):
+        """The directory carries the arm; so does the manifest, so a figure's
+        provenance does not rest on where someone filed it."""
+        runs, root, _ = built
+        run_ids = [r.run_id for r in runs]
+        out = F.cross_dir(run_ids, analysis_root=root)
+        m = json.loads(
+            (out / F.FIGURE_MANIFEST.format(slug="healpix-128")).read_text()
+        )
+        assert m["arm"] == cross.arm(run_ids)
+
+    def test_the_manifest_says_no_weighted_arm_is_drawn_beside_the_bars(
+        self, built
+    ):
+        """A weighted run is its own figure in its own `@<arm>` directory, not
+        a hatched half of this one. v3 filled that half from a hard-coded dict
+        and showed 99.3% bars that measured nothing."""
         runs, root, _ = built
         out = F.cross_dir([r.run_id for r in runs], analysis_root=root)
         m = json.loads(
             (out / F.FIGURE_MANIFEST.format(slug="healpix-128")).read_text()
         )
-        assert "weighted_arm" in m
-        assert "no traffic-weighted run exists" in m["weighted_arm"]
+        assert "not drawn beside the mesh bars" in m["weighted_arm"]
 
     def test_the_csv_counts_partition_every_row(self, built):
         runs, root, _ = built

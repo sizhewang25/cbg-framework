@@ -807,6 +807,7 @@ def _manifest(
         "layout": layout,
         "grid": H.describe(nside),
         "runs": run_ids,
+        "arm": cross.arm(run_ids),
         "methods": method_order(table),
         "panel_order": {
             ds: panel_order(table, ds)
@@ -833,8 +834,12 @@ def _manifest(
             ),
         },
         "weighted_arm": (
-            "absent by design — no traffic-weighted run exists, and "
-            "a placeholder would be fabricated data"
+            "not drawn beside the mesh bars. A traffic-weighted run is its "
+            "own set of `--run-id`s and lands in its own `@<arm>` directory, "
+            "so the two arms are two figures rather than one hatched pair — "
+            "`arm` above says which this is. v3 instead filled that half of "
+            "one figure from a hard-coded dict, and its 99.3% bars measured "
+            "nothing."
         ),
     }
     if layout == POOLED:

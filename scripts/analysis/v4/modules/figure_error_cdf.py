@@ -631,6 +631,7 @@ def _manifest(
         "layout": layout,
         "runs": list(run_ids),
         "dataset": cross.dataset_slug(run_ids),
+        "arm": cross.arm(run_ids),
         "methods": curve_order(table),
         "baseline": C.SHORTEST_PING,
         "error_column": ERROR_COLUMN,

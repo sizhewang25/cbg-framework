@@ -390,6 +390,23 @@ holds everywhere.
 
 ## Usage
 
+Everything below, over the finals runs, in dependency order:
+
+```bash
+./scripts/analysis/v4/create_analysis_artifacts.sh                # default sets
+./scripts/analysis/v4/create_analysis_artifacts.sh --mesh R1 R2 --weighted R3
+```
+
+It is also the tail of `run_finals.sh`, which hands it the run ids of the
+benchmark arms that succeeded. Runs are grouped into two **arms**, mesh and
+traffic-weighted, and the three cross-dataset figures are built once per arm
+rather than once over both: a weighted run is a subset of its own mesh's
+targets, so pooling them would count a site twice and compare a dataset against
+itself. A run id with no benchmark tree is a skip, not a failure — the weighted
+arms depend on traffic-annotated meshes that are generally not collected.
+
+The individual commands:
+
 ```bash
 python -m scripts.analysis.v4.cli build-answer-space --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v4.cli build-bipartite    --run-id as01-260728-260802-mesh
@@ -448,7 +465,7 @@ outputs/analysis/v4/<run_id>/
   target-cls-accuracy/error_cdf.{png,csv,manifest.json}  <- rung-free: error_km
                                                             is the same at every rung
 
-outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>/
+outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>@<arm>/
   outcome_bars.healpix-<nside>.{png,csv,manifest.json}         <- one panel per dataset
   outcome_bars.pooled.healpix-<nside>.{png,csv,manifest.json}  <- all of them, count-weighted
   euler.healpix-<nside>.top<N>.png                             <- the fitted layout
@@ -459,6 +476,15 @@ outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>/
   euler.healpix-<nside>.top<N>.manifest.json
   error_cdf.pooled.{png,csv,manifest.json}                     <- every run's targets, one curve
 ```
+
+`<arm>` is whatever the pooled run ids share after their dataset head —
+`260728-260802-mesh`, `260728-260802-weighted`. Without it the two arms of the
+same three datasets are both `as01+as02+as03` and the second pass overwrites the
+first. It keys the **directory only**: the `dataset` column in every CSV twin
+and the label in the pooled subtitles stay `as01+as02+as03`, where a date range
+would be noise. A set spanning two arms has no shared tail and keeps the bare
+name. Each manifest also records `arm`, so a figure's provenance does not rest
+on where someone filed it.
 
 The Euler set carries `.top<N>` because a figure is a function of the
 tolerance — without it a top-3 pass would overwrite the top-1 files — and the

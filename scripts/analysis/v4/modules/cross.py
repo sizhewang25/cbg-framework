@@ -18,6 +18,15 @@ passed in, and the default is the outcome bars' original wording, unchanged to
 the character -- the messages that module raised before this split are the
 messages it raises after it.
 
+## The directory is keyed by dataset AND arm
+
+`dataset_slug` keeps only each run id's head, which is what makes
+`as01+as02+as03` readable -- and what made the mesh and traffic-weighted arms of
+those same three datasets share one directory. `cross_dir` therefore appends the
+remainder the runs share (`arm`), so the two arms sit side by side instead of
+one overwriting the other. Only the path carries it; the label the figures print
+stays `dataset_slug`.
+
 ## One copy still outstanding
 
 `euler.membership.guard_disjoint_targets` is **not** folded in here. It says
@@ -63,13 +72,40 @@ def short_dataset(run_id: str) -> str:
     return run_id.split("-")[0]
 
 
+def arm(run_ids: list[str]) -> str | None:
+    """The run-id remainder every run shares, or None if they differ.
+
+    `as01-260728-260802-mesh` + `as02-260728-260802-mesh` -> `260728-260802-mesh`.
+
+    `dataset_slug` keeps only the head of each run id, so the mesh arm and the
+    traffic-weighted arm of the same three datasets collapse to one name --
+    `as01+as02+as03` either way. Pooling both would then write the weighted
+    figures over the mesh ones, and the comparison between the arms is the whole
+    reason both are run.
+
+    Derived rather than declared, and with no vocabulary of arm names: anything
+    the run ids share is the arm, whether that is `-mesh`, `-weighted`,
+    `-mesh-reciprocal` or a date range alone. Mixed remainders yield None, which
+    is the heads-only name -- a set spanning two arms is not an arm.
+    """
+    tails = {r.split("-", 1)[1] if "-" in r else "" for r in run_ids}
+    if len(tails) != 1:
+        return None
+    return tails.pop() or None
+
+
 def cross_dir(run_ids: list[str], *, analysis_root: Path | None = None) -> Path:
-    out = (
-        (analysis_root or DEFAULT_ANALYSIS_ROOT)
-        / "_cross"
-        / CROSS_KIND
-        / dataset_slug(run_ids)
-    )
+    """`_cross/cls-accuracy/<datasets>[@<arm>]/`, created.
+
+    The arm is a directory-name concern only. `dataset_slug` also supplies the
+    `dataset` column of every CSV twin and the label in the pooled figures'
+    subtitles, where a date range would be noise.
+    """
+    name = dataset_slug(run_ids)
+    shared = arm(run_ids)
+    if shared is not None:
+        name = f"{name}@{shared}"
+    out = (analysis_root or DEFAULT_ANALYSIS_ROOT) / "_cross" / CROSS_KIND / name
     out.mkdir(parents=True, exist_ok=True)
     return out
 

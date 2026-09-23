@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 # Serial driver for the CBG finals: 3 operator ASNs x {mesh, traffic-weighted},
-# plus as7018_us_test01 as a mesh-only public counterpart, plus the reciprocal
-# (topology-matched) public/private pairs.
+# then the v4 analysis artifacts over whatever ran.
 #
-# Each config runs to completion before the next; a failure is logged and the
-# batch continues. Per-config logs + a rollup live under logs/finals/.
+# Two benchmark modules, in this order:
+#
+#   1. weighted arms -- derive the traffic-weighted subset beside its mesh,
+#      then run against it (precomputed mode)
+#   2. mesh arms     -- run directly
+#
+# followed by scripts/analysis/v4/create_analysis_artifacts.sh over the arms
+# that succeeded. Each config runs to completion before the next; a failure is
+# logged and the batch continues. Per-config logs + a rollup live under
+# logs/finals/.
 #
 # Usage:  tmux new-session -d -s cbg_finals "bash run_finals.sh"
-#         bash run_finals.sh --dry-run     # preflight only, run nothing
-#         bash run_finals.sh --force       # ignore the cache, recompute all
+#         bash run_finals.sh --dry-run      # preflight only, run nothing
+#         bash run_finals.sh --force        # ignore the cache, recompute all
+#         bash run_finals.sh --no-analysis  # benchmark only, no figures
 #
 # WHY --force EXISTS. Snakemake decides what to re-run from file timestamps and
 # recorded params -- neither of which sees a CODE change. The combo id is the
@@ -27,11 +35,11 @@
 # mesh, then run against it (precomputed mode), so the same CSV feeds both the
 # benchmark and the §8.1 dataset figures.
 #
-# Each reciprocal pair is likewise two steps: cut BOTH datasets to the H3 res-4
-# cells they both occupy (§7.3's best-effort VP-topology match), then run each
-# filtered side. The pair is only comparable to itself -- each side's footprint is
-# defined by the other -- so matching the same public set against a different
-# operator ASN yields a different public set, and the filenames say which.
+# The analysis step groups the two arms separately and never pools them: a
+# weighted run is a subset of its own mesh's targets, so one pooled population
+# holding both would count a site twice and compare a dataset against itself.
+# Each arm gets its own pooled bars, Euler diagram and error CDF, in its own
+# `@<arm>` directory.
 #
 # Run ids are NEW (-mesh / -weighted suffixes). The published
 # as0X-260728-260802 trees are never written to: their CSVs are reconstructions
@@ -43,11 +51,13 @@ cd "$(dirname "$0")"
 export PATH="$PWD/.venv/bin:$PATH"   # cli.sh calls `python`; resolve to the venv
 
 DRY_RUN=0
+RUN_ANALYSIS=1
 FORCE_ARGS=()
 for _arg in "$@"; do
   case "$_arg" in
-    --dry-run) DRY_RUN=1 ;;
-    --force)   FORCE_ARGS=(--forceall) ;;
+    --dry-run)     DRY_RUN=1 ;;
+    --force)       FORCE_ARGS=(--forceall) ;;
+    --no-analysis) RUN_ANALYSIS=0 ;;
     *) echo "run_finals.sh: unknown argument: $_arg" >&2; exit 2 ;;
   esac
 done
@@ -75,22 +85,13 @@ WEIGHTED_CONFIGS=(
   # as01-randweight-precomputed
 )
 
-# Reciprocal arms: "<public-config>:<private-config>". Both sides are filtered to
-# their common footprint, then both are run. The source CSVs come from these two
-# configs and the filtered CSVs from the matching `<config>-reciprocal.yaml`, so
-# every path lives in a config and none is spelled out here.
-RECIPROCAL_PAIRS=(
-  # "as7018-ripe-mesh:as02-260728-260802-mesh"
-  # "as01-materialization-test:as01-randweight-precomputed"
-)
+ALL_CONFIGS=("${MESH_CONFIGS[@]}" "${WEIGHTED_CONFIGS[@]}")
 
-# The configs a pair runs, derived from it: two per pair, public then private.
-RECIPROCAL_CONFIGS=()
-for _pair in "${RECIPROCAL_PAIRS[@]}"; do
-  RECIPROCAL_CONFIGS+=("${_pair%%:*}-reciprocal" "${_pair##*:}-reciprocal")
-done
-
-ALL_CONFIGS=("${MESH_CONFIGS[@]}" "${WEIGHTED_CONFIGS[@]}" "${RECIPROCAL_CONFIGS[@]}")
+# Run ids of the arms that exited 0, collected as they run and handed to the
+# analysis step. Tracked rather than re-derived from the config lists so a
+# failed arm is not scored from whatever stale tree an earlier attempt left.
+MESH_OK=()
+WEIGHTED_OK=()
 
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$SUMMARY"; }
 
@@ -102,6 +103,33 @@ cfg, key = sys.argv[1], sys.argv[2]
 d = yaml.safe_load(open(f"configs/{cfg}.yaml"))["benchmark"]["source_kwargs"]
 print(d.get(key, ""))
 PY
+}
+
+# A config's own run id. Every finals config currently names its file stem, but
+# that is a convention rather than a rule, and the analysis step addresses runs
+# by id -- so read it rather than assume it.
+cfg_run_id() {  # $1=config stem
+  python - "$1" <<'RUNID'
+import sys, yaml
+cfg = yaml.safe_load(open(f"configs/{sys.argv[1]}.yaml"))
+rid = (cfg.get("run_id") or "").strip()
+if not rid:
+    sys.exit(f"configs/{sys.argv[1]}.yaml declares no run_id")
+print(rid)
+RUNID
+}
+
+# Append a config's run id to an arm's OK list, or log why it could not be.
+# An empty id would reach the driver as a bare `--mesh ''`, whose benchmark-tree
+# check (`-d outputs/benchmark/v2/`) passes on the empty string and hands the CLI
+# a run id it cannot resolve.
+record_ok() {  # $1=array name  $2=config stem
+  local rid
+  if ! rid=$(cfg_run_id "$2" 2>&1); then
+    log "WARN  $2 ran, but its run id could not be read ($rid); not scored"
+    return
+  fi
+  eval "$1+=(\"\$rid\")"
 }
 
 if (( ${#ALL_CONFIGS[@]} == 0 )); then
@@ -130,7 +158,7 @@ if compgen -G ".snakemake/locks/*" >/dev/null; then
 fi
 
 # ---- preflight: every input must exist before anything runs -----------------
-log "preflight: checking inputs for ${#MESH_CONFIGS[@]} mesh + ${#WEIGHTED_CONFIGS[@]} weighted + ${#RECIPROCAL_CONFIGS[@]} reciprocal runs"
+log "preflight: checking inputs for ${#MESH_CONFIGS[@]} mesh + ${#WEIGHTED_CONFIGS[@]} weighted runs"
 MISSING=()
 for c in "${MESH_CONFIGS[@]}"; do
   p=$(cfg_path "$c" csv_path)
@@ -141,21 +169,6 @@ for c in "${WEIGHTED_CONFIGS[@]}"; do
   # Only the weight-bearing mesh must pre-exist; the subset is derived below.
   [[ -f "$p" ]] || MISSING+=("$c: mesh_csv_path $p")
 done
-for pair in "${RECIPROCAL_PAIRS[@]}"; do
-  # The two UNFILTERED sources must exist; both filtered CSVs are derived below.
-  # Their source configs need not be listed in MESH_CONFIGS -- a pair reads their
-  # csv_path whether or not that arm is itself being run.
-  for c in "${pair%%:*}" "${pair##*:}"; do
-    p=$(cfg_path "$c" csv_path)
-    [[ -f "$p" ]] || MISSING+=("$c (reciprocal source): csv_path $p")
-  done
-  # A missing -reciprocal config would otherwise surface as an empty output path
-  # and a filter that writes to the repo root.
-  for c in "${pair%%:*}-reciprocal" "${pair##*:}-reciprocal"; do
-    [[ -f "configs/$c.yaml" ]] || MISSING+=("$c: configs/$c.yaml does not exist")
-  done
-done
-
 if (( ${#MISSING[@]} )); then
   log "ABORT: ${#MISSING[@]} required input(s) missing -- nothing was run:"
   for m in "${MISSING[@]}"; do log "         $m"; done
@@ -186,6 +199,7 @@ for c in "${WEIGHTED_CONFIGS[@]}"; do
   fi
   if ./cli.sh --configfile "configs/$c.yaml" "${FORCE_ARGS[@]}" >"$LOGDIR/$c.log" 2>&1; then
     log "OK    $c"
+    record_ok WEIGHTED_OK "$c"
   else
     log "FAIL  $c (see $LOGDIR/$c.log)"
   fi
@@ -196,45 +210,42 @@ for c in "${MESH_CONFIGS[@]}"; do
   log "START $c"
   if ./cli.sh --configfile "configs/$c.yaml" "${FORCE_ARGS[@]}" >"$LOGDIR/$c.log" 2>&1; then
     log "OK    $c"
+    record_ok MESH_OK "$c"
   else
     log "FAIL  $c (see $LOGDIR/$c.log)"
   fi
 done
 
-# ---- reciprocal arms: match both footprints, then run both sides ------------
-# Called directly rather than through a Snakefile: Snakemake locks the whole
-# working directory, and this step has a single input pair and no fan-out.
-for pair in "${RECIPROCAL_PAIRS[@]}"; do
-  pub="${pair%%:*}"; priv="${pair##*:}"
-  pub_in=$(cfg_path "$pub" csv_path)
-  priv_in=$(cfg_path "$priv" csv_path)
-  pub_out=$(cfg_path "$pub-reciprocal" csv_path)
-  priv_out=$(cfg_path "$priv-reciprocal" csv_path)
+# ---- analysis: the v4 artifacts over the arms that ran ----------------------
+# One invocation, both arms, because the driver is what knows the dependency
+# order within a run and the two arms only ever share this call -- it pools each
+# separately. Arms that produced nothing are simply not passed; the driver
+# reports them as skips rather than failing, so a mesh-only batch is a clean run.
+#
+# Not gated on the benchmark having been fully successful: a partly-failed batch
+# is exactly when you want to see the figures for the arms that did land.
+if (( RUN_ANALYSIS )); then
+  ANALYSIS_ARGS=()
+  (( ${#MESH_OK[@]} ))     && ANALYSIS_ARGS+=(--mesh "${MESH_OK[@]}")
+  (( ${#WEIGHTED_OK[@]} )) && ANALYSIS_ARGS+=(--weighted "${WEIGHTED_OK[@]}")
 
-  # Audit artifact, not a dataset: the match summary goes to the same outputs/
-  # tree the traffic-weighted step uses, so datasets/ holds only CSVs.
-  recip_outputs="scripts/processing/source/outputs/$pub-x-$priv"
-  mkdir -p "$recip_outputs"
-
-  log "START $pub x $priv (reciprocal match)"
-  if ! python -m scripts.processing.source.reciprocal_grid_filter \
-         --public "$pub_in"   --out-public  "$pub_out" \
-         --private "$priv_in" --out-private "$priv_out" \
-         --summary "$recip_outputs/reciprocal.summary.json" \
-         >"$LOGDIR/$pub-x-$priv.reciprocal.log" 2>&1; then
-    log "FAIL  $pub x $priv (reciprocal match; see $LOGDIR/$pub-x-$priv.reciprocal.log)"
-    continue        # no filtered CSVs -> both runs would fail anyway
-  fi
-  log "OK    $pub x $priv (reciprocal match)"
-
-  for c in "$pub-reciprocal" "$priv-reciprocal"; do
-    log "START $c"
-    if ./cli.sh --configfile "configs/$c.yaml" "${FORCE_ARGS[@]}" >"$LOGDIR/$c.log" 2>&1; then
-      log "OK    $c"
+  if (( ${#ANALYSIS_ARGS[@]} == 0 )); then
+    log "SKIP  analysis (v4): every benchmark arm failed, nothing to score"
+  else
+    log "START analysis (v4): mesh ${#MESH_OK[@]}, weighted ${#WEIGHTED_OK[@]}"
+    if ./scripts/analysis/v4/create_analysis_artifacts.sh "${ANALYSIS_ARGS[@]}" \
+         >"$LOGDIR/_analysis.v4.log" 2>&1; then
+      log "OK    analysis (v4)"
     else
-      log "FAIL  $c (see $LOGDIR/$c.log)"
+      log "FAIL  analysis (v4) (see $LOGDIR/_analysis.v4.log)"
     fi
-  done
-done
+    # The driver prints its own tally; surface it so the rollup is self-contained.
+    sed -n '/^runs: /p' "$LOGDIR/_analysis.v4.log" | while read -r line; do
+      log "      $line"
+    done
+  fi
+else
+  log "SKIP  analysis (v4): --no-analysis"
+fi
 
 log "ALL DONE"
