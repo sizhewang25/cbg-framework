@@ -82,30 +82,31 @@ class TestPalette:
         """The four placed segments — the single-hue part of the ramp."""
         return [F.SEGMENT_INK[s] for s in F.SEGMENTS if s != "n_failed"]
 
-    def test_the_whole_stack_is_monotone_light_to_dark(self):
+    def test_the_placed_segments_are_monotone_light_to_dark(self):
         """Lightness is the separator no colour-vision deficiency and no
-        greyscale print can take away, and here it covers all five segments
-        including the grey — which is what making the grey the *darkest* step
-        bought. Light = precise, darkening as the outcome worsens."""
-        lums = [_luminance(F.SEGMENT_INK[s]) for s in F.SEGMENTS]
+        greyscale print can take away, so the four *ordered* outcomes carry it.
+        Light = precise, darkening as the prediction lands further out."""
+        lums = [_luminance(c) for c in self._greens()]
         assert lums == sorted(lums, reverse=True), f"not monotone: {lums}"
 
     def test_lighter_means_better(self):
-        """The direction, pinned explicitly: 'in the cell' is the lightest
-        segment and 'no answer' the darkest."""
-        assert _luminance(F.SEGMENT_INK["n_ring0"]) == max(
-            _luminance(F.SEGMENT_INK[s]) for s in F.SEGMENTS
-        )
-        assert _luminance(F.SEGMENT_INK["n_failed"]) == min(
-            _luminance(F.SEGMENT_INK[s]) for s in F.SEGMENTS
-        )
+        """The direction, pinned explicitly, over the ramp."""
+        greens = self._greens()
+        assert _luminance(greens[0]) == max(_luminance(c) for c in greens)
+        assert _luminance(greens[-1]) == min(_luminance(c) for c in greens)
 
-    def test_adjacent_steps_are_visibly_apart(self):
+    def test_no_answer_sits_outside_the_ramp(self):
+        """Deliberately not the ramp's next step. 'No answer' is not a worse
+        *placement* — it is the absence of one — so giving it a rank on the
+        precision ramp would claim an ordering it does not have."""
+        grey = _luminance(F.SEGMENT_INK["n_failed"])
+        assert grey > max(_luminance(c) for c in self._greens())
+
+    def test_adjacent_ramp_steps_are_visibly_apart(self):
         """Every adjacent gap must be a real step; checked in relative
         luminance with a floor loose enough not to re-litigate the colour
-        space. The tightest pair is 'further out' vs 'no answer', which the
-        validator puts at dE 8.8 under deuteranopia."""
-        lums = [_luminance(F.SEGMENT_INK[s]) for s in F.SEGMENTS]
+        space."""
+        lums = [_luminance(c) for c in self._greens()]
         gaps = -np.diff(lums)
         assert (gaps > 0.015).all(), f"a step is too close to its neighbour: {gaps}"
 
@@ -125,17 +126,24 @@ class TestPalette:
         ]
         assert max(hues) - min(hues) < 25, f"hue spread too wide: {hues}"
 
-    def test_no_answer_is_an_achromatic_charcoal(self):
-        """Grey, and specifically a DARK grey. A mid grey is where green lands
-        under deuteranopia — every one tested collided with a ramp step at
-        dE 4.5-4.7 — and a near-white grey vanishes at 1.29:1 on the surface."""
+    def test_no_answer_is_an_achromatic_light_grey(self):
+        """Grey, and specifically a LIGHT grey — the conventional reading for
+        absent, legible because the ramp vacated the light end. A *mid* grey is
+        where green lands under deuteranopia (dE 2.6-5.0 against the ramp), so
+        the light end is the only safe place for it."""
         import colorsys
 
         hexstr = F.SEGMENT_INK["n_failed"]
         r, g, b = (int(hexstr[i : i + 2], 16) / 255 for i in (1, 3, 5))
         sat = colorsys.rgb_to_hls(r, g, b)[2]
-        assert sat < 0.1, f"{hexstr} is not achromatic (S={sat:.3f})"
-        assert _luminance(hexstr) < 0.05, "a mid or light grey is not safe here"
+        assert sat < 0.12, f"{hexstr} is not achromatic (S={sat:.3f})"
+        assert _luminance(hexstr) > 0.6, "a mid grey collides with the ramp"
+
+    def test_the_grey_slot_carries_an_edge_rather_than_a_stripe(self):
+        """At 1.44:1 the fill alone does not delineate against the surface, and
+        the hatch channel is reserved, so the definition comes from an edge."""
+        assert F._FAILED_EDGE != F._SURFACE
+        assert _luminance(F._FAILED_EDGE) < _luminance(F.SEGMENT_INK["n_failed"])
 
     def test_no_outcome_uses_the_hatch_channel(self):
         """Reserved for the traffic-weighted arm beside a mesh bar. Spending it
@@ -148,7 +156,8 @@ class TestPalette:
         """Text inside a fill picks white or ink by luminance, so it always
         clears contrast — the one place a label may sit on a colour."""
         assert F._label_ink(F.SEGMENT_INK["n_ring0"]) == F._INK
-        assert F._label_ink(F.SEGMENT_INK["n_failed"]) == "#ffffff"
+        assert F._label_ink(F.SEGMENT_INK["n_failed"]) == F._INK
+        assert F._label_ink(F.SEGMENT_INK["n_beyond"]) == "#ffffff"
 
 
 class TestTable:
@@ -195,8 +204,8 @@ class TestRender:
         assert png.exists() and png.stat().st_size > 5000
 
     def test_the_order_can_be_pinned_from_outside(self, tmp_path):
-        """So every rung of a figure set shares one x order. Ranking per rung
-        moved Spotter between the 4th and 5th slot from figure to figure."""
+        """The override, for a caller that wants x position comparable across
+        panels instead of each panel ranking itself."""
         pinned = ["spotter_cbg", "octant_cbg_hull"]
         png = F.render(_table(), 64, tmp_path, order=pinned)
         assert png.exists()
@@ -255,16 +264,36 @@ class TestRealRuns:
             assert (out / F.FIGURE_CSV.format(slug=slug)).exists()
             assert (out / F.FIGURE_MANIFEST.format(slug=slug)).exists()
 
-    def test_the_x_order_is_identical_across_rungs(self, built):
+    def test_every_panel_is_ranked_by_its_own_in_cell_share(self, built):
+        """Each panel reads as that dataset's leaderboard, so bar height must
+        decrease left to right within it."""
         runs, root, _ = built
         out = F.cross_dir([r.run_id for r in runs], analysis_root=root)
-        orders = []
         for n in H.NSIDE_LADDER:
-            m = json.loads(
-                (out / F.FIGURE_MANIFEST.format(slug=f"healpix-{n}")).read_text()
+            slug = f"healpix-{n}"
+            m = json.loads((out / F.FIGURE_MANIFEST.format(slug=slug)).read_text())
+            df = pd.read_csv(out / F.FIGURE_CSV.format(slug=slug)).set_index(
+                ["dataset", "method"]
             )
-            orders.append(tuple(m["methods"]))
-        assert len(set(orders)) == 1, f"order drifted across rungs: {orders}"
+            for ds, order in m["panel_order"].items():
+                shares = [
+                    round(float(df.loc[(ds, meth), "share_n_ring0"]), 6)
+                    for meth in order
+                ]
+                assert shares == sorted(shares, reverse=True), (
+                    f"nside={n} {ds} not descending: {list(zip(order, shares))}"
+                )
+
+    def test_the_panel_orders_genuinely_differ_between_datasets(self, built):
+        """Which is why they rank themselves: a single pooled order would hide
+        that Octant-Spline leads as01 while Octant-Hull leads as02 and as03."""
+        runs, root, _ = built
+        out = F.cross_dir([r.run_id for r in runs], analysis_root=root)
+        m = json.loads(
+            (out / F.FIGURE_MANIFEST.format(slug="healpix-128")).read_text()
+        )
+        orders = {tuple(v) for v in m["panel_order"].values()}
+        assert len(orders) > 1, "no dataset disagreed; the per-panel rank is moot"
 
     def test_the_manifest_records_the_absent_weighted_arm(self, built):
         """Rather than drawing a placeholder. v3 filled that half from a

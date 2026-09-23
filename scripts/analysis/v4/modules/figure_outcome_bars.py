@@ -10,6 +10,15 @@ between is visible rather than implied. v3's three segments (correct / wrong /
 failed) collapsed the middle three into "wrong", which is exactly the
 information the ring metric exists to expose.
 
+## Each panel ranks itself
+
+Bars within a panel are ordered by that dataset's own `in the cell` share,
+descending, so a panel reads as a leaderboard. The cost is that a method does
+not keep one x slot across panels — comparing a method between datasets means
+reading its label rather than its position. That is bought deliberately,
+because the orders genuinely differ: Octant-Spline leads as01 while
+Octant-Hull leads as02 and as03, and a single pooled order would hide it.
+
 ## One figure per rung, not one figure with a resolution axis
 
 The rung *is* the tolerance the reader is choosing. Putting four rungs in one
@@ -20,30 +29,33 @@ carries the curve for anyone who wants it as a line.
 
 ## Colour is a sequential ramp, and it was computed rather than chosen
 
-The segments are ordered — in the cell beats one ring out beats two, and "no
-answer" is the worst outcome of all — so the stack is a **single-hue ramp,
-light to dark**, ending in charcoal. Lightness therefore falls monotonically
-bottom to top (relative luminance 0.437, 0.253, 0.127, 0.056, 0.024), and
-lightness is the one separator that survives every colour-vision deficiency
-*and* greyscale print at once.
+The four *placed* outcomes are ordered — in the cell beats one ring out beats
+two — so they take a **single-hue ramp, light to dark**: relative luminance
+0.437, 0.253, 0.127, 0.056. Lightness is the one separator that survives every
+colour-vision deficiency *and* greyscale print at once.
 
-Three designs were **rejected by measurement**, not taste, using the dataviz
-skill's `validate_palette.js`:
+"No answer" is a **light grey and sits outside that ramp**, which is the
+honest placement: it is not a worse *placement*, it is the absence of one, so
+giving it a rank on the precision ramp would claim an ordering it does not
+have. Light grey is the conventional reading for absent, and it is legible
+here precisely because the ramp runs light-to-dark and so vacated the light
+end.
+
+Rejected by measurement, not taste, using the dataviz skill's
+`validate_palette.js`:
 
 * **Green ramp + red for "further out"** — the obvious good-to-bad reading.
   Red against the ramp's mid-green is Delta E **1.8 under protanopia**: a
   protanope cannot tell the second ring from a total miss.
-* **A mid grey for "no answer"** — the conventional neutral. Mid grey is
-  exactly where green lands under deuteranopia, and every mid grey tested
-  collided with some ramp step at Delta E **4.5-4.7**.
-* **A near-white grey**, which clears CVD but sits at 1.29:1 against the
-  surface and effectively vanishes.
+* **A mid grey for "no answer"** — the conventional neutral, and the worst
+  option here. Mid grey is exactly where green lands under deuteranopia;
+  every one tested collided with a ramp step at Delta E **2.6-5.0**.
 
-Charcoal `#2b2b29` is what survives: Delta E **8.8** from the darkest green
-under deuteranopia, adequate contrast, and it extends the ramp rather than
-interrupting it. Making the grey the *darkest* step is what buys the
-separation, and it also reads correctly — the bar gets darker as the outcome
-gets worse.
+Among light greys, separation from the lightest green and contrast against the
+surface pull opposite ways, so the choice was made on the measured curve
+(see `SEGMENT_INK`): `#d8d7cf` keeps Delta E **10.8** — real headroom over the
+8 threshold — at 1.44:1. The weak contrast is covered by a hairline edge on
+that slot alone, plus the in-place label and the CSV twin.
 
 **No hatch on any outcome.** That channel is reserved for the traffic-weighted
 arm drawn beside a mesh bar (`WEIGHTED_HATCH`), and spending it on an outcome
@@ -88,27 +100,47 @@ SEGMENT_LABELS = {
     "n_failed": "no answer",
 }
 
-#: Single-hue ordinal ramp, **light = most precise**, darkening as the
-#: prediction lands further out, and ending in a charcoal grey for "no answer".
+#: Single-hue ordinal ramp for the four *placed* outcomes, **light = most
+#: precise**, darkening as the prediction lands further out. "No answer" is a
+#: light grey and deliberately sits **outside** that ramp.
 #:
-#: The whole stack is monotone in lightness bottom to top (0.437, 0.253, 0.127,
-#: 0.056, 0.024 relative luminance), which is the one separator that survives
-#: every colour-vision deficiency *and* greyscale print at once. That the grey
-#: is the darkest step rather than a mid tone is what buys it: a mid grey is
-#: where green lands under deuteranopia, and every mid grey tested collided
-#: with some ramp step at dE 4.5-4.7. Charcoal clears the darkest green at
-#: dE 8.8 (deutan) — measured with the dataviz validator, not judged.
+#: The four greens are monotone in lightness (relative luminance 0.437, 0.253,
+#: 0.127, 0.056), which is the separator that survives every colour-vision
+#: deficiency and greyscale print at once. The grey does **not** extend that
+#: ordering — it is lighter than all four — and that is the point: "no answer"
+#: is not a worse placement, it is the absence of one, so putting it on the
+#: precision ramp would claim a rank it does not have. Light grey is the
+#: conventional reading for absent, and it is legible here because the ramp
+#: vacated the light end.
 #:
-#: Rejected by the same measurement: a green ramp plus **red** for "further
-#: out". Red against the ramp's mid-green is dE 1.8 under protanopia, so a
-#: protanope could not separate "two rings out" from a total miss.
+#: The trade-off is measured, not guessed. Against the lightest green, grey
+#: separation and surface contrast pull opposite ways:
+#:
+#:     #e1e0d9  dE 13.5 (protan)   1.32:1 vs white
+#:     #d8d7cf  dE 10.8            1.44:1      <- chosen
+#:     #cfcec6  dE  8.1            1.58:1
+#:     #b5b4ad  dE  2.6   FAIL     2.08:1
+#:
+#: `#d8d7cf` keeps real headroom over the dE 8 threshold while staying dark
+#: enough to read; the weak contrast is covered by `_FAILED_EDGE` plus the
+#: in-place label and the CSV twin.
+#:
+#: Rejected by the same measurement: a ramp plus **red** for "further out" —
+#: red against the mid-green is dE 1.8 under protanopia, so a protanope could
+#: not separate "two rings out" from a total miss. And any **mid** grey: that
+#: is exactly where green lands under deuteranopia (dE 2.6-5.0).
 SEGMENT_INK = {
     "n_ring0": "#79bf9b",
     "n_ring1": "#3f9a6f",
     "n_ring2": "#17724a",
     "n_beyond": "#0b4d2c",
-    "n_failed": "#2b2b29",
+    "n_failed": "#d8d7cf",
 }
+
+#: A hairline edge on the grey slot only. At 1.44:1 the fill alone does not
+#: delineate against a white surface, and the hatch channel is reserved, so the
+#: definition comes from an edge instead. Not a stripe.
+_FAILED_EDGE = "#b5b4ad"
 
 #: Reserved for the traffic-weighted arm drawn beside a mesh bar, so it must
 #: not be spent on an outcome. None exists yet; the constant records the claim
@@ -219,10 +251,39 @@ def build_table(
 
 
 def method_order(table: pd.DataFrame) -> list[str]:
-    """Best mean `in the cell` share first, so the panels share one x order and
-    a reader compares the same column across datasets."""
+    """Best mean `in the cell` share first — the pooled order across datasets.
+
+    Used for the legend and the manifest. Each *panel* ranks itself; see
+    `panel_order`.
+    """
     means = table.groupby("method")["share_n_ring0"].mean()
     return means.sort_values(ascending=False).index.tolist()
+
+
+def panel_order(table: pd.DataFrame, dataset: str) -> list[str]:
+    """One dataset's methods, best `in the cell` share first.
+
+    **Each panel ranks itself**, so a bar's height decreases left to right
+    within every panel and the panel reads as a leaderboard for that dataset.
+
+    The cost is deliberate and worth naming: a method does *not* keep the same
+    x slot across panels, so comparing one method between datasets means
+    reading its label rather than its position. The ranking within a dataset is
+    the question these bars answer, and on these three datasets the order
+    genuinely differs -- Octant-Spline leads as01 while Octant-Hull leads as02
+    and as03 -- so a single pooled order would hide the thing worth seeing.
+
+    Ties break on the pooled order, so two methods level on a dataset still
+    appear in a stable, reproducible sequence rather than whatever order the
+    rows happened to arrive in.
+    """
+    pooled = {m: i for i, m in enumerate(method_order(table))}
+    sub = table[table["dataset"] == dataset]
+    return (
+        sub.assign(_tie=sub["method"].map(pooled))
+        .sort_values(["share_n_ring0", "_tie"], ascending=[False, True])["method"]
+        .tolist()
+    )
 
 
 def _label_ink(face: str) -> str:
@@ -243,10 +304,10 @@ def render(
 ) -> Path:
     """One panel per dataset, one bar per method, segments stacked bottom-up.
 
-    `order` is passed in rather than derived here so the whole rung set shares
-    one x order. Ranking each rung independently moved a method between slots
-    from figure to figure -- Spotter sat 5th at nside 128 and 4th at nside 16 --
-    which is exactly the comparison the four figures exist to support.
+    Each panel is ranked by its own `in the cell` share, descending, so every
+    panel reads as that dataset's leaderboard. `order` overrides that with a
+    single shared sequence when a caller wants position comparable across
+    panels instead.
     """
     import matplotlib
 
@@ -255,7 +316,7 @@ def render(
     from matplotlib.patches import Patch
 
     datasets = sorted(table["dataset"].unique())
-    order = list(order) if order else method_order(table)
+    pinned = list(order) if order else None
     slug = grid_slug(nside)
 
     fig, axes = plt.subplots(
@@ -269,6 +330,7 @@ def render(
     fig.patch.set_facecolor(_SURFACE)
 
     for ax, ds in zip(axes, datasets):
+        order = pinned or panel_order(table, ds)
         sub = table[table["dataset"] == ds].set_index("method")
         ax.set_facecolor(_SURFACE)
         xs = np.arange(len(order))
@@ -288,10 +350,12 @@ def render(
                 bottom=bottoms,
                 width=_BAR_FRAC,
                 facecolor=face,
-                edgecolor=_SURFACE,
                 # The 2 px surface gap between touching segments, one width up
                 # the whole stack. No hatch on any outcome: that channel is
-                # reserved for the mesh-vs-weighted distinction.
+                # reserved for the mesh-vs-weighted distinction. The grey slot
+                # takes a visible edge instead, because at 1.44:1 its fill does
+                # not delineate itself against the surface.
+                edgecolor=_FAILED_EDGE if seg == "n_failed" else _SURFACE,
                 linewidth=_GAP_PT,
                 zorder=3,
             )
@@ -341,11 +405,12 @@ def render(
     axes[0].set_ylabel("Share of targets", fontsize=11, color=_INK_2)
 
     # Legend always present: five segments, so identity is never colour-alone
-    # even before the in-place labels.
+    # even before the in-place labels. Segment order, not method order — the
+    # panels each rank themselves.
     handles = [
         Patch(
             facecolor=SEGMENT_INK[s],
-            edgecolor=_SURFACE,
+            edgecolor=_FAILED_EDGE if s == "n_failed" else _SURFACE,
             linewidth=0.8,
             label=SEGMENT_LABELS[s],
         )
@@ -391,10 +456,6 @@ def build_for_runs(
         n: build_table(runs, n, methods=methods, analysis_root=analysis_root)
         for n in rungs
     }
-    # One x order for the whole set, taken from the FINEST rung: that is the
-    # strictest test, so it ranks the methods on the hardest question rather
-    # than on whichever tolerance happens to be plotted.
-    shared_order = method_order(tables[rungs[0]])
     written: list[Path] = []
     for nside in rungs:
         table = tables[nside]
@@ -408,7 +469,7 @@ def build_for_runs(
         table[[c for c in keep if c in table.columns]].to_csv(
             out_dir / FIGURE_CSV.format(slug=slug), index=False
         )
-        png = render(table, nside, out_dir, order=shared_order)
+        png = render(table, nside, out_dir)
         (out_dir / FIGURE_MANIFEST.format(slug=slug)).write_text(
             json.dumps(
                 {
@@ -416,11 +477,16 @@ def build_for_runs(
                     "csv": FIGURE_CSV.format(slug=slug),
                     "grid": H.describe(nside),
                     "runs": run_ids,
-                    "methods": shared_order,
+                    "methods": method_order(table),
+                    "panel_order": {
+                        ds: panel_order(table, ds)
+                        for ds in sorted(table["dataset"].unique())
+                    },
                     "method_order_note": (
-                        "ranked once by 'in the cell' at the finest rung and "
-                        "reused for every rung, so a method keeps its x slot "
-                        "across the figure set"
+                        "`methods` is the pooled order across datasets; each "
+                        "panel is ranked by its OWN 'in the cell' share "
+                        "descending, so a method does not keep one x slot "
+                        "across panels"
                     ),
                     "segments": list(SEGMENTS),
                     "segment_labels": SEGMENT_LABELS,

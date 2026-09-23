@@ -86,32 +86,34 @@ cannot see it — it is appended explicitly and its estimate read from
 `eval_source`, restricted to the evaluated roster so it shares one denominator
 with every CBG arm.
 
-Colour was **computed, not chosen**. The stack is a single-hue ramp **light to
-dark** — lighter is better — ending in charcoal for "no answer", so relative
-luminance falls monotonically across all five segments (0.437, 0.253, 0.127,
-0.056, 0.024). Lightness is the one separator that survives every
-colour-vision deficiency *and* greyscale print. Three designs were rejected by
-measurement with `validate_palette.js`:
+Colour was **computed, not chosen**. The four *placed* outcomes take a
+single-hue ramp **light to dark** — lighter is better (relative luminance
+0.437, 0.253, 0.127, 0.056). "No answer" is a **light grey outside that ramp**:
+it is not a worse placement, it is the absence of one, so giving it a rank on
+the precision ramp would claim an ordering it does not have.
+
+Rejected by measurement with `validate_palette.js`:
 
 * green ramp + **red** for "further out" — red vs the ramp's mid-green is
   Delta E **1.8 under protanopia**, so a protanope cannot separate "two rings
   out" from a total miss;
-* a **mid grey** for "no answer" — mid grey is where green lands under
-  deuteranopia; every one tested collided with a ramp step at Delta E 4.5-4.7;
-* a **near-white grey** — clears CVD but sits at 1.29:1 on the surface and
-  effectively vanishes.
+* a **mid grey** for "no answer" — mid grey is exactly where green lands under
+  deuteranopia; every one tested collided with a ramp step at Delta E 2.6-5.0.
 
-Charcoal `#2b2b29` survives at Delta E **8.8** from the darkest green. Making
-the grey the *darkest* step is what buys the separation, and it reads correctly
-too: the bar darkens as the outcome worsens.
+Among light greys, separation from the lightest green and surface contrast pull
+opposite ways, so the pick came off the measured curve: `#d8d7cf` holds Delta E
+**10.8** at 1.44:1. The weak contrast is covered by a hairline edge on that
+slot alone plus the in-place label and the CSV twin.
 
 **No hatch on any outcome** — that channel is reserved for a traffic-weighted
 arm drawn beside a mesh bar.
 
-The x order is ranked once at the finest rung and reused for every rung, so a
-method keeps its slot across the figure set. **No traffic-weighted arm is
-drawn**: none exists, and v3 filled that half from a hard-coded dict that
-rendered 99.3% bars measuring nothing.
+**Each panel ranks itself** by its own in-cell share, descending, so a panel
+reads as that dataset's leaderboard. A method therefore does not keep one x
+slot across panels — deliberate, because the orders genuinely differ
+(Octant-Spline leads as01; Octant-Hull leads as02 and as03). **No
+traffic-weighted arm is drawn**: none exists, and v3 filled that half from a
+hard-coded dict that rendered 99.3% bars measuring nothing.
 
 ## Usage
 
