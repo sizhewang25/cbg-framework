@@ -313,25 +313,58 @@ class TestRealRuns:
             assert (out / F.FIGURE_CSV.format(slug=slug)).exists()
             assert (out / F.FIGURE_MANIFEST.format(slug=slug)).exists()
 
-    def test_every_panel_is_ranked_by_its_own_in_cell_share(self, built):
-        """Each panel reads as that dataset's leaderboard, so bar height must
-        decrease left to right within it."""
+    def test_every_panel_is_ranked_by_the_declared_sorting_key(self, built):
+        """The contract: `(in-cell, 1-ring, 2-ring, further-out)` DESC, each
+        cumulative and rounded to `ACCURACY_DECIMALS`.
+
+        Asserted on the **rounded** key rather than the exact share, because
+        that is what the figure sorts on and what its labels show. Checking the
+        exact share instead would fail on a legitimate case: as03 rounds
+        `million_scale_cbg` and `shortest_ping` both to 0.17 in-cell, and the
+        cascade then puts million_scale first on the 2-ring rung even though
+        its exact in-cell share is 0.4 pp lower. A difference below the
+        reported precision must not decide an order the reader cannot verify.
+        """
         runs, root, _ = built
         out = F.cross_dir([r.run_id for r in runs], analysis_root=root)
         for n in H.NSIDE_LADDER:
             slug = f"healpix-{n}"
             m = json.loads((out / F.FIGURE_MANIFEST.format(slug=slug)).read_text())
-            df = pd.read_csv(out / F.FIGURE_CSV.format(slug=slug)).set_index(
-                ["dataset", "method"]
-            )
+            df = F._with_rank_keys(pd.read_csv(out / F.FIGURE_CSV.format(slug=slug)))
+            keyed = df.set_index(["dataset", "method"])
             for ds, order in m["panel_order"].items():
-                shares = [
-                    round(float(df.loc[(ds, meth), "share_n_ring0"]), 6)
+                keys = [
+                    tuple(float(keyed.loc[(ds, meth), k]) for k in F._RANK_KEYS)
                     for meth in order
                 ]
-                assert shares == sorted(shares, reverse=True), (
-                    f"nside={n} {ds} not descending: {list(zip(order, shares))}"
+                assert keys == sorted(keys, reverse=True), (
+                    f"nside={n} {ds} not descending on the key: "
+                    f"{list(zip(order, keys))}"
                 )
+
+    def test_a_cumulative_key_never_exceeds_one(self, built):
+        """It is a share. Summing already-rounded shares put `within_beyond` at
+        1.01; the keys are now accumulated on the exact counts and rounded
+        once."""
+        runs, root, _ = built
+        out = F.cross_dir([r.run_id for r in runs], analysis_root=root)
+        for n in H.NSIDE_LADDER:
+            df = F._with_rank_keys(
+                pd.read_csv(out / F.FIGURE_CSV.format(slug=f"healpix-{n}"))
+            )
+            for k in F._RANK_KEYS:
+                assert (df[k] <= 1.0).all(), f"nside={n} {k} exceeded 1: {df[k].max()}"
+                assert (df[k] >= 0.0).all()
+
+    def test_the_drawn_shares_stay_exact_so_the_stack_closes(self, built):
+        """Geometry is not rounded — a rounded share would leave the bar short
+        of or past 100%. Rounding lives in the label and the sort key only."""
+        runs, root, _ = built
+        out = F.cross_dir([r.run_id for r in runs], analysis_root=root)
+        for n in H.NSIDE_LADDER:
+            df = pd.read_csv(out / F.FIGURE_CSV.format(slug=f"healpix-{n}"))
+            total = df[[f"share_{s}" for s in F.SEGMENTS]].sum(axis=1)
+            assert np.allclose(total, 1.0), f"nside={n} stack does not close"
 
     def test_the_panel_orders_genuinely_differ_between_datasets(self, built):
         """Which is why they rank themselves: a single pooled order would hide
@@ -367,3 +400,82 @@ class TestRealRuns:
         out = F.cross_dir([r.run_id for r in runs], analysis_root=root)
         df = pd.read_csv(out / F.FIGURE_CSV.format(slug="healpix-128"))
         assert sorted(df["dataset"].unique()) == ["as01", "as02", "as03"]
+
+
+class TestReportedPrecision:
+    """Accuracy is reported and ranked at the same precision, on purpose."""
+
+    def test_the_sorting_key_is_the_declared_tuple(self):
+        assert F._RANK_KEYS == (
+            "within_ring0", "within_ring1", "within_ring2", "within_beyond",
+        )
+        assert F.ACCURACY_DECIMALS == 2
+
+    def test_a_sub_precision_lead_does_not_decide_the_order(self):
+        """The case that prompted this. as01 at nside 16: million_scale_cbg is
+        in-cell on 259 of 399 targets and octant_cbg_spl on 258 — a one-target
+        lead, 0.6491 vs 0.6466, both printing as 65%. Ranking on the exact
+        share put the *worse* method first with no way for a reader to see why;
+        rounding first makes it a tie and the 1-ring rung resolves it visibly.
+        """
+        rows = [
+            # 259/399 in-cell, weak one ring out.
+            _row("sub_precision_leader", n=399, ring0=259, ring1=65, ring2=30,
+                 beyond=45, failed=0),
+            # 258/399 in-cell, much stronger one ring out.
+            _row("better_next_ring", n=399, ring0=258, ring1=108, ring2=31,
+                 beyond=2, failed=0),
+        ]
+        table = _table(rows)
+        keyed = F._with_rank_keys(table).set_index("method")
+        # Rounded to the reported precision they tie in-cell ...
+        assert keyed.loc["sub_precision_leader", "within_ring0"] == keyed.loc[
+            "better_next_ring", "within_ring0"
+        ]
+        # ... and separate on the next rung, which the labels also show.
+        assert (
+            keyed.loc["better_next_ring", "within_ring1"]
+            > keyed.loc["sub_precision_leader", "within_ring1"]
+        )
+        assert F.panel_order(table, "as01")[0] == "better_next_ring"
+
+    def test_keys_accumulate_on_counts_not_on_rounded_shares(self):
+        """Summing rounded shares compounds: it put `within_beyond` at 1.01."""
+        rows = [_row("m", n=3, ring0=1, ring1=1, ring2=1, beyond=0, failed=0)]
+        keyed = F._with_rank_keys(_table(rows))
+        assert keyed["within_beyond"].iloc[0] <= 1.0
+
+    def test_the_geometry_is_not_rounded(self, tmp_path):
+        """The drawn `share_*` must stay exact, or the bars stop closing at
+        100%. Asserted on the values rather than by grepping the source, which
+        matched the comment explaining the rule and not the code.
+        """
+        from scripts.analysis.v4.modules import classify as CC
+
+        # 399 targets split so that no share is a round 2-decimal number.
+        acc = pd.DataFrame(
+            [
+                {
+                    "method": "m", "nside": 128, "cell_km": 50.9,
+                    "n_targets": 399, "n_solved": 399, "n_fallback": 0,
+                    "n_error": 0, "fallback_rate": 0.0,
+                    "n_ring0": 259, "n_ring1": 65, "n_ring2": 30,
+                    "n_beyond": 45, "n_failed": 0,
+                    "accuracy_ring0": 0.649, "accuracy_nearest_seed_retired": 0.9,
+                    "error_km_p50": 1.0, "error_km_p90": 2.0,
+                }
+            ]
+        )
+        d = tmp_path / "as01-x" / "target-cls-accuracy" / "healpix-128"
+        d.mkdir(parents=True)
+        acc.to_csv(d / CC.ACCURACY_CSV, index=False)
+
+        from scripts.analysis.v4.modules.paths import RunPaths
+
+        run = RunPaths(
+            run_id="as01-x", root=tmp_path, source="generic_csv", setup="s"
+        )
+        table = F.build_table([run], 128, analysis_root=tmp_path)
+        got = float(table["share_n_ring0"].iloc[0])
+        assert got == pytest.approx(259 / 399, abs=1e-12)
+        assert got != round(got, F.ACCURACY_DECIMALS), "the share was rounded"

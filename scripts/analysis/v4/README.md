@@ -113,11 +113,20 @@ reads as that dataset's leaderboard. A method therefore does not keep one x
 slot across panels — deliberate, because the orders genuinely differ
 (Octant-Spline leads as01; Octant-Hull leads as02 and as03).
 
-**A tie cascades outward along the ladder**: level on in-cell is separated by
-within-one-ring, then within-two, then by how much was answered at all. On as01
-`shortest_ping` and `million_scale_cbg` tie at ring 0 (0.3008) *and* at
-within-ring-1 (0.6366) and separate only at within-ring-2, so a one-level
-tiebreak would have ordered them arbitrarily.
+**The sorting key is `(in-cell, 1-ring-out, 2-rings-out, further-out)`,
+descending**, each cumulative and **rounded to 2 decimals** — the same number
+the labels show, so the order always follows from the values on the page. A
+method identical on all four falls back to the pooled order.
+
+Rounding before ranking matters. as01 at nside 16 has `million_scale_cbg`
+in-cell on 259 of 399 targets and `octant_cbg_spl` on 258 (0.6491 vs 0.6466) —
+both print as 65%. On the exact share million_scale ranked first, so the figure
+showed 65% ahead of 65% with the second bar visibly stronger one ring out. At
+the reported precision they tie and the 1-ring rung resolves it, 27% to 16%.
+
+Rounding is confined to the label and the sort key; the drawn shares stay exact
+so every stack closes at 100%, and the exact counts (`n_ring0` ...) stay in the
+CSV twin.
 
 **No traffic-weighted arm is drawn**: none exists, and v3 filled that half from
 a hard-coded dict that rendered 99.3% bars measuring nothing.

@@ -19,14 +19,27 @@ reading its label rather than its position. That is bought deliberately,
 because the orders genuinely differ: Octant-Spline leads as01 while
 Octant-Hull leads as02 and as03, and a single pooled order would hide it.
 
-**A tie cascades outward along the ladder** — level on "in the cell" is
-separated by "within one ring", then "within two", then by how much was
-answered at all. The ladder is the metric, so being level at 51 km and better
-at 102 km is genuinely better, and breaking such a tie on a name or a row order
-would put the worse method first for no reason. It has to go more than one
-level deep: on as01 at nside 128, `shortest_ping` and `million_scale_cbg` tie
-at ring 0 (0.3008) *and* at within-ring-1 (0.6366), separating only at
-within-ring-2 (0.6366 against 0.6867).
+**The sorting key, explicitly, all descending:**
+
+    (in-cell, 1-ring-out, 2-rings-out, further-out)
+
+Each is cumulative and rounded to two decimals — the same number the labels
+show — so the order a reader sees always follows from the values they can
+read. Level on one rung is separated by the next, then the next; a method
+identical on all four falls back to the pooled cross-dataset order so the
+sequence stays reproducible.
+
+It has to go more than one rung deep. On as01 at nside 128 `octant_cbg_spl` and
+`octant_cbg_hull` are both 0.37 in-cell *and* 0.51 one ring out, separating
+only at two rings (0.56 against 0.55).
+
+Rounding *before* ranking is what makes the figure self-consistent, and it
+changes real orders. as01 at nside 16 has `million_scale_cbg` in-cell on 259 of
+399 targets and `octant_cbg_spl` on 258 — 0.6491 against 0.6466, both printing
+as 65%. Ranking on the exact share put million_scale first, so a reader saw
+65% ahead of 65% with the second bar visibly stronger one ring out and no way
+to tell the sort was right. At the reported precision they tie, and the 1-ring
+rung resolves it the way the figure shows (27% against 16%).
 
 ## One figure per rung, not one figure with a resolution axis
 
@@ -196,6 +209,27 @@ _GAP_PT = 1.0
 #: what happens here — the value is never lost, only moved.
 _LABEL_FLOOR = 0.055
 
+
+#: Accuracy is **reported and ranked at two decimals** — i.e. whole percent.
+#:
+#: One number, used for the sort key and for the drawn label, so the displayed
+#: order always follows from the displayed values. The alternative — sorting on
+#: the exact share while labelling a rounded one — makes the figure contradict
+#: itself: as01 at nside 16 has `million_scale_cbg` in-cell on 259 of 399
+#: targets and `octant_cbg_spl` on 258, which is 0.6491 against 0.6466. Both
+#: print as `65%`, so a reader saw `65%` ranked ahead of `65%` with the second
+#: bar visibly better one ring out, and had no way to tell the sort was right.
+#:
+#: Rounding *first* makes that a genuine tie, which the ladder cascade then
+#: resolves on the next ring — and the resolution is visible in the figure,
+#: because the next ring's labels differ. A one-target lead is below the
+#: precision this metric is reported at, so it should not decide an order the
+#: reader cannot verify.
+#:
+#: The exact counts stay in the CSV twin (`n_ring0` ...), so nothing is lost:
+#: the counts are the ground truth and the shares are the reported metric.
+ACCURACY_DECIMALS = 2
+
 FIGURE_PNG = "outcome_bars.{slug}.png"
 FIGURE_CSV = "outcome_bars.{slug}.csv"
 FIGURE_MANIFEST = "outcome_bars.{slug}.manifest.json"
@@ -255,16 +289,24 @@ def build_table(
             raise ValueError(f"none of {methods} are scored at nside={nside}")
     C.guard_partition(table)
     for seg in SEGMENTS:
+        # EXACT. These are the drawn geometry: rounding them would stop the
+        # stack closing at 100%. Rounding happens where it belongs -- in the
+        # label and in the sort key, both at `ACCURACY_DECIMALS`.
         table[f"share_{seg}"] = table[seg] / table["n_targets"]
     return table
 
 
-#: The tolerance ladder, tightest first: share within ring 0, within ring 1,
-#: within ring 2, answered at all. Each is the running sum of the exclusive
-#: segment shares, so `_RANK_KEYS[k]` is "accuracy if you accept k rings of
-#: slack" — which is exactly the sequence a tie should be broken on.
+#: **The bar sorting key, in order, all DESC:**
+#:
+#:     (in-cell, 1-ring-out, 2-rings-out, further-out)
+#:
+#: Each entry is *cumulative* — the running sum of the exclusive segment shares
+#: — so `within_beyond` means "in-cell or 1 ring or 2 rings or further out",
+#: i.e. answered at all. Cumulative is the right form because the ladder is a
+#: tolerance dial: `_RANK_KEYS[k]` is "accuracy if you accept k rings of slack",
+#: and that is the sequence a tie should be broken on.
 _RANK_KEYS: tuple[str, ...] = (
-    "within_ring0", "within_ring1", "within_ring2", "answered",
+    "within_ring0", "within_ring1", "within_ring2", "within_beyond",
 )
 
 
@@ -276,11 +318,15 @@ def _with_rank_keys(table: pd.DataFrame) -> pd.DataFrame:
     a hand-built fixture that never went through `classify`.
     """
     out = table.copy()
-    running = 0.0
     placed = [s for s in SEGMENTS if s != "n_failed"]
+    assert len(placed) == len(_RANK_KEYS), "a segment has no rank key"
+    # Accumulate the exact integer COUNTS, then divide and round **once**.
+    # Summing already-rounded shares compounds the error -- it put
+    # `within_beyond` at 1.01, which is not a share of anything.
+    running = 0
     for key, seg in zip(_RANK_KEYS, placed):
-        running = running + out[f"share_{seg}"]
-        out[key] = running
+        running = running + out[seg]
+        out[key] = (running / out["n_targets"]).round(ACCURACY_DECIMALS)
     return out
 
 
@@ -354,6 +400,7 @@ def render(
     out_dir: Path,
     *,
     order: list[str] | None = None,
+    decimals: int | None = None,
     dpi: int = 150,
 ) -> Path:
     """One panel per dataset, one bar per method, segments stacked bottom-up.
@@ -371,6 +418,7 @@ def render(
 
     datasets = sorted(table["dataset"].unique())
     pinned = list(order) if order else None
+    nd = ACCURACY_DECIMALS if decimals is None else decimals
     slug = grid_slug(nside)
 
     fig, axes = plt.subplots(
@@ -418,7 +466,9 @@ def render(
                     ax.text(
                         x,
                         b + v / 2,
-                        f"{v * 100:.0f}%",
+                        # Round to the reported precision, then print as a
+                        # percent, so the label is exactly the ranked value.
+                        f"{round(float(v), nd) * 100:.0f}%",
                         ha="center",
                         va="center",
                         fontsize=8,
