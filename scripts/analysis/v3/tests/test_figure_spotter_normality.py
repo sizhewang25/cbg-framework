@@ -19,10 +19,16 @@ from scripts.analysis.v3.modules.config import REPO_ROOT
 #: The `spotter_cbg` ltd_kwargs the published operator runs fitted with. The
 #: command's defaults must equal these, or the diagnostic describes a model
 #: nobody deployed.
+#:
+#: `bin_size_ms` is deliberately absent. The fit runs on raw (rtt, distance)
+#: pairs, so that key now configures only the `cutoff_rtt` density scan, and
+#: the config takes `NormalDistLTD`'s default for it rather than restating it.
+#: The command has to take that same default, which is asserted separately
+#: against the LTD class below -- pinning the literal 5.0 in two places is
+#: exactly the drift this module exists to stop.
 DEPLOYED_FIT_KWARGS = {
     "deg_mu": 3,
     "deg_sigma": 2,
-    "bin_size_ms": 5.0,
     "cutoff_min_points": 5,
 }
 
@@ -52,6 +58,25 @@ def test_the_fit_defaults_are_the_kwargs_the_operator_runs_deployed():
     defaults = {k: v.default for k, v in _params().items()}
     for key, want in DEPLOYED_FIT_KWARGS.items():
         assert defaults[key] == want, key
+
+    # `spotter_hybrid_cbg` is commented out of the as0* configs -- the ablation
+    # it supports has been measured -- so its absence is expected state, not a
+    # failure. Conditional rather than deleted: both Spotter arms fit the SAME
+    # LTD, so if the hybrid is ever uncommented with different `ltd_kwargs` the
+    # diagnostic would quietly describe only one of the two.
+    hybrid = next(
+        (c for c in cfg["benchmark"]["combos"] if c["combo_id"] == "spotter_hybrid_cbg"),
+        None,
+    )
+    if hybrid is not None:
+        assert hybrid["ltd"] == "normal_dist"
+        assert hybrid["ltd_kwargs"] == DEPLOYED_FIT_KWARGS
+
+    # `bin_size_ms` is stated in neither place, so the command and the runner
+    # agree only as long as they inherit the SAME default.
+    from scripts.framework.v2.ltd.normal_dist import NormalDistLTD
+
+    assert defaults["bin_size_ms"] == NormalDistLTD().bin_size_ms
     # `target_coverage` is never exposed: k must stay 1.0 so panel (a)'s band
     # is the paper's mu +/- sigma rather than a coverage-calibrated annulus.
     assert "target_coverage" not in defaults

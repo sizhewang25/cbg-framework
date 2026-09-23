@@ -1,7 +1,9 @@
 """GaussianDensityMTL — Spotter's joint probability surface (Laki et al. 2011, §III).
 
 The faithful reading of the paper's multilateration step, as opposed to the
-annular-intersection stack `spotter_cbg` currently borrows from Octant. See
+annular-intersection stack borrowed from Octant. On the as0* configs this is
+what `spotter_cbg` now composes; the Octant-geometry version it replaced is
+still scored alongside it as `spotter_hybrid_cbg`. See
 notes/2026-09-18-spotter-mtl-fidelity-gap.md for why that stack is not Spotter.
 
 ## What the paper actually asks for

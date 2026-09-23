@@ -7,6 +7,13 @@
 — that note audits Spotter's **LTD** claim (pooled landmark-independent normal) on our
 data. This note audits the **MTL and CTR** stages, which that note did not touch.
 
+> **NAMING (2026-09-22).** The combo ids below predate the as0* config rename.
+> Throughout this note, `spotter_cbg` means the Octant-geometry hybrid and
+> `spotter_true` means the faithful density stack. In `configs/as0*.yaml` those
+> are now `spotter_hybrid_cbg` and `spotter_cbg` respectively — the faithful
+> implementation took the plain name, because it is the one that is Spotter.
+> The numbers are unaffected; only the labels moved.
+
 ## Summary
 
 Our `normal_dist` LTD is a faithful implementation of Spotter's delay-distance model.

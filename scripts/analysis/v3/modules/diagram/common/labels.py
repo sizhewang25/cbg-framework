@@ -12,6 +12,13 @@ from scripts.analysis.v3.modules.classify import SHORTEST_PING
 
 #: Display labels. Keyed by method id; the Octant-Spline combo id differs by run
 #: (`octant_cbg_spl` on the operator runs, `octant_cbg` on the RIPE run).
+#:
+#: `spotter_cbg` also means two different pipelines depending on the run. On
+#: the as0* configs it is now Spotter as the paper describes it -- a Gaussian
+#: density MTL with an argmax CTR -- and the Octant-geometry hybrid that used
+#: to hold the name moved to `spotter_hybrid_cbg`. The as7018 configs have not
+#: been renamed, so `spotter_cbg` there is still the hybrid. Do not pool the
+#: two under one label in a cross-run table without re-running as7018.
 LABELS: dict[str, str] = {
     SHORTEST_PING: "Shortest-Ping",
     "million_scale_cbg": "SoI CBG",
@@ -20,6 +27,7 @@ LABELS: dict[str, str] = {
     "octant_cbg_spl": "Octant-Spline CBG",
     "octant_cbg": "Octant-Spline CBG",
     "spotter_cbg": "Spotter CBG",
+    "spotter_hybrid_cbg": "Spotter-Hybrid CBG",
 }
 
 
@@ -32,6 +40,7 @@ PREFERRED_ORDER: tuple[str, ...] = (
     "octant_cbg_spl",
     "octant_cbg",
     "spotter_cbg",
+    "spotter_hybrid_cbg",
 )
 
 
@@ -43,6 +52,13 @@ PREFERRED_ORDER: tuple[str, ...] = (
 #: only hold one, and this holds the operator runs' spelling: `as7018_us_test01`
 #: names it `octant_cbg` and is out of scope until it is re-run with its columns
 #: consolidated onto the other AS runs' schema.
+#:
+#: `spotter_hybrid_cbg` is deliberately absent while carrying both a `LABELS`
+#: entry and a `PREFERRED_ORDER` slot. It is an ablation arm, parked in the as0*
+#: configs, so it should be named and sorted correctly if it reappears -- but it
+#: is not one of the six. The count is load-bearing: `palette._build_label_hues`
+#: walks this tuple against exactly six validated hues, so a seventh entry
+#: silently drops a published variant into the grey "other" bucket.
 PUBLISHED_METHODS: tuple[str, ...] = (
     SHORTEST_PING,
     "million_scale_cbg",

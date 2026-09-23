@@ -5,6 +5,13 @@
 IEEE 2011 — `papers/references/`. Sections cited: III-A, III-B, IV-B, IV-C, V-A-2.
 **Status:** conclusion note. Consolidates four investigations; supersedes none of them.
 
+> **NAMING (2026-09-22).** The combo ids below predate the as0* config rename.
+> Throughout this note, `spotter_cbg` means the Octant-geometry hybrid and
+> `spotter_true` means the faithful density stack. In `configs/as0*.yaml` those
+> are now `spotter_hybrid_cbg` and `spotter_cbg` respectively — the faithful
+> implementation took the plain name, because it is the one that is Spotter.
+> The numbers are unaffected; only the labels moved.
+
 ## The Spotter document set
 
 Read in this order:
@@ -174,6 +181,48 @@ fold pinning is not recoverable — `run.json` records `source_kwargs: null`). I
 a **weak instrument**: 399 targets span only **20 distinct coordinates**, every
 region appears in all five folds, and the classification metric quantises in 5%
 steps. Treat the ordering as solid and the magnitudes as coarse.
+
+### 2.1.1 The two accuracy metrics disagree, and the disagreement is the finding
+
+Re-scored 2026-09-22 after the hybrid was parked and `spotter_cbg` became the
+faithful arm (`outputs/analysis/v3/as01-260728-260802-mesh/target-cls-accuracy/h3-4/`):
+
+| method | top-1 | top-3 | p5 | p25 | p50 | p90 |
+|---|---|---|---|---|---|---|
+| shortest_ping | 0.637 | 0.787 | 2.2 | 26.2 | 50.3 | 3657 |
+| million_scale_cbg | 0.662 | 0.812 | 2.2 | 25.3 | 50.3 | 2010 |
+| vanilla_cbg | 0.439 | 0.619 | 14.6 | 36.4 | 75.4 | 2118 |
+| octant_cbg_hull | 0.749 | **0.940** | **0.8** | **6.2** | **71.5** | **496** |
+| octant_cbg_spl | 0.714 | **0.980** | 0.9 | 6.3 | 79.9 | 630 |
+| **spotter_cbg** | **0.887** | 0.937 | 54.6 | 144.8 | 198.1 | 2356 |
+
+Spotter has the **best top-1 classification accuracy of any method and the worst
+median error**, by a factor of 2.5 against Octant-Hull. Both numbers are correct
+and they are measuring different things.
+
+The mechanism is the grid. `DensityArgmaxCTR` returns an H3-4 **cell centre**, so
+the estimate is quantised to the answer space's own granularity before it is
+scored. The 20 distinct target coordinates sit ~300 km apart, so an estimate can
+be 200 km from the truth and still be nearest the right seed — the classification
+metric cannot see the miss, while p50 reports it in full. This is the same
+"centroid snapping as a tolerance mechanism" recorded for the hybrid in
+[finding_exclusive_region_verified], except that here the snapping is literal
+rather than emergent: the estimator cannot return anything but a cell centre.
+
+Two consequences worth stating plainly:
+
+- **Do not read this as "Spotter wins".** On a metric that does not quantise —
+  p5, p25, p50, p90 — it is last or near-last at every percentile. The top-1
+  number is an artefact of the answer space being coarser than the error.
+- **It is a real property of the method, not a scoring bug.** An operator whose
+  question is "which metro?" genuinely gets the right answer 88.7% of the time
+  from this estimator. An operator who needs a coordinate does not.
+
+The honest comparison is Octant-Hull: it wins p5/p25/p50/p90 *and* top-3, and
+loses top-1 only because its continuous estimate can land just across a cell
+boundary that Spotter's quantised one cannot. Resolving which metric the paper
+should lead with needs a finer answer space, which as01's 20 coordinates cannot
+provide — see the weak-instrument caveat above.
 
 ## 2.2 Abandoned arm, and why it is worth recording
 

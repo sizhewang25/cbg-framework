@@ -287,6 +287,31 @@ def test_the_six_published_variants_each_get_their_own_hue():
     assert P._C_OTHER not in got.values()
 
 
+def test_the_published_set_and_the_palette_have_the_same_capacity():
+    """The coupling that broke when `spotter_hybrid_cbg` was added.
+
+    Hues used to be handed out walking `PREFERRED_ORDER`, which is a *sort key*
+    and grows whenever an arm needs somewhere to sort. Adding one entry ahead of
+    `spotter_cbg` consumed the sixth hue and dropped a published variant into
+    the grey bucket -- a figure where Spotter is drawn as "other". Assert the
+    two capacities directly so the next arm fails here rather than in a figure.
+    """
+    from scripts.analysis.v3.modules.diagram.common import labels
+    from scripts.analysis.v3.modules.diagram.common import palette
+
+    distinct_labels = {labels.label_for(m) for m in labels.PUBLISHED_METHODS}
+    assert len(distinct_labels) == len(palette._VARIANT_HUES)
+
+
+def test_a_non_published_arm_cannot_take_a_published_variants_hue():
+    """`spotter_hybrid_cbg` is scored alongside the six but is not one of them,
+    so it belongs in the grey bucket until a 7-hue palette is validated."""
+    got = P.method_colors(_PUBLISHED + ["spotter_hybrid_cbg"])
+    assert got["spotter_hybrid_cbg"] == P._C_OTHER
+    for m in _PUBLISHED:
+        assert got[m] != P._C_OTHER, m
+
+
 def test_filtering_the_method_pool_does_not_repaint_the_survivors():
     """The regression this guards is the recolor-on-filter anti-pattern: colour
     must follow the entity, never its rank within the current selection.

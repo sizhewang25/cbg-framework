@@ -1,20 +1,21 @@
 """Variant -> hue, fixed at import from a constant order.
 
 Lives here rather than in `pareto.py` (where it was written) because it is keyed
-on `label_for` and `PREFERRED_ORDER`, and because every module that draws a
+on `label_for` and `PUBLISHED_METHODS`, and because every module that draws a
 variant needs it. `pareto` imports it back; the dependency only runs one way.
 """
 
 from __future__ import annotations
 
 from scripts.analysis.v3.modules.diagram.common.labels import (
-    PREFERRED_ORDER,
+    PUBLISHED_METHODS,
     label_for,
 )
 
 
-#: Fixed variant -> hue, assigned by **identity** (`PREFERRED_ORDER`) and never
-#: by rank in the current selection, so `--method` cannot repaint the survivors.
+#: Fixed variant -> hue, assigned by **identity** (`PUBLISHED_METHODS`) and
+#: never by rank in the current selection, so `--method` cannot repaint the
+#: survivors.
 #:
 #: Validated with the dataviz skill's `validate_palette.js` against the
 #: reference 8-hue categorical theme, `--pairs all` on white — the right check
@@ -57,17 +58,30 @@ _SURFACE = "#ffffff"
 
 
 def _build_label_hues() -> dict[str, str]:
-    """Display label -> hue, fixed once from `PREFERRED_ORDER`.
+    """Display label -> hue, fixed once from `PUBLISHED_METHODS`.
 
     Keyed on the *label* rather than the combo id so `octant_cbg_spl` and
     `octant_cbg` land on one hue: they are one paper variant whose id differs
     per run, which is why `LABELS` already maps both onto "Octant-Spline CBG".
     Two hues would invent a distinction the runs do not contain. That aliasing
-    is also what makes the six published variants fit the six validated hues
-    exactly.
+    is what lets `PUBLISHED_METHODS` name one id per variant and still colour
+    either spelling.
+
+    Driven by `PUBLISHED_METHODS` rather than `PREFERRED_ORDER` because the two
+    answer different questions and only one of them is capacity-bounded.
+    `PREFERRED_ORDER` is a sort key and grows whenever an arm needs a place to
+    sort; the palette has exactly six validated hues. Reading the sort key here
+    meant that adding `spotter_hybrid_cbg` to it consumed the sixth hue and
+    pushed `spotter_cbg` -- a published variant -- into the grey bucket. The
+    published set is fixed at six by the same argument that fixed the palette at
+    six, so keying on it makes the capacities match by construction.
+
+    An arm outside that set gets `_C_OTHER`. That is the documented behaviour
+    for as7018's ablation arms and it applies to `spotter_hybrid_cbg` too:
+    promoting it to a hue of its own needs a 7-hue re-validation first.
     """
     hues: dict[str, str] = {}
-    for method in PREFERRED_ORDER:
+    for method in PUBLISHED_METHODS:
         label = label_for(method)
         if label in hues:
             continue
@@ -90,8 +104,9 @@ def method_colors(methods) -> dict[str, str]:
     entity, never its rank in the current selection, and the same variant is
     the same colour in every figure of a sweep.
 
-    Anything `PREFERRED_ORDER` does not name — as7018's 11 ablation arms —
-    folds into the single `_C_OTHER` bucket rather than being handed a generated
-    hue, because no palette distinguishes 17 series.
+    Anything `PUBLISHED_METHODS` does not name — as7018's 11 ablation arms,
+    and `spotter_hybrid_cbg` — folds into the single `_C_OTHER` bucket rather
+    than being handed a generated hue, because no palette distinguishes 17
+    series and only six of these hues are validated.
     """
     return {m: _LABEL_HUES.get(label_for(m), _C_OTHER) for m in methods}

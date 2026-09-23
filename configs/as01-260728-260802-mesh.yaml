@@ -80,31 +80,63 @@ benchmark:
       ctr_kwargs:
         n_samples: 1024
 
-    - combo_id: spotter_cbg
-      ltd: normal_dist
-      mtl: planar_annulus_weighted
-      ctr: monte_carlo_medoid
-      ltd_kwargs:
-        deg_mu: 3
-        deg_sigma: 2
-        bin_size_ms: 5.0
-        cutoff_min_points: 5
-      mtl_kwargs:
-        n_pts: 64
-        enable_circle_filter: true
-        weight_tau_ms: 50.0
-        highest_weight_only: true
-      ctr_kwargs:
-        n_samples: 1024
+    # --- Spotter: two arms, one delay-distance model ----------------------
+    # Both fit the SAME pooled-normal LTD -- Laki et al. 2011 SS IV-B's claim
+    # is one (mu(d), sigma(d)) shared by every landmark, evaluated at that
+    # landmark's own measured delay. They differ only in what the geometry
+    # downstream does with the sigma it is handed.
+    #
+    # `bin_size_ms` is deliberately absent from both. The fit runs on raw
+    # (rtt, distance) pairs now, so the only thing that key still configures
+    # is the `cutoff_rtt` density scan -- and 5.0 is already NormalDistLTD's
+    # default for it. Restating a default here just creates a second copy
+    # free to drift from the first.
 
-    - combo_id: spotter_true
+    # Spotter's LTD inside Octant's geometry. This is the combo the earlier
+    # runs published as `spotter_cbg`, renamed so the name stops claiming to
+    # be the paper. Every key below `ltd:` is octant_cbg_spl's verbatim, and
+    # that is the point: it isolates the delay-distance model as the single
+    # difference, which is what makes the pair readable as an ablation.
+    #
+    # PARKED, not deleted. The ablation it supports has been measured and
+    # written up; scoring it on every run costs a fold sweep to re-derive a
+    # number we already have. Uncomment to bring it back -- and note that
+    # commenting it out here is NOT enough on its own to remove it from the
+    # figures, because the analysis layer enumerates combos by globbing the
+    # output tree (`RunPaths.combo_ids`) rather than reading this file. Its
+    # benchmark output was moved to outputs/benchmark/.disabled/ for that
+    # reason; restoring the arm means moving it back or re-running.
+    # - combo_id: spotter_hybrid_cbg
+    #   ltd: normal_dist
+    #   mtl: planar_annulus_weighted
+    #   ctr: monte_carlo_medoid
+    #   ltd_kwargs:
+    #     deg_mu: 3
+    #     deg_sigma: 2
+    #     cutoff_min_points: 5
+    #   mtl_kwargs:
+    #     n_pts: 64
+    #     enable_circle_filter: true
+    #     weight_tau_ms: 50.0
+    #     highest_weight_only: true
+    #   ctr_kwargs:
+    #     n_samples: 1024
+
+    # Spotter as the paper describes it: the target region is the
+    # intersection MAXIMIZING the product of every landmark's density, not a
+    # hard AND of annuli. Three consequences, all of which the hybrid gets
+    # wrong -- no pruning of constraints by inclusion, no veto (a
+    # contradicting landmark is one low score, never an empty region), and a
+    # CTR that reads the density surface rather than averaging vertices that
+    # were placed density-blind.
+    # See notes/2026-09-22-spotter-faithful-vs-harness-conclusion.md.
+    - combo_id: spotter_cbg
       ltd: normal_dist
       mtl: gaussian_density
       ctr: density_argmax
       ltd_kwargs:
         deg_mu: 3
         deg_sigma: 2
-        bin_size_ms: 5.0
         cutoff_min_points: 5
       mtl_kwargs:
         resolution: 4
@@ -163,7 +195,9 @@ analysis:
   #
   # The fit kwargs are NOT restated: the command's defaults are this config's
   # own `spotter_cbg.ltd_kwargs`, and a test asserts the two still agree, so a
-  # copy here would be a second declaration free to drift.
+  # copy here would be a second declaration free to drift. Both Spotter arms
+  # share one `ltd_kwargs` block, so the diagnostic describes the model behind
+  # `spotter_hybrid_cbg` equally -- the arms diverge downstream of the fit.
   plot-spotter-normality:
     # The paper's claim is about the landmark that PERFORMED the measurement,
     # and in this dataset that is unambiguously the VP.
