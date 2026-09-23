@@ -10,11 +10,14 @@
   // the method name rather than sniffed from the data here, so a CBG run that
   // happened to produce nothing is not mistaken for the baseline.
   const isBaseline = data.is_baseline === true;
-  // A density MTL (Spotter's Eq. 2) answers with a probability field over an H3
-  // grid, not with a feasible set, so there is no region to draw and no
-  // inclusion filter to report. Stated by Python off the MTL's registry family,
-  // for the same reason `isBaseline` is: an empty `region` alone cannot
-  // distinguish "this method has no region" from "this target had none".
+  // A density MTL (Spotter's Eq. 2) answers with a probability field over a
+  // HEALPix grid, not with a feasible set. There is still a region to draw --
+  // the grid cell the argmax fell in, which Python recovers by re-binning the
+  // stored prediction -- but it is a quantisation of the point estimate rather
+  // than a feasible set, and there is no inclusion filter to report. Stated by
+  // Python off the MTL's registry family, for the same reason `isBaseline` is:
+  // an empty `region` alone cannot distinguish "this method has no region"
+  // from "this target had none".
   const isDensity = data.region_mode === "density";
 
   const statusSel = document.getElementById("status");
@@ -176,11 +179,10 @@
   }
   if (isDensity && !isBaseline) {
     // The annuli stay -- they are the per-landmark constraints and still worth
-    // reading -- but these two controls have nothing to act on. `showRegion`
-    // toggles a layer this method never produces, and `post-filter only` would
-    // filter by an inclusion filter that never ran, so both would read as
-    // broken rather than as inapplicable.
-    for (const id of ["keptOnly", "showRegion"]) hideControl(id);
+    // reading -- and `showRegion` now has the argmax cell to toggle. Only
+    // `post-filter only` goes: it would filter by an inclusion filter that
+    // never ran, so it reads as broken rather than as inapplicable.
+    hideControl("keptOnly");
   }
   if (isBaseline) {
     for (const id of ["showRings", "keptOnly", "showRegion", "maxR"]) hideControl(id);
@@ -500,7 +502,9 @@
       }
       if (fillRings.length) traces.push(Object.assign(
         ringsToTrace(fillRings, REGION_FILL, REGION_LINE, 1.3),
-        { name: `feasible region (${t.region.kind})` }));
+        { name: isDensity
+            ? `argmax cell (${t.region.kind})`
+            : `feasible region (${t.region.kind})` }));
       // A hole is drawn as an outline over the same fill, not as a punched-out
       // patch. Plotly cannot express a real hole on a `toself` path, so the
       // previous version overpainted it in the ocean colour — which reads as a
@@ -603,11 +607,12 @@
         ? ""
         : isDensity
         ? // No inclusion filter runs, so every constraint participates and
-          // `n_kept` carries no information; and the answer is a density
-          // surface, which this map deliberately does not draw.
+          // `n_kept` carries no information. The region is named for what it
+          // is -- the argmax's own cell -- so it is not read as a feasible set.
           `LTD constraints ${(t.rings || []).length} (all contribute, no ` +
-          `inclusion filter), ${shown} drawn · region=density surface ` +
-          `(${data.grid}-${data.resolution}, not drawn; ▲ is the argmax) · `
+          `inclusion filter), ${shown} drawn · region=` +
+          `${t.region ? `argmax cell (healpix nside=${data.density_nside})` : "none"}` +
+          ` · `
         : `LTD constraints ${t.n_kept}/${(t.rings || []).length} kept by the inclusion ` +
           `filter, ${shown} drawn${dropped ? `, ${dropped} dropped` : ""} · ` +
           `region=${t.region ? t.region.kind : "none"} · `) +

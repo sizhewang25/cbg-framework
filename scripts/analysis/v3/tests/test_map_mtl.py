@@ -946,6 +946,24 @@ def test_region_mode_reaches_the_payload_and_rings_survive_it(tmp_path):
     assert t0["pred"] is not None, "the argmax estimate is still shown"
 
 
+def test_a_density_target_with_no_cell_still_reads_as_none(tmp_path):
+    """A prediction that is absent (a fallback, say) has no cell to draw, and
+    that must stay distinguishable from "this method has no region"."""
+    space = _space()
+    folds = pd.DataFrame({
+        "target_id": space.assignments["target_id"].to_numpy(),
+        "ltd_predictions": [[{"vp_id": "vp-0", "success": True,
+                              "upper_km": 900.0, "lower_km": 400.0}]] * len(space.assignments),
+        "mtl_participants": [[{"vp_id": "vp-0"}]] * len(space.assignments),
+    })
+    payload = _payload(
+        space, folds=folds, regions={}, region_mode="density", density_nside=128,
+    )
+    out = tmp_path / "density_noregion.html"
+    out.write_text(render_html(payload), encoding="utf-8")
+    assert "region=none" in _run_harness(out)["meta"]
+
+
 def test_the_payload_defaults_to_geometric_and_rejects_an_unknown_mode():
     space = _space()
     assert _payload(space)["region_mode"] == "geometric"
@@ -965,18 +983,40 @@ def _density_payload(space):
             {"vp_id": "vp-0"}, {"vp_id": "vp-1"},
         ]] * len(space.assignments),
     })
-    return _payload(space, folds=folds, regions={}, region_mode="density")
+    from scripts.analysis.v3.modules.map_mtl import argmax_cell_regions
+
+    scores = _scores(space)
+    regions = {
+        str(t): {
+            "kind": "healpix_cell",
+            # [lat, lon] and CLOCKWISE: Plotly's spherical `toself` fills the
+            # antipodal hemisphere for a CCW ring, and the viewer harness
+            # rejects one.
+            "rings": [{"outer": [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5],
+                                 [0.0, 0.5], [0.0, 0.0]],
+                       "holes": []}],
+        }
+        for t in scores["target_id"]
+    }
+    return _payload(
+        space, folds=folds, regions=regions, region_mode="density",
+        density_nside=128,
+    )
 
 
-def test_the_density_view_drops_the_two_controls_that_have_nothing_to_act_on(tmp_path):
-    """`showRegion` toggles a layer this method never produces and `keptOnly`
-    filters by an inclusion filter that never ran. `showRings` and `maxR` stay:
-    the annuli are real per-landmark constraints."""
+def test_the_density_view_drops_only_the_control_with_nothing_to_act_on(tmp_path):
+    """`keptOnly` filters by an inclusion filter that never ran, so it goes.
+
+    `showRegion` stays: a density combo *does* have a region to draw now -- the
+    grid cell its argmax fell in, recovered by re-binning the stored prediction.
+    `showRings` and `maxR` stay too; the annuli are real per-landmark
+    constraints.
+    """
     space = _space()
     out = tmp_path / "density.html"
     out.write_text(render_html(_density_payload(space)), encoding="utf-8")
     report = _run_harness(out)
-    assert sorted(report["hiddenControls"]) == ["keptOnly", "showRegion"]
+    assert sorted(report["hiddenControls"]) == ["keptOnly"]
 
 
 def test_the_density_meta_line_makes_no_inclusion_filter_claim(tmp_path):
@@ -998,7 +1038,16 @@ def test_the_density_meta_line_makes_no_inclusion_filter_claim(tmp_path):
     assert "kept by the inclusion filter" not in meta, meta
     assert "region=none" not in meta, meta
     assert "all contribute, no inclusion filter" in meta
-    assert "density surface" in meta
+    # And the region is named for what it is, so it is not read as a feasible
+    # set: it is the quantisation of the point estimate.
+    assert "argmax cell (healpix nside=128)" in meta, meta
+    # "density surface" is gone on purpose. It described a thing the map did not
+    # draw; now that the argmax cell IS drawn, naming the surface instead of the
+    # cell would misdescribe what is on screen.
+    assert "density surface" not in meta, meta
+    # The nside is the MTL's own, never the answer space's. Those are different
+    # tessellations at different resolutions and the fixture's space is h3.
+    assert "h3" not in meta.split("argmax cell")[1].split("·")[0], meta
 
     # And the geometric view must keep the claim it is entitled to make.
     geo = tmp_path / "geo.html"
@@ -1017,3 +1066,138 @@ def test_the_density_view_still_draws_the_annuli_and_the_estimate(tmp_path):
     for expected in ("outer bounds", "prediction", "true target"):
         assert expected in every, f"{expected!r} missing: {every!r}"
     assert "feasible region" not in every, every
+
+
+# ---- the density region: the argmax's own cell ------------------------------
+#
+# `replay_mtl` cannot rebuild a density MTL's answer, so this map drew nothing
+# at all for Spotter. It does not need to: `density_argmax` returns a *cell
+# centre*, so re-binning the stored prediction recovers the exact cell, and the
+# boundary is closed-form. No replay, no schema change, no global grid.
+
+
+def _density_scores(target_ids, lats, lons):
+    return pd.DataFrame({
+        "target_id": list(target_ids),
+        "pred_lat": list(lats),
+        "pred_lon": list(lons),
+    })
+
+
+def test_the_nside_comes_from_the_combos_own_kwargs(tmp_path):
+    from scripts.analysis.v3.modules.map_mtl import density_nside
+
+    run = _run_with_combo(tmp_path, "spotter_cbg", "gaussian_density",
+                          {"grid": "healpix", "resolution": 128,
+                           "coarse_resolution": 16})
+    assert density_nside(run, "spotter_cbg") == 128
+
+
+def test_a_combo_predating_the_grid_key_falls_back_to_the_working_nside(tmp_path):
+    """An H3-era `run.json` has `resolution: 4` and no `grid`. Its cell cannot
+    be drawn honestly, but neither should reading it crash the whole render."""
+    from scripts.analysis.v3.modules.map_mtl import density_nside
+
+    run = _run_with_combo(tmp_path, "spotter_h3_cbg", "gaussian_density",
+                          {"resolution": 4, "coarse_resolution": 2})
+    # No `grid` key, so it is read as the default scheme at that resolution --
+    # which is what the cell would be drawn at. The caller sees a number, not a
+    # silent zero-cell region.
+    assert density_nside(run, "spotter_h3_cbg") == 4
+
+
+def test_a_non_healpix_grid_yields_no_cell(tmp_path):
+    """Refuses rather than drawing a HEALPix cell for some other tessellation."""
+    from scripts.analysis.v3.modules.map_mtl import argmax_cell_regions, density_nside
+
+    run = _run_with_combo(tmp_path, "spotter_cbg", "gaussian_density",
+                          {"grid": "htm", "resolution": 7})
+    assert density_nside(run, "spotter_cbg") is None
+    scores = _density_scores(["tg-0"], [39.74], [-104.99])
+    assert argmax_cell_regions(run, "spotter_cbg", scores) == {}
+
+
+def test_the_drawn_cell_contains_the_prediction(tmp_path):
+    """The property that makes this correct at all: the cell is the one the
+    prediction re-bins into, so the estimate must sit inside what is drawn."""
+    from scripts.analysis.v3.modules.map_mtl import argmax_cell_regions
+
+    run = _run_with_combo(tmp_path, "spotter_cbg", "gaussian_density",
+                          {"grid": "healpix", "resolution": 128,
+                           "coarse_resolution": 16})
+    preds = [(39.74, -104.99), (47.45, -122.31), (-33.87, 151.21)]
+    scores = _density_scores(
+        [f"tg-{i}" for i in range(3)],
+        [p[0] for p in preds], [p[1] for p in preds],
+    )
+    regions = argmax_cell_regions(run, "spotter_cbg", scores)
+    assert set(regions) == {"tg-0", "tg-1", "tg-2"}
+    for (lat, lon), tid in zip(preds, ["tg-0", "tg-1", "tg-2"]):
+        outer = regions[tid]["rings"][0]["outer"]
+        lats = [p[0] for p in outer]
+        lons = [p[1] for p in outer]
+        assert min(lats) <= lat <= max(lats), tid
+        assert min(lons) <= lon <= max(lons), tid
+
+
+def test_the_drawn_ring_is_clockwise(tmp_path):
+    """Plotly's spherical `toself` uses the right-hand convention, so a CCW
+    ring fills the antipodal hemisphere -- the whole globe minus the cell.
+    `astropy_healpix` traces boundaries counter-clockwise, so this is a real
+    flip and not a no-op; the viewer harness caught it."""
+    import numpy as np
+
+    from scripts.analysis.v3.modules.map_mtl import argmax_cell_regions
+
+    run = _run_with_combo(tmp_path, "spotter_cbg", "gaussian_density",
+                          {"grid": "healpix", "resolution": 128,
+                           "coarse_resolution": 16})
+    scores = _density_scores(
+        [f"tg-{i}" for i in range(4)],
+        [39.74, 0.0, 85.0, -85.0], [-104.99, 179.9, 10.0, -10.0],
+    )
+    for tid, region in argmax_cell_regions(run, "spotter_cbg", scores).items():
+        outer = np.asarray(region["rings"][0]["outer"], dtype=float)
+        lat, lon = outer[:, 0], outer[:, 1]
+        twice_area = float(np.sum(lon * np.roll(lat, -1) - np.roll(lon, -1) * lat))
+        assert twice_area < 0, f"{tid} ring is counter-clockwise"
+
+
+def test_the_ring_is_closed(tmp_path):
+    from scripts.analysis.v3.modules.map_mtl import argmax_cell_regions
+
+    run = _run_with_combo(tmp_path, "spotter_cbg", "gaussian_density",
+                          {"grid": "healpix", "resolution": 128,
+                           "coarse_resolution": 16})
+    scores = _density_scores(["tg-0"], [39.74], [-104.99])
+    outer = argmax_cell_regions(run, "spotter_cbg", scores)["tg-0"]["rings"][0]["outer"]
+    assert outer[0] == outer[-1]
+
+
+def test_a_target_with_no_prediction_gets_no_cell(tmp_path):
+    """A fallback leaves `pred_lat` null. It must be absent from the mapping
+    rather than drawn at (0, 0)."""
+    from scripts.analysis.v3.modules.map_mtl import argmax_cell_regions
+
+    run = _run_with_combo(tmp_path, "spotter_cbg", "gaussian_density",
+                          {"grid": "healpix", "resolution": 128,
+                           "coarse_resolution": 16})
+    scores = _density_scores(
+        ["tg-0", "tg-1"], [39.74, None], [-104.99, None]
+    )
+    regions = argmax_cell_regions(run, "spotter_cbg", scores)
+    assert set(regions) == {"tg-0"}
+
+
+def test_two_predictions_in_one_cell_get_the_same_ring(tmp_path):
+    """The cell is a quantisation, so it must be shared -- otherwise it is
+    being drawn around the point rather than read off the grid."""
+    from scripts.analysis.v3.modules.map_mtl import argmax_cell_regions
+
+    run = _run_with_combo(tmp_path, "spotter_cbg", "gaussian_density",
+                          {"grid": "healpix", "resolution": 16,
+                           "coarse_resolution": 16})
+    scores = _density_scores(["tg-0", "tg-1"], [39.74, 39.80], [-104.99, -104.95])
+    regions = argmax_cell_regions(run, "spotter_cbg", scores)
+    assert (regions["tg-0"]["rings"][0]["outer"]
+            == regions["tg-1"]["rings"][0]["outer"])

@@ -4,7 +4,7 @@ The v3 figures are static: they show a distribution, not a case. This one is the
 case viewer — pick a target and read, on one map, every quantity the top-1
 classification verdict is made of:
 
-  - the **seed regions**, drawn as the H3 cells they actually are, with the
+  - the **seed regions**, drawn as the grid cells they actually are, with the
     prediction's top-1 / top-2 / top-3 candidates coloured red / orange / yellow;
   - the **margin**, half the geodesic between the top-1 and top-2 seed — the
     radius inside which any coordinate snaps to top-1, so it is the scale at
@@ -56,6 +56,7 @@ import numpy as np
 import pandas as pd
 import typer
 
+from scripts.libs.healpix import grid as healpix_grid
 from scripts.analysis.v3.modules import io
 from scripts.analysis.v3.modules.answer_space import (
     AnswerSpace,
@@ -359,6 +360,108 @@ def combo_region_mode(run: RunPaths, combo_id: str) -> str:
     return REGION_DENSITY if any(is_density_mtl(n) for n in names) else REGION_GEOMETRIC
 
 
+#: nside for a density combo's cell, read from its own `mtl_kwargs`. Falls back
+#: to the working resolution when a combo predates the key.
+_DEFAULT_DENSITY_NSIDE = 128
+
+
+def density_nside(run: RunPaths, combo_id: str) -> int | None:
+    """The nside a density combo reported at, from its stored `mtl_kwargs`.
+
+    Read off `run.json` rather than by constructing the MTL: the grid is the
+    only thing needed here, and constructing it would build a global grid and
+    (for a combo that predates the required `grid` kwarg) raise.
+
+    Returns None when the combo's folds disagree, which cannot happen from one
+    `run-combo` but would make the drawn cell a lie if it did.
+    """
+    try:
+        specs = io.load_run_configs(run, [combo_id])
+    except Exception:
+        return None
+    seen: set[int] = set()
+    for r in specs.itertuples(index=False):
+        kwargs = r.mtl_kwargs
+        if isinstance(kwargs, str):
+            try:
+                kwargs = json.loads(kwargs)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(kwargs, dict):
+            continue
+        if kwargs.get("grid") not in (None, "healpix"):
+            return None
+        seen.add(int(kwargs.get("resolution", _DEFAULT_DENSITY_NSIDE)))
+    if len(seen) != 1:
+        return None
+    return seen.pop()
+
+
+def argmax_cell_regions(
+    run: RunPaths, combo_id: str, scores: pd.DataFrame
+) -> dict[str, dict]:
+    """`{target_id: the grid cell the prediction fell in}`, for a density combo.
+
+    A density MTL's answer is a probability field, which `replay_mtl` cannot
+    rebuild: `mtl_participants` stores the echoed band and not `mu_km`/
+    `sigma_km`, and the band is explicitly not invertible back to the
+    distribution. So this map used to draw nothing at all for Spotter.
+
+    None of that needs solving, because `density_argmax` returns a **cell
+    centre**. Re-binning the persisted prediction therefore recovers the exact
+    cell it came from -- `ang2pix(pix2ang(p)) == p` is a pinned property of the
+    grid -- and the cell boundary is closed-form. So the region comes back for
+    free: no MTL construction, no global grid, no replay, and nothing read that
+    the benchmark did not already write.
+
+    What is drawn is narrower than a geometric method's region, and the viewer
+    says so: it is the argmax cell, i.e. the quantisation of the point estimate,
+    not a feasible set and not a credible region. Its area is exactly
+    `pixel_area_km2(nside)` because HEALPix cells are equal-area.
+    """
+    nside = density_nside(run, combo_id)
+    if nside is None:
+        return {}
+    lat = pd.to_numeric(scores["pred_lat"], errors="coerce")
+    lon = pd.to_numeric(scores["pred_lon"], errors="coerce")
+    ok = lat.notna() & lon.notna()
+    if not ok.any():
+        return {}
+    pix = healpix_grid.ang2pix(lat[ok].to_numpy(), lon[ok].to_numpy(), nside)
+    rings = healpix_grid.cell_rings(pix, nside)
+    out: dict[str, dict] = {}
+    for tid, ring in zip(scores.loc[ok, "target_id"].astype(str), rings):
+        ring = _clockwise(ring)
+        # `cell_rings` yields (lon, lat); the viewer's ring format is [lat, lon].
+        outer = [[round(float(la), 4), round(float(lo), 4)] for lo, la in ring]
+        if outer and outer[0] != outer[-1]:
+            outer.append(outer[0])
+        out[tid] = {
+            "kind": "healpix_cell",
+            "rings": [{"outer": outer, "holes": []}],
+        }
+    return out
+
+
+def _clockwise(ring: np.ndarray) -> np.ndarray:
+    """Reorder a `(V, 2)` `(lon, lat)` ring clockwise.
+
+    Not cosmetic. Plotly's `fill: "toself"` reads a closed lat/lon path as a
+    *spherical* polygon under the right-hand convention, so a counter-clockwise
+    ring fills the antipodal hemisphere -- the whole globe minus the cell. The
+    viewer's own test harness refuses a CCW filled ring for exactly this
+    reason, and caught it here. `_serialize_intersection` solves the same
+    problem by azimuth-sorting with `reverse=True`; a traced cell boundary must
+    instead keep its vertex order, so the winding is flipped rather than
+    re-sorted, which preserves the curvature `cell_rings` sampled.
+    """
+    lon, lat = ring[:, 0], ring[:, 1]
+    # Shoelace. Positive is counter-clockwise in a (x=lon, y=lat) frame.
+    twice_area = float(
+        np.sum(lon * np.roll(lat, -1) - np.roll(lon, -1) * lat)
+    )
+    return ring[::-1] if twice_area > 0 else ring
+
 def _region_task(task: tuple[str, str, list[dict]]) -> dict | None:
     """Replay one target's MTL and serialize the region. Runs in a worker process.
 
@@ -429,12 +532,17 @@ def replay_mtl(
     # `mu_km` / `sigma_km`; `GaussianDensityMTL` requires `has_distribution` and
     # the bounds are explicitly not invertible back to the distribution
     # (framework/v2/types.py). Attempting it returned INSUFFICIENT_DATA for
-    # every target -- while still paying a global-H3-grid construction each
-    # time, and while memoising `{}` so no later render would retry.
+    # every target -- while still paying a global grid construction each time,
+    # and while memoising `{}` so no later render would retry.
     #
     # Returning before the cache is touched is the point: an empty result here
     # means "not applicable", which must stay distinguishable from an MTL that
     # genuinely found nothing, and must not be frozen into the cache.
+    #
+    # The region is not lost, it just comes from somewhere cheaper: see
+    # `argmax_cell_regions`, which re-bins the stored prediction to recover the
+    # cell `density_argmax` chose. `build_regions` routes density combos there
+    # instead, so this guard is now a backstop for a direct caller.
     density = sorted({n for n, _ in specs.values() if n and is_density_mtl(n)})
     if density:
         if progress is not None:
@@ -591,6 +699,7 @@ def build_payload(
     regions: dict[str, dict] | None = None,
     folds: pd.DataFrame | None = None,
     region_mode: str = REGION_GEOMETRIC,
+    density_nside: int | None = None,
 ) -> dict[str, Any]:
     """Assemble the whole viewer payload for one method.
 
@@ -760,6 +869,12 @@ def build_payload(
         "setup": run.setup,
         "grid": str(seeds["grid_scheme"].iloc[0]),
         "resolution": int(seeds["grid_resolution"].iloc[0]),
+        # The MTL's OWN grid, which is not the answer space's. The seeds above
+        # come from whatever `analysis.common.grid` the run was scored on (h3-4
+        # today); a density combo's drawn cell comes from its `mtl_kwargs`. They
+        # are different tessellations at different resolutions, and labelling
+        # the drawn cell with the answer space's would be simply wrong.
+        "density_nside": density_nside,
         "earth_radius_km": EARTH_RADIUS_KM,
         "mtl_kind": mtl_kind,
         "region_mode": region_mode,
@@ -878,15 +993,30 @@ def build_for_run(
         )
         method_regions: dict[str, dict] = {}
         if regions and folds is not None:
-            method_regions = replay_mtl(
-                run, method, folds,
-                cache_dir=cache_dir, workers=workers, progress=progress,
-            )
+            if region_mode == REGION_DENSITY:
+                # Derived from the stored prediction, not replayed -- see
+                # `argmax_cell_regions`. No cache, because it is closed-form.
+                method_regions = argmax_cell_regions(run, method, scores)
+                if progress is not None:
+                    progress(
+                        f"    {method}: {len(method_regions)} argmax cells from "
+                        f"the stored predictions (no replay needed)"
+                    )
+            else:
+                method_regions = replay_mtl(
+                    run, method, folds,
+                    cache_dir=cache_dir, workers=workers, progress=progress,
+                )
         payload = build_payload(
             run, space, method,
             scores=scores, labels=labels, edges=edges, crossing=crossing,
             rings=rings, voronoi=voronoi, vps=vps,
             regions=method_regions, folds=folds, region_mode=region_mode,
+            density_nside=(
+                density_nside(run, method)
+                if region_mode == REGION_DENSITY
+                else None
+            ),
         )
         out = out_dir / MAP_HTML.format(method=method)
         out.write_text(render_html(payload), encoding="utf-8")
