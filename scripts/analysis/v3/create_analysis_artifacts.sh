@@ -284,6 +284,20 @@ for R in "${RUNS[@]}"; do
   fi
 done
 
+# 7. Cross-run: the pooled error CDF and its one-panel-per-dataset twin, written
+#    beside the outcome bars in _cross/accuracy-table/<dataset-set>/. Mesh is
+#    solid; a traffic-weighted twin would be dashed, but none is collected, so
+#    no --weighted-run-id is passed and the weighted kind reports as pending.
+#    Add `--weighted-run-id <dataset>=<run_id>` per dataset once one exists.
+#    R is set only so `run`'s failure label reads as a cross-run step. No
+#    --config: $V3 still carries the loop's last run's config, whose defaults
+#    (run_id, grid) belong to that one run, not to the set.
+if [ "${#RUNS[@]}" -ge 2 ]; then
+  R=_cross
+  run plot-error-cdf-pooled python -m scripts.analysis.v3.cli plot-error-cdf \
+    --layout pooled --layout compare $(printf -- '--run-id %s ' "${RUNS[@]}")
+fi
+
 printf '\n==================== summary ====================\n'
 printf 'runs: %d   commands ok: %d   failed: %d   skipped: %d\n' \
   "${#RUNS[@]}" "$N_OK" "${#FAILED[@]}" "${#SKIPPED[@]}"

@@ -212,3 +212,164 @@ def test_a_method_with_no_solved_rows_is_skipped_not_drawn_as_a_flat_line(tmp_pa
         errors, table, tmp_path / "cdf.png", title="t", subtitle="s"
     )
     assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# cross-run layouts: pooled and compare
+# ---------------------------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+import typer  # noqa: E402
+from matplotlib.colors import to_hex  # noqa: E402
+
+from scripts.analysis.v3.modules import headline_table as H  # noqa: E402
+from scripts.analysis.v3.modules.diagram.common.draw import plt  # noqa: E402
+from scripts.analysis.v3.modules.diagram.common.palette import (  # noqa: E402
+    method_colors,
+)
+
+
+def _run(run_id, setup="probes_to_anchors"):
+    """A `RunPaths` stand-in: `_load_solved` only asks for these three."""
+    return SimpleNamespace(
+        run_id=run_id,
+        setup=setup,
+        cls_accuracy_dir=lambda **_: Path(run_id),
+    )
+
+
+def _frame(ids, statuses, errors):
+    df = _scored(statuses, errors)
+    df["target_id"] = ids
+    return df
+
+
+@pytest.fixture
+def scored(monkeypatch):
+    """`{(run_id, method): frame}`, served in place of the classify parquets."""
+    store: dict[tuple[str, str], pd.DataFrame] = {}
+    monkeypatch.setattr(F, "load_scored", lambda d, m: store[(str(d), m)])
+    monkeypatch.setattr(
+        F,
+        "available_methods",
+        lambda d: sorted(m for r, m in store if r == str(d)),
+    )
+    return store
+
+
+def _load(**kw):
+    return dict(analysis_root=None, grid="h3", resolution=4, **kw)
+
+
+def test_pooling_concatenates_the_solved_rows_and_sums_the_counts(scored):
+    scored[("as01-1-2", "vanilla_cbg")] = _frame(
+        ["a", "b", "c"], ["SUCCESS", "FALLBACK", "SUCCESS"], [10.0, 999.0, 20.0]
+    )
+    scored[("as02-1-2", "vanilla_cbg")] = _frame(["d", "e"], ["SUCCESS"] * 2, [5.0, 7.0])
+    pooled = F.pool_runs([_run("as01-1-2"), _run("as02-1-2")], **_load())
+
+    assert sorted(pooled["errors"]["vanilla_cbg"].tolist()) == [5.0, 7.0, 10.0, 20.0]
+    assert 999.0 not in pooled["errors"]["vanilla_cbg"]  # fallback stays out
+    assert pooled["counts"]["vanilla_cbg"] == {
+        "n_total": 5, "n_solved": 4, "n_fallback": 1,
+    }
+    assert set(pooled["per_run_counts"]) == {"as01-1-2", "as02-1-2"}
+
+
+def test_the_baseline_survives_pooling_despite_never_being_SUCCESS(scored):
+    for rid, ids in (("as01-1-2", ["a"]), ("as02-1-2", ["b"])):
+        scored[(rid, SHORTEST_PING)] = _frame(ids, ["BASELINE"], [3.0])
+    pooled = F.pool_runs([_run("as01-1-2"), _run("as02-1-2")], **_load())
+    assert pooled["counts"][SHORTEST_PING]["n_solved"] == 2
+
+
+def test_a_method_missing_from_one_run_is_dropped_and_named(scored):
+    scored[("as01-1-2", "vanilla_cbg")] = _frame(["a"], ["SUCCESS"], [1.0])
+    scored[("as01-1-2", "spotter_cbg")] = _frame(["a"], ["SUCCESS"], [2.0])
+    scored[("as02-1-2", "vanilla_cbg")] = _frame(["b"], ["SUCCESS"], [3.0])
+    pooled = F.pool_runs([_run("as01-1-2"), _run("as02-1-2")], **_load())
+    assert list(pooled["errors"]) == ["vanilla_cbg"]
+    assert pooled["methods_absent_in_some_runs"] == ["spotter_cbg"]
+
+
+def test_runs_sharing_a_target_refuse_to_pool(scored):
+    scored[("as01-1-2", "vanilla_cbg")] = _frame(["a", "b"], ["SUCCESS"] * 2, [1.0, 2.0])
+    scored[("as02-1-2", "vanilla_cbg")] = _frame(["b"], ["SUCCESS"], [3.0])
+    with pytest.raises(typer.BadParameter, match="share targets"):
+        F.pool_runs([_run("as01-1-2"), _run("as02-1-2")], **_load())
+
+
+def _mesh_and_weighted(scored, *, weighted=True):
+    """as01/as02 mesh, and as01's weighted twin over a subset of its targets."""
+    for rid, ids in (("as01-1-2", ["a", "b"]), ("as02-1-2", ["c", "d"])):
+        scored[(rid, SHORTEST_PING)] = _frame(ids, ["BASELINE"] * 2, [4.0, 40.0])
+        scored[(rid, "vanilla_cbg")] = _frame(ids, ["SUCCESS"] * 2, [2.0, 20.0])
+    mesh = {rid: _run(rid) for rid in ("as01-1-2", "as02-1-2")}
+    wtd = {}
+    if weighted:
+        scored[("as01-w", SHORTEST_PING)] = _frame(["a"], ["BASELINE"], [4.0])
+        scored[("as01-w", "vanilla_cbg")] = _frame(["a"], ["SUCCESS"], [2.0])
+        wtd = {"as01": _run("as01-w")}
+    return mesh, wtd
+
+
+def test_a_weighted_twin_overlapping_its_mesh_targets_is_not_refused(scored, tmp_path):
+    mesh, wtd = _mesh_and_weighted(scored)
+    rendered, manifest = F.build_cross(
+        mesh, wtd, analysis_root=tmp_path, resolution=4, layouts=(F.POOLED, F.COMPARE)
+    )
+    assert all(png.exists() for png, _ in rendered.values())
+    table = rendered[F.POOLED][1]
+    assert set(table["kind"]) == {H.MESH, H.WEIGHTED}
+    assert not any(c["pending"] for c in manifest["curves"] if c["layout"] == F.POOLED)
+
+
+def test_no_weighted_run_leaves_the_kind_pending_with_no_curve(scored, tmp_path):
+    mesh, wtd = _mesh_and_weighted(scored, weighted=False)
+    rendered, manifest = F.build_cross(
+        mesh, wtd, analysis_root=tmp_path, resolution=4, layouts=(F.POOLED,)
+    )
+    assert set(rendered[F.POOLED][1]["kind"]) == {H.MESH}
+    pending = [c for c in manifest["curves"] if c["pending"]]
+    assert [c["kind"] for c in pending] == [H.WEIGHTED]
+
+
+def test_a_weighted_run_without_its_mesh_twin_is_refused(scored, tmp_path):
+    mesh, _ = _mesh_and_weighted(scored)
+    with pytest.raises(typer.BadParameter):
+        F.build_cross(
+            mesh, {"as09": _run("as01-w")}, analysis_root=tmp_path, resolution=4
+        )
+
+
+def test_line_style_is_the_kind_and_the_baseline_keeps_its_own_hue():
+    """Mesh solid, weighted dashed — the baseline included, in its variant hue."""
+    entries = [
+        {"kind": H.MESH, "errors": {SHORTEST_PING: np.array([1.0, 2.0]),
+                                    "vanilla_cbg": np.array([3.0])}},
+        {"kind": H.WEIGHTED, "errors": {SHORTEST_PING: np.array([1.5]),
+                                        "vanilla_cbg": np.array([2.5])}},
+    ]
+    fig, ax = plt.subplots()
+    F._draw_kind_curves(ax, entries, F.X_MIN_KM)
+    lines = {line.get_gid(): line for line in ax.get_lines()}
+    plt.close(fig)
+
+    for method in (SHORTEST_PING, "vanilla_cbg"):
+        assert lines[f"{H.MESH}:{method}"].get_linestyle() == "-"
+        assert lines[f"{H.WEIGHTED}:{method}"].get_linestyle() == "--"
+    hue = method_colors([SHORTEST_PING])[SHORTEST_PING]
+    assert to_hex(lines[f"{H.MESH}:{SHORTEST_PING}"].get_color()) == to_hex(hue)
+    # Drawn last, so it reads on top of every kind's variants.
+    assert list(lines)[-2:] == [f"{H.MESH}:{SHORTEST_PING}", f"{H.WEIGHTED}:{SHORTEST_PING}"]
+
+
+def test_the_pending_note_names_missing_and_partial_kinds():
+    mesh = {"kind": H.MESH, "dataset": None, "datasets": ["as01", "as02"], "pending": False}
+    partial = {"kind": H.WEIGHTED, "dataset": None, "datasets": ["as01"], "pending": False}
+    missing = {"kind": H.WEIGHTED, "dataset": None, "datasets": [], "pending": True}
+    assert "1 of 2 datasets" in F.pending_note([mesh, partial])
+    assert "not collected" in F.pending_note([mesh, missing])
+    assert F.pending_note([mesh]) == ""
