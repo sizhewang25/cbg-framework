@@ -59,10 +59,11 @@ a new locator.
 
 | method | retired nearest-seed (as01/02/03) | ring0 same-cell (as01/02/03) |
 |---|---|---|
+| octant_cbg_hull | 0.694 / 0.624 / 0.498 | 0.366 / **0.240** / **0.207** |
+| octant_cbg_spl | 0.669 / 0.582 / 0.417 | **0.368** / 0.204 / 0.205 |
+| shortest_ping | 0.637 / 0.369 / 0.432 | 0.301 / 0.180 / 0.175 |
 | million_scale_cbg | 0.662 / 0.366 / 0.397 | 0.301 / 0.148 / 0.170 |
 | vanilla_cbg | 0.408 / 0.306 / 0.288 | 0.043 / 0.044 / 0.098 |
-| octant_cbg_hull | 0.694 / 0.624 / 0.498 | 0.366 / 0.240 / 0.207 |
-| octant_cbg_spl | 0.669 / 0.582 / 0.417 | **0.368** / 0.204 / 0.205 |
 | spotter_cbg | **0.862** / 0.510 / 0.493 | **0.000** / 0.000 / 0.000 |
 
 The ranking inverts. Spotter led as01 under nearest-seed and is last under
@@ -80,21 +81,32 @@ never answered. One figure per rung, three dataset panels each.
 v3's three segments (correct / wrong / failed) collapsed the middle three into
 "wrong", which is precisely what the ring metric exists to expose.
 
-Colour was **computed, not chosen** — the four placed segments take a
-single-hue ordinal ramp, validated with the dataviz skill's
-`validate_palette.js --ordinal` (monotone lightness, adjacent gaps >= 0.06,
-light end 2.10:1, hue spread 5 degrees; all pass). Two earlier designs were
-rejected by measurement:
+`shortest_ping` is included. It has no `targets.parquet`, so `combo_ids`
+cannot see it — it is appended explicitly and its estimate read from
+`eval_source`, restricted to the evaluated roster so it shares one denominator
+with every CBG arm.
+
+Colour was **computed, not chosen**. The stack is a single-hue ramp **light to
+dark** — lighter is better — ending in charcoal for "no answer", so relative
+luminance falls monotonically across all five segments (0.437, 0.253, 0.127,
+0.056, 0.024). Lightness is the one separator that survives every
+colour-vision deficiency *and* greyscale print. Three designs were rejected by
+measurement with `validate_palette.js`:
 
 * green ramp + **red** for "further out" — red vs the ramp's mid-green is
   Delta E **1.8 under protanopia**, so a protanope cannot separate "two rings
   out" from a total miss;
-* a **grey** fifth fill for "never answered" — every grey tested collided with
-  some ramp step under deuteranopia (Delta E 1.6-4.5), because greens desaturate
-  toward grey exactly there.
+* a **mid grey** for "no answer" — mid grey is where green lands under
+  deuteranopia; every one tested collided with a ramp step at Delta E 4.5-4.7;
+* a **near-white grey** — clears CVD but sits at 1.29:1 on the surface and
+  effectively vanishes.
 
-So "never answered" carries **no fill** — an outlined, hatched slot. An absence
-cannot be confused with a hue, and nothing was produced to colour.
+Charcoal `#2b2b29` survives at Delta E **8.8** from the darkest green. Making
+the grey the *darkest* step is what buys the separation, and it reads correctly
+too: the bar darkens as the outcome worsens.
+
+**No hatch on any outcome** — that channel is reserved for a traffic-weighted
+arm drawn beside a mesh bar.
 
 The x order is ranked once at the finest rung and reused for every rung, so a
 method keeps its slot across the figure set. **No traffic-weighted arm is

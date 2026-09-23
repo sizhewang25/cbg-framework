@@ -20,25 +20,34 @@ carries the curve for anyone who wants it as a line.
 
 ## Colour is a sequential ramp, and it was computed rather than chosen
 
-The four *placed* segments are ordered — in the cell is better than one ring
-out is better than two — so they take a **single-hue ramp**, dark to light,
-which is the one encoding that survives every colour-vision deficiency and
-greyscale at once. Validated with the dataviz skill's `validate_palette.js` in
-`--ordinal` mode: monotone lightness, every adjacent gap >= 0.06, light end
-2.10:1 against white, hue spread 5 degrees. All four checks pass.
+The segments are ordered — in the cell beats one ring out beats two, and "no
+answer" is the worst outcome of all — so the stack is a **single-hue ramp,
+light to dark**, ending in charcoal. Lightness therefore falls monotonically
+bottom to top (relative luminance 0.437, 0.253, 0.127, 0.056, 0.024), and
+lightness is the one separator that survives every colour-vision deficiency
+*and* greyscale print at once.
 
-Two designs were tried and **rejected by measurement**, not taste:
+Three designs were **rejected by measurement**, not taste, using the dataviz
+skill's `validate_palette.js`:
 
-* **Green ramp + red for "further out"** — the obvious "good to bad" reading.
+* **Green ramp + red for "further out"** — the obvious good-to-bad reading.
   Red against the ramp's mid-green is Delta E **1.8 under protanopia**: a
-  protanope cannot tell the second ring from a total miss. Fatal.
-* **Adding grey for "never answered"** as a fifth fill. Every grey tested
-  collided with some step of the ramp under deuteranopia (Delta E 1.6-4.5),
-  because greens desaturate toward grey exactly there. Also fatal.
+  protanope cannot tell the second ring from a total miss.
+* **A mid grey for "no answer"** — the conventional neutral. Mid grey is
+  exactly where green lands under deuteranopia, and every mid grey tested
+  collided with some ramp step at Delta E **4.5-4.7**.
+* **A near-white grey**, which clears CVD but sits at 1.29:1 against the
+  surface and effectively vanishes.
 
-So "never answered" carries **no fill at all** — an outlined, hatched slot.
-That is semantically right as well as safe: nothing was produced, so there is
-nothing to colour, and an absence cannot be confused with a hue.
+Charcoal `#2b2b29` is what survives: Delta E **8.8** from the darkest green
+under deuteranopia, adequate contrast, and it extends the ramp rather than
+interrupting it. Making the grey the *darkest* step is what buys the
+separation, and it also reads correctly — the bar gets darker as the outcome
+gets worse.
+
+**No hatch on any outcome.** That channel is reserved for the traffic-weighted
+arm drawn beside a mesh bar (`WEIGHTED_HATCH`), and spending it on an outcome
+would leave the mesh-vs-weighted distinction with nowhere to go.
 
 The ramp's light end is 2.10:1 against the surface, which the skill flags as
 requiring relief. Both reliefs ship: every segment above a visibility floor is
@@ -76,22 +85,35 @@ SEGMENT_LABELS = {
     "n_ring1": "1 ring out",
     "n_ring2": "2 rings out",
     "n_beyond": "further out",
-    "n_failed": "never answered",
+    "n_failed": "no answer",
 }
 
-#: Single-hue ordinal ramp, dark = most precise. Validated in `--ordinal` mode;
-#: see the module docstring for the two alternatives measurement rejected.
+#: Single-hue ordinal ramp, **light = most precise**, darkening as the
+#: prediction lands further out, and ending in a charcoal grey for "no answer".
+#:
+#: The whole stack is monotone in lightness bottom to top (0.437, 0.253, 0.127,
+#: 0.056, 0.024 relative luminance), which is the one separator that survives
+#: every colour-vision deficiency *and* greyscale print at once. That the grey
+#: is the darkest step rather than a mid tone is what buys it: a mid grey is
+#: where green lands under deuteranopia, and every mid grey tested collided
+#: with some ramp step at dE 4.5-4.7. Charcoal clears the darkest green at
+#: dE 8.8 (deutan) — measured with the dataviz validator, not judged.
+#:
+#: Rejected by the same measurement: a green ramp plus **red** for "further
+#: out". Red against the ramp's mid-green is dE 1.8 under protanopia, so a
+#: protanope could not separate "two rings out" from a total miss.
 SEGMENT_INK = {
-    "n_ring0": "#0b4d2c",
-    "n_ring1": "#17724a",
-    "n_ring2": "#3f9a6f",
-    "n_beyond": "#79bf9b",
-    #: No fill. An absence cannot collide with a hue, and nothing was produced.
-    "n_failed": "none",
+    "n_ring0": "#79bf9b",
+    "n_ring1": "#3f9a6f",
+    "n_ring2": "#17724a",
+    "n_beyond": "#0b4d2c",
+    "n_failed": "#2b2b29",
 }
 
-_FAILED_EDGE = "#9a998f"
-_FAILED_HATCH = "///"
+#: Reserved for the traffic-weighted arm drawn beside a mesh bar, so it must
+#: not be spent on an outcome. None exists yet; the constant records the claim
+#: on the channel so a later figure does not take it for something else.
+WEIGHTED_HATCH = "//"
 
 #: Display names. Shared vocabulary with v3's figures on purpose: the metric
 #: changed, the methods did not, and inventing a second set of names would make
@@ -206,8 +228,6 @@ def method_order(table: pd.DataFrame) -> list[str]:
 def _label_ink(face: str) -> str:
     """White or ink by the fill's luminance, so text inside a segment always
     clears contrast — the one place a label may sit on a colour."""
-    if face == "none":
-        return _INK_2
     r, g, b = (int(face[i : i + 2], 16) / 255 for i in (1, 3, 5))
     lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
     return "#ffffff" if lum < 0.55 else _INK
@@ -262,19 +282,17 @@ def render(
                 ]
             )
             face = SEGMENT_INK[seg]
-            is_empty = face == "none"
             ax.bar(
                 xs,
                 vals,
                 bottom=bottoms,
                 width=_BAR_FRAC,
-                facecolor="none" if is_empty else face,
-                edgecolor=_FAILED_EDGE if is_empty else _SURFACE,
-                # The 2 px surface gap between touching segments. On the
-                # unfilled slot the same width draws its outline instead, so
-                # the stack's rhythm is unbroken.
+                facecolor=face,
+                edgecolor=_SURFACE,
+                # The 2 px surface gap between touching segments, one width up
+                # the whole stack. No hatch on any outcome: that channel is
+                # reserved for the mesh-vs-weighted distinction.
                 linewidth=_GAP_PT,
-                hatch=_FAILED_HATCH if is_empty else None,
                 zorder=3,
             )
             for x, v, b in zip(xs, vals, bottoms):
@@ -326,9 +344,8 @@ def render(
     # even before the in-place labels.
     handles = [
         Patch(
-            facecolor="none" if SEGMENT_INK[s] == "none" else SEGMENT_INK[s],
-            edgecolor=_FAILED_EDGE if SEGMENT_INK[s] == "none" else _SURFACE,
-            hatch=_FAILED_HATCH if SEGMENT_INK[s] == "none" else None,
+            facecolor=SEGMENT_INK[s],
+            edgecolor=_SURFACE,
             linewidth=0.8,
             label=SEGMENT_LABELS[s],
         )

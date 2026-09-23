@@ -116,6 +116,60 @@ def load_method_frame(run: RunPaths, method: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+#: Columns `load_shortest_ping_frame` needs. A run missing any of them cannot
+#: be scored against the baseline at all, so the check belongs here rather than
+#: at each call site.
+_SPING_COLUMNS = ("target_id", "shortest_ping_vp_lat", "shortest_ping_vp_lon")
+
+
+def load_shortest_ping_frame(run: RunPaths, roster: pd.DataFrame) -> pd.DataFrame:
+    """The Shortest-Ping control, shaped like any other method's frame.
+
+    Its estimate is the lowest-RTT VP's own coordinate, which `eval_source`
+    already resolved. Read from there rather than re-minimising over the
+    canonical CSV's RTTs: a second minimisation would break ties differently on
+    any target whose two lowest RTTs are equal, leaving v4 disagreeing with the
+    benchmark instead of agreeing with it.
+
+    Fold-independent by construction — K-fold splits targets, not VPs, so every
+    VP is available in every fold and a target's shortest-ping VP does not
+    depend on which fold held it out. `fold` therefore comes from the roster.
+
+    **Scored over the evaluated roster, not over the eval source**, and the
+    restriction cuts both ways:
+
+    * eval-source targets the run never evaluated are dropped;
+    * evaluated targets the eval source has no row for keep a row with **no
+      prediction**, so the baseline scores a miss there rather than shrinking
+      its denominator.
+
+    Without that, the baseline's population would be whatever the eval CSV
+    describes, and every figure comparing it with a CBG arm would divide by two
+    different numbers.
+    """
+    path = run.eval_file("eval_per_target.csv")
+    raw = pd.read_csv(path)
+    missing = [c for c in _SPING_COLUMNS if c not in raw.columns]
+    if missing:
+        raise MissingArtifactError(f"{path} is missing {missing}")
+
+    sping = raw[list(_SPING_COLUMNS)].drop_duplicates("target_id").set_index("target_id")
+    out = roster[["target_id", "target_lat", "target_lon", "fold"]].copy()
+    hit = sping.reindex(out["target_id"])
+    out["pred_lat"] = hit["shortest_ping_vp_lat"].to_numpy()
+    out["pred_lon"] = hit["shortest_ping_vp_lon"].to_numpy()
+    # BASELINE, not SUCCESS: the control has no LTD/MTL/CTR pipeline and so no
+    # fallback path, and `solved_mask` reads an all-BASELINE frame as wholly
+    # solved. A row with no eval source still counts in the denominator and
+    # scores a miss, because its prediction is NaN.
+    out["status"] = "BASELINE"
+    out.attrs["n_baseline_only_dropped"] = int(
+        len(set(sping.index) - set(out["target_id"]))
+    )
+    out.attrs["n_evaluated_without_baseline"] = int(out["pred_lat"].isna().sum())
+    return out
+
+
 def score_method(
     frame: pd.DataFrame, space: AnswerSpace, *, max_ring: int = H.MAX_RING
 ) -> pd.DataFrame:
@@ -277,10 +331,21 @@ def score_rung(
     """Score every method at one rung, write the rung's artifacts, return the
     summary."""
     space = load_answer_space(run.answer_space_dir(nside, root=analysis_root))
-    wanted = list(methods) if methods else run.combo_ids
+    combos = run.combo_ids
+    # The control is appended rather than discovered: it has no
+    # `targets.parquet`, so `combo_ids` cannot see it, and leaving it out was
+    # the gap this fixes -- every figure lost its baseline column.
+    wanted = list(methods) if methods else [*combos, SHORTEST_PING]
     scored: dict[str, pd.DataFrame] = {}
     for method in wanted:
-        scored[method] = score_method(load_method_frame(run, method), space)
+        if method == SHORTEST_PING:
+            if not combos:
+                continue
+            roster = load_method_frame(run, combos[0])
+            frame = load_shortest_ping_frame(run, roster)
+        else:
+            frame = load_method_frame(run, method)
+        scored[method] = score_method(frame, space)
 
     summary = summarize(scored, nside)
     out_dir = run.cls_accuracy_dir(nside, root=analysis_root)

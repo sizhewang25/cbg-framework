@@ -235,3 +235,83 @@ class TestPopulationContract:
             {"m": C.score_method(_frame(space, preds, statuses), space)}, space.nside
         )
         assert s["error_km_p50"].iloc[0] == pytest.approx(0.0, abs=1e-6)
+
+
+class TestShortestPingBaseline:
+    """The control has no `targets.parquet`, so `combo_ids` cannot see it.
+
+    Leaving it out was a real gap: every figure lost its baseline column, which
+    is the one number that says how much of a method's accuracy is geometry
+    rather than just proximity.
+    """
+
+    def test_it_is_scored_without_being_a_combo(self):
+        from scripts.analysis.v4.modules.paths import MissingArtifactError, resolve_run
+
+        try:
+            run = resolve_run("as01-260728-260802-mesh")
+        except MissingArtifactError:
+            pytest.skip("as01 mesh not available")
+        assert C.SHORTEST_PING not in run.combo_ids, "it has no targets.parquet"
+
+        import tempfile, pathlib
+        from scripts.analysis.v4.modules import answer_space as A
+
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            A.build_for_run(run, nsides=(128,), analysis_root=root)
+            summary = C.score_rung(run, 128, analysis_root=root)
+        assert C.SHORTEST_PING in set(summary["method"])
+
+    def test_it_shares_the_denominator_with_every_cbg_arm(self):
+        """Its estimate comes from `eval_source`, whose population is the
+        pre-filter mesh. Scored over that instead of over the evaluated roster,
+        the baseline would be divided by a different number from every arm it
+        is compared against."""
+        from scripts.analysis.v4.modules.paths import MissingArtifactError, resolve_run
+
+        try:
+            run = resolve_run("as01-260728-260802-mesh")
+        except MissingArtifactError:
+            pytest.skip("as01 mesh not available")
+
+        import tempfile, pathlib
+        from scripts.analysis.v4.modules import answer_space as A
+
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            A.build_for_run(run, nsides=(128,), analysis_root=root)
+            summary = C.score_rung(run, 128, analysis_root=root)
+        assert summary["n_targets"].nunique() == 1, summary[["method", "n_targets"]]
+
+    def test_an_evaluated_target_with_no_eval_row_scores_a_miss(self):
+        """Rather than shrinking the denominator. The restriction cuts both
+        ways and neither direction is silent."""
+        roster = pd.DataFrame(
+            {
+                "target_id": ["a", "b"],
+                "target_lat": [39.7, 47.4],
+                "target_lon": [-105.0, -122.3],
+                "fold": [0, 0],
+            }
+        )
+        import tempfile, pathlib
+        from scripts.analysis.v4.modules.paths import RunPaths
+
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            ev = root / "r" / "eval_source"
+            ev.mkdir(parents=True)
+            # Only "a" has a baseline row; "b" was evaluated but is absent here.
+            (ev / "x_eval_per_target.csv").write_text(
+                "target_id,shortest_ping_vp_lat,shortest_ping_vp_lon\na,39.8,-105.1\n"
+            )
+            run = RunPaths(run_id="r", root=root, source="generic_csv", setup="s")
+            frame = C.load_shortest_ping_frame(run, roster)
+
+        assert len(frame) == 2, "the roster sets the population"
+        by_id = frame.set_index("target_id")
+        assert pd.isna(by_id.loc["b", "pred_lat"]), "b must keep a row with no prediction"
+        assert not pd.isna(by_id.loc["a", "pred_lat"])
+        assert frame.attrs["n_evaluated_without_baseline"] == 1
+        assert (frame["status"] == "BASELINE").all()

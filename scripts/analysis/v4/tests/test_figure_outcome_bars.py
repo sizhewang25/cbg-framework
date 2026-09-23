@@ -8,6 +8,7 @@ asserted here so a later "nicer green" cannot silently break them.
 from __future__ import annotations
 
 import json
+import pathlib
 
 import numpy as np
 import pandas as pd
@@ -77,48 +78,77 @@ class TestSegments:
 class TestPalette:
     """Properties the dataviz validator checked; asserted so they stay true."""
 
-    def _ramp(self):
-        return [F.SEGMENT_INK[s] for s in F.SEGMENTS if F.SEGMENT_INK[s] != "none"]
+    def _greens(self):
+        """The four placed segments — the single-hue part of the ramp."""
+        return [F.SEGMENT_INK[s] for s in F.SEGMENTS if s != "n_failed"]
 
-    def test_the_placed_segments_are_a_monotone_lightness_ramp(self):
-        """Monotone lightness is the separator no colour-vision deficiency and
-        no greyscale print can take away. It is also the ordinal validator's
-        first check."""
-        lums = [_luminance(c) for c in self._ramp()]
-        assert lums == sorted(lums), f"ramp is not monotone: {lums}"
+    def test_the_whole_stack_is_monotone_light_to_dark(self):
+        """Lightness is the separator no colour-vision deficiency and no
+        greyscale print can take away, and here it covers all five segments
+        including the grey — which is what making the grey the *darkest* step
+        bought. Light = precise, darkening as the outcome worsens."""
+        lums = [_luminance(F.SEGMENT_INK[s]) for s in F.SEGMENTS]
+        assert lums == sorted(lums, reverse=True), f"not monotone: {lums}"
+
+    def test_lighter_means_better(self):
+        """The direction, pinned explicitly: 'in the cell' is the lightest
+        segment and 'no answer' the darkest."""
+        assert _luminance(F.SEGMENT_INK["n_ring0"]) == max(
+            _luminance(F.SEGMENT_INK[s]) for s in F.SEGMENTS
+        )
+        assert _luminance(F.SEGMENT_INK["n_failed"]) == min(
+            _luminance(F.SEGMENT_INK[s]) for s in F.SEGMENTS
+        )
 
     def test_adjacent_steps_are_visibly_apart(self):
-        """The ordinal rule wants every adjacent gap >= 0.06 in perceptual
-        lightness; checked here in relative luminance as a proxy, with a floor
-        loose enough not to re-litigate the colour space."""
-        lums = [_luminance(c) for c in self._ramp()]
-        gaps = np.diff(lums)
-        assert (gaps > 0.02).all(), f"a step is too close to its neighbour: {gaps}"
+        """Every adjacent gap must be a real step; checked in relative
+        luminance with a floor loose enough not to re-litigate the colour
+        space. The tightest pair is 'further out' vs 'no answer', which the
+        validator puts at dE 8.8 under deuteranopia."""
+        lums = [_luminance(F.SEGMENT_INK[s]) for s in F.SEGMENTS]
+        gaps = -np.diff(lums)
+        assert (gaps > 0.015).all(), f"a step is too close to its neighbour: {gaps}"
 
-    def test_the_ramp_is_one_hue(self):
-        """Four steps of one hue, not four hues. A multi-hue 'good to bad'
-        scheme was measured and rejected: red against the ramp's mid-green is
-        dE 1.8 under protanopia."""
+    def test_the_placed_segments_are_one_hue(self):
+        """Four steps of one hue, not four hues. A multi-hue good-to-bad scheme
+        was measured and rejected: red against the ramp's mid-green is dE 1.8
+        under protanopia, so a protanope could not separate 'two rings out'
+        from a total miss. The grey is excluded — it has no meaningful hue."""
         import colorsys
 
-        hues = []
-        for c in self._ramp():
-            r, g, b = (int(c[i : i + 2], 16) / 255 for i in (1, 3, 5))
-            hues.append(colorsys.rgb_to_hls(r, g, b)[0] * 360)
+        hues = [
+            colorsys.rgb_to_hls(
+                *[int(c[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+            )[0]
+            * 360
+            for c in self._greens()
+        ]
         assert max(hues) - min(hues) < 25, f"hue spread too wide: {hues}"
 
-    def test_never_answered_carries_no_fill(self):
-        """Not a fifth hue. Every grey tested collided with some step of the
-        ramp under deuteranopia (dE 1.6-4.5), and an absence has nothing to
-        colour anyway."""
-        assert F.SEGMENT_INK["n_failed"] == "none"
+    def test_no_answer_is_an_achromatic_charcoal(self):
+        """Grey, and specifically a DARK grey. A mid grey is where green lands
+        under deuteranopia — every one tested collided with a ramp step at
+        dE 4.5-4.7 — and a near-white grey vanishes at 1.29:1 on the surface."""
+        import colorsys
+
+        hexstr = F.SEGMENT_INK["n_failed"]
+        r, g, b = (int(hexstr[i : i + 2], 16) / 255 for i in (1, 3, 5))
+        sat = colorsys.rgb_to_hls(r, g, b)[2]
+        assert sat < 0.1, f"{hexstr} is not achromatic (S={sat:.3f})"
+        assert _luminance(hexstr) < 0.05, "a mid or light grey is not safe here"
+
+    def test_no_outcome_uses_the_hatch_channel(self):
+        """Reserved for the traffic-weighted arm beside a mesh bar. Spending it
+        on an outcome would leave that distinction with nowhere to go."""
+        src = pathlib.Path(F.__file__).read_text()
+        assert "WEIGHTED_HATCH" in src
+        assert "hatch=" not in src, "an outcome is drawing with a hatch"
 
     def test_label_ink_flips_with_the_fill(self):
         """Text inside a fill picks white or ink by luminance, so it always
         clears contrast — the one place a label may sit on a colour."""
-        assert F._label_ink(F.SEGMENT_INK["n_ring0"]) == "#ffffff"
-        assert F._label_ink(F.SEGMENT_INK["n_beyond"]) == F._INK
-        assert F._label_ink("none") == F._INK_2
+        assert F._label_ink(F.SEGMENT_INK["n_ring0"]) == F._INK
+        assert F._label_ink(F.SEGMENT_INK["n_failed"]) == "#ffffff"
 
 
 class TestTable:

@@ -73,6 +73,28 @@ class RunPaths:
     def eval_source_dir(self) -> Path:
         return self.run_dir / "eval_source"
 
+    def eval_file(self, suffix: str) -> Path:
+        """`eval_source/<basename>_<suffix>` — the dataset-scored sidecar.
+
+        The basename is the canonical CSV's, not the run id, so it is globbed
+        rather than constructed. Exactly one match is required: two would mean
+        two datasets were scored into one run and picking either silently
+        changes the population.
+        """
+        hits = sorted(self.eval_source_dir.glob(f"*_{suffix}"))
+        if not hits:
+            raise MissingArtifactError(
+                f"no eval_source/*_{suffix} under {self.eval_source_dir}; "
+                f"run the benchmark's eval-source stage first"
+            )
+        if len(hits) > 1:
+            raise MissingArtifactError(
+                f"{len(hits)} eval_source/*_{suffix} files under "
+                f"{self.eval_source_dir}: {[h.name for h in hits]}. Each scores a "
+                f"different dataset; keep one."
+            )
+        return hits[0]
+
     @property
     def fold_ids(self) -> list[str]:
         """`fold_0` .. `fold_N`, ordered numerically rather than lexically —

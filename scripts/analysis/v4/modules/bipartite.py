@@ -68,7 +68,7 @@ def dispersion(counts) -> float:
     Equals the raw count when occupancy is uniform and falls toward 1 as it
     concentrates, so the gap between the two is a direct read on how lopsided
     the geometry is. One point in each of 18 cells gives 18; 17 points in one
-    cell and 1 in another gives ~1.3.
+    cell and 1 in another gives ~1.24.
     """
     c = np.asarray(counts, dtype=float)
     c = c[c > 0]
