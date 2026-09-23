@@ -28,7 +28,30 @@ class MonteCarloMedoidCTR(CTRMethod):
     needed; vertices are the point set).
     """
 
-    def __init__(self, n_samples: int = 1000, seed: int | None = None) -> None:
+    #: Default seed, so a run is reproducible whether or not anything upstream
+    #: seeds it. `sample_points_in_region` builds its Sobol sampler with
+    #: `scramble=True` and draws the scramble seed from this generator, so an
+    #: unseeded default made the sampled medoid move run to run -- measured at
+    #: ~2 km of jitter on a 1-degree region at n_samples=1024. That is small
+    #: against an H3-4 cell, which is why it was invisible in the accuracy
+    #: tables, but it made every error_km figure irreproducible at the metre
+    #: precision those CSVs are written to.
+    #:
+    #: `benchmark/v2/runner.py` REPLACES `self.rng` per target when the run
+    #: carries a `base_seed`, deriving each from `SeedSequence([base_seed,
+    #: target_index])`. That still wins and is the stronger guarantee -- it
+    #: survives a change in target order, which a single generator advancing
+    #: across targets does not. This default is the floor for the case where
+    #: nothing sets one: a config with no `seed:` key, or a direct caller.
+    #:
+    #: Matches `GeometricMedianCTR`, the other sampling CTR, which has defaulted
+    #: to 42 all along. Pass `seed=None` explicitly to opt back into OS entropy
+    #: -- the only reason to want that is measuring the sampler's own variance.
+    DEFAULT_SEED = 42
+
+    def __init__(
+        self, n_samples: int = 1000, seed: int | None = DEFAULT_SEED
+    ) -> None:
         self.n_samples = n_samples
         self.rng = np.random.default_rng(seed)
 

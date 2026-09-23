@@ -132,7 +132,15 @@ rule run_combo:
         ctr_kwargs = lambda wc: json.dumps(COMBOS_BY_ID[wc.combo_id].get("ctr_kwargs", {})),
         source_kwargs_json = json.dumps(SOURCE_KWARGS),
         # Per-combo seed wins over the run-level default; both are optional.
-        # An empty seed_flag means: let the CTR use its built-in randomization.
+        #
+        # An empty seed_flag leaves `base_seed` None, so runner.py does NOT
+        # replace the CTR's generator per target and the CTR keeps whatever it
+        # constructed itself. That is no longer the same as "randomize":
+        # MonteCarloMedoidCTR.DEFAULT_SEED pins it to 42, so an unseeded config
+        # is still reproducible -- just with one generator advancing across
+        # targets instead of a per-target seed, which makes it sensitive to
+        # target ORDER where a seeded run is not. Declare `seed:` for anything
+        # whose numbers get published.
         seed_flag = lambda wc: (
             f"--seed {COMBOS_BY_ID[wc.combo_id]['seed']}"
             if "seed" in COMBOS_BY_ID[wc.combo_id]
