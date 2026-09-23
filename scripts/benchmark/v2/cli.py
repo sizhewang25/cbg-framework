@@ -23,6 +23,7 @@ import pyarrow.parquet as pq
 import typer
 
 from scripts.benchmark.v2 import mtl_basin_miss as basin
+from scripts.benchmark.v2 import rename_combo
 from scripts.benchmark.v2 import schema as bench_schema
 from scripts.benchmark.v2.inputs import (
     DEFAULT_INPUTS_ROOT,
@@ -1227,6 +1228,92 @@ def cmd_mtl_basin_miss(
             "\nAt least one setting loses modes. The shipped setting must be a "
             "zero-miss row.", err=True,
         )
+
+
+@app.command("rename-combo")
+def cmd_rename_combo(
+    old: str = typer.Option(..., "--from", help="Combo id to rename."),
+    new: str = typer.Option(..., "--to", help="Combo id to rename it to."),
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Limit to these runs (repeatable). Default: every run."
+    ),
+    require_mtl: Optional[str] = typer.Option(
+        None,
+        help=(
+            "Only rename combos whose run.json names this MTL. The safety gate: "
+            "several runs can share a combo id while having run different "
+            "compositions under it."
+        ),
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root containing <run_id>/."),
+    derived_root: list[Path] = typer.Option(
+        None,
+        "--derived-root",
+        help=(
+            "Analysis output root to rename derived artifacts under (repeatable). "
+            "Defaults to outputs/analysis/{v3,v4}."
+        ),
+    ),
+    derived_suffix: list[str] = typer.Option(
+        None,
+        "--derived-suffix",
+        help=f"Suffixes appended to a combo id. Default: {list(rename_combo.DEFAULT_DERIVED_SUFFIXES)}.",
+    ),
+    dry_run: bool = typer.Option(False, help="Print what would move and stop."),
+) -> None:
+    """Rename a combo's output directories, its run.json ids, and its artifacts.
+
+    The combo id is the whole cache key, so re-running a combo whose code
+    changed overwrites the old numbers in place. This preserves them.
+
+    Idempotent: re-running reports the completed rename and does nothing.
+    See `rename_combo.py` for why `combo_id` inside run.json and the derived
+    analysis artifacts have to move with the directory.
+    """
+    roots = list(derived_root) if derived_root else [
+        _REPO_ROOT / "outputs" / "analysis" / "v3",
+        _REPO_ROOT / "outputs" / "analysis" / "v4",
+    ]
+    try:
+        plan = rename_combo.plan_rename(
+            outputs_root, old, new,
+            run_ids=list(run_id) if run_id else None,
+            require_mtl=require_mtl,
+            derived_roots=roots,
+            derived_suffixes=(
+                tuple(derived_suffix) if derived_suffix
+                else rename_combo.DEFAULT_DERIVED_SUFFIXES
+            ),
+        )
+    except rename_combo.RenameRefused as exc:
+        typer.echo(f"refused: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    for path, why in plan.skipped:
+        typer.echo(f"  skip {path.relative_to(outputs_root)}: {why}")
+    for path in plan.combo_dirs:
+        typer.echo(f"  move {path.relative_to(outputs_root)} -> {new}")
+    for path in plan.derived:
+        typer.echo(f"  move {path}")
+    if plan.already_done:
+        typer.echo(
+            f"  {len(plan.already_done)} destination(s) already in place "
+            f"(a previous run of this command)"
+        )
+    if plan.is_noop:
+        typer.echo(f"nothing to do: no {old!r} directories or artifacts left.")
+        return
+    if dry_run:
+        typer.echo(
+            f"dry run: would move {len(plan.combo_dirs)} combo dir(s) and "
+            f"{len(plan.derived)} derived artifact(s)."
+        )
+        return
+    rename_combo.apply(plan, old, new)
+    typer.echo(
+        f"renamed {len(plan.combo_dirs)} combo dir(s) and "
+        f"{len(plan.derived)} derived artifact(s): {old} -> {new}"
+    )
 
 
 if __name__ == "__main__":

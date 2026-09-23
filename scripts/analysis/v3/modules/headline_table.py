@@ -196,7 +196,12 @@ PROVISIONAL_WEIGHTED: dict[int, dict[str, dict[str, float]]] = {
         "vanilla_cbg": {"accuracy": 0.763, "fallback_rate": 0.0},
         "octant_cbg_hull": {"accuracy": 0.987, "fallback_rate": 0.0},
         "octant_cbg_spl": {"accuracy": 0.956, "fallback_rate": 0.0},
-        "spotter_cbg": {"accuracy": 0.727, "fallback_rate": 0.0},
+        # Re-keyed when the density MTL moved from H3 to HEALPix nside 128.
+        # This number was hand-entered from an H3-era run, so leaving it under
+        # `spotter_cbg` would have attached an H3 measurement to a name that now
+        # means HEALPix. It is a placeholder either way -- see PROVISIONAL_NOTE,
+        # and delete this whole dict the moment a real weighted run exists.
+        "spotter_h3_cbg": {"accuracy": 0.727, "fallback_rate": 0.0},
     }
 }
 

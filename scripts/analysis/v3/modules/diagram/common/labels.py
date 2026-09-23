@@ -19,6 +19,12 @@ from scripts.analysis.v3.modules.classify import SHORTEST_PING
 #: to hold the name moved to `spotter_hybrid_cbg`. The as7018 configs have not
 #: been renamed, so `spotter_cbg` there is still the hybrid. Do not pool the
 #: two under one label in a cross-run table without re-running as7018.
+#:
+#: `spotter_h3_cbg` is a third: the density MTL on its **previous H3 grid**,
+#: preserved on disk by `cli.py rename-combo` when it moved to HEALPix nside
+#: 128. It appears in no config and is not runnable; it exists so the two grids
+#: can be compared. Deliberately absent from `PUBLISHED_METHODS` -- see the note
+#: there -- so it renders in the "other" grey.
 LABELS: dict[str, str] = {
     SHORTEST_PING: "Shortest-Ping",
     "million_scale_cbg": "SoI CBG",
@@ -28,6 +34,7 @@ LABELS: dict[str, str] = {
     "octant_cbg": "Octant-Spline CBG",
     "spotter_cbg": "Spotter CBG",
     "spotter_hybrid_cbg": "Spotter-Hybrid CBG",
+    "spotter_h3_cbg": "Spotter-H3 CBG",
 }
 
 
@@ -41,6 +48,7 @@ PREFERRED_ORDER: tuple[str, ...] = (
     "octant_cbg",
     "spotter_cbg",
     "spotter_hybrid_cbg",
+    "spotter_h3_cbg",
 )
 
 
@@ -53,12 +61,16 @@ PREFERRED_ORDER: tuple[str, ...] = (
 #: names it `octant_cbg` and is out of scope until it is re-run with its columns
 #: consolidated onto the other AS runs' schema.
 #:
-#: `spotter_hybrid_cbg` is deliberately absent while carrying both a `LABELS`
-#: entry and a `PREFERRED_ORDER` slot. It is an ablation arm, parked in the as0*
-#: configs, so it should be named and sorted correctly if it reappears -- but it
-#: is not one of the six. The count is load-bearing: `palette._build_label_hues`
-#: walks this tuple against exactly six validated hues, so a seventh entry
-#: silently drops a published variant into the grey "other" bucket.
+#: `spotter_hybrid_cbg` and `spotter_h3_cbg` are deliberately absent while
+#: carrying both a `LABELS` entry and a `PREFERRED_ORDER` slot. One is an
+#: ablation arm parked in the as0* configs; the other is the H3-grid backup of
+#: the density arm, which appears in no config at all. Both should be named and
+#: sorted correctly if they turn up in an output tree -- but neither is one of
+#: the six. The count is load-bearing: `palette._build_label_hues` walks this
+#: tuple against exactly six validated hues and raises at import if the two
+#: disagree, so adding a name here without adding a validated hue breaks every
+#: v3 figure command rather than degrading. Leaving them out puts them in the
+#: grey "other" bucket, which is the intended outcome.
 PUBLISHED_METHODS: tuple[str, ...] = (
     SHORTEST_PING,
     "million_scale_cbg",

@@ -30,6 +30,24 @@ MESH_RUNS = (
 REGRESSION_TARGET = "tg-e1a1545"
 
 
+def _h3_density_arm(run) -> str:
+    """Whichever combo id holds the H3-grid density predictions.
+
+    The Arctic prediction belongs to the density MTL **on its old H3 grid**, and
+    permanently: when that MTL moved to HEALPix nside 128, `cli.py rename-combo`
+    preserved the H3 results as `spotter_h3_cbg` and `spotter_cbg` became the
+    HEALPix arm. The HEALPix arm is under no obligation to reproduce the same
+    prediction for the same target, so the evidence has to be read from the arm
+    that produced it.
+
+    Resolved at runtime rather than pinned, because `outputs/` is gitignored:
+    the rename is a filesystem mutation git cannot see, so on one machine the
+    backup exists and on another it does not. Pinning either name would make
+    this suite pass or fail on a fact about the checkout.
+    """
+    return "spotter_h3_cbg" if "spotter_h3_cbg" in run.combo_ids else "spotter_cbg"
+
+
 def _run(run_id):
     try:
         run = resolve_run(run_id)
@@ -78,10 +96,11 @@ class TestMonotonicityOnRealPredictions:
 class TestTheRegressionCase:
     def test_the_arctic_prediction_is_never_credited(self, as01):
         run, root, _ = as01
+        method = _h3_density_arm(run)
         for nside in H.NSIDE_LADDER:
             cells = pd.read_parquet(
                 run.cls_accuracy_dir(nside, root=root)
-                / C.CELLS_PARQUET.format(method="spotter_cbg")
+                / C.CELLS_PARQUET.format(method=method)
             )
             row = cells[cells.target_id == REGRESSION_TARGET]
             if row.empty:
@@ -95,7 +114,7 @@ class TestTheRegressionCase:
         run, root, _ = as01
         cells = pd.read_parquet(
             run.cls_accuracy_dir(128, root=root)
-            / C.CELLS_PARQUET.format(method="spotter_cbg")
+            / C.CELLS_PARQUET.format(method=_h3_density_arm(run))
         )
         row = cells[cells.target_id == REGRESSION_TARGET]
         if row.empty:
