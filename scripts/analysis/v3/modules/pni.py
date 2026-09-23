@@ -123,6 +123,7 @@ from scripts.analysis.v3.modules.paths import (
     RunPaths,
     resolve_run,
 )
+from scripts.libs.canonical import build_pairs, load_canonical_csv
 from scripts.libs.cbg.rtt_model import THEORETICAL_SLOPE
 
 PNI_EDGES_CSV = "pni_edges.csv"
@@ -949,8 +950,6 @@ def build_for_run(
     split_csv: Path | None = None,
 ) -> tuple[PniGraph, Path]:
     """Resolve this run's inputs, build, and say where the result belongs."""
-    from scripts.benchmark.v2.eval_source import build_pairs, load_canonical_csv
-
     csv_path = resolve_source_csv(run, source_csv)
     pairs = build_pairs(load_canonical_csv(csv_path))
     pni, diag = load_pni_sites(pni_csv)

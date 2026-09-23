@@ -23,7 +23,8 @@ import typer
 from scripts.analysis.v3.modules import figure_pni_delay, pni
 from scripts.analysis.v3.modules.answer_space import pairwise_km
 from scripts.analysis.v3.modules.paths import MissingArtifactError, RunPaths
-from scripts.benchmark.v2.eval_source import build_pairs, per_target_metrics
+from scripts.benchmark.v2.eval_source import per_target_metrics
+from scripts.libs.canonical import build_pairs
 from scripts.libs.cbg.rtt_model import THEORETICAL_SLOPE
 
 # Real metros, so a distance that looks wrong can be checked against intuition.

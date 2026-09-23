@@ -127,6 +127,7 @@ from scripts.analysis.v3.modules.paths import (
     discover_runs,
     resolve_run,
 )
+from scripts.libs.canonical import load_canonical_csv
 
 LABELS_CSV = "target_labels.csv"
 META_JSON = "meta.json"
@@ -626,8 +627,6 @@ def build_for_run(
     source_csv: Path | None = None,
 ) -> tuple[ProximityLabels, Path]:
     """`build_proximity` for one run. Returns the labels and their output dir."""
-    from scripts.benchmark.v2.eval_source import load_canonical_csv
-
     g = get_grid(grid) if isinstance(grid, str) else grid
     res = g.DEFAULT_RESOLUTION if resolution is None else g.validate_resolution(resolution)
     space_dir = answer_space or run.answer_space_dir(

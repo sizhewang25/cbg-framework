@@ -94,6 +94,7 @@ from scripts.analysis.v3.modules.paths import (
     RunPaths,
     resolve_run,
 )
+from scripts.libs.canonical import build_pairs, load_canonical_csv
 
 TARGET_VERDICTS_CSV = "target_verdicts.csv"
 VP_VERDICTS_CSV = "vp_verdicts.csv"
@@ -599,8 +600,6 @@ def build_for_run(
     peer_asn: int | None = None,
 ) -> tuple[PniStrategy, Path]:
     """Resolve this run's inputs, detect, and say where the result belongs."""
-    from scripts.benchmark.v2.eval_source import build_pairs, load_canonical_csv
-
     csv_path = resolve_source_csv(run, source_csv)
     pairs = build_pairs(load_canonical_csv(csv_path))
     sites, diag = pni.load_pni_sites(pni_csv)

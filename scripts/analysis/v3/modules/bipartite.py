@@ -95,6 +95,7 @@ from scripts.analysis.v3.modules.paths import (
     discover_runs,
     resolve_run,
 )
+from scripts.libs.canonical import load_canonical_csv
 
 VP_NODES_CSV = "vp_nodes.csv"
 TARGET_NODES_CSV = "target_nodes.csv"
@@ -663,8 +664,6 @@ def load_edges(csv_path: Path) -> tuple[pd.DataFrame, int]:
     Raises if one id carries more than one coordinate, which would make every
     distance below ambiguous.
     """
-    from scripts.benchmark.v2.eval_source import load_canonical_csv
-
     df = load_canonical_csv(Path(csv_path))
     n_obs = int(len(df))
 

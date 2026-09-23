@@ -70,6 +70,7 @@ from scripts.analysis.v3.modules.grid import (
     get_grid,
     resolve_cli_grid,
 )
+from scripts.libs.canonical import load_canonical_csv
 from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM
 from scripts.analysis.v3.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
@@ -832,7 +833,6 @@ def build_for_run(
     shared; only the seed scoring and the MTL replay are per method.
     """
     from scripts.analysis.v3.modules import bipartite, classify, proximity
-    from scripts.benchmark.v2.eval_source import load_canonical_csv
 
     space = build_answer_space_for_run(run, grid=grid, resolution=resolution)
     space_grid = str(space.seeds["grid_scheme"].iloc[0])
