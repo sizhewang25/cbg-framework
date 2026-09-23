@@ -5,6 +5,7 @@ Three commands, in dependency order:
     python -m scripts.analysis.v4.cli build-answer-space --run-id as01-260728-260802-mesh
     python -m scripts.analysis.v4.cli build-bipartite    --run-id as01-260728-260802-mesh
     python -m scripts.analysis.v4.cli classify           --run-id as01-260728-260802-mesh
+    python -m scripts.analysis.v4.cli plot-outcome-bars  --run-id as01-... --run-id as02-...
 
 `classify` needs the answer space; `build-bipartite` is independent of both and
 can run in any order. Each writes one directory per rung of the ladder
@@ -22,7 +23,13 @@ from pathlib import Path
 
 import typer
 
-from scripts.analysis.v4.modules import answer_space, bipartite, classify, healpix
+from scripts.analysis.v4.modules import (
+    answer_space,
+    bipartite,
+    classify,
+    figure_outcome_bars,
+    healpix,
+)
 from scripts.analysis.v4.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
     DEFAULT_OUTPUTS_ROOT,
@@ -131,6 +138,41 @@ def classify_cmd(
             typer.echo(bad.to_string(index=False), err=True)
             if strict:
                 raise typer.Exit(code=1)
+
+
+@app.command("plot-outcome-bars")
+def plot_outcome_bars_cmd(
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Mesh run, one per dataset (repeatable)."
+    ),
+    nside: list[int] = typer.Option(None, "--nside", "-n", help=_NSIDE_HELP),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Plot only these."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v4 writes."),
+) -> None:
+    """Outcome composition bars, one figure per rung, across datasets.
+
+    Cross-dataset by nature, so `--run-id` is repeatable and there is no
+    `--all-runs`: the figure IS the comparison between named datasets, and
+    sweeping every run on disk would silently mix populations that were never
+    meant to share an axis.
+
+    No traffic-weighted arm is drawn. None exists, and v3 filled that half of
+    its figure from a hard-coded dict — 99.3% bars that measured nothing.
+    """
+    if not run_id:
+        raise typer.BadParameter(
+            "pass at least one --run-id; this figure compares named datasets"
+        )
+    runs = [resolve_run(r, outputs_root) for r in run_id]
+    pngs = figure_outcome_bars.build_for_runs(
+        runs,
+        nsides=_nsides(nside),
+        methods=list(method) if method else None,
+        analysis_root=analysis_root,
+    )
+    for png in pngs:
+        typer.echo(f"wrote {png}")
 
 
 if __name__ == "__main__":

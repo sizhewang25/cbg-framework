@@ -71,16 +71,52 @@ estimator never once lands in the truth's own cell, which the old rule could not
 see. `accuracy_nearest_seed_retired` is kept in the output **for this comparison
 only**; its name says so and the manifest says not to publish it.
 
+## The figure
+
+`plot-outcome-bars` draws one stacked bar per method, partitioned into **where
+the prediction landed**: in the cell · 1 ring out · 2 rings out · further out ·
+never answered. One figure per rung, three dataset panels each.
+
+v3's three segments (correct / wrong / failed) collapsed the middle three into
+"wrong", which is precisely what the ring metric exists to expose.
+
+Colour was **computed, not chosen** — the four placed segments take a
+single-hue ordinal ramp, validated with the dataviz skill's
+`validate_palette.js --ordinal` (monotone lightness, adjacent gaps >= 0.06,
+light end 2.10:1, hue spread 5 degrees; all pass). Two earlier designs were
+rejected by measurement:
+
+* green ramp + **red** for "further out" — red vs the ramp's mid-green is
+  Delta E **1.8 under protanopia**, so a protanope cannot separate "two rings
+  out" from a total miss;
+* a **grey** fifth fill for "never answered" — every grey tested collided with
+  some ramp step under deuteranopia (Delta E 1.6-4.5), because greens desaturate
+  toward grey exactly there.
+
+So "never answered" carries **no fill** — an outlined, hatched slot. An absence
+cannot be confused with a hue, and nothing was produced to colour.
+
+The x order is ranked once at the finest rung and reused for every rung, so a
+method keeps its slot across the figure set. **No traffic-weighted arm is
+drawn**: none exists, and v3 filled that half from a hard-coded dict that
+rendered 99.3% bars measuring nothing.
+
 ## Usage
 
 ```bash
 python -m scripts.analysis.v4.cli build-answer-space --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v4.cli build-bipartite    --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v4.cli classify           --run-id as01-260728-260802-mesh
+python -m scripts.analysis.v4.cli plot-outcome-bars \
+    --run-id as01-260728-260802-mesh \
+    --run-id as02-260728-260802-mesh \
+    --run-id as03-260728-260802-mesh
 ```
 
-`classify` needs the answer space; `build-bipartite` is independent. `--nside`
-selects rungs (default: the full ladder). There is no `--grid`.
+`classify` needs the answer space; `build-bipartite` is independent.
+`plot-outcome-bars` needs `classify` and takes a repeatable `--run-id` because
+the figure *is* the cross-dataset comparison. `--nside` selects rungs (default:
+the full ladder). There is no `--grid`.
 
 ## Layout
 
@@ -92,6 +128,9 @@ outputs/analysis/v4/<run_id>/
   bipartite-graph/occupancy_by_resolution.healpix.csv   <- geometry curve
   target-cls-accuracy/healpix-<nside>/          <method>_cells.parquet accuracy.csv manifest.json
   target-cls-accuracy/accuracy_by_resolution.healpix.csv <- accuracy curve
+
+outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>/
+  outcome_bars.healpix-<nside>.{png,csv,manifest.json}
 ```
 
 One rung per directory, following v3, so each rung is a complete self-describing

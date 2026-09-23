@@ -211,6 +211,20 @@ def summarize(scored: dict[str, pd.DataFrame], nside: int) -> pd.DataFrame:
             hit = placed & (ring <= k) & solved.to_numpy()
             row[f"accuracy_ring{k}"] = round(float(hit.mean()), 4)
         row["n_unplaced"] = int((~placed).sum())
+
+        # EXCLUSIVE counts, so the outcome is a partition of `n_targets` that a
+        # figure can stack directly. Derived from the rounded cumulative shares
+        # instead, a bar would not close: four values rounded to 4dp and
+        # differenced can miss the total by a target or two, and the reader
+        # would see a stack that does not reach 100%.
+        sv = solved.to_numpy()
+        for k in range(H.MAX_RING + 1):
+            row[f"n_ring{k}"] = int((sv & placed & (ring == k)).sum())
+        # Answered, but further out than the metric grades. Distinct from
+        # `n_failed`: this method produced a coordinate and it was nowhere near.
+        row["n_beyond"] = int((sv & ~placed).sum())
+        # Never produced a coordinate at all -- fallback or crash.
+        row["n_failed"] = int((~sv).sum())
         row["accuracy_nearest_seed_retired"] = round(
             float(
                 (
@@ -223,7 +237,34 @@ def summarize(scored: dict[str, pd.DataFrame], nside: int) -> pd.DataFrame:
         row["error_km_p50"] = round(float(err.quantile(0.50)), 3) if len(err) else None
         row["error_km_p90"] = round(float(err.quantile(0.90)), 3) if len(err) else None
         rows.append(row)
-    return pd.DataFrame(rows).sort_values("accuracy_ring0", ascending=False)
+    out = pd.DataFrame(rows).sort_values("accuracy_ring0", ascending=False)
+    guard_partition(out)
+    return out
+
+
+#: The exclusive outcome segments, bottom of a stack to top: how much landed in
+#: the cell, how much one ring out, two rings out, further than that, and how
+#: much never answered.
+OUTCOME_COUNTS: tuple[str, ...] = (
+    "n_ring0", "n_ring1", "n_ring2", "n_beyond", "n_failed",
+)
+
+
+def guard_partition(summary: pd.DataFrame) -> None:
+    """The five outcome counts must sum to `n_targets`, per method.
+
+    Asserted rather than trusted because the failure is invisible in the
+    artifact: a stack that sums to 0.98 looks like a stack, and the missing 2%
+    would be read as a rendering quirk rather than as a scoring bug.
+    """
+    total = summary[list(OUTCOME_COUNTS)].sum(axis=1)
+    bad = summary.loc[total != summary["n_targets"]]
+    if len(bad):
+        raise ValueError(
+            "outcome counts do not partition n_targets for "
+            f"{bad['method'].tolist()}: "
+            f"{total[bad.index].tolist()} vs {bad['n_targets'].tolist()}"
+        )
 
 
 def score_rung(
