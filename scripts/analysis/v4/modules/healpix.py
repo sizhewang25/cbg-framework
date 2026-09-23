@@ -43,52 +43,68 @@ is also aperture-4 and also measured 0 violations):
 50.9 km across, which is the metro granularity prior work puts near 40 km.
 The ladder runs 128 -> 16 (50.9 km -> 407 km).
 
-RING ordering would break `degrade` and therefore the whole package; the order
-is fixed at "nested" in `scripts.libs.healpix.grid` and is not a parameter.
-
-## Where the primitives live
-
-`validate_nside`, `npix`, `pixel_area_km2`, `nominal_cell_km`, `ang2pix`,
-`pix2ang`, `degrade`, `neighbours`, `children`, `disk`, `cell_rings` and
-`describe` are **re-exported from `scripts.libs.healpix.grid`**, which is the
-one implementation. They moved there when the framework's density MTL needed
-the same grid: the framework may not import `scripts.analysis`, so a grid
-shared by both belongs in `scripts/libs/` -- the rule
-`scripts/analysis/v3/tests/test_layering.py` states for the CSV contract.
-
-What stays here is the part that is about *this metric* rather than about the
-grid: the ladder, the ring-distance rule, and the occupancy curve.
+RING ordering would break `degrade` and therefore the whole package; `_ORDER` is
+fixed at "nested" and is not a parameter.
 """
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
-from scripts.libs.healpix.grid import (  # noqa: F401  (re-exported)
-    DEFAULT_NSIDE,
-    ang2pix,
-    cell_rings,
-    children,
-    degrade,
-    describe,
-    disk,
-    neighbours,
-    nominal_cell_km,
-    npix,
-    pix2ang,
-    pixel_area_km2,
-    validate_nside,
-)
+from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM
+
+#: Working resolution: 2,594 km^2 cells, 50.9 km nominal.
+DEFAULT_NSIDE = 128
 
 #: The accuracy ladder, finest first. Each step is one 4-to-1 subdivision, so
 #: `degrade` walks it by shifting 2 bits per rung.
 NSIDE_LADDER: tuple[int, ...] = (128, 64, 32, 16)
+
+#: Fixed, not a parameter — see the module docstring.
+_ORDER = "nested"
 
 #: How many rings out the classification metric grades before giving up. Ring 0
 #: is "same cell"; beyond `MAX_RING` the prediction is reported as unplaced
 #: rather than as a large ring, because the count stops being informative once
 #: it exceeds the neighbourhood the metric is asking about.
 MAX_RING = 2
+
+
+def _healpix(nside: int):
+    # Lazy: astropy is a heavy import and a caller that only needs the areas
+    # (which are closed-form) should not pay for it.
+    from astropy_healpix import HEALPix
+
+    return HEALPix(nside=nside, order=_ORDER)
+
+
+def validate_nside(nside: int) -> int:
+    """`nside` must be a positive power of two for NESTED ids to nest."""
+    n = int(nside)
+    if n < 1 or (n & (n - 1)) != 0:
+        raise ValueError(f"nside must be a positive power of two, got {nside}")
+    return n
+
+
+def npix(nside: int) -> int:
+    """Total cells: `12 * nside**2` (196,608 at nside=128)."""
+    return 12 * validate_nside(nside) ** 2
+
+
+def pixel_area_km2(nside: int) -> float:
+    """Cell area in km^2 — exact and identical for every cell at this nside."""
+    return 4.0 * np.pi * EARTH_RADIUS_KM**2 / npix(nside)
+
+
+def nominal_cell_km(nside: int) -> float:
+    """Cell pitch as `sqrt(area)` — 50.9 km at nside=128.
+
+    This is the merge scale: the distance below which two targets are treated as
+    one place.
+    """
+    return float(np.sqrt(pixel_area_km2(nside)))
 
 
 def ladder_for(nside: int) -> tuple[int, ...]:
@@ -102,7 +118,84 @@ def ladder_for(nside: int) -> tuple[int, ...]:
     return (n,) + tuple(x for x in NSIDE_LADDER if x < n)
 
 
-def ring_distance(a, b, nside: int, max_ring: int = MAX_RING) -> np.ndarray:
+def ang2pix(lat_deg, lon_deg, nside: int = DEFAULT_NSIDE) -> np.ndarray:
+    """NESTED cell id per `(lat, lon)` in degrees."""
+    import astropy.units as u
+
+    lat = np.asarray(lat_deg, dtype=float)
+    lon = np.asarray(lon_deg, dtype=float)
+    pix = _healpix(validate_nside(nside)).lonlat_to_healpix(lon * u.deg, lat * u.deg)
+    return np.asarray(pix, dtype=np.int64)
+
+
+def pix2ang(pix, nside: int = DEFAULT_NSIDE) -> np.ndarray:
+    """Cell centres as an `(N, 2)` array of `(lat, lon)` degrees.
+
+    **`(lat, lon)`, the opposite order from `cell_rings`.** A seed is written to
+    `seeds.csv` as `seed_lat` then `seed_lon`; rings are `(lon, lat)` because
+    that is what plotting wants. Two orders in one module is a swap-bug magnet,
+    so `test_healpix.py` pins the round trip `ang2pix(pix2ang(p)) == p`.
+
+    Longitude is normalised to `[-180, 180)`. Not cosmetic: `healpix_to_lonlat`
+    returns an astropy `Longitude` wrapped to `[0, 360)`, so a Chicago cell
+    arrives as 271.77 rather than -88.23. Nothing would crash — haversine goes
+    through sin/cos — but any map that picks a projection centre from
+    `lon.mean()` would render in the wrong hemisphere.
+    """
+    p = np.asarray(pix, dtype=np.int64).ravel()
+    if p.size == 0:
+        return np.zeros((0, 2), dtype=float)
+    lon, lat = _healpix(validate_nside(nside)).healpix_to_lonlat(p)
+    lon = np.asarray(lon.to_value("deg"), dtype=float)
+    lat = np.asarray(lat.to_value("deg"), dtype=float)
+    return np.column_stack([lat, ((lon + 180.0) % 360.0) - 180.0])
+
+
+def degrade(pix, nside_from: int, nside_to: int) -> np.ndarray:
+    """Coarsen NESTED ids by bit shift — the whole ladder in one operation.
+
+    Valid only for NESTED ordering with both nsides powers of two and
+    `nside_to <= nside_from`. Equals geometric re-binning exactly, which is the
+    property that makes the ladder free; `test_healpix.py` asserts it against
+    `ang2pix` at every rung rather than trusting the algebra.
+    """
+    validate_nside(nside_from)
+    validate_nside(nside_to)
+    if nside_to > nside_from:
+        raise ValueError(
+            f"nside_to ({nside_to}) must not exceed nside_from ({nside_from})"
+        )
+    shift = 2 * int(np.log2(nside_from // nside_to))
+    return np.asarray(pix, dtype=np.int64) >> shift
+
+
+def neighbours(pix, nside: int) -> np.ndarray:
+    """The 8 neighbours of each cell, as an `(N, 8)` array.
+
+    Absent neighbours are `-1`, and they are real: **24 cells at every nside**
+    sit at a corner of the 12-face base tessellation and have 7 rather than 8
+    (0.012% at nside=128, 0.78% at nside=16). `astropy_healpix` warns on them,
+    which is noise here rather than information, so it is suppressed and the
+    `-1`s are left for `ring_distance` to filter. The direct analogue is H3's 12
+    pentagons.
+
+    Transposed from `astropy_healpix`, which returns `(8, N)`: every caller here
+    wants one row per input cell.
+    """
+    from astropy_healpix import neighbours as _nb
+
+    p = np.asarray(pix, dtype=np.int64).ravel()
+    if p.size == 0:
+        return np.zeros((0, 8), dtype=np.int64)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*invalid value.*neighbours.*")
+        out = _nb(p, validate_nside(nside), order=_ORDER)
+    return np.asarray(out, dtype=np.int64).T
+
+
+def ring_distance(
+    a, b, nside: int, max_ring: int = MAX_RING
+) -> np.ndarray:
     """How many cell steps separate each `(a, b)` pair, or `-1` past `max_ring`.
 
     0 means the same cell. 1 means `b` is one of `a`'s 8 neighbours. `-1` means
@@ -145,11 +238,13 @@ def ring_distance(a, b, nside: int, max_ring: int = MAX_RING) -> np.ndarray:
             (c for i in pending for c in shell[i]), dtype=np.int64
         )
         counts = [len(shell[i]) for i in pending]
+        # neighbours() returns -1 for absent neighbours
         nbrs = neighbours(flat, nside)
         pos = 0
         for i, n in zip(pending, counts):
             block = nbrs[pos : pos + n].ravel()
             pos += n
+            # remove reached duplicates from new neighbors
             new = {int(c) for c in block if c >= 0} - frontier[i]
             if int(b[i]) in new:
                 out[i] = k
@@ -172,3 +267,41 @@ def occupied_cells_by_nside(
     finest = ordered[0]
     pix = ang2pix(lat_deg, lon_deg, finest)
     return {n: int(np.unique(degrade(pix, finest, n)).size) for n in ordered}
+
+
+def cell_rings(pix, nside: int, *, step: int = 8) -> list[np.ndarray]:
+    """One `(V, 2)` `(lon, lat)`-degree boundary ring per cell, for drawing.
+
+    `step` points per edge so the cell's curvature on the sphere shows. Each
+    ring is made contiguous in longitude: a cell straddling the antimeridian
+    comes back with mixed-sign longitudes, and drawing that as one polygon
+    smears it across the whole map. Every vertex is placed within half a turn of
+    the first, which puts a straddling ring slightly outside [-180, 180] —
+    correct for plotting, and what cartopy expects.
+    """
+    p = np.asarray(pix, dtype=np.int64).ravel()
+    if p.size == 0:
+        return []
+    lon, lat = _healpix(validate_nside(nside)).boundaries_lonlat(p, step=step)
+    lon = np.asarray(lon.to_value("deg"), dtype=float)
+    lat = np.asarray(lat.to_value("deg"), dtype=float)
+    rings = []
+    for i in range(p.size):
+        lo = ((lon[i] + 180.0) % 360.0) - 180.0
+        lo = lo[0] + ((lo - lo[0] + 180.0) % 360.0) - 180.0
+        rings.append(np.column_stack([lo, lat[i]]))
+    return rings
+
+
+def describe(nside: int) -> dict:
+    """Static facts about the grid at this nside, for a `meta.json` block."""
+    n = validate_nside(nside)
+    return {
+        "scheme": "healpix",
+        "nside": n,
+        "order": _ORDER,
+        "n_cells": npix(n),
+        "cell_area_km2": round(pixel_area_km2(n), 3),
+        "nominal_cell_km": round(nominal_cell_km(n), 3),
+        "nominal_cell_km_note": "sqrt(area); HEALPix cells are exactly equal-area",
+    }

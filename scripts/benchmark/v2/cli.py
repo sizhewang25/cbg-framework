@@ -22,6 +22,7 @@ from typing import Optional
 import pyarrow.parquet as pq
 import typer
 
+from scripts.benchmark.v2 import mtl_basin_miss as basin
 from scripts.benchmark.v2 import schema as bench_schema
 from scripts.benchmark.v2.inputs import (
     DEFAULT_INPUTS_ROOT,
@@ -1132,6 +1133,100 @@ def cmd_materialize_target_space(
         )
 
     typer.echo(f"materialize-target-space done for {len(setup_dirs)} (source, setup) tree(s).")
+
+
+@app.command("mtl-basin-miss")
+def cmd_mtl_basin_miss(
+    run_id: str = typer.Option(..., help="Run whose VP geometry and targets to use."),
+    source: str = typer.Option("generic_csv", help="Source directory under the run."),
+    setup: Optional[str] = typer.Option(
+        None, help="Setup directory. Defaults to the only one, and refuses if there are several."
+    ),
+    fold: str = typer.Option("fold_0", help="Fold whose targets.parquet supplies coordinates."),
+    combo: Optional[str] = typer.Option(
+        None, help="Combo to read target coordinates from. Any will do; defaults to the first."
+    ),
+    resolution: int = typer.Option(..., help="Fine resolution the descent ends at."),
+    coarse_resolution: int = typer.Option(..., help="Resolution of the global first pass."),
+    grid: Optional[str] = typer.Option(
+        None, help="Grid name, if the MTL takes one. Omit for a version that does not."
+    ),
+    setting: list[str] = typer.Option(
+        None, "--setting", help="`top_k:ring` to test (repeatable). Defaults to a 5-point sweep."
+    ),
+    n_targets: int = typer.Option(50, help="Targets to sample."),
+    seed: int = typer.Option(20260923, help="Seed for the sample and the RTT inflation."),
+    miss_km: float = typer.Option(
+        basin.DEFAULT_MISS_KM, help="Displacement above which a prediction is a different basin."
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Root containing <run_id>/."),
+    out_json: Optional[Path] = typer.Option(None, help="Also write the sweep as JSON."),
+) -> None:
+    """Sweep `top_k` x `neighbor_ring` against an exhaustive global pass.
+
+    This is how those two are chosen. A non-zero miss count means the
+    coarse-to-fine descent is losing modes at that setting, so it is not safe
+    to ship -- see `mtl_basin_miss.py` for what is being measured and why the
+    constraints are synthetic.
+
+    Reference cost scales with the full grid: at HEALPix nside 128 one global
+    pass is ~1.1 s per target, so 50 targets is about a minute before the sweep
+    itself starts.
+    """
+    source_dir = outputs_root / run_id / source
+    if not source_dir.is_dir():
+        raise typer.BadParameter(f"{source_dir} does not exist")
+    setups = sorted(d for d in source_dir.iterdir() if d.is_dir())
+    if setup is not None:
+        setup_dir = source_dir / setup
+        if not setup_dir.is_dir():
+            raise typer.BadParameter(
+                f"setup {setup!r} not under {source_dir}; have {[d.name for d in setups]}"
+            )
+    elif len(setups) == 1:
+        setup_dir = setups[0]
+    else:
+        # Each setup is a different VP population, so picking one silently
+        # would put a number in a table nobody could reproduce.
+        raise typer.BadParameter(
+            f"{source_dir} holds {len(setups)} setups {[d.name for d in setups]}; "
+            f"pass --setup"
+        )
+
+    if setting:
+        try:
+            settings = tuple(
+                (int(a), int(b)) for a, b in (s.split(":", 1) for s in setting)
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(f"--setting wants `top_k:ring`, got {setting}") from exc
+    else:
+        settings = ((1, 0), (8, 0), (1, 1), (8, 1), (64, 1))
+
+    vps, targets = basin.load_geometry(setup_dir, fold=fold, combo=combo)
+    typer.echo(
+        f"{run_id}/{setup_dir.name}/{fold}: {len(vps)} VPs, {len(targets)} targets"
+    )
+    rows = basin.sweep(
+        vps, targets,
+        resolution=resolution,
+        coarse_resolution=coarse_resolution,
+        settings=settings,
+        grid_kwargs={"grid": grid} if grid else None,
+        n_targets=n_targets,
+        seed=seed,
+        miss_km=miss_km,
+        progress=typer.echo,
+    )
+    typer.echo("")
+    typer.echo(basin.format_table(rows))
+    if out_json:
+        typer.echo(f"wrote {basin.write_report(rows, out_json)}")
+    if any(r.n_misses for r in rows):
+        typer.echo(
+            "\nAt least one setting loses modes. The shipped setting must be a "
+            "zero-miss row.", err=True,
+        )
 
 
 if __name__ == "__main__":
