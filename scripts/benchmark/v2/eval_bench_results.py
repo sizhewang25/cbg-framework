@@ -467,12 +467,48 @@ def _fold_paths(combo_dir: Path, run_dir: Path, inputs_root: Path) -> tuple[Path
     return obs_path, clusters_dir
 
 
+class UnreplayableCombo(Exception):
+    """A combo's `run.json` cannot be turned back into a live MTL/CTR pair."""
+
+
+def _replay_methods(run_meta: dict, combo_id: str, fold_name: str):
+    """The `(mtl, ctr)` pair for one fold, rebuilt from its `run.json`.
+
+    Raises `UnreplayableCombo` instead of letting the constructor's own error
+    escape, because the two failures need opposite handling. A malformed
+    *caller* argument should stop the command; a single **historical combo**
+    whose stored `mtl_kwargs` no longer match its class must not, and that is
+    not hypothetical: a combo directory is discovered by globbing the output
+    tree, so any arm left on disk from an older code version lands in this
+    loop. Before this guard, one such directory raised here and the whole
+    run produced nothing -- including every combo that happened to sort after
+    it alphabetically.
+
+    `KeyError` covers an MTL or CTR name the registry has since dropped;
+    `TypeError` a kwarg that was renamed, added or made required; `ValueError`
+    one whose accepted range changed.
+    """
+    try:
+        mtl = MTL_REGISTRY[run_meta["mtl"]](**(run_meta.get("mtl_kwargs") or {}))
+        ctr = CTR_REGISTRY[run_meta["ctr"]](**(run_meta.get("ctr_kwargs") or {}))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise UnreplayableCombo(
+            f"{combo_id}/{fold_name}: cannot rebuild "
+            f"{run_meta.get('mtl')!r}/{run_meta.get('ctr')!r} from the stored "
+            f"kwargs ({type(exc).__name__}: {exc}). The combo ran under a "
+            f"different version of that class, so its metrics cannot be "
+            f"recomputed; re-run the benchmark for it, or drop the directory."
+        ) from exc
+    return mtl, ctr
+
+
 def compute_bench_metrics(
     run_dir: Path,
     inputs_root: Path,
     source: Optional[str] = None,
     combos: Optional[list[str]] = None,
     compute_loo: bool = True,
+    unreplayable: Optional[list[str]] = None,
 ) -> dict[str, pd.DataFrame]:
     """Return `{combo_id: per_target_metrics_df}` for every discovered combo,
     pooled across folds (K-fold sets are disjoint, so pooling is a plain
@@ -482,7 +518,13 @@ def compute_bench_metrics(
     docstring's brittleness section) — every other metric group still runs,
     including the single full MTL recompute each target needs for
     area/inclusion. Use this on large runs or combos with an expensive CTR
-    (Monte Carlo medoid) where the O(sum of n_part) LOO reruns dominate."""
+    (Monte Carlo medoid) where the O(sum of n_part) LOO reruns dominate.
+
+    A combo whose `run.json` cannot be rebuilt into a live MTL/CTR pair is
+    skipped rather than fatal -- see `_replay_methods`. Pass a list as
+    `unreplayable` to collect the ids that were skipped: a warning in the log
+    is not enough, because the caller writes a results table and a silently
+    absent combo is an unnoticed hole in it."""
     combo_dirs = discover_combos(run_dir, source, slice_=None, combos=combos)
     if not combo_dirs:
         raise FileNotFoundError(f"No combos found under {run_dir} (source={source})")
@@ -493,10 +535,22 @@ def compute_bench_metrics(
 
     for combo_id, fold_dirs in sorted(grouped.items()):
         rows: list[dict[str, Any]] = []
+        skip_combo = False
         for fold_dir in fold_dirs:
             run_meta = load_run_json(fold_dir)
-            mtl_method = MTL_REGISTRY[run_meta["mtl"]](**(run_meta.get("mtl_kwargs") or {}))
-            ctr_method = CTR_REGISTRY[run_meta["ctr"]](**(run_meta.get("ctr_kwargs") or {}))
+            try:
+                mtl_method, ctr_method = _replay_methods(
+                    run_meta, combo_id, fold_dir.name
+                )
+            except UnreplayableCombo as exc:
+                # Skip the whole combo, not just this fold: the folds pool into
+                # one frame, so a partial combo would be a table row silently
+                # computed over a subset of the population.
+                logger.warning("%s", exc)
+                if unreplayable is not None and combo_id not in unreplayable:
+                    unreplayable.append(combo_id)
+                skip_combo = True
+                break
 
             obs_path, clusters_dir = _fold_paths(fold_dir, run_dir, inputs_root)
             if not obs_path.exists():
@@ -596,6 +650,8 @@ def compute_bench_metrics(
                     "cell_gap_km": cell_gap_by_target.get(target_id, np.nan),
                     **loo,
                 })
+        if skip_combo:
+            continue
         results[combo_id] = pd.DataFrame(rows)
     return results
 
@@ -651,15 +707,24 @@ def eval_bench_results(
     `<run_dir>/bench_eval/`. Returns `{combo_id: summary_dict}` plus the
     output paths under `"per_target_csvs"` / `"summary_parquet"`.
     `compute_loo=False` skips leave-one-out brittleness — see
-    `compute_bench_metrics`."""
+    `compute_bench_metrics`.
+
+    `stats["unreplayable_combos"]` lists any combo skipped because its stored
+    `mtl_kwargs` no longer construct its class -- a historical arm left in the
+    output tree. Those produce no CSV and no summary row."""
     out_dir = out_dir or (run_dir / "bench_eval")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    unreplayable: list[str] = []
     per_combo = compute_bench_metrics(
         run_dir, inputs_root, source=source, combos=combos, compute_loo=compute_loo,
+        unreplayable=unreplayable,
     )
 
     stats: dict[str, Any] = {"run_dir": str(run_dir), "per_target_csvs": {}}
+    # Reported even when empty, so "no combo was skipped" is a statement the
+    # caller can read rather than an absence it has to infer.
+    stats["unreplayable_combos"] = sorted(unreplayable)
     summary_rows: list[dict[str, Any]] = []
     for combo_id, df in sorted(per_combo.items()):
         csv_path = out_dir / f"{combo_id}_bench_per_target.csv"
