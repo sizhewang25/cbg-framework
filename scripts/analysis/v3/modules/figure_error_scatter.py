@@ -104,6 +104,7 @@ with the comparison grid suffixed `_by_dataset`.
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -116,6 +117,7 @@ from scripts.analysis.v3.modules.answer_space import (
     load_answer_space,
     seed_crossing_matrix,
 )
+from scripts.analysis.v3.modules.classify import denominator_mismatch
 from scripts.analysis.v3.modules.confusion import load_scored
 from scripts.analysis.v3.modules.diagram.common.draw import plt
 from scripts.analysis.v3.modules.diagram.common.labels import (
@@ -337,6 +339,12 @@ def load_points(
             f"no placed rows for {chosen} on {run.run_id} at "
             f"{grid_slug(grid, resolution)}; run `classify` first"
         )
+    # `band_table` divides each method's per-band count by that method's own
+    # `n_targets`, so two populations turn the shares into two scales. Stale
+    # artifacts only — `classify` no longer writes them.
+    problem = denominator_mismatch({m: c["n_targets"] for m, c in counts.items()})
+    if problem:
+        warnings.warn(f"{run.run_id}: {problem}", stacklevel=2)
     return pd.concat(frames, ignore_index=True), counts
 
 

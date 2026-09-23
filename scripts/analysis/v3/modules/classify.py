@@ -28,6 +28,7 @@ Command: `classify`. Writes to
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +63,18 @@ SHORTEST_PING = "shortest_ping"
 
 #: Ns reported in the summary; the per-target artifact supports any N.
 DEFAULT_TOPN = (1, 3)
+
+#: Set on `score_shortest_ping`'s frame: eval-source targets the benchmark
+#: never evaluated, dropped so the baseline is scored over the same population
+#: as the CBG arms. Non-zero on a traffic-weighted arm and zero on a mesh one.
+#: An attribute rather than a return value, following
+#: `diagram.common.membership`: only the CLI reports a denominator.
+BASELINE_ONLY_ATTR = "n_baseline_only_targets"
+
+#: Set on the same frame: evaluated targets the eval source carries no row for.
+#: Those keep a prediction-less row, so this never changes the denominator —
+#: but it is not explained by the traffic filter and is worth saying out loud.
+MISSING_BASELINE_ATTR = "n_evaluated_targets_without_baseline"
 
 _DIST_PREFIX = "dist_km__seed_"
 TOPN_CSV = "topn_accuracy.csv"
@@ -217,7 +230,9 @@ def score_combo(run: RunPaths, space: AnswerSpace, combo_id: str) -> pd.DataFram
     )
 
 
-def score_shortest_ping(run: RunPaths, space: AnswerSpace) -> pd.DataFrame:
+def score_shortest_ping(
+    run: RunPaths, space: AnswerSpace, *, combo_ids: list[str] | None = None
+) -> pd.DataFrame:
     """Seed distances for the Shortest-Ping baseline.
 
     The estimate is the lowest-RTT VP's own coordinate, resolved by
@@ -226,31 +241,91 @@ def score_shortest_ping(run: RunPaths, space: AnswerSpace) -> pd.DataFrame:
     fold-independent because every VP is available in every fold; only targets
     are folded.
 
-    `fold` is taken from any CBG combo's fold assignment so the baseline sits on
-    the same fold partition as the variants; it is left as -1 if no combo exists.
+    **Scored over the evaluated roster, not over the eval source.** The rows are
+    `io.evaluated_fold_by_target`'s index — the targets the benchmark actually
+    ran — with the VP coordinate mapped onto them, exactly the way
+    `proximity._sping_chain` reindexes the same frame onto the same roster.
+    Without that the baseline's population is whatever the eval CSV describes,
+    which on a **traffic-weighted** arm is the pre-filter mesh: the baseline
+    would then be scored over more targets than every CBG arm, and every
+    figure comparing them would divide by two different numbers (§7.2's rule
+    is a policy about rows, not a defence against two populations).
+
+    The restriction cuts **both** ways, and neither is silent:
+
+    * eval-source targets the run never evaluated are dropped, counted into
+      `frame.attrs[BASELINE_ONLY_ATTR]`;
+    * evaluated targets the eval source has no row for keep a row with **no
+      prediction** — NaN coordinates, `tg_seed_rank == -1`, so the baseline
+      scores a miss there rather than shrinking the denominator — counted into
+      `frame.attrs[MISSING_BASELINE_ATTR]`.
+
+    `fold` comes from the roster, so the baseline sits on the variants' own
+    fold partition. With no combo scored there is no roster: the eval source's
+    own population stands, every `fold` is -1, and both counts are 0.
     """
-    ev = io.load_sping_vp(run)
-
+    ev = io.load_sping_vp(run).set_index("target_id")
     tg_seed = space.assignments.set_index("target_id")["seed_id"]
-    ev = ev[ev["target_id"].isin(tg_seed.index)].reset_index(drop=True)
 
-    fold = pd.Series(-1, index=ev.index, dtype=int)
-    combos = run.combo_ids
+    combos = list(combo_ids) if combo_ids is not None else run.combo_ids
     if combos:
-        ref = io.load_folds(run, combos[0], columns=["target_id"])
-        # `load_folds` adds `fold`; map it onto the baseline's target order.
-        fold_by_target = ref.set_index("target_id")["fold"]
-        fold = ev["target_id"].map(fold_by_target).fillna(-1).astype(int)
+        fold_by_target = io.evaluated_fold_by_target(run, combos)
+        roster, have = set(fold_by_target.index), set(ev.index)
+        # The eval source's row order is kept for the targets the two share,
+        # and the roster-only ones are appended: on a mesh run the two
+        # populations are equal, so this reproduces the previous frame row for
+        # row rather than re-sorting every existing artifact.
+        shared = [t for t in ev.index if t in roster]
+        roster_only = [t for t in fold_by_target.index if t not in have]
+        target_id = pd.Series(shared + roster_only, dtype=ev.index.dtype)
+        fold = target_id.map(fold_by_target).astype(int)
+        n_baseline_only = int(len(ev.index.difference(fold_by_target.index)))
+        n_missing_baseline = len(roster_only)
+    else:
+        target_id = pd.Series(
+            [t for t in ev.index if t in set(tg_seed.index)], dtype=ev.index.dtype
+        )
+        fold = pd.Series(-1, index=target_id.index, dtype=int)
+        n_baseline_only = 0
+        n_missing_baseline = 0
 
-    return _seed_distance_frame(
+    out = _seed_distance_frame(
         space,
         method=SHORTEST_PING,
-        target_id=ev["target_id"],
+        target_id=target_id,
         fold=fold,
-        status=pd.Series("BASELINE", index=ev.index),
-        pred_lat=ev["sping_vp_lat"],
-        pred_lon=ev["sping_vp_lon"],
-        tg_seed_id=ev["target_id"].map(tg_seed),
+        status=pd.Series("BASELINE", index=target_id.index),
+        pred_lat=target_id.map(ev["sping_vp_lat"]),
+        pred_lon=target_id.map(ev["sping_vp_lon"]),
+        tg_seed_id=target_id.map(tg_seed),
+    )
+    out.attrs[BASELINE_ONLY_ATTR] = n_baseline_only
+    out.attrs[MISSING_BASELINE_ATTR] = n_missing_baseline
+    return out
+
+
+def denominator_mismatch(n_targets_by_method: Mapping[str, int]) -> str | None:
+    """The message for a mixed denominator, or None when there is one.
+
+    Shared by the writer and the readers so they cannot describe the same
+    condition two ways: `score_run` **raises** it, because an artifact set must
+    never be written with two populations in it, while the readers of an
+    already-written `topn_accuracy.csv` (`pareto.load_accuracy`,
+    `accuracy_table.accuracy_rows`) **warn** it — those still have to open
+    tables produced before the baseline was aligned, and refusing to plot them
+    would help nobody.
+    """
+    sizes = set(n_targets_by_method.values())
+    if len(sizes) <= 1:
+        return None
+    return (
+        f"methods were scored over different target sets "
+        f"({dict(sorted(n_targets_by_method.items()))}); accuracies over "
+        f"different denominators are not comparable, so any table, frontier or "
+        f"figure putting them side by side is reading two populations. On a "
+        f"traffic-weighted arm this is the {SHORTEST_PING!r} baseline covering "
+        f"eval_source's pre-filter mesh — re-run `classify`, which restricts it "
+        f"to the targets the benchmark evaluated"
     )
 
 
@@ -312,12 +387,24 @@ def score_run(
     combo_ids: list[str] | None = None,
     include_baseline: bool = True,
 ) -> dict[str, pd.DataFrame]:
-    """Seed-distance frames for the baseline plus every requested combo."""
+    """Seed-distance frames for the baseline plus every requested combo.
+
+    Every frame covers the same targets, and that is enforced here rather than
+    left to each consumer: `score_combo` reads the folds and
+    `score_shortest_ping` is restricted to the same roster, so a difference
+    surviving to this point is a bug in one of them.
+    """
     frames: dict[str, pd.DataFrame] = {}
     if include_baseline:
-        frames[SHORTEST_PING] = score_shortest_ping(run, space)
+        # The baseline's population follows the combos actually being scored,
+        # so `--combo` narrows both sides together.
+        frames[SHORTEST_PING] = score_shortest_ping(run, space, combo_ids=combo_ids)
     for combo_id in combo_ids if combo_ids is not None else run.combo_ids:
         frames[combo_id] = score_combo(run, space, combo_id)
+
+    problem = denominator_mismatch({m: len(df) for m, df in frames.items()})
+    if problem:
+        raise ValueError(f"{run.run_id}: {problem}")
     return frames
 
 
@@ -396,6 +483,35 @@ def register(app: typer.Typer) -> None:
                 combo_ids=list(combo) if combo else None,
                 include_baseline=not no_baseline,
             )
+            baseline = frames.get(SHORTEST_PING)
+            n_baseline_only = (
+                0 if baseline is None else int(baseline.attrs.get(BASELINE_ONLY_ATTR, 0))
+            )
+            n_missing_baseline = (
+                0
+                if baseline is None
+                else int(baseline.attrs.get(MISSING_BASELINE_ATTR, 0))
+            )
+            n_targets = len(next(iter(frames.values()))) if frames else 0
+            if n_baseline_only:
+                # The per-run directory's only channel for this, the same way
+                # `plot-venn` echoes its own alignment.
+                typer.echo(
+                    f"{run.run_id}: {n_baseline_only} eval-source target(s) the "
+                    f"benchmark never evaluated were left out of "
+                    f"{SHORTEST_PING}; every method below is scored over the "
+                    f"same {n_targets} targets. Expected on a traffic-weighted "
+                    f"arm, whose eval source spans the pre-filter mesh."
+                )
+            if n_missing_baseline:
+                typer.echo(
+                    f"{run.run_id}: WARNING {n_missing_baseline} evaluated "
+                    f"target(s) have no eval_source row, so {SHORTEST_PING} "
+                    f"scores a miss on them. This is NOT the traffic filter — "
+                    f"check eval_source/*_eval_stats.json's `csv` against the "
+                    f"CSV the benchmark ran on."
+                )
+
             out_dir = run.cls_accuracy_dir(
                 root=analysis_root, grid=space_grid, resolution=space_res
             )
@@ -413,6 +529,23 @@ def register(app: typer.Typer) -> None:
                         "resolution": space_res,
                         "methods": sorted(frames),
                         "topn_reported": list(ns),
+                        # The denominator every accuracy in topn_accuracy.csv
+                        # is taken over. One block rather than a per-method
+                        # count because there is only one population by
+                        # construction — `score_run` refuses to write two.
+                        "population": {
+                            "definition": (
+                                "the targets the benchmark evaluated (the union "
+                                "of the folds' targets.parquet); the "
+                                f"{SHORTEST_PING} baseline is restricted to it "
+                                "rather than to eval_source's own target set"
+                            ),
+                            "n_targets": int(n_targets),
+                            "n_baseline_only_targets_excluded": n_baseline_only,
+                            "n_evaluated_targets_without_baseline": (
+                                n_missing_baseline
+                            ),
+                        },
                         "fallback_policy": (
                             "per-target parquet is neutral (FALLBACK rows carry "
                             "distances); topn_accuracy.csv counts fallbacks as "

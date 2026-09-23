@@ -150,6 +150,55 @@ def load_all_folds(
     return pd.concat(frames, ignore_index=True)
 
 
+def evaluated_fold_by_target(
+    run: RunPaths, combo_ids: list[str] | None = None
+) -> pd.Series:
+    """Fold index per target, over **the targets the benchmark evaluated**.
+
+    Its index is the run's evaluated roster — the one population every method's
+    accuracy is taken over. Read from the fold parquets rather than from
+    `targets.csv` because those are what the run actually produced: a config
+    listing five slices of which four ran leaves `targets.csv` a superset,
+    while `load_folds` refuses a combo with a missing fold outright.
+
+    **Why this exists as a shared helper.** `eval_source/*_eval_per_target.csv`
+    — the Shortest-Ping baseline's source — is a *different* population. On a
+    mesh run the two coincide. On a **traffic-weighted** arm they cannot: the
+    filter prunes flows, a target that loses every flow is never evaluated, and
+    the eval source spans the pre-filter mesh. So the baseline has to be
+    restricted to this roster before it can be compared with anything, and the
+    definition of "this roster" belongs in one place.
+
+    Every combo shares the fold partition, so the first is read and the rest
+    are checked against it. A disagreement is a broken run — unioning would
+    invent a population no single arm covers, and intersecting would hide it.
+    """
+    combos = list(combo_ids) if combo_ids is not None else run.combo_ids
+    if not combos:
+        raise MissingArtifactError(
+            f"{run.setup_dir} has no combo with a targets.parquet; the evaluated "
+            f"roster is defined by the fold outputs, so there is none to read"
+        )
+
+    first = load_folds(run, combos[0], columns=["target_id"])
+    roster = pd.Series(
+        first["fold"].to_numpy(dtype=int),
+        index=pd.Index(first["target_id"], name="target_id"),
+        name="fold",
+    )
+    for combo in combos[1:]:
+        other = load_folds(run, combo, columns=["target_id"])["target_id"]
+        if set(other) != set(roster.index):
+            raise ValueError(
+                f"combos {combos[0]!r} and {combo!r} evaluated different target "
+                f"sets ({len(roster)} vs {len(other)}); they read the same run's "
+                f"fold parquets, so this is an unfinished or corrupt run rather "
+                f"than a filtered one. Re-run the benchmark, or pass the combos "
+                f"that agree."
+            )
+    return roster
+
+
 def load_run_configs(run: RunPaths, combo_ids: list[str] | None = None) -> pd.DataFrame:
     """One row per (combo, fold) from `run.json`: phase choice, kwargs, cost.
 

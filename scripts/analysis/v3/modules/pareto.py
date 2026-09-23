@@ -57,7 +57,11 @@ import numpy as np
 import pandas as pd
 
 from scripts.analysis.v3.modules import cross, io
-from scripts.analysis.v3.modules.classify import SHORTEST_PING, TOPN_CSV
+from scripts.analysis.v3.modules.classify import (
+    SHORTEST_PING,
+    TOPN_CSV,
+    denominator_mismatch,
+)
 from scripts.analysis.v3.modules.cost import (
     COST_ROWS,
     COST_SPECS,
@@ -167,13 +171,15 @@ def load_accuracy(path: Path, *, top_n: int) -> pd.DataFrame:
             f"{path}: method(s) {df.loc[dup, 'method'].tolist()} appear more than once; "
             f"which row is the accuracy is ambiguous"
         )
-    if df["n_targets"].nunique() > 1:
-        warnings.warn(
-            f"{path}: n_targets differs across methods "
-            f"({sorted(df['n_targets'].unique().tolist())}); accuracies over different "
-            f"denominators are not comparable on one frontier",
-            stacklevel=2,
-        )
+    # Stale artifacts only: `classify` now refuses to write a table whose
+    # methods disagree, so this fires on one produced before the Shortest-Ping
+    # baseline was restricted to the evaluated roster. Warned, not raised —
+    # the message says how to fix it and the frontier still draws.
+    problem = denominator_mismatch(
+        dict(zip(df["method"].astype(str), df["n_targets"].astype(int)))
+    )
+    if problem:
+        warnings.warn(f"{path}: {problem}", stacklevel=2)
     keep = ["method", "n_targets", "n_solved", "n_fallback", "fallback_rate", col]
     out = df[[c for c in keep if c in df.columns]].copy()
     return out.rename(columns={col: "accuracy"}).set_index("method")

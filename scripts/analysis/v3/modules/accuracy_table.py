@@ -41,13 +41,14 @@ Command: `table-accuracy`. Writes to
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import typer
 
-from scripts.analysis.v3.modules.classify import TOPN_CSV
+from scripts.analysis.v3.modules.classify import TOPN_CSV, denominator_mismatch
 from scripts.analysis.v3.modules.cross import cross_dir, short_dataset
 from scripts.analysis.v3.modules.diagram.common.labels import PREFERRED_ORDER, label_for
 from scripts.analysis.v3.modules.grid import (
@@ -116,6 +117,15 @@ def accuracy_rows(
         df = pd.read_csv(path)
         if methods:
             df = df[df["method"].isin(methods)]
+        # Checked per run, before the concat: pooling hides it, and every
+        # consumer of these rows — this table, `table-headline`'s significance
+        # bands, `plot-outcome-bars`' pooled rates — divides by `n_targets`.
+        # Stale artifacts only; `classify` refuses to write a mixed table.
+        problem = denominator_mismatch(
+            dict(zip(df["method"].astype(str), df["n_targets"].astype(int)))
+        )
+        if problem:
+            warnings.warn(f"{path}: {problem}", stacklevel=2)
         df.insert(0, "run_id", run_id)
         df.insert(1, "dataset", short_dataset(run_id))
         frames.append(df)

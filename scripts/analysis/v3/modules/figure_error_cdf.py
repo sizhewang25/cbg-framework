@@ -44,6 +44,7 @@ Command: `plot-error-cdf`. Writes to
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -51,7 +52,10 @@ import pandas as pd
 import typer
 
 from scripts.analysis.v3.modules import io
-from scripts.analysis.v3.modules.classify import SHORTEST_PING
+from scripts.analysis.v3.modules.classify import (
+    SHORTEST_PING,
+    denominator_mismatch,
+)
 from scripts.analysis.v3.modules.confusion import load_scored
 from scripts.analysis.v3.modules.diagram.common.draw import plt
 from scripts.analysis.v3.modules.diagram.common.labels import (
@@ -164,6 +168,12 @@ def load_errors(
             "n_solved": int(solved.sum()),
             "n_fallback": int((df["status"] == "FALLBACK").sum()),
         }
+    # Each curve is normalized by its own n, so two populations on one axis
+    # read as one distribution. Stale artifacts only — `classify` no longer
+    # writes them — hence a warning rather than a refusal to draw.
+    problem = denominator_mismatch({m: c["n_total"] for m, c in counts.items()})
+    if problem:
+        warnings.warn(f"{cls_dir}: {problem}", stacklevel=2)
     return errors, counts
 
 

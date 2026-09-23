@@ -1930,10 +1930,18 @@ Two *CBG* arms over different targets remain a hard error. They read the same
 run's fold parquets, so a difference there is a broken run rather than a
 filtered one, and intersecting it away would hide that. So is the reverse
 direction — a target scored by the CBG arms and absent from the baseline — since
-there is nothing to compare it against. Note that `classify` applies no such
-rule: `topn_accuracy.csv` takes each method's accuracy over its own `n_targets`,
-so on a weighted arm that table compares 183 baseline targets against 150 CBG
-ones and only the `n_targets` column says so.
+there is nothing to compare it against.
+
+`classify` now applies the same rule one layer earlier, which is where it
+belongs: `score_shortest_ping` scores the baseline over
+`io.evaluated_fold_by_target`'s roster rather than over the eval source's own
+target set, so `topn_accuracy.csv`'s `n_targets` is equal across methods by
+construction and `score_run` refuses to write a table where it is not. The
+count of eval-source targets left out lands in the `classify` manifest's
+`population` block and is echoed. `build_membership`'s alignment therefore
+drops nothing on a freshly classified run and stays as the backstop for
+artifacts written before that (where it is the only thing standing between a
+weighted arm and a Venn over two populations).
 
 The headline is `overlap_venn.top<N>.png` — a 2-set Venn of **Shortest-Ping vs
 "≥1 CBG works"**. The CBG-only region counts rescues, the Shortest-Ping-only

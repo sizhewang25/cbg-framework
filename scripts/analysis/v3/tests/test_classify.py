@@ -6,12 +6,19 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from scripts.analysis.v3.modules import io
 from scripts.analysis.v3.modules.answer_space import build_answer_space
 from scripts.analysis.v3.modules.classify import (
+    BASELINE_ONLY_ATTR,
     DEFAULT_TOPN,
+    MISSING_BASELINE_ATTR,
     _seed_distance_frame,
+    denominator_mismatch,
+    score_run,
+    score_shortest_ping,
     topn_summary,
 )
+from scripts.analysis.v3.modules.paths import RunPaths
 
 CHI = (41.9742, -87.9073)
 SJC = (37.4675, -121.9215)
@@ -256,3 +263,142 @@ def test_scoring_a_target_outside_the_answer_space_is_rejected():
     truth = space.assignments.iloc[0]["seed_id"]
     with pytest.raises(ValueError, match="absent from the answer space"):
         _frame(space, [CHI], ["SUCCESS"], [truth], target_ids=["not-a-target"])
+
+
+# ---------------------------------------------------------------------------
+# § one population — the baseline is scored over the targets the run evaluated
+# ---------------------------------------------------------------------------
+# No local run reproduces the divergence (on a mesh arm the eval source and the
+# fold parquets describe the same targets), so the traffic-weighted case has to
+# be built: a run whose folds cover a subset of the eval CSV, which is exactly
+# what the flow filter leaves behind.
+
+
+def _weighted_run(tmp_path, *, evaluated: list[str], in_eval_csv: list[str]):
+    """A run whose folds evaluated `evaluated` while eval_source has `in_eval_csv`.
+
+    Returns `(RunPaths, AnswerSpace)`. The answer space spans every target of
+    both sets — on a traffic-weighted arm it is deliberately built from the
+    pre-filter mesh (`answer_space.build_for_run`), so it is not what restricts
+    the baseline and must not be mistaken for the roster.
+    """
+    coords = {"tg-chi": CHI, "tg-sjc": SJC, "tg-nyc": NYC}
+    run = RunPaths(run_id="w", root=tmp_path, source="traffic_weighted_csv", setup="s")
+
+    for i, tid in enumerate(evaluated):
+        d = run.combo_dir("vanilla_cbg", f"fold_{i}")
+        d.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "target_id": [tid],
+                "target_lat": [coords[tid][0]],
+                "target_lon": [coords[tid][1]],
+                "pred_lat": [coords[tid][0]],
+                "pred_lon": [coords[tid][1]],
+                "status": ["SUCCESS"],
+                "error_km": [0.0],
+            }
+        ).to_parquet(d / "targets.parquet", index=False)
+
+    run.eval_source_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "target_id": in_eval_csv,
+            "shortest_ping_vp_lat": [coords[t][0] for t in in_eval_csv],
+            "shortest_ping_vp_lon": [coords[t][1] for t in in_eval_csv],
+        }
+    ).to_csv(run.eval_source_dir / "base_eval_per_target.csv", index=False)
+
+    space = build_answer_space(
+        pd.DataFrame(
+            {
+                "target_id": list(coords),
+                "target_lat": [c[0] for c in coords.values()],
+                "target_lon": [c[1] for c in coords.values()],
+            }
+        )
+    )
+    return run, space
+
+
+def test_baseline_is_scored_over_the_targets_the_run_evaluated(tmp_path):
+    """The traffic-weighted case: the eval source spans the pre-filter mesh."""
+    run, space = _weighted_run(
+        tmp_path,
+        evaluated=["tg-chi", "tg-sjc"],
+        in_eval_csv=["tg-chi", "tg-sjc", "tg-nyc"],
+    )
+    sp = score_shortest_ping(run, space)
+
+    assert sorted(sp["target_id"]) == ["tg-chi", "tg-sjc"]
+    assert sp.attrs[BASELINE_ONLY_ATTR] == 1
+    assert sp.attrs[MISSING_BASELINE_ATTR] == 0
+    # The fold comes from the roster, not from a fillna default.
+    assert set(sp["fold"]) == {0, 1}
+
+
+def test_every_method_shares_one_denominator_on_a_weighted_arm(tmp_path):
+    """What the fix is for: `topn_accuracy.csv`'s n_targets must not differ."""
+    run, space = _weighted_run(
+        tmp_path,
+        evaluated=["tg-chi", "tg-sjc"],
+        in_eval_csv=["tg-chi", "tg-sjc", "tg-nyc"],
+    )
+    summary = topn_summary(score_run(run, space))
+    assert summary["n_targets"].nunique() == 1
+    assert int(summary["n_targets"].iloc[0]) == 2
+
+
+def test_an_evaluated_target_the_eval_source_lacks_scores_a_miss(tmp_path):
+    """Shrinking the denominator instead would credit the baseline for a gap."""
+    run, space = _weighted_run(
+        tmp_path, evaluated=["tg-chi", "tg-sjc"], in_eval_csv=["tg-chi"]
+    )
+    sp = score_shortest_ping(run, space)
+
+    assert sorted(sp["target_id"]) == ["tg-chi", "tg-sjc"]
+    assert sp.attrs[MISSING_BASELINE_ATTR] == 1
+    gap = sp.set_index("target_id").loc["tg-sjc"]
+    assert not np.isfinite(gap["pred_lat"])
+    assert gap["tg_seed_rank"] == -1  # a miss, not a hit and not a missing row
+
+
+def test_a_mesh_arm_drops_nothing(tmp_path):
+    run, space = _weighted_run(
+        tmp_path,
+        evaluated=["tg-chi", "tg-sjc"],
+        in_eval_csv=["tg-chi", "tg-sjc"],
+    )
+    sp = score_shortest_ping(run, space)
+    assert sp.attrs[BASELINE_ONLY_ATTR] == 0
+    assert sp.attrs[MISSING_BASELINE_ATTR] == 0
+
+
+def test_mixed_denominators_are_a_message_not_a_silence():
+    assert denominator_mismatch({"a": 10, "b": 10}) is None
+    msg = denominator_mismatch({"shortest_ping": 183, "vanilla_cbg": 150})
+    assert msg is not None
+    assert "183" in msg and "150" in msg
+
+
+def test_combos_over_different_target_sets_are_rejected(tmp_path):
+    """A disagreement between CBG arms is a broken run, not a filtered one."""
+    run, _ = _weighted_run(
+        tmp_path, evaluated=["tg-chi"], in_eval_csv=["tg-chi", "tg-sjc"]
+    )
+    d = run.combo_dir("octant_cbg_hull", "fold_0")
+    d.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "target_id": ["tg-sjc"],
+            "target_lat": [SJC[0]],
+            "target_lon": [SJC[1]],
+            "pred_lat": [SJC[0]],
+            "pred_lon": [SJC[1]],
+            "status": ["SUCCESS"],
+            "error_km": [0.0],
+        }
+    ).to_parquet(d / "targets.parquet", index=False)
+
+    with pytest.raises(ValueError, match="evaluated different target sets"):
+        io.evaluated_fold_by_target(run)
