@@ -139,10 +139,10 @@ import numpy as np
 import pandas as pd
 
 from scripts.analysis.v4.modules import classify as C
+from scripts.analysis.v4.modules import cross
 from scripts.analysis.v4.modules import healpix as H
 from scripts.analysis.v4.modules import methods
 from scripts.analysis.v4.modules.paths import (
-    DEFAULT_ANALYSIS_ROOT,
     MissingArtifactError,
     RunPaths,
     grid_slug,
@@ -327,30 +327,16 @@ NAMES: dict[str, tuple[str, str, str]] = {
     POOLED: (POOLED_PNG, POOLED_CSV, POOLED_MANIFEST),
 }
 
-#: Where cross-dataset figures land — keyed by the dataset set, so a two-run
-#: comparison cannot overwrite a three-run one.
-CROSS_KIND = "cls-accuracy"
-
-
-def dataset_slug(run_ids: list[str]) -> str:
-    """`as01-...-mesh, as02-...` -> `as01+as02+as03`.
-
-    Keyed on the datasets rather than on a count, so the directory names the
-    comparison it holds.
-    """
-    heads = sorted({r.split("-")[0] for r in run_ids})
-    return "+".join(heads)
-
-
-def cross_dir(run_ids: list[str], *, analysis_root: Path | None = None) -> Path:
-    out = (
-        (analysis_root or DEFAULT_ANALYSIS_ROOT)
-        / "_cross"
-        / CROSS_KIND
-        / dataset_slug(run_ids)
-    )
-    out.mkdir(parents=True, exist_ok=True)
-    return out
+#: Where cross-dataset figures land, and the two refusals that make pooling
+#: honest — shared with `plot-euler` and `plot-error-cdf`, which write into the
+#: same directory and pool the same way. Re-exported rather than imported at
+#: the call sites so `figure_outcome_bars.cross_dir` keeps working for callers
+#: and tests that already reach for it here.
+CROSS_KIND = cross.CROSS_KIND
+dataset_slug = cross.dataset_slug
+cross_dir = cross.cross_dir
+guard_common_methods = cross.guard_common_methods
+guard_disjoint_targets = cross.guard_disjoint_targets
 
 
 def load_rung(run: RunPaths, nside: int, *, analysis_root: Path | None = None):
@@ -387,52 +373,6 @@ def build_table(
         # label and in the sort key, both at `ACCURACY_DECIMALS`.
         table[f"share_{seg}"] = table[seg] / table["n_targets"]
     return table
-
-
-def guard_common_methods(scored: dict[str, set[str]]) -> list[str]:
-    """Every run must score the same methods. Returns them, sorted.
-
-    Strict on purpose. The alternative -- v3's `pool_method_counts`, which sums
-    over the runs that *carry* a method -- leaves bars in one panel resting on
-    different denominators, so the panel's `n=` is true of some bars and not
-    others and a reader has no way to tell which. Here a method absent from any
-    input run is refused, and the caller narrows the set with `--method`.
-    """
-    common = set.intersection(*scored.values()) if scored else set()
-    partial = sorted(set.union(*scored.values()) - common) if scored else []
-    if partial:
-        where = {
-            m: sorted(r for r, ms in scored.items() if m in ms) for m in partial
-        }
-        raise ValueError(
-            f"cannot pool: {partial} are not scored in every run ({where}). "
-            f"Pooling them would put their bars on a different denominator "
-            f"from the rest. Pass --method to pick a common subset, or "
-            f"--layout compare to keep each dataset on its own panel."
-        )
-    return sorted(common)
-
-
-def guard_disjoint_targets(targets: dict[str, set[str]]) -> None:
-    """No target id may appear in two runs.
-
-    One shared id lands in the pooled denominator twice, which silently
-    reweights that target and breaks the "every target counts once" claim the
-    micro-average rests on. v3 guards the same thing in
-    `cross.guard_disjoint_targets` for the same reason.
-    """
-    runs = sorted(targets)
-    for i, a in enumerate(runs):
-        for b in runs[i + 1 :]:
-            shared = targets[a] & targets[b]
-            if shared:
-                sample = sorted(shared)[:5]
-                raise ValueError(
-                    f"{a} and {b} share {len(shared)} target ids (e.g. "
-                    f"{sample}); each would sit in the pooled denominator "
-                    f"twice. Use --layout compare, which keeps each dataset on "
-                    f"its own panel."
-                )
 
 
 def _load_cells(

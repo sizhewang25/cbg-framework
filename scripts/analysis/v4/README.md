@@ -200,13 +200,34 @@ point on Earth, so its rank-1 set contained a prediction 2,360 km from its
 truth. Here it is a containment tolerance, cumulative, so each circle can only
 grow as `top_n` rises.
 
-Pooled over as01+as02+as03 at nside 128, `placed` 97.0% (worst pair error 0.9%):
+Pooled over as01+as02+as03, 1,269 targets, the six published variants:
 
-| top-N | any method | none | largest set | what the picture shows |
-|---|---|---|---|---|
-| 1 | 39.6% | 60.4% | Octant-Hull 26.8% | Shortest-Ping ⊂ ~SoI; the two Octants overlap heavily but keep exclusive lobes |
-| 2 | 61.5% | 38.5% | SoI / Shortest-Ping 49.1% | Spotter's 8.2% sits almost entirely inside the others |
-| 3 | 67.8% | 32.2% | SoI 54.1% | every set overlaps every other; the tolerance has stopped discriminating |
+| nside | top-N | any method | none | largest set | fit `placed` (pair err) |
+|---|---|---|---|---|---|
+| 128 | 1 | 39.6% | 60.4% | Octant-Hull 26.8% | 97.0% (0.9%) |
+| 128 | 2 | 61.6% | 38.4% | SoI = Shortest-Ping 49.1% | 93.3% (3.0%) |
+| 128 | 3 | 68.0% | 32.0% | SoI 54.1% | 90.1% (3.0%) |
+| 16 | 1 | 77.1% | 22.9% | Octant-Hull 53.3% | 84.8% (5.3%) |
+
+At nside 128 top-1 Shortest-Ping sits almost entirely inside SoI while the two
+Octant arms overlap heavily and keep exclusive lobes — the trade the accuracy
+table cannot show. By top-3 every set overlaps every other, and at **nside 16
+the tolerance has stopped discriminating altogether**: the single largest
+region is all six methods at once, bigger than any exclusive lobe. That rung
+is where to look to see the metric saturate, not to rank anything.
+
+The fit degrades predictably as the sets grow into each other — `placed` runs
+97.0% -> 84.8% across those four — which is the overdetermination the figure
+reports rather than hides.
+
+**The method set is passed explicitly.** `spotter_h3_cbg` — the density MTL's
+preserved H3 backup — is scored at every rung because `combo_ids` globs the
+output tree, so the figure's default (every method scored in every run) picks
+it up as a seventh circle. At nside 16 that saturated the layout: its label
+could not clear Octant-Hull's. It is excluded with `--method` rather than by a
+default exclusion list, because silently dropping a scored method is what
+`guard_common_methods` exists to prevent; park it by moving its directory if
+you want it gone for good.
 
 **`spotter_cbg` has no circle at top-1.** It places zero targets in the truth's
 own cell on all three meshes, and a zero-radius circle is a dot a reader takes

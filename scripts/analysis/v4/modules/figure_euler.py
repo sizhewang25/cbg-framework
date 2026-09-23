@@ -85,6 +85,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from scripts.analysis.v4.modules import cross
 from scripts.analysis.v4.modules import healpix as H
 from scripts.analysis.v4.modules.euler import layout as L
 from scripts.analysis.v4.modules.euler import membership as M
@@ -92,7 +93,6 @@ from scripts.analysis.v4.modules.euler import tables as T
 from scripts.analysis.v4.modules.euler.plot import plot_euler
 from scripts.analysis.v4.modules.methods import method_label
 from scripts.analysis.v4.modules.paths import (
-    DEFAULT_ANALYSIS_ROOT,
     RunPaths,
     grid_slug,
 )
@@ -108,9 +108,10 @@ DEFAULT_NSIDE = 128
 DEFAULT_TOP_NS: tuple[int, ...] = (1, 2, 3)
 
 #: Where cross-dataset figures land. The same directory `plot-outcome-bars`
-#: writes to, keyed by the dataset set, so one comparison's artifacts sit
-#: together regardless of which figure produced them.
-CROSS_KIND = "cls-accuracy"
+#: and `plot-error-cdf` write to, keyed by the dataset set, so one comparison's
+#: artifacts sit together regardless of which figure produced them — which is
+#: why the rule lives in `cross` and is re-exported here.
+CROSS_KIND = cross.CROSS_KIND
 
 #: `{slug}` is `healpix-<nside>`, `{n}` the top-N.
 STEM = "euler.{slug}.top{n}"
@@ -124,26 +125,9 @@ ARTIFACTS = {
 }
 
 
-def dataset_slug(run_ids: list[str]) -> str:
-    """`as01-...-mesh, as02-...` -> `as01+as02+as03`."""
-    heads = sorted({r.split("-")[0] for r in run_ids})
-    return "+".join(heads)
-
-
-def cross_dir(run_ids: list[str], *, analysis_root: Path | None = None) -> Path:
-    out = (
-        (analysis_root or DEFAULT_ANALYSIS_ROOT)
-        / "_cross"
-        / CROSS_KIND
-        / dataset_slug(run_ids)
-    )
-    out.mkdir(parents=True, exist_ok=True)
-    return out
-
-
-def short_dataset(run_id: str) -> str:
-    """`as01-260728-260802-mesh` -> `as01`."""
-    return run_id.split("-")[0]
+dataset_slug = cross.dataset_slug
+cross_dir = cross.cross_dir
+short_dataset = cross.short_dataset
 
 
 def drop_empty_sets(membership: pd.DataFrame) -> tuple[list[str], list[str]]:
