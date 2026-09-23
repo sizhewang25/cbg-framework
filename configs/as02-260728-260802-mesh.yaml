@@ -139,11 +139,27 @@ benchmark:
         deg_sigma: 2
         cutoff_min_points: 5
       mtl_kwargs:
-        resolution: 4
-        coarse_resolution: 2
+        # §V-A-2 discretises the globe and evaluates Eq. (2) per cell. HEALPix
+        # rather than the paper's HTM: both are aperture-4 with the four
+        # children exactly tiling the parent, but HEALPix cells are also
+        # exactly equal-area (HTM's vary by 110%), so a cell count converts to
+        # an area and the argmax's quantisation floor is the same everywhere.
+        #
+        # `grid` is required and has no default. The H3-era runs stored
+        # `resolution: 4` and no grid, and 4 is a legal nside -- so a default
+        # would let a stale payload replay as a 192-cell globe instead of
+        # failing. Those results are backed up on disk as `spotter_h3_cbg/`.
+        grid: healpix
+        resolution: 128        # nside: 196,608 cells, 50.9 km, 2,594 km^2
+        coarse_resolution: 16  # nside: 3,072 cells, 407.5 km -- the global pass
+        # Re-validated for this three-level descent (16 -> 32 -> 64 -> 128),
+        # not inherited: `cli.py mtl-basin-miss` against an exhaustive global
+        # nside-128 pass gives 0/50 misses on as01, as02 and as03, while
+        # `top_k=1, neighbor_ring=0` gives 8/50, 5/50 and 7/50. H3's two-level
+        # descent survived that starved setting; this one does not, so the
+        # margin is doing real work.
         top_k: 8
         neighbor_ring: 1
-        credible_mass: 0.95
 
 
 analysis:
