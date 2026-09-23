@@ -177,6 +177,55 @@ class TestTable:
         order = F.method_order(_table())
         assert order == ["octant_cbg_hull", "spotter_cbg"]
 
+    def test_a_tie_at_the_current_ring_breaks_on_the_next(self):
+        """The ladder IS the metric: level at 51 km and better at 102 km is
+        genuinely better, so a tie must cascade outward rather than fall back
+        to a name or a row order."""
+        rows = [
+            # Same in-cell, but `b` places more of the rest one ring out.
+            _row("a", ring0=30, ring1=10, ring2=30, beyond=30, failed=0),
+            _row("b", ring0=30, ring1=30, ring2=10, beyond=30, failed=0),
+        ]
+        assert F.panel_order(_table(rows), "as01") == ["b", "a"]
+
+    def test_the_cascade_goes_past_the_first_ring(self):
+        """The real case this was written for: as01's shortest_ping and
+        million_scale_cbg tie at ring 0 (0.3008) AND at within-ring-1 (0.6366),
+        separating only at within-ring-2. A one-level tiebreak ordered them
+        arbitrarily."""
+        rows = [
+            _row("a", ring0=30, ring1=34, ring2=0, beyond=36, failed=0),
+            _row("b", ring0=30, ring1=34, ring2=5, beyond=31, failed=0),
+        ]
+        assert F.panel_order(_table(rows), "as01") == ["b", "a"]
+
+    def test_a_tie_all_the_way_out_falls_back_to_answering_at_all(self):
+        rows = [
+            _row("a", ring0=20, ring1=20, ring2=20, beyond=20, failed=20),
+            _row("b", ring0=20, ring1=20, ring2=20, beyond=40, failed=0),
+        ]
+        assert F.panel_order(_table(rows), "as01") == ["b", "a"]
+
+    def test_a_total_tie_is_still_deterministic(self):
+        """Identical at every rung, so the order must come from the explicit
+        tiebreak rather than from however the rows arrived."""
+        rows = [_row("z"), _row("a")]
+        forward = F.panel_order(_table(rows), "as01")
+        backward = F.panel_order(_table(list(reversed(rows))), "as01")
+        assert forward == backward
+
+    def test_the_primary_key_is_still_the_current_ring(self):
+        """The next ring only breaks ties — it must not outrank a worse in-cell
+        score. as03 has exactly this shape: million_scale beats shortest_ping
+        at within-ring-2 but loses at ring 0, so it ranks below."""
+        rows = [
+            _row("worse_in_cell", ring0=10, ring1=10, ring2=70, beyond=10, failed=0),
+            _row("better_in_cell", ring0=20, ring1=10, ring2=0, beyond=70, failed=0),
+        ]
+        assert F.panel_order(_table(rows), "as01") == [
+            "better_in_cell", "worse_in_cell",
+        ]
+
     def test_dataset_slug_names_the_comparison(self):
         assert F.dataset_slug(
             ["as01-260728-260802-mesh", "as03-x", "as02-y"]

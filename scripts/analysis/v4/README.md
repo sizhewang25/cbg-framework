@@ -111,9 +111,16 @@ arm drawn beside a mesh bar.
 **Each panel ranks itself** by its own in-cell share, descending, so a panel
 reads as that dataset's leaderboard. A method therefore does not keep one x
 slot across panels — deliberate, because the orders genuinely differ
-(Octant-Spline leads as01; Octant-Hull leads as02 and as03). **No
-traffic-weighted arm is drawn**: none exists, and v3 filled that half from a
-hard-coded dict that rendered 99.3% bars measuring nothing.
+(Octant-Spline leads as01; Octant-Hull leads as02 and as03).
+
+**A tie cascades outward along the ladder**: level on in-cell is separated by
+within-one-ring, then within-two, then by how much was answered at all. On as01
+`shortest_ping` and `million_scale_cbg` tie at ring 0 (0.3008) *and* at
+within-ring-1 (0.6366) and separate only at within-ring-2, so a one-level
+tiebreak would have ordered them arbitrarily.
+
+**No traffic-weighted arm is drawn**: none exists, and v3 filled that half from
+a hard-coded dict that rendered 99.3% bars measuring nothing.
 
 ## Usage
 

@@ -19,6 +19,15 @@ reading its label rather than its position. That is bought deliberately,
 because the orders genuinely differ: Octant-Spline leads as01 while
 Octant-Hull leads as02 and as03, and a single pooled order would hide it.
 
+**A tie cascades outward along the ladder** — level on "in the cell" is
+separated by "within one ring", then "within two", then by how much was
+answered at all. The ladder is the metric, so being level at 51 km and better
+at 102 km is genuinely better, and breaking such a tie on a name or a row order
+would put the worse method first for no reason. It has to go more than one
+level deep: on as01 at nside 128, `shortest_ping` and `million_scale_cbg` tie
+at ring 0 (0.3008) *and* at within-ring-1 (0.6366), separating only at
+within-ring-2 (0.6366 against 0.6867).
+
 ## One figure per rung, not one figure with a resolution axis
 
 The rung *is* the tolerance the reader is choosing. Putting four rungs in one
@@ -250,18 +259,71 @@ def build_table(
     return table
 
 
-def method_order(table: pd.DataFrame) -> list[str]:
-    """Best mean `in the cell` share first — the pooled order across datasets.
+#: The tolerance ladder, tightest first: share within ring 0, within ring 1,
+#: within ring 2, answered at all. Each is the running sum of the exclusive
+#: segment shares, so `_RANK_KEYS[k]` is "accuracy if you accept k rings of
+#: slack" — which is exactly the sequence a tie should be broken on.
+_RANK_KEYS: tuple[str, ...] = (
+    "within_ring0", "within_ring1", "within_ring2", "answered",
+)
 
-    Used for the legend and the manifest. Each *panel* ranks itself; see
-    `panel_order`.
+
+def _with_rank_keys(table: pd.DataFrame) -> pd.DataFrame:
+    """Add the cumulative tolerance columns the orderings sort on.
+
+    Built from the exclusive shares rather than read from `accuracy_ring*`, so
+    the ranking works on any frame that carries the segment counts — including
+    a hand-built fixture that never went through `classify`.
     """
-    means = table.groupby("method")["share_n_ring0"].mean()
-    return means.sort_values(ascending=False).index.tolist()
+    out = table.copy()
+    running = 0.0
+    placed = [s for s in SEGMENTS if s != "n_failed"]
+    for key, seg in zip(_RANK_KEYS, placed):
+        running = running + out[f"share_{seg}"]
+        out[key] = running
+    return out
+
+
+def _sorted_methods(frame: pd.DataFrame, tiebreak: dict[str, int]) -> list[str]:
+    """Methods ranked down the tolerance ladder, then by an explicit tiebreak.
+
+    **Ties cascade to the next ring.** Two methods level on `in the cell` are
+    separated by "within one ring", then by "within two", then by how much they
+    answered at all. That is the right cascade because the ladder is the
+    metric: being level at 51 km and better at 102 km is genuinely better, and
+    breaking such a tie on anything else (a name, a row order) would put the
+    worse method first for no reason.
+
+    Real case on as01 at nside 128: shortest_ping and million_scale_cbg tie at
+    ring 0 (0.3008) *and* at within-ring-1 (0.6366), separating only at
+    within-ring-2 (0.6366 vs 0.6867). A one-level tiebreak would have ordered
+    them arbitrarily.
+
+    `tiebreak` is the last resort for a method identical at every rung, so the
+    sequence stays stable and reproducible rather than following whatever order
+    the rows arrived in.
+    """
+    f = frame.assign(_tie=frame["method"].map(tiebreak).fillna(len(tiebreak)))
+    return f.sort_values(
+        [*_RANK_KEYS, "_tie"],
+        ascending=[False] * len(_RANK_KEYS) + [True],
+    )["method"].tolist()
+
+
+def method_order(table: pd.DataFrame) -> list[str]:
+    """The pooled order across datasets, down the same tolerance ladder.
+
+    Used for the legend, the manifest, and as `panel_order`'s final tiebreak.
+    Each *panel* ranks itself; see `panel_order`.
+    """
+    keyed = _with_rank_keys(table)
+    means = keyed.groupby("method", as_index=False)[list(_RANK_KEYS)].mean()
+    alpha = {m: i for i, m in enumerate(sorted(means["method"]))}
+    return _sorted_methods(means, alpha)
 
 
 def panel_order(table: pd.DataFrame, dataset: str) -> list[str]:
-    """One dataset's methods, best `in the cell` share first.
+    """One dataset's methods, ranked down the tolerance ladder.
 
     **Each panel ranks itself**, so a bar's height decreases left to right
     within every panel and the panel reads as a leaderboard for that dataset.
@@ -272,18 +334,10 @@ def panel_order(table: pd.DataFrame, dataset: str) -> list[str]:
     the question these bars answer, and on these three datasets the order
     genuinely differs -- Octant-Spline leads as01 while Octant-Hull leads as02
     and as03 -- so a single pooled order would hide the thing worth seeing.
-
-    Ties break on the pooled order, so two methods level on a dataset still
-    appear in a stable, reproducible sequence rather than whatever order the
-    rows happened to arrive in.
     """
     pooled = {m: i for i, m in enumerate(method_order(table))}
-    sub = table[table["dataset"] == dataset]
-    return (
-        sub.assign(_tie=sub["method"].map(pooled))
-        .sort_values(["share_n_ring0", "_tie"], ascending=[False, True])["method"]
-        .tolist()
-    )
+    keyed = _with_rank_keys(table)
+    return _sorted_methods(keyed[keyed["dataset"] == dataset], pooled)
 
 
 def _label_ink(face: str) -> str:
