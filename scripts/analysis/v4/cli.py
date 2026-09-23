@@ -1,16 +1,20 @@
 """Typer CLI for the v4 analysis layer — HEALPix only.
 
-Three commands, in dependency order:
+Build commands first, then figures, in dependency order:
 
     python -m scripts.analysis.v4.cli build-answer-space --run-id as01-260728-260802-mesh
     python -m scripts.analysis.v4.cli build-bipartite    --run-id as01-260728-260802-mesh
     python -m scripts.analysis.v4.cli classify           --run-id as01-260728-260802-mesh
+    python -m scripts.analysis.v4.cli plot-answer-space  --run-id as01-260728-260802-mesh
     python -m scripts.analysis.v4.cli plot-outcome-bars  --run-id as01-... --run-id as02-...
 
 `classify` needs the answer space; `build-bipartite` is independent of both and
-can run in any order. Each writes one directory per rung of the ladder
-(`healpix-128` .. `healpix-16`) plus a merged CSV one level above holding the
-curve across rungs.
+can run in any order. `plot-answer-space` needs only `build-bipartite` — one
+occupied target cell is exactly one class, so those artifacts already carry the
+answer space, and the VP side with it.
+
+Each build command writes one directory per rung of the ladder (`healpix-128` ..
+`healpix-16`) plus a merged CSV one level above holding the curve across rungs.
 
 There is no `--grid`. v4 is HEALPix because the laddered metric it computes
 cannot be expressed on H3 — see `modules/healpix.py`. `--nside` selects which
@@ -29,10 +33,13 @@ from scripts.analysis.v4.modules import (
     classify,
     figure_outcome_bars,
     healpix,
+    map_answer_space,
+    mapping,
 )
 from scripts.analysis.v4.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
     DEFAULT_OUTPUTS_ROOT,
+    MissingArtifactError,
     discover_runs,
     resolve_run,
 )
@@ -202,6 +209,63 @@ def plot_outcome_bars_cmd(
         # read as a usage error rather than a traceback.
         raise typer.BadParameter(str(exc)) from exc
     for png in pngs:
+        typer.echo(f"wrote {png}")
+
+
+@app.command("plot-answer-space")
+def plot_answer_space_cmd(
+    run_id: str = typer.Option(None, help="Run to map."),
+    all_runs: bool = typer.Option(False, "--all-runs", help="Every run under the root."),
+    us_only: bool = typer.Option(
+        True,
+        "--us-only/--auto-extent",
+        help=(
+            "Frame the continental US (the default: these meshes live there), "
+            "or derive the frame from the run's own targets and VPs."
+        ),
+    ),
+    extent: tuple[float, float, float, float] = typer.Option(
+        (None, None, None, None),
+        "--extent",
+        help="LON_MIN LON_MAX LAT_MIN LAT_MAX. Overrides --us-only/--auto-extent.",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v4 writes."),
+) -> None:
+    """Map the answer space: the lattice, the target cells, and the VP cells.
+
+    Needs `build-bipartite`, **not** `build-answer-space`. One occupied target
+    cell is exactly one class, so the bipartite artifacts already carry the
+    answer space — and the VP side with it, co-quantized on the same grid.
+
+    There is no `--nside`. The figure draws the whole ladder in one 2x2, because
+    resolution is the tolerance dial and how the cells merge as it turns is what
+    the figure is for; a single rung is a different, smaller figure. Written
+    beside `occupancy_by_resolution.healpix.csv`, whose numbers it draws.
+    """
+    if all_runs == (run_id is not None):
+        raise typer.BadParameter("pass exactly one of --run-id or --all-runs")
+
+    chosen = None
+    if extent and all(v is not None for v in extent):
+        chosen = tuple(float(v) for v in extent)
+
+    for run in _runs(run_id, all_runs, outputs_root):
+        frame = chosen
+        if frame is None:
+            frame = (
+                mapping.US_MAINLAND_EXTENT
+                if us_only
+                else map_answer_space.auto_extent_for_run(
+                    run, analysis_root=analysis_root
+                )
+            )
+        try:
+            png = map_answer_space.build_for_run(
+                run, extent=frame, analysis_root=analysis_root
+            )
+        except MissingArtifactError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         typer.echo(f"wrote {png}")
 
 

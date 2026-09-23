@@ -1,7 +1,7 @@
 # analysis/v4 — HEALPix answer space and laddered classification accuracy
 
-An MVP replacement for v3's scoring layer. Three modules, one grid, and a
-correctness rule that is bounded.
+An MVP replacement for v3's scoring layer. One grid, a correctness rule that is
+bounded, and the figures that read it.
 
 ## Why this package exists
 
@@ -165,12 +165,81 @@ accuracy on *this* target mix, and as03 is 36% of it; the manifest records the
 largest run's share so the number cannot be over-read. The compare layout stays
 the place to see per-dataset divergence.
 
+## The second figure: the answer-space map
+
+`plot-answer-space` draws the grid itself — one panel per rung, the whole ladder
+in a 2x2. Target cells filled, VP cells outlined, and **every empty cell of the
+frame** inked as a hairline lattice.
+
+The two bar figures answer "how well did a method do". This one answers the
+question underneath them: *what was it being asked?*
+
+### What is different from v3's
+
+v3's `answer_space_map.png` drew one resolution with a red dashed **nearest-seed
+Voronoi partition** over it. That partition was not decoration — it was the
+classifier's own decision boundary, so the map was incomplete without it. Under
+containment there is nothing equivalent to draw: the cell edge *is* the boundary.
+Two thirds of v3's `mapping.py` (`SeedVoronoi`, the azimuthal-equidistant
+reprojection, the 200 km re-segmentization) exists to reconstruct that geometry
+and has no counterpart here.
+
+v3 also drew **occupied cells only**, on the grounds that the full 288,122-cell
+grid "would be both unreadable and pointless at continental scale". True
+globally, false in a US frame: the mainland window holds 5,740 cells at nside 128
+and 92 at nside 16, one `PolyCollection` each.
+
+Drawing the empty ones is the point. The claim the package rests on is that the
+grid is **fixed, not fitted** — a class boundary falls where HEALPix falls, not
+where the targets are sparse — and the empty cells are the only direct evidence
+of it. Occupied cells alone look exactly like a clustering, which is the reading
+the answer space must not invite (the benchmark also ships an older `clusters/`
+answer space built by radius-capped agglomeration, and the two are not the same
+object).
+
+### Why the whole ladder and not one rung
+
+Resolution is the tolerance dial, so how the cells merge as it turns is the
+figure. On as01 the target cells go 18 -> 18 -> 17 -> 15 and the cells holding
+more than one distinct operator site go 2 -> 2 -> 3 -> 5. This is the picture
+behind `occupancy_by_resolution.healpix.csv`, and a single rung is a different,
+smaller figure — so there is no `--nside`.
+
+### Encoding
+
+VP cells outnumber target cells 4:1 (80 against 18 at nside 128), so two fills of
+equal weight put the ink on the wrong side. **Fill for targets, outline for VPs**
+instead: the overlap then reads compositionally — orange inside a blue border —
+with no third hue and no alpha blend, whose result is neither predictable nor
+validatable. A target cell *without* a VP keeps its own darker orange edge, so
+`share_of_target_cells_with_a_vp` is legible cell by cell.
+
+`#eb6834` / `#2a78d6` are slots 1 and 2 of the dataviz reference theme, validated
+with `validate_palette.js --mode light --pairs all` (all-pairs, because a map is
+a choropleth form): all five checks pass, worst CVD Delta E **24.7** under
+protanopia. Blue is also v3's `map_bipartite._VP_COLOR` unchanged, so the two
+packages do not disagree about which side is which.
+
+**The dots are distinct target coordinates, not targets.** These meshes carry
+~20 IP replicas per coordinate — 399 targets over 20 sites on as01 — so a
+per-target scatter would put 20 marks on one pixel and say nothing. Deduplicated,
+a cell holding two dots *is* two operator sites quantized into one class. Target
+site and VP take one marker size between them: they are two categories, not two
+magnitudes.
+
+### Known limit
+
+At nside 128 a cell is ~19 px in a continental panel, so the finest rung reads as
+graph paper with dots on it and the orange is largely hidden under its own site
+marker. Making that rung informative needs a metro inset, not a bigger figure.
+
 ## Usage
 
 ```bash
 python -m scripts.analysis.v4.cli build-answer-space --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v4.cli build-bipartite    --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v4.cli classify           --run-id as01-260728-260802-mesh
+python -m scripts.analysis.v4.cli plot-answer-space  --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v4.cli plot-outcome-bars \
     --run-id as01-260728-260802-mesh \
     --run-id as02-260728-260802-mesh \
@@ -183,6 +252,12 @@ the figure *is* the cross-dataset comparison. `--nside` selects rungs (default:
 the full ladder) and `--layout` selects views (default: both). There is no
 `--grid`.
 
+`plot-answer-space` is the exception on both counts: it is **per-run**, so it
+takes one `--run-id` or `--all-runs`, and it needs only `build-bipartite` — not
+`build-answer-space`. It frames the continental US by default; `--auto-extent`
+derives the frame from the run's own targets and VPs instead, and `--extent`
+takes one literally.
+
 ## Layout
 
 ```
@@ -191,6 +266,7 @@ outputs/analysis/v4/<run_id>/
   target-answer-space/grid_sweep.healpix.csv            <- class-count curve
   bipartite-graph/healpix-<nside>/              target_cells.csv vp_cells.csv cell_occupancy.csv meta.json
   bipartite-graph/occupancy_by_resolution.healpix.csv   <- geometry curve
+  bipartite-graph/answer_space_map.healpix.{png,manifest.json}  <- the map, all four rungs
   target-cls-accuracy/healpix-<nside>/          <method>_cells.parquet accuracy.csv manifest.json
   target-cls-accuracy/accuracy_by_resolution.healpix.csv <- accuracy curve
 
@@ -205,7 +281,10 @@ and share one prefix to glob.
 
 One rung per directory, following v3, so each rung is a complete self-describing
 artifact and a sweep cannot overwrite one rung with another. The merged CSVs one
-level above join the ladder for plotting.
+level above join the ladder for plotting — and the map sits beside them, for the
+same reason: it spans the ladder, so no single rung owns it. It writes no CSV
+twin, because `occupancy_by_resolution.healpix.csv` already holds every number it
+draws and a second copy would be a thing to keep in sync for nothing.
 
 ## Relationship to v3
 
