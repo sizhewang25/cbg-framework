@@ -104,8 +104,16 @@ Rejected by measurement, not taste, using the dataviz skill's
 Among light greys, separation from the lightest green and contrast against the
 surface pull opposite ways, so the choice was made on the measured curve
 (see `SEGMENT_INK`): `#d8d7cf` keeps Delta E **10.8** — real headroom over the
-8 threshold — at 1.44:1. The weak contrast is covered by a hairline edge on
-that slot alone, plus the in-place label and the CSV twin.
+8 threshold — at 1.44:1. The weak contrast is covered by the in-place label and
+the CSV twin.
+
+**Every segment takes the same white edge**, including the grey one. A grey
+hairline there would delineate the slot better, and it was drawn that way at
+first, but matplotlib centres a stroke on the patch boundary: half of it falls
+outside, which is invisible white-on-white and ~2 px of extra apparent width
+when it is grey. In a stacked share chart apparent width is quantitative, so it
+cannot vary by outcome. The edge survives on the legend swatch, which is where
+it was load-bearing anyway.
 
 **No hatch on any outcome.** That channel is reserved for the traffic-weighted
 arm drawn beside a mesh bar (`WEIGHTED_HATCH`), and spending it on an outcome
@@ -172,8 +180,9 @@ SEGMENT_LABELS = {
 #:     #b5b4ad  dE  2.6   FAIL     2.08:1
 #:
 #: `#d8d7cf` keeps real headroom over the dE 8 threshold while staying dark
-#: enough to read; the weak contrast is covered by `_FAILED_EDGE` plus the
-#: in-place label and the CSV twin.
+#: enough to read; the weak contrast is covered by the in-place label and the
+#: CSV twin. On the bar it gets the same white edge as every other segment --
+#: see `_FAILED_EDGE` for why it cannot have a grey one.
 #:
 #: Rejected by the same measurement: a ramp plus **red** for "further out" —
 #: red against the mid-green is dE 1.8 under protanopia, so a protanope could
@@ -187,9 +196,22 @@ SEGMENT_INK = {
     "n_failed": "#d8d7cf",
 }
 
-#: A hairline edge on the grey slot only. At 1.44:1 the fill alone does not
-#: delineate against a white surface, and the hatch channel is reserved, so the
-#: definition comes from an edge instead. Not a stripe.
+#: A hairline edge on the grey slot **in the legend only**. At 1.44:1 the fill
+#: alone does not delineate against a white surface, and the hatch channel is
+#: reserved, so a small swatch needs the definition an edge gives it.
+#:
+#: It is deliberately **not** used on the bar. matplotlib centres a stroke on
+#: the patch boundary, so half of it falls outside the patch; a white edge on a
+#: white surface hides that overhang but a grey one shows it, and the "no
+#: answer" segment came out ~2 px wider than every other segment of its own
+#: bar. Apparent width is a quantitative channel here -- these are stacked
+#: shares -- so it must not vary by outcome, and matching the neighbours wins
+#: over the delineation.
+#:
+#: Losing it costs little in the bar and nothing in the legend. In the stack the
+#: grey slot is bounded below by the darkest green and carries its own in-place
+#: label, so only its top edge meets the surface; the swatch, floating alone on
+#: white, is where the edge was actually load-bearing.
 _FAILED_EDGE = "#b5b4ad"
 
 #: Reserved for the traffic-weighted arm drawn beside a mesh bar, so it must
@@ -693,11 +715,20 @@ def render(
                 width=_BAR_FRAC,
                 facecolor=face,
                 # The 2 px surface gap between touching segments, one width up
-                # the whole stack. No hatch on any outcome: that channel is
-                # reserved for the mesh-vs-weighted distinction. The grey slot
-                # takes a visible edge instead, because at 1.44:1 its fill does
-                # not delineate itself against the surface.
-                edgecolor=_FAILED_EDGE if seg == "n_failed" else _SURFACE,
+                # the whole stack, and the SAME colour on every segment. No
+                # hatch on any outcome either: that channel is reserved for the
+                # mesh-vs-weighted distinction.
+                #
+                # The grey slot used to take a visible grey edge here, for the
+                # reason in `_FAILED_EDGE` -- and it made that one segment look
+                # wider than the rest of its own bar. matplotlib centres a
+                # stroke on the patch boundary, so half of it lies outside: at
+                # `_GAP_PT` that is ~1 px of overhang per side. On a white edge
+                # against a white surface the overhang is invisible and the bar
+                # reads at its true width; on a grey one it is 2 px of extra
+                # apparent width on the one segment that should match its
+                # neighbours exactly.
+                edgecolor=_SURFACE,
                 linewidth=_GAP_PT,
                 zorder=3,
             )
@@ -754,6 +785,10 @@ def render(
     handles = [
         Patch(
             facecolor=SEGMENT_INK[s],
+            # The one place the grey edge survives. A ~10 px swatch of a
+            # 1.44:1 fill floating on white needs the definition, and the
+            # stroke overhang that disqualified it on the bar is harmless on a
+            # mark that sits beside no other mark.
             edgecolor=_FAILED_EDGE if s == "n_failed" else _SURFACE,
             linewidth=0.8,
             label=SEGMENT_LABELS[s],

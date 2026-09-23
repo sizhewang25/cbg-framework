@@ -139,11 +139,89 @@ class TestPalette:
         assert sat < 0.12, f"{hexstr} is not achromatic (S={sat:.3f})"
         assert _luminance(hexstr) > 0.6, "a mid grey collides with the ramp"
 
-    def test_the_grey_slot_carries_an_edge_rather_than_a_stripe(self):
+    def test_the_legend_swatch_carries_an_edge_rather_than_a_stripe(self):
         """At 1.44:1 the fill alone does not delineate against the surface, and
-        the hatch channel is reserved, so the definition comes from an edge."""
+        the hatch channel is reserved, so a swatch floating on white takes an
+        edge. The BAR does not -- see `TestSegmentWidth`."""
         assert F._FAILED_EDGE != F._SURFACE
         assert _luminance(F._FAILED_EDGE) < _luminance(F.SEGMENT_INK["n_failed"])
+
+
+class TestSegmentWidth:
+    """Every segment of a bar must render at the same width.
+
+    These are stacked shares, so apparent width is a quantitative channel: if
+    one outcome draws wider than the others, the bar claims something about
+    that outcome that is not in the data.
+
+    The trap is that a patch edge is *centred* on its boundary, so half the
+    stroke lies outside the patch. White-on-white that overhang is invisible and
+    the bar reads at its true width; the grey edge the "no answer" slot used to
+    carry made it ~2 px wider than every other segment of its own bar. Asserted
+    on rendered pixels rather than on the edgecolor argument, because the
+    argument is not the thing that was wrong -- the rendering was.
+    """
+
+    def _widths(self, tmp_path):
+        """Pixel width of each segment's drawn extent, for a single bar."""
+        import matplotlib.image as mpimg
+
+        # One method, one dataset, every segment present and thick enough to
+        # sample well clear of the boundaries between them.
+        rows = [_row("m", n=100, ring0=20, ring1=20, ring2=20, beyond=20, failed=20)]
+        png = F.render(_table(rows), 128, tmp_path, png_name="w.png")
+        img = mpimg.imread(png)[:, :, :3]
+        surface = np.array(
+            [int(F._SURFACE[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+        )
+        # Rows where something is drawn, scanned top to bottom. The bar spans a
+        # contiguous block; each segment is a fifth of it.
+        painted = (np.abs(img - surface).max(axis=2) > 0.02)
+        widths = {}
+        for seg in F.SEGMENTS:
+            ink = np.array(
+                [int(F.SEGMENT_INK[seg][i : i + 2], 16) / 255 for i in (1, 3, 5)]
+            )
+            # Rows whose dominant colour is this segment's fill.
+            hit = (np.abs(img - ink).max(axis=2) < 0.02)
+            rows_with = np.flatnonzero(hit.sum(axis=1) > 5)
+            assert len(rows_with), f"{seg} did not render"
+            # Sample the middle row of the segment, away from its edges, and
+            # measure the full painted run -- fill plus any stroke overhang.
+            mid = rows_with[len(rows_with) // 2]
+            cols = np.flatnonzero(painted[mid])
+            widths[seg] = int(cols.max() - cols.min() + 1)
+        return widths
+
+    def test_no_segment_renders_wider_than_another(self, tmp_path):
+        widths = self._widths(tmp_path)
+        assert len(set(widths.values())) == 1, (
+            f"segments drew at different widths: {widths}"
+        )
+
+    def test_the_no_answer_slot_matches_its_neighbours(self, tmp_path):
+        """The reported case, named explicitly so a later 'nicer' grey edge
+        cannot quietly reintroduce it."""
+        widths = self._widths(tmp_path)
+        others = {s: w for s, w in widths.items() if s != "n_failed"}
+        assert widths["n_failed"] == max(others.values()), (
+            f"'no answer' drew at {widths['n_failed']} px against "
+            f"{others} for the rest"
+        )
+
+    def test_no_outcome_uses_the_hatch_channel(self):
+        """Reserved for the traffic-weighted arm beside a mesh bar. Spending it
+        on an outcome would leave that distinction with nowhere to go."""
+        src = pathlib.Path(F.__file__).read_text()
+        assert "WEIGHTED_HATCH" in src
+        assert "hatch=" not in src, "an outcome is drawing with a hatch"
+
+    def test_label_ink_flips_with_the_fill(self):
+        """Text inside a fill picks white or ink by luminance, so it always
+        clears contrast — the one place a label may sit on a colour."""
+        assert F._label_ink(F.SEGMENT_INK["n_ring0"]) == F._INK
+        assert F._label_ink(F.SEGMENT_INK["n_failed"]) == F._INK
+        assert F._label_ink(F.SEGMENT_INK["n_beyond"]) == "#ffffff"
 
 
 class TestTable:
