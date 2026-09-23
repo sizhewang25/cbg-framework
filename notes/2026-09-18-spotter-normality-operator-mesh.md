@@ -351,27 +351,63 @@ here) than "our Q-Q failed".
 
 ## Reproduce
 
+Every command below was run as written on 2026-09-22. `plot-spotter-normality`
+needs no database — it reads the dataset CSVs directly.
+
 ```bash
-# All three datasets, one output dir each plus a cross-dataset summary
-.venv/bin/python -m scripts.analysis.v3.cli plot-spotter-normality \
+cd /home/nuwinslab/workspace/atnt/cbg-framework
+V3=".venv/bin/python -m scripts.analysis.v3.cli"
+CSV=datasets/final/as01-20260728-20260802.mainland.sanitized.csv
+
+# --- the published pass: all three meshes, one output dir each -------------
+$V3 plot-spotter-normality \
     --csv datasets/final/as01-20260728-20260802.mainland.sanitized.csv \
     --csv datasets/final/as02-20260728-20260802.mainland.sanitized.csv \
     --csv datasets/final/as03-20260728-20260802.mainland.sanitized.csv \
     --out-dir /tmp/spotter
+# more than one --csv also writes /tmp/spotter/spotter_normality_summary.json,
+# which cross-tabulates the three so they need not be diffed by hand.
 
-# Config-driven, writing to outputs/analysis/v3/<run-id>/spotter-normality/
-.venv/bin/python -m scripts.analysis.v3.cli \
-    --config configs/as01-260728-260802-mesh.yaml plot-spotter-normality
+# --- config-driven: resolves the CSV from benchmark.source_kwargs ----------
+# `--config` is a GROUP option, so it goes BEFORE the command name.
+# Writes to outputs/analysis/v3/<run-id>/spotter-normality/ (grid-free).
+# Needs the run's benchmark outputs to exist, since that is where (source,
+# setup) are discovered; --csv mode has no such requirement.
+$V3 --config configs/as01-260728-260802-mesh.yaml plot-spotter-normality
 
-# The grouping contrast, and the paper's literal RTT range
-... plot-spotter-normality --csv <csv> --group-by target_id
-... plot-spotter-normality --csv <csv> --rtt-max 80
+# --- the arms this note reports -------------------------------------------
+# Landmark vs the wrong endpoint. vp_id is the paper's landmark; target_* is
+# the grouping the ClickHouse arm used, kept as the contrast.
+for g in vp_id vp_coord target_id target_coord; do
+  $V3 plot-spotter-normality --csv "$CSV" --group-by "$g" --out-dir "/tmp/spotter/g-$g"
+done
+
+# The paper's literal plotted range. NOTE --rtt-max FILTERS the fit
+# population, unlike plot-distance-rtt's view-only cuts; --view-rtt-max clips
+# panel (a)'s axis alone.
+$V3 plot-spotter-normality --csv "$CSV" --rtt-max 80 --out-dir /tmp/spotter/rtt80
+
+# The paper's literal recipe, with no sigma guard at all. Still meaningful
+# after the log-sigma fix: sigma is now always positive, but a positive-but-
+# tiny sigma still inflates z, so the guarded pass is what makes the per-VP
+# moments interpretable.
+$V3 plot-spotter-normality --csv "$CSV" --sigma-ref-km 0 --out-dir /tmp/spotter/noguard
 ```
 
-Each run writes `<stem>_spotter_fig3{a,b,c}*.png`, `<stem>_spotter_normality.json`
-(the manifest, including every number in this note),
-`<stem>_landmark_independence.csv` (one row per landmark, **all** of them, never
-a top-N) and `<stem>_bin_fit.csv`.
+Per input it writes `<stem>_spotter_fig3{a_scatter,b_standardized,c_qq}.png`,
+`<stem>_spotter_normality.json` (the manifest — every number in this note is a
+key in it) and `<stem>_landmark_independence.csv` (one row per landmark, **all**
+of them, never a top-N).
+
+> The `<stem>_bin_fit.csv` this section used to list is gone, along with the
+> per-bin dots and `sigma_domain`: `fit_mu_sigma` no longer bins. See the STATUS
+> block at the top.
+
+The four-reason argument built on these measurements has its own script:
+
+```bash
+.venv/bin/python -m scripts.libs.cbg_feasibility.spotter_assumption_breakdown
+```
 
 ## Follow-ups
 

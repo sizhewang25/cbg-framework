@@ -8,6 +8,15 @@
 #
 # Usage:  tmux new-session -d -s cbg_finals "bash run_finals.sh"
 #         bash run_finals.sh --dry-run     # preflight only, run nothing
+#         bash run_finals.sh --force       # ignore the cache, recompute all
+#
+# WHY --force EXISTS. Snakemake decides what to re-run from file timestamps and
+# recorded params -- neither of which sees a CODE change. The combo id is the
+# whole cache key (`<run>/<setup>/<fold>/<combo>/targets.parquet`), so a combo
+# whose LTD/MTL/CTR implementation changed while its config did not is reported
+# as up to date and silently keeps the old numbers. `--force` passes
+# `--forceall` to both stages, which is what you want after touching anything
+# under scripts/framework/ or scripts/libs/.
 #
 # The weighted arms need a mesh ANNOTATED WITH REAL TRAFFIC VOLUME -- the plain
 # meshes carry no weight column. Set those paths in the *-weighted.yaml configs
@@ -34,7 +43,14 @@ cd "$(dirname "$0")"
 export PATH="$PWD/.venv/bin:$PATH"   # cli.sh calls `python`; resolve to the venv
 
 DRY_RUN=0
-[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+FORCE_ARGS=()
+for _arg in "$@"; do
+  case "$_arg" in
+    --dry-run) DRY_RUN=1 ;;
+    --force)   FORCE_ARGS=(--forceall) ;;
+    *) echo "run_finals.sh: unknown argument: $_arg" >&2; exit 2 ;;
+  esac
+done
 
 LOGDIR="logs/finals"
 mkdir -p "$LOGDIR"
@@ -45,9 +61,9 @@ DERIVE_SMK="scripts/processing/source/derive_traffic_weighted_cbg_data.smk"
 
 # Mesh arms: run directly.
 MESH_CONFIGS=(
-  # as01-260728-260802-mesh
-  # as02-260728-260802-mesh
-  # as03-260728-260802-mesh
+  as01-260728-260802-mesh
+  as02-260728-260802-mesh
+  as03-260728-260802-mesh
   # as01-materialization-test
 )
 
@@ -56,7 +72,7 @@ WEIGHTED_CONFIGS=(
   # as01-260728-260802-weighted
   # as02-260728-260802-weighted
   # as03-260728-260802-weighted
-  as01-randweight-precomputed
+  # as01-randweight-precomputed
 )
 
 # Reciprocal arms: "<public-config>:<private-config>". Both sides are filtered to
@@ -148,7 +164,11 @@ if (( ${#MISSING[@]} )); then
   log "       only the mesh arms."
   exit 1
 fi
-log "preflight OK"
+if (( ${#FORCE_ARGS[@]} )); then
+  log "preflight OK -- --force: every combo will be recomputed (--forceall)"
+else
+  log "preflight OK -- incremental; pass --force to ignore the cache"
+fi
 
 if (( DRY_RUN )); then
   log "--dry-run: preflight only, exiting before any run"
@@ -164,7 +184,7 @@ for c in "${WEIGHTED_CONFIGS[@]}"; do
     log "FAIL  $c (subset derivation; see $LOGDIR/$c.derive.log)"
     continue          # no subset -> the run would fail anyway
   fi
-  if ./cli.sh --configfile "configs/$c.yaml" >"$LOGDIR/$c.log" 2>&1; then
+  if ./cli.sh --configfile "configs/$c.yaml" "${FORCE_ARGS[@]}" >"$LOGDIR/$c.log" 2>&1; then
     log "OK    $c"
   else
     log "FAIL  $c (see $LOGDIR/$c.log)"
@@ -174,7 +194,7 @@ done
 # ---- mesh arms --------------------------------------------------------------
 for c in "${MESH_CONFIGS[@]}"; do
   log "START $c"
-  if ./cli.sh --configfile "configs/$c.yaml" >"$LOGDIR/$c.log" 2>&1; then
+  if ./cli.sh --configfile "configs/$c.yaml" "${FORCE_ARGS[@]}" >"$LOGDIR/$c.log" 2>&1; then
     log "OK    $c"
   else
     log "FAIL  $c (see $LOGDIR/$c.log)"
@@ -209,7 +229,7 @@ for pair in "${RECIPROCAL_PAIRS[@]}"; do
 
   for c in "$pub-reciprocal" "$priv-reciprocal"; do
     log "START $c"
-    if ./cli.sh --configfile "configs/$c.yaml" >"$LOGDIR/$c.log" 2>&1; then
+    if ./cli.sh --configfile "configs/$c.yaml" "${FORCE_ARGS[@]}" >"$LOGDIR/$c.log" 2>&1; then
       log "OK    $c"
     else
       log "FAIL  $c (see $LOGDIR/$c.log)"

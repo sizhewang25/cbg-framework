@@ -259,10 +259,37 @@ measurement.
 ## Reproduce
 
 ```bash
+cd /home/nuwinslab/workspace/atnt/cbg-framework
+
+# All three meshes. One function per reason, printed as a table and written to
+# JSON. Takes a few minutes per dataset: `envelope` fits a per-VP CBG bestline
+# (134 LP solves) and `landmark` scans a 501-point offset grid per VP.
 .venv/bin/python -m scripts.libs.cbg_feasibility.spotter_assumption_breakdown
 # -> scripts/libs/cbg_feasibility/outputs/spotter_assumption_breakdown/breakdown.json
+
+# One dataset, when iterating.
+.venv/bin/python -m scripts.libs.cbg_feasibility.spotter_assumption_breakdown \
+    --dataset as01 --out-dir /tmp/breakdown
 ```
 
-Every number in this note is in that JSON. The Fig. 3 panels and the
-permutation test for R4 come from `plot-spotter-normality`; see the measurement
-note.
+Which function backs which reason:
+
+| reason | function | key manifest keys |
+|---|---|---|
+| R1 one-sided noise | `shape()` | `skew`, `excess_kurtosis` |
+| R2 bound vs quantile | `envelope()` | `containment_cbg_disk`, `containment_spotter_outer_only`, `outer_over_cbg_radius` |
+| R3 the invented inner edge | `sides()` → `sides_k1`, `sides_k2` | `miss_inside_inner_hole`, `miss_beyond_outer_edge`, `per_vp_miss` |
+| R4 landmark dependence | `landmark()` | `variance_decomposition`, `offset_model` |
+
+The Fig. 3 panels, the Q-Q plot and R4's permutation test come from the
+measurement note's command:
+
+```bash
+.venv/bin/python -m scripts.analysis.v3.cli plot-spotter-normality \
+    --csv datasets/final/as01-20260728-20260802.mainland.sanitized.csv \
+    --out-dir /tmp/spotter
+```
+
+Both read the dataset CSVs directly — no database, no prior benchmark run. The
+breakdown script reuses `plot-spotter-normality`'s loader, fit and
+`standardize`, so the two cannot report different numbers for the same input.

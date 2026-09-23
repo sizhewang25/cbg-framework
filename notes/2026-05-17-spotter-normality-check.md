@@ -464,19 +464,58 @@ claim as a hypothesis to test, not an assumption to inherit.
 
 ## Reproduce
 
+> **These three scripts model a fit that no longer exists.** They carry their
+> own copy of the old binned `fit_mu_sigma`
+> ([spotter_normality_check.py:96](../scripts/libs/cbg_feasibility/spotter_normality_check.py#L96)),
+> so they are unaffected by — and do not reflect — the monotone-µ / log-σ
+> rewrite of `scripts/libs/spotter/spotter_model.py`. They still run, and they
+> are still the only arm that reaches the RIPE Atlas tables, but treat their
+> numbers as a record of the May analysis rather than as a description of the
+> deployed model. For the current model on the operator meshes use
+> `plot-spotter-normality`
+> ([2026-09-18](2026-09-18-spotter-normality-operator-mesh.md)).
+
+Two prerequisites, unlike the CSV-based arm: a **running ClickHouse** with
+`geolocation_replication` loaded (`source install.sh`, or `./start_clickhouse.sh`),
+and the `.env` credentials `default.py` reads. Use the venv interpreter — a bare
+`python` is a pyenv shim without pandas.
+
 ```bash
-# Pooled normality check (Spotter's Fig. 3 panels)
-python -m scripts.libs.cbg_feasibility.spotter_normality_check
-python -m scripts.libs.cbg_feasibility.spotter_normality_check --table anchors_meshed_pings
+cd /home/nuwinslab/workspace/atnt/cbg-framework
+LIB=".venv/bin/python -m scripts.libs.cbg_feasibility"
+
+# Pooled normality check (Spotter's Fig. 3 panels), probes -> anchors
+$LIB.spotter_normality_check
+
+# The PlanetLab analogue: anchors -> anchors only, both endpoints well connected
+$LIB.spotter_normality_check --table anchors_meshed_pings
 
 # Slice by (probe-ASN, anchor-ASN)
-python -m scripts.libs.cbg_feasibility.spotter_normality_by_asn
+$LIB.spotter_normality_by_asn
 
-# Slice by (probe-ASN, anchor-ASN, probe-country, anchor-country)
-python -m scripts.libs.cbg_feasibility.spotter_normality_by_asn_country
-
-# Optional flags: --max-rtt 80 --n-bins 40 --n-anchors 5 --top-k 5
+# ... and by country within each ASN pair
+$LIB.spotter_normality_by_asn_country
 ```
+
+Flags, per script (all three also take `--table`, `--max-rtt`, `--n-anchors`,
+`--out-dir`, `--probes-file`):
+
+| script | extra flags | default output dir |
+|---|---|---|
+| `spotter_normality_check` | `--n-bins` | `scripts/libs/cbg_feasibility/outputs/spotter_normality/<table>/` |
+| `spotter_normality_by_asn` | `--top-k`, `--min-count` | `.../outputs/spotter_normality_by_asn/` |
+| `spotter_normality_by_asn_country` | `--top-asn`, `--top-country`, `--min-asn-count`, `--min-country-count` | `.../outputs/spotter_normality_by_asn_country/` |
+
+Each writes `fig3a_scatter.png`, `fig3b_standardized.png`, `fig3c_qq.png`; the
+slicing scripts add a per-slice subdirectory plus `summary_sigma_z.png` and
+`summary.json`. All of `outputs/` is gitignored, so the figures linked at the
+top of this note must be regenerated.
+
+**Two known defects, carried for the record** (both fixed in the operator-mesh
+arm, see that note's "What was wrong with the Atlas arm"): `plot_panel_c` groups
+by `dst` — the *measured* endpoint, not the landmark that performed the
+measurement — and `standardize` returns a shorter array than its input with no
+count of what it dropped.
 
 ---
 

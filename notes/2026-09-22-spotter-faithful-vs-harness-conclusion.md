@@ -220,9 +220,52 @@ Two consequences worth stating plainly:
 
 The honest comparison is Octant-Hull: it wins p5/p25/p50/p90 *and* top-3, and
 loses top-1 only because its continuous estimate can land just across a cell
-boundary that Spotter's quantised one cannot. Resolving which metric the paper
-should lead with needs a finer answer space, which as01's 20 coordinates cannot
-provide — see the weak-instrument caveat above.
+boundary that Spotter's quantised one cannot.
+
+#### Confirmed on as02 and as03 (2026-09-23)
+
+The paragraph above originally ended "resolving which metric the paper should
+lead with needs a finer answer space, which as01's 20 coordinates cannot
+provide". That was the wrong remedy to ask for. A forced re-run of all three
+meshes (`run_finals.sh --force`, 65 min, every combo recomputed) shows the
+divergence is **systematic across datasets**, not an as01 artefact — so the
+question is answerable with the instruments already in hand:
+
+| method | top-1 as01 / as02 / as03 | p50 km as01 / as02 / as03 |
+|---|---|---|
+| shortest_ping | 0.637 / 0.369 / 0.432 | 50.3 / 400.3 / 140.5 |
+| million_scale_cbg | 0.662 / 0.366 / 0.439 | 50.3 / 387.4 / 138.9 |
+| vanilla_cbg | 0.439 / 0.291 / 0.308 | 75.4 / 272.5 / 166.1 |
+| octant_cbg_hull | 0.749 / **0.658** / 0.518 | 71.5 / **121.4** / 186.8 |
+| octant_cbg_spl | 0.714 / 0.604 / 0.454 | 79.9 / 176.0 / 258.4 |
+| spotter_cbg | **0.887** / 0.510 / **0.585** | 198.1 / 338.0 / 235.2 |
+
+Two facts hold on all three:
+
+1. **Spotter never wins p50** — on any dataset, at any percentile reported.
+2. **Spotter wins top-1 on two of three** (as01, as03) while sitting last or
+   near-last on p50 for those same two. as02 is the exception on top-1 only,
+   where Octant-Hull wins both metrics outright.
+
+So the two metrics do not merely disagree on one weak instrument; they rank the
+methods differently as a rule, and the direction is predictable from the
+estimator. Methods that emit a **quantised** estimate — Spotter's H3 cell
+centre — are rewarded by a classification metric scored on the same grid.
+Methods that emit a continuous coordinate are rewarded by a distance metric.
+Nothing about as01's 20 coordinates caused this and a finer answer space will
+not dissolve it; it would only move the crossover.
+
+**Implication for the paper.** These cannot be averaged into one "accuracy"
+column. Either report both and say which question each answers — "which metro?"
+vs "how far off?" — or pick one and justify it against the operator question
+being asked. The ranking is not robust to that choice: it changes the winner on
+two of three datasets.
+
+Note also that the p50 ordering is itself unstable across datasets — the
+calibration-free baselines win as01 and as03 outright and collapse on as02
+(shortest_ping 50.3 → 400.3 km), where Octant-Hull wins by 2.2x. No method is
+uniformly best on either metric, which is the framing
+[[project_cbg_bench_framing]] already commits to.
 
 ## 2.2 Abandoned arm, and why it is worth recording
 
