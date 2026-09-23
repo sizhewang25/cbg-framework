@@ -330,6 +330,64 @@ At nside 128 a cell is ~19 px in a continental panel, so the finest rung reads a
 graph paper with dots on it and the orange is largely hidden under its own site
 marker. Making that rung informative needs a metro inset, not a bigger figure.
 
+## The fourth figure: the error CDF
+
+`plot-error-cdf` draws the other half: not *where* the prediction landed but
+*how far off* it was, one curve per method on a log x axis. The two can
+disagree — a method rarely in the right cell may still be consistently close —
+and §2.4(a) says the disagreement is itself a finding, so the package needs
+both.
+
+`classify` has computed `error_km` all along and `accuracy.csv` publishes two
+percentiles of it; nothing drew the distribution they summarise.
+
+**Unanswered rows are excluded**, via the same `classify.solved_mask` that
+`summarize` applies before taking `error_km_p50/p90`. A `FALLBACK` row carries
+the shortest-ping VP's coordinate, so filtering on NaN will not drop it and
+pooling it would pull a variant's curve toward the baseline exactly where the
+variant failed. Those rows are the outcome bars' grey "no answer" segment, so
+a curve's population is that figure's *non-grey* stack. The effect is not
+uniform and so it is printed: pooled, every method rests on all 1,269 targets
+except `vanilla_cbg`, which rests on **994**.
+
+**The figure does not depend on the grid, and its name says so.** `error_km`
+is prediction-to-target; the answer space defines the classes and stays out of
+the distance. Measured: `error_km` and every count and percentile derived from
+it are byte-identical across healpix-128/64/32/16 on all three meshes. So the
+artifacts carry **no `healpix-<n>`** and sit in the rung-free parent of the
+rung directories, rather than as four identical copies. v3 could only ask for
+this in a docstring; here there is no seed-routed error column to be tempted
+by, because `ring` answers "how far from the class centre" instead.
+
+**Pooling concatenates rows; it cannot average percentiles.** These are order
+statistics. Averaging the runs' published p50s is not an approximation but a
+different quantity, and on this data it **reverses the leader**:
+
+| method | true pooled p50 | mean of the 3 runs' p50 |
+|---|---|---|
+| million_scale_cbg | **96.1 km** | 192.2 km |
+| octant_cbg_hull | 131.1 km | **126.6 km** |
+| vanilla_cbg | 198.6 km | 171.3 km |
+
+It errs in both directions, so there is not even a sign to correct for.
+Coverage is strict and target ids must be disjoint, for the reason the pooled
+bars give: one axis, one denominator.
+
+**Curves are ranked by p50**, then p90, then population — the order in which
+they cross the drawn median line. CDF curves cross, so no total order holds
+across the whole axis; the percentile box sits under the legend in the same
+order and shows p5 through p95, so the reader can see where the ranking comes
+from and where it stops.
+
+**The baseline is dark grey and dashed** in both layouts. Not
+`methods.OTHER_HUE`: that constant and this figure's `_MUTED` are the same hex
+(`#898781`, inherited from v3, where `_C_MUTED == _C_OTHER`), and the bucket
+is occupied — `spotter_h3_cbg` is scored on all three meshes. v3's claim that
+a dash alone separates them holds only while nothing is in the bucket. v3 also
+had to drop the grey dashed baseline in its cross-run views because a dash
+there meant "traffic-weighted"; v4 has no weighted arm, so the convention
+holds everywhere.
+
 ## Usage
 
 ```bash
@@ -345,11 +403,21 @@ python -m scripts.analysis.v4.cli plot-euler \
     --run-id as01-260728-260802-mesh \
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh
+python -m scripts.analysis.v4.cli plot-error-cdf --layout per-run --layout pooled \
+    --run-id as01-260728-260802-mesh \
+    --run-id as02-260728-260802-mesh \
+    --run-id as03-260728-260802-mesh
 ```
 
 `classify` needs the answer space; `build-bipartite` is independent. The two
 accuracy figures need `classify` and take a repeatable `--run-id`, because each
 *is* the cross-dataset comparison. There is no `--grid`.
+
+`plot-error-cdf` needs `classify` too but spans both scopes: `--layout per-run`
+(the default) writes one figure per `--run-id` into that run's own tree, and
+`--layout pooled` writes a single cross-dataset figure. Its `--nside` is a
+*single* rung naming which parquets to read; it cannot change the output, and
+exists so that can be demonstrated.
 
 `plot-answer-space` is the exception on both counts: it is **per-run**, so it
 takes one `--run-id` or `--all-runs`, and it needs only `build-bipartite` —
@@ -377,6 +445,8 @@ outputs/analysis/v4/<run_id>/
   bipartite-graph/answer_space_map.healpix.{png,manifest.json}  <- the map, all four rungs
   target-cls-accuracy/healpix-<nside>/          <method>_cells.parquet accuracy.csv manifest.json
   target-cls-accuracy/accuracy_by_resolution.healpix.csv <- accuracy curve
+  target-cls-accuracy/error_cdf.{png,csv,manifest.json}  <- rung-free: error_km
+                                                            is the same at every rung
 
 outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>/
   outcome_bars.healpix-<nside>.{png,csv,manifest.json}         <- one panel per dataset
@@ -387,6 +457,7 @@ outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>/
   euler.healpix-<nside>.top<N>.pairwise.csv                    <- both / a-only / b-only / neither
   euler.healpix-<nside>.top<N>.membership.csv                  <- the boolean matrix itself
   euler.healpix-<nside>.top<N>.manifest.json
+  error_cdf.pooled.{png,csv,manifest.json}                     <- every run's targets, one curve
 ```
 
 The Euler set carries `.top<N>` because a figure is a function of the

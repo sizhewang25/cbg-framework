@@ -36,6 +36,12 @@ DEFAULT_ANALYSIS_ROOT = REPO_ROOT / "outputs" / "analysis" / "v4"
 _NON_SOURCE_DIRS = frozenset({"eval_source", "eval_dataset", "bench_eval"})
 
 
+#: The per-run analysis kind holding the scoring artifacts. Named because two
+#: directories are built from it: the `healpix-<n>/` rungs, and their rung-free
+#: parent, where the grid-independent figures land.
+CLS_ACCURACY_KIND = "target-cls-accuracy"
+
+
 class MissingArtifactError(FileNotFoundError):
     """A required artifact is absent, with a hint on how to produce it."""
 
@@ -143,7 +149,17 @@ class RunPaths:
         return self.rung_dir("bipartite-graph", nside, root=root)
 
     def cls_accuracy_dir(self, nside: int, *, root: Path | None = None) -> Path:
-        return self.rung_dir("target-cls-accuracy", nside, root=root)
+        return self.rung_dir(CLS_ACCURACY_KIND, nside, root=root)
+
+    def cls_accuracy_root(self, *, root: Path | None = None) -> Path:
+        """The rung-free parent of the `healpix-<n>/` directories.
+
+        Home for anything scoring produces that does **not** vary with the
+        grid. `error_km` is the case: it is prediction-to-target, so the error
+        CDF is identical at every rung and writing it four times would invite
+        a reader to look for a difference that cannot exist.
+        """
+        return self.analysis_dir(CLS_ACCURACY_KIND, root=root)
 
 
 def discover_runs(root: Path | str = DEFAULT_OUTPUTS_ROOT) -> list[RunPaths]:
