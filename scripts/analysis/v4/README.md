@@ -131,6 +131,40 @@ CSV twin.
 **No traffic-weighted arm is drawn**: none exists, and v3 filled that half from
 a hard-coded dict that rendered 99.3% bars measuring nothing.
 
+### Two layouts
+
+`--layout compare` is the per-dataset view above. `--layout pooled` adds a
+second figure per rung, `outcome_bars.pooled.healpix-<n>`, with one panel over
+every input run's targets at once — the single "how does each method do
+overall?" number the per-dataset panels cannot give. **Both are written by
+default**; they read the same `accuracy.csv` files, so the second costs only its
+parquet reads.
+
+Pooling is a **micro-average**: the per-target rows are concatenated across runs
+and re-scored by `classify.summarize`, so a target counts the same whichever
+dataset it came from. A macro-average — the mean of the three panels' shares —
+would give each of as01's 399 targets 1.15x the weight of one of as03's 458
+purely because as01 is smaller. Micro also keeps the pooled row a *count*, so it
+carries `n_ring0` like every per-run row and `guard_partition` applies to it
+unchanged. On these three meshes the two differ by 0.15–0.33 pp and rank the
+methods identically, which is the argument for taking the defensible one.
+
+Re-scoring rather than adding up the summaries is what makes `error_km_p50/p90`
+correct. They are order statistics: the pooled p50 for `million_scale_cbg` is
+**96 km** against **192 km** for the mean of the three runs' p50s, and no
+weighting of the summaries recovers it.
+
+Coverage is **strict** — a method absent from any input run is refused rather
+than pooled over the runs that carry it, so every bar in the panel rests on the
+same denominator and the title's `n=` is true of all of them. Overlapping target
+ids across runs are refused for the same reason. Both refusals name the remedy
+(`--method` to narrow, or `--layout compare`).
+
+What the pooled bar is **not** is a method's accuracy in general. It is its
+accuracy on *this* target mix, and as03 is 36% of it; the manifest records the
+largest run's share so the number cannot be over-read. The compare layout stays
+the place to see per-dataset divergence.
+
 ## Usage
 
 ```bash
@@ -146,7 +180,8 @@ python -m scripts.analysis.v4.cli plot-outcome-bars \
 `classify` needs the answer space; `build-bipartite` is independent.
 `plot-outcome-bars` needs `classify` and takes a repeatable `--run-id` because
 the figure *is* the cross-dataset comparison. `--nside` selects rungs (default:
-the full ladder). There is no `--grid`.
+the full ladder) and `--layout` selects views (default: both). There is no
+`--grid`.
 
 ## Layout
 
@@ -160,8 +195,13 @@ outputs/analysis/v4/<run_id>/
   target-cls-accuracy/accuracy_by_resolution.healpix.csv <- accuracy curve
 
 outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>/
-  outcome_bars.healpix-<nside>.{png,csv,manifest.json}
+  outcome_bars.healpix-<nside>.{png,csv,manifest.json}         <- one panel per dataset
+  outcome_bars.pooled.healpix-<nside>.{png,csv,manifest.json}  <- all of them, count-weighted
 ```
+
+The pooled triple takes a `.pooled.` **infix** rather than v3's separate stem
+(`outcome_bars` vs `outcome_bars_by_dataset`) so the two layouts sort together
+and share one prefix to glob.
 
 One rung per directory, following v3, so each rung is a complete self-describing
 artifact and a sweep cannot overwrite one rung with another. The merged CSVs one

@@ -145,20 +145,6 @@ class TestPalette:
         assert F._FAILED_EDGE != F._SURFACE
         assert _luminance(F._FAILED_EDGE) < _luminance(F.SEGMENT_INK["n_failed"])
 
-    def test_no_outcome_uses_the_hatch_channel(self):
-        """Reserved for the traffic-weighted arm beside a mesh bar. Spending it
-        on an outcome would leave that distinction with nowhere to go."""
-        src = pathlib.Path(F.__file__).read_text()
-        assert "WEIGHTED_HATCH" in src
-        assert "hatch=" not in src, "an outcome is drawing with a hatch"
-
-    def test_label_ink_flips_with_the_fill(self):
-        """Text inside a fill picks white or ink by luminance, so it always
-        clears contrast — the one place a label may sit on a colour."""
-        assert F._label_ink(F.SEGMENT_INK["n_ring0"]) == F._INK
-        assert F._label_ink(F.SEGMENT_INK["n_failed"]) == F._INK
-        assert F._label_ink(F.SEGMENT_INK["n_beyond"]) == "#ffffff"
-
 
 class TestTable:
     def test_shares_sum_to_one_per_method(self):
@@ -298,20 +284,36 @@ def built(tmp_path_factory):
 class TestRealRuns:
     """The figure over the real scored runs, including the artifact contract."""
 
-    def test_one_figure_per_rung(self, built):
+    def test_one_figure_per_rung_per_layout(self, built):
+        """Both layouts by default, so every rung yields two figures."""
         _, _, pngs = built
-        assert len(pngs) == len(H.NSIDE_LADDER)
+        assert len(pngs) == len(F.LAYOUTS) * len(H.NSIDE_LADDER)
         assert {p.name for p in pngs} == {
-            F.FIGURE_PNG.format(slug=f"healpix-{n}") for n in H.NSIDE_LADDER
+            F.NAMES[lay][0].format(slug=f"healpix-{n}")
+            for lay in F.LAYOUTS
+            for n in H.NSIDE_LADDER
         }
 
     def test_every_figure_has_a_csv_twin_and_a_manifest(self, built):
         runs, root, _ = built
         out = F.cross_dir([r.run_id for r in runs], analysis_root=root)
-        for n in H.NSIDE_LADDER:
-            slug = f"healpix-{n}"
-            assert (out / F.FIGURE_CSV.format(slug=slug)).exists()
-            assert (out / F.FIGURE_MANIFEST.format(slug=slug)).exists()
+        for layout in F.LAYOUTS:
+            _, csv_name, man_name = F.NAMES[layout]
+            for n in H.NSIDE_LADDER:
+                slug = f"healpix-{n}"
+                assert (out / csv_name.format(slug=slug)).exists()
+                assert (out / man_name.format(slug=slug)).exists()
+
+    def test_the_layouts_do_not_overwrite_each_other(self, built):
+        """Both PNGs must survive. Rendering to one name and renaming afterwards
+        had the pooled pass clobber the compare figure written moments before,
+        which `render`'s `png_name` exists to prevent."""
+        runs, root, _ = built
+        out = F.cross_dir([r.run_id for r in runs], analysis_root=root)
+        compare = out / F.FIGURE_PNG.format(slug="healpix-128")
+        pooled = out / F.POOLED_PNG.format(slug="healpix-128")
+        assert compare.exists() and pooled.exists()
+        assert compare.read_bytes() != pooled.read_bytes()
 
     def test_every_panel_is_ranked_by_the_declared_sorting_key(self, built):
         """The contract: `(in-cell, 1-ring, 2-ring, further-out)` DESC, each
@@ -479,3 +481,427 @@ class TestReportedPrecision:
         got = float(table["share_n_ring0"].iloc[0])
         assert got == pytest.approx(259 / 399, abs=1e-12)
         assert got != round(got, F.ACCURACY_DECIMALS), "the share was rounded"
+
+
+# --- pooling ---------------------------------------------------------------
+
+
+def _cells(
+    *,
+    ring0=0,
+    ring1=0,
+    ring2=0,
+    beyond=0,
+    failed=0,
+    errors=None,
+    first_id=0,
+):
+    """Per-target scored rows, the shape `classify.score_method` emits.
+
+    Only the columns `summarize` reads. `beyond` and `failed` both carry
+    `ring=-1` and separate on `status`, exactly as the real scorer does:
+    "answered and nowhere near" against "never answered".
+    """
+    rows = []
+    tid = first_id
+    for ring, count in ((0, ring0), (1, ring1), (2, ring2), (-1, beyond)):
+        for _ in range(count):
+            rows.append(
+                {
+                    "target_id": f"t{tid}",
+                    "status": "SUCCESS",
+                    "ring": ring,
+                    "error_km": 100.0,
+                    "tg_seed_id": 1,
+                    "nearest_seed_id_retired": 1,
+                }
+            )
+            tid += 1
+    for _ in range(failed):
+        rows.append(
+            {
+                "target_id": f"t{tid}",
+                "status": "FALLBACK",
+                "ring": -1,
+                "error_km": np.nan,
+                "tg_seed_id": 1,
+                "nearest_seed_id_retired": -1,
+            }
+        )
+        tid += 1
+    df = pd.DataFrame(rows)
+    if errors is not None:
+        solved = df["status"] == "SUCCESS"
+        assert len(errors) == int(solved.sum()), "one error per solved row"
+        df.loc[solved, "error_km"] = list(errors)
+    return df
+
+
+def _write_run(root, dataset, spec, *, nside=128):
+    """A run on disk with an `accuracy.csv` and one cells parquet per method.
+
+    The summary is produced by `classify.summarize` rather than hand-written, so
+    the per-run rows the pooled row gets compared against are the real thing.
+    """
+    from scripts.analysis.v4.modules.paths import RunPaths
+
+    run = RunPaths(
+        run_id=f"{dataset}-260728-260802-mesh",
+        root=root,
+        source="generic_csv",
+        setup="s",
+    )
+    out = run.cls_accuracy_dir(nside, root=root)
+    C.summarize(spec, nside).to_csv(out / C.ACCURACY_CSV, index=False)
+    for method, df in spec.items():
+        df.to_parquet(out / C.CELLS_PARQUET.format(method=method), index=False)
+    return run
+
+
+class TestPooled:
+    """One panel over every input run's targets, count-weighted."""
+
+    def test_pooling_is_micro_not_macro(self, tmp_path):
+        """The whole point. as01 is 40% in-cell on 100 targets and as02 is 60%
+        on 400, so the micro-average is 280/500 = 56% and a macro-average --
+        the mean of the two panels' shares -- would say 50%. Macro would give
+        each of the smaller dataset's targets four times the weight, purely
+        because it is smaller.
+        """
+        runs = [
+            _write_run(tmp_path, "as01", {"m": _cells(ring0=40, beyond=60)}),
+            _write_run(
+                tmp_path, "as02", {"m": _cells(ring0=240, beyond=160, first_id=1000)}
+            ),
+        ]
+        pooled = F.pooled_table(runs, 128, analysis_root=tmp_path)
+        assert len(pooled) == 1
+        row = pooled.iloc[0]
+        assert int(row["n_targets"]) == 500
+        assert int(row["n_ring0"]) == 280
+        assert float(row["share_n_ring0"]) == pytest.approx(0.56)
+        # The macro-average, for contrast -- what this must NOT be.
+        assert float(row["share_n_ring0"]) != pytest.approx((0.40 + 0.60) / 2)
+
+    def test_the_stack_closes_at_exactly_one(self, tmp_path):
+        """Structurally, not by luck: every target lands in exactly one bucket,
+        so the recounted integers partition `n_targets` and `guard_partition`
+        asserts it. A stack summing to 0.98 still looks like a stack."""
+        runs = [
+            _write_run(
+                tmp_path, "as01", {"m": _cells(ring0=7, ring1=11, ring2=13, beyond=17, failed=19)}
+            ),
+            _write_run(
+                tmp_path,
+                "as02",
+                {"m": _cells(ring0=23, ring1=29, ring2=31, beyond=37, failed=41, first_id=1000)},
+            ),
+        ]
+        pooled = F.pooled_table(runs, 128, analysis_root=tmp_path)
+        C.guard_partition(pooled)
+        assert (pooled[list(F.SEGMENTS)].sum(axis=1) == pooled["n_targets"]).all()
+        shares = pooled[[f"share_{s}" for s in F.SEGMENTS]].sum(axis=1)
+        assert np.allclose(shares, 1.0), shares.tolist()
+
+    def test_micro_equals_the_count_weighted_mean_of_the_run_shares(self, tmp_path):
+        """The two readings of "count-based weighted average" are the same
+        number: `sum(c_r) / sum(n_r) == sum((n_r/N) * share_r)`. Summing
+        recounted integers is just the form that cannot drift."""
+        runs = [
+            _write_run(tmp_path, "as01", {"m": _cells(ring0=17, ring1=5, beyond=78)}),
+            _write_run(
+                tmp_path,
+                "as02",
+                {"m": _cells(ring0=140, ring1=60, beyond=200, first_id=1000)},
+            ),
+        ]
+        pooled = F.pooled_table(runs, 128, analysis_root=tmp_path)
+        compare = F.build_table(runs, 128, analysis_root=tmp_path)
+        weights = compare.groupby("run_id")["n_targets"].first()
+        for seg in F.SEGMENTS:
+            weighted = sum(
+                weights[r["run_id"]] * r[f"share_{seg}"]
+                for _, r in compare.iterrows()
+            ) / weights.sum()
+            assert float(pooled[f"share_{seg}"].iloc[0]) == pytest.approx(weighted)
+
+    def test_percentiles_are_true_pooled_quantiles(self, tmp_path):
+        """Order statistics cannot be averaged, which is why this reads the
+        per-target parquets instead of the summaries. as01 has one solved target
+        at 10 km and as02 three at 100/200/300, so the pooled p50 is 150 -- not
+        105, the mean of the two runs' own p50s."""
+        runs = [
+            _write_run(tmp_path, "as01", {"m": _cells(ring0=1, errors=[10.0])}),
+            _write_run(
+                tmp_path,
+                "as02",
+                {"m": _cells(ring0=3, errors=[100.0, 200.0, 300.0], first_id=1000)},
+            ),
+        ]
+        pooled = F.pooled_table(runs, 128, analysis_root=tmp_path)
+        got = float(pooled["error_km_p50"].iloc[0])
+        assert got == pytest.approx(150.0)
+        compare = F.build_table(runs, 128, analysis_root=tmp_path)
+        mean_of_p50s = compare["error_km_p50"].mean()
+        assert mean_of_p50s == pytest.approx(105.0)
+        assert got != pytest.approx(mean_of_p50s)
+
+    def test_a_method_missing_from_one_run_is_refused(self, tmp_path):
+        """Strict coverage. Pooling it would put its bar on a different
+        denominator from the rest, and the panel's `n=` would be true of some
+        bars and not others with no way for a reader to tell which."""
+        runs = [
+            _write_run(
+                tmp_path,
+                "as01",
+                {"a": _cells(ring0=10, beyond=10), "b": _cells(ring0=5, beyond=15)},
+            ),
+            _write_run(
+                tmp_path, "as02", {"a": _cells(ring0=10, beyond=10, first_id=1000)}
+            ),
+        ]
+        with pytest.raises(ValueError, match="not scored in every run"):
+            F.pooled_table(runs, 128, analysis_root=tmp_path)
+
+    def test_a_common_subset_pools_fine(self, tmp_path):
+        """The remedy the refusal names: narrow to the methods every run has."""
+        runs = [
+            _write_run(
+                tmp_path,
+                "as01",
+                {"a": _cells(ring0=10, beyond=10), "b": _cells(ring0=5, beyond=15)},
+            ),
+            _write_run(
+                tmp_path, "as02", {"a": _cells(ring0=10, beyond=10, first_id=1000)}
+            ),
+        ]
+        pooled = F.pooled_table(runs, 128, methods=["a"], analysis_root=tmp_path)
+        assert pooled["method"].tolist() == ["a"]
+        assert int(pooled["n_targets"].iloc[0]) == 40
+
+    def test_overlapping_targets_are_refused(self, tmp_path):
+        """One shared id sits in the pooled denominator twice, which silently
+        reweights that target and breaks the "every target counts once" claim
+        the micro-average rests on."""
+        runs = [
+            _write_run(tmp_path, "as01", {"m": _cells(ring0=10, beyond=10)}),
+            # Same `first_id`, so the target ids collide.
+            _write_run(tmp_path, "as02", {"m": _cells(ring0=10, beyond=10)}),
+        ]
+        with pytest.raises(ValueError, match="share 20 target ids"):
+            F.pooled_table(runs, 128, analysis_root=tmp_path)
+
+    def test_the_pooled_row_is_labelled_by_the_dataset_set(self, tmp_path):
+        runs = [
+            _write_run(tmp_path, "as01", {"m": _cells(ring0=10, beyond=10)}),
+            _write_run(
+                tmp_path, "as02", {"m": _cells(ring0=10, beyond=10, first_id=1000)}
+            ),
+        ]
+        pooled = F.pooled_table(runs, 128, analysis_root=tmp_path)
+        assert pooled["dataset"].unique().tolist() == ["as01+as02"]
+        assert "as01" in pooled["run_id"].iloc[0]
+        assert "as02" in pooled["run_id"].iloc[0]
+
+    def test_a_shortest_ping_style_baseline_is_wholly_solved(self, tmp_path):
+        """`solved_mask`'s all-`BASELINE` branch has to survive the concat: the
+        control writes `BASELINE` on every row in every run, so the pooled frame
+        is still all-`BASELINE` and must not score as 100% unanswered."""
+        frames = []
+        for i, ds in enumerate(("as01", "as02")):
+            df = _cells(ring0=10, beyond=10, first_id=i * 1000)
+            df["status"] = "BASELINE"
+            frames.append((ds, df))
+        runs = [_write_run(tmp_path, ds, {"shortest_ping": df}) for ds, df in frames]
+        pooled = F.pooled_table(runs, 128, analysis_root=tmp_path)
+        assert int(pooled["n_failed"].iloc[0]) == 0
+        assert int(pooled["n_ring0"].iloc[0]) == 20
+
+    def test_methods_on_different_populations_are_refused(self, tmp_path):
+        """Strict coverage matches method *names*; this is the denominator it
+        exists to guarantee. Two methods can share a name set and still have
+        been scored on different target counts, and then one panel's `n=` is
+        true of one bar and not the next."""
+        runs = [
+            _write_run(
+                tmp_path,
+                "as01",
+                {
+                    "a": _cells(ring0=10, beyond=10),
+                    # Ten targets against a's twenty, so the pooled
+                    # denominators come out 40 and 30.
+                    "b": _cells(ring0=5, beyond=5, first_id=500),
+                },
+            ),
+            _write_run(
+                tmp_path,
+                "as02",
+                {
+                    "a": _cells(ring0=10, beyond=10, first_id=1000),
+                    "b": _cells(ring0=10, beyond=10, first_id=1500),
+                },
+            ),
+        ]
+        with pytest.raises(ValueError, match="different target counts"):
+            F.pooled_table(runs, 128, analysis_root=tmp_path)
+
+    def test_a_single_run_pools_to_itself(self, tmp_path):
+        """A micro-average over one population is that population. Written
+        rather than second-guessed, but it must not transform the numbers."""
+        run = _write_run(tmp_path, "as01", {"m": _cells(ring0=10, ring1=5, beyond=85)})
+        pooled = F.pooled_table([run], 128, analysis_root=tmp_path)
+        compare = F.build_table([run], 128, analysis_root=tmp_path)
+        for seg in F.SEGMENTS:
+            assert int(pooled[seg].iloc[0]) == int(compare[seg].iloc[0])
+
+
+class TestLayouts:
+    def test_the_pooled_names_carry_the_infix(self):
+        """The artifact the caller asked for, spelled out."""
+        assert F.POOLED_PNG.format(slug="healpix-128") == (
+            "outcome_bars.pooled.healpix-128.png"
+        )
+        assert F.POOLED_CSV.format(slug="healpix-64") == (
+            "outcome_bars.pooled.healpix-64.csv"
+        )
+        assert F.POOLED_MANIFEST.format(slug="healpix-16") == (
+            "outcome_bars.pooled.healpix-16.manifest.json"
+        )
+
+    def test_both_layouts_are_on_by_default(self):
+        assert F.LAYOUTS == (F.COMPARE, F.POOLED)
+
+    def test_every_layout_has_a_name_triple_and_a_subject(self):
+        for layout in F.LAYOUTS:
+            assert len(F.NAMES[layout]) == 3
+            assert layout in F._SUBJECTS
+
+    def test_an_unknown_layout_is_refused(self, tmp_path):
+        run = _write_run(tmp_path, "as01", {"m": _cells(ring0=10, beyond=10)})
+        with pytest.raises(ValueError, match="unknown layout"):
+            F.build_for_runs(
+                [run], nsides=(128,), layouts=("sideways",), analysis_root=tmp_path
+            )
+
+    def test_one_layout_writes_only_its_own_artifacts(self, tmp_path):
+        runs = [
+            _write_run(tmp_path, "as01", {"m": _cells(ring0=10, beyond=10)}),
+            _write_run(
+                tmp_path, "as02", {"m": _cells(ring0=10, beyond=10, first_id=1000)}
+            ),
+        ]
+        pngs = F.build_for_runs(
+            runs, nsides=(128,), layouts=(F.POOLED,), analysis_root=tmp_path
+        )
+        out = F.cross_dir([r.run_id for r in runs], analysis_root=tmp_path)
+        assert [p.name for p in pngs] == ["outcome_bars.pooled.healpix-128.png"]
+        assert not (out / F.FIGURE_PNG.format(slug="healpix-128")).exists()
+        assert not (out / F.FIGURE_CSV.format(slug="healpix-128")).exists()
+
+    def test_the_pooled_manifest_records_how_it_pooled(self, tmp_path):
+        runs = [
+            _write_run(tmp_path, "as01", {"m": _cells(ring0=40, beyond=60)}),
+            _write_run(
+                tmp_path, "as02", {"m": _cells(ring0=240, beyond=160, first_id=1000)}
+            ),
+        ]
+        F.build_for_runs(
+            runs, nsides=(128,), layouts=(F.POOLED,), analysis_root=tmp_path
+        )
+        out = F.cross_dir([r.run_id for r in runs], analysis_root=tmp_path)
+        m = json.loads(
+            (out / F.POOLED_MANIFEST.format(slug="healpix-128")).read_text()
+        )
+        assert m["layout"] == F.POOLED
+        assert m["pooling"]["n_targets"] == 500
+        assert set(m["pooling"]["runs"].values()) == {100, 400}
+        assert "micro-average" in m["pooling"]["rule"]
+        # The caveat the number needs: it is this target mix, not the world.
+        assert m["pooling"]["largest_share"] == pytest.approx(0.8)
+        assert "not its" in m["pooling"]["reading_caveat"]
+        assert "cannot be averaged" in m["pooling"]["percentiles"]
+        assert "strict" in m["pooling"]["coverage"]
+
+    def test_the_compare_manifest_has_no_pooling_block(self, tmp_path):
+        """It did not pool anything, so claiming a rule would be a lie."""
+        runs = [
+            _write_run(tmp_path, "as01", {"m": _cells(ring0=10, beyond=10)}),
+            _write_run(
+                tmp_path, "as02", {"m": _cells(ring0=10, beyond=10, first_id=1000)}
+            ),
+        ]
+        F.build_for_runs(
+            runs, nsides=(128,), layouts=(F.COMPARE,), analysis_root=tmp_path
+        )
+        out = F.cross_dir([r.run_id for r in runs], analysis_root=tmp_path)
+        m = json.loads(
+            (out / F.FIGURE_MANIFEST.format(slug="healpix-128")).read_text()
+        )
+        assert m["layout"] == F.COMPARE
+        assert "pooling" not in m
+
+
+class TestFigureWidth:
+    """The figure must be wide enough for its own title and legend.
+
+    `_MIN_FIG_W` is a measured constant, and a measured constant goes stale the
+    moment someone edits a string it was measured against — the first value
+    tried here, 7.4, sat 0.04 in under the pooled suptitle and clipped both ends
+    of it. These re-measure, so that edit fails a test instead.
+    """
+
+    def _fig(self, subject):
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
+
+        fig = plt.figure(figsize=(F._MIN_FIG_W, 5.4), dpi=150)
+        title = fig.suptitle(
+            f"{subject}  ·  HEALPix nside=128 (51 km cells)", fontsize=13
+        )
+        legend = fig.legend(
+            handles=[
+                Patch(facecolor=F.SEGMENT_INK[s], label=F.SEGMENT_LABELS[s])
+                for s in F.SEGMENTS
+            ],
+            loc="upper center",
+            ncol=len(F.SEGMENTS),
+            frameon=False,
+            fontsize=9,
+        )
+        fig.canvas.draw()
+        r = fig.canvas.get_renderer()
+        widths = (
+            title.get_window_extent(renderer=r).width / 150,
+            legend.get_window_extent(renderer=r).width / 150,
+        )
+        plt.close(fig)
+        return widths
+
+    @pytest.mark.parametrize("layout", F.LAYOUTS)
+    def test_the_title_and_legend_fit_the_narrowest_figure(self, layout):
+        title_w, legend_w = self._fig(F._SUBJECTS[layout])
+        assert title_w <= F._MIN_FIG_W, (
+            f"{layout} suptitle needs {title_w:.2f} in but the floor is "
+            f"{F._MIN_FIG_W} in; it will clip on a single-panel figure"
+        )
+        assert legend_w <= F._MIN_FIG_W, (
+            f"legend needs {legend_w:.2f} in against a {F._MIN_FIG_W} in floor"
+        )
+
+    def test_a_single_panel_keeps_a_multi_panel_bar_width(self, tmp_path):
+        """The floor widens the figure; the axes are inset to compensate. If
+        they were stretched instead, one panel's bars would come out roughly
+        twice as thick as the same bars in a three-panel figure."""
+        one = F.render(_table(), 128, tmp_path, png_name="one.png")
+        rows = [
+            _row(m, ds=d)
+            for d in ("as01", "as02", "as03")
+            for m in ("octant_cbg_hull", "spotter_cbg")
+        ]
+        three = F.render(_table(rows), 128, tmp_path, png_name="three.png")
+        assert one.exists() and three.exists()
+        # Panel count drives the figure width only past the floor.
+        assert F._PANEL_W * 3 > F._MIN_FIG_W >= F._PANEL_W

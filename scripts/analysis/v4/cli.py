@@ -147,6 +147,15 @@ def plot_outcome_bars_cmd(
     ),
     nside: list[int] = typer.Option(None, "--nside", "-n", help=_NSIDE_HELP),
     method: list[str] = typer.Option(None, "--method", "-m", help="Plot only these."),
+    layout: list[str] = typer.Option(
+        None,
+        "--layout",
+        help=(
+            f"{figure_outcome_bars.COMPARE} (one panel per dataset) or "
+            f"{figure_outcome_bars.POOLED} (every run's targets as one "
+            f"count-weighted population). Repeatable; default: both."
+        ),
+    ),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v4 writes."),
 ) -> None:
@@ -157,6 +166,14 @@ def plot_outcome_bars_cmd(
     sweeping every run on disk would silently mix populations that were never
     meant to share an axis.
 
+    `--layout pooled` adds a second figure per rung, `outcome_bars.pooled.<slug>`,
+    holding one panel over every input run's targets at once. It is a
+    micro-average: the per-target rows are concatenated and re-scored, so a
+    target counts the same whichever dataset it came from. Pooling a **single**
+    `--run-id` is a no-op view of that dataset — a micro-average over one
+    population is that population — and is written anyway rather than
+    second-guessed, since the caller asked for it.
+
     No traffic-weighted arm is drawn. None exists, and v3 filled that half of
     its figure from a hard-coded dict — 99.3% bars that measured nothing.
     """
@@ -164,13 +181,26 @@ def plot_outcome_bars_cmd(
         raise typer.BadParameter(
             "pass at least one --run-id; this figure compares named datasets"
         )
+    layouts = tuple(dict.fromkeys(layout or ())) or figure_outcome_bars.LAYOUTS
+    unknown = [x for x in layouts if x not in figure_outcome_bars.LAYOUTS]
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown --layout {unknown}; pick from "
+            f"{list(figure_outcome_bars.LAYOUTS)}"
+        )
     runs = [resolve_run(r, outputs_root) for r in run_id]
-    pngs = figure_outcome_bars.build_for_runs(
-        runs,
-        nsides=_nsides(nside),
-        methods=list(method) if method else None,
-        analysis_root=analysis_root,
-    )
+    try:
+        pngs = figure_outcome_bars.build_for_runs(
+            runs,
+            nsides=_nsides(nside),
+            methods=list(method) if method else None,
+            layouts=layouts,
+            analysis_root=analysis_root,
+        )
+    except ValueError as exc:
+        # Coverage and target-overlap refusals are the caller's to fix, so they
+        # read as a usage error rather than a traceback.
+        raise typer.BadParameter(str(exc)) from exc
     for png in pngs:
         typer.echo(f"wrote {png}")
 

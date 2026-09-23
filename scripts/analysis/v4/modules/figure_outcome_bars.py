@@ -41,6 +41,34 @@ as 65%. Ranking on the exact share put million_scale first, so a reader saw
 to tell the sort was right. At the reported precision they tie, and the 1-ring
 rung resolves it the way the figure shows (27% against 16%).
 
+## Two layouts: one panel per dataset, and all of them pooled
+
+`compare` is the per-dataset view above. `pooled` adds one extra figure per rung
+— `outcome_bars.pooled.healpix-<n>` — holding a single panel whose bars run over
+every input run's targets at once, because "how does each method do overall?"
+otherwise has no artifact.
+
+The pooling is a **micro-average**: the per-target rows are concatenated across
+runs and re-scored, so a target counts the same whichever dataset it came from.
+A macro-average — the mean of the three panels' shares — would give each of
+as01's 399 targets 1.15x the weight of one of as03's 458, purely because as01 is
+smaller, and nothing about the experiment justifies that. Micro also keeps the
+pooled row a *count*, so it carries `n_ring0` like every per-run row and
+`guard_partition` applies to it unchanged; a macro share has no integer behind
+it.
+
+On the three meshes the two differ by only 0.15-0.33 pp and rank the methods
+identically, which is the argument for picking the defensible one rather than
+the flattering one.
+
+What the pooled bar is **not** is "the method's accuracy in general". It is its
+accuracy on *this* target mix, and as03 is 36% of that mix. The per-dataset
+panels stay the place to see divergence; this figure is the single number.
+
+Coverage is **strict**: a method absent from any input run is refused rather
+than pooled over the runs that carry it. That keeps one denominator behind every
+bar in the panel, so the `n=` in the title is true of all of them.
+
 ## One figure per rung, not one figure with a resolution axis
 
 The rung *is* the tolerance the reader is choosing. Putting four rungs in one
@@ -203,6 +231,36 @@ _BAR_FRAC = 0.62
 #: figure's 150 dpi, 1.0 pt is ~2 px.
 _GAP_PT = 1.0
 
+#: One panel's width, in inches. The figure is this times the panel count --
+#: except that the suptitle and the five-entry legend are **figure**-level and
+#: need a width of their own regardless of how many panels there are. At one
+#: panel, 4.6 in clipped both ends of the legend and both ends of the title.
+#:
+#: So the figure takes a floor, and the *axes* are then inset to the width the
+#: panels actually want, leaving the surplus as margin. Stretching the axes to
+#: fill the floor would have widened the bars with them -- a single panel's six
+#: bars came out roughly twice the compare figure's slab width -- and the same
+#: bar should not change thickness because a reader asked for one dataset
+#: instead of three. Insetting the axes rather than padding the x limits is the
+#: difference between a normal-width panel with air around it and a full-width
+#: panel whose spine and gridlines run off into empty space either side.
+_PANEL_W = 4.6
+
+#: Enough for the widest figure-level furniture, **measured** rather than
+#: estimated (`get_window_extent` at this dpi, which is how the 7.4 first tried
+#: here was caught sitting exactly on the clipping edge):
+#:
+#:     7.44 in  suptitle, pooled  ("... , datasets pooled · HEALPix ...")
+#:     6.07 in  legend, five entries in one row
+#:     5.88 in  suptitle, compare
+#:
+#: 8.0 leaves the widest of those a little over half an inch of margin. Two or
+#: more panels clear it on their own, so the floor only ever binds on a single
+#: panel. `TestFigureWidth` re-measures both against the figure, so editing a
+#: subject string into something longer fails a test rather than silently
+#: clipping the title.
+_MIN_FIG_W = 8.0
+
 #: Below this share a segment is too thin to hold its own label without the
 #: text overflowing the mark. The skill's rule for an interior segment with no
 #: free end is to drop the label and let the legend and table carry it, which is
@@ -233,6 +291,30 @@ ACCURACY_DECIMALS = 2
 FIGURE_PNG = "outcome_bars.{slug}.png"
 FIGURE_CSV = "outcome_bars.{slug}.csv"
 FIGURE_MANIFEST = "outcome_bars.{slug}.manifest.json"
+
+#: One panel per dataset, each ranking itself.
+COMPARE = "compare"
+
+#: One panel over every input run's targets at once, count-weighted.
+POOLED = "pooled"
+
+#: Both are written by default -- they read the same `accuracy.csv` files, so
+#: the second costs a handful of parquet reads and the pooled artifact is then
+#: always on disk beside the per-dataset one.
+LAYOUTS: tuple[str, ...] = (COMPARE, POOLED)
+
+#: The pooled triple takes a `.pooled.` **infix** rather than v3's separate stem
+#: (`outcome_bars` vs `outcome_bars_by_dataset`), so the two layouts sort
+#: together in a directory listing and share one prefix to glob.
+POOLED_PNG = "outcome_bars.pooled.{slug}.png"
+POOLED_CSV = "outcome_bars.pooled.{slug}.csv"
+POOLED_MANIFEST = "outcome_bars.pooled.{slug}.manifest.json"
+
+#: `layout -> (png, csv, manifest)` name templates, each taking `{slug}`.
+NAMES: dict[str, tuple[str, str, str]] = {
+    COMPARE: (FIGURE_PNG, FIGURE_CSV, FIGURE_MANIFEST),
+    POOLED: (POOLED_PNG, POOLED_CSV, POOLED_MANIFEST),
+}
 
 #: Where cross-dataset figures land — keyed by the dataset set, so a two-run
 #: comparison cannot overwrite a three-run one.
@@ -294,6 +376,150 @@ def build_table(
         # label and in the sort key, both at `ACCURACY_DECIMALS`.
         table[f"share_{seg}"] = table[seg] / table["n_targets"]
     return table
+
+
+def guard_common_methods(scored: dict[str, set[str]]) -> list[str]:
+    """Every run must score the same methods. Returns them, sorted.
+
+    Strict on purpose. The alternative -- v3's `pool_method_counts`, which sums
+    over the runs that *carry* a method -- leaves bars in one panel resting on
+    different denominators, so the panel's `n=` is true of some bars and not
+    others and a reader has no way to tell which. Here a method absent from any
+    input run is refused, and the caller narrows the set with `--method`.
+    """
+    common = set.intersection(*scored.values()) if scored else set()
+    partial = sorted(set.union(*scored.values()) - common) if scored else []
+    if partial:
+        where = {
+            m: sorted(r for r, ms in scored.items() if m in ms) for m in partial
+        }
+        raise ValueError(
+            f"cannot pool: {partial} are not scored in every run ({where}). "
+            f"Pooling them would put their bars on a different denominator "
+            f"from the rest. Pass --method to pick a common subset, or "
+            f"--layout compare to keep each dataset on its own panel."
+        )
+    return sorted(common)
+
+
+def guard_disjoint_targets(targets: dict[str, set[str]]) -> None:
+    """No target id may appear in two runs.
+
+    One shared id lands in the pooled denominator twice, which silently
+    reweights that target and breaks the "every target counts once" claim the
+    micro-average rests on. v3 guards the same thing in
+    `cross.guard_disjoint_targets` for the same reason.
+    """
+    runs = sorted(targets)
+    for i, a in enumerate(runs):
+        for b in runs[i + 1 :]:
+            shared = targets[a] & targets[b]
+            if shared:
+                sample = sorted(shared)[:5]
+                raise ValueError(
+                    f"{a} and {b} share {len(shared)} target ids (e.g. "
+                    f"{sample}); each would sit in the pooled denominator "
+                    f"twice. Use --layout compare, which keeps each dataset on "
+                    f"its own panel."
+                )
+
+
+def _load_cells(
+    run: RunPaths, method: str, nside: int, *, analysis_root: Path | None = None
+) -> pd.DataFrame:
+    """One run's per-target scored rows for one method at one rung."""
+    path = run.cls_accuracy_dir(nside, root=analysis_root) / C.CELLS_PARQUET.format(
+        method=method
+    )
+    if not path.exists():
+        raise MissingArtifactError(
+            f"{path} missing; run `classify --run-id {run.run_id}` first"
+        )
+    return pd.read_parquet(path)
+
+
+def pooled_table(
+    runs: list[RunPaths],
+    nside: int,
+    *,
+    methods: list[str] | None = None,
+    analysis_root: Path | None = None,
+) -> pd.DataFrame:
+    """Every run's targets as one population: one row per method.
+
+    A **micro-average**. The per-target rows are concatenated across runs and
+    handed back to `classify.summarize`, so the pooled row is *recounted* rather
+    than assembled from the per-run summaries. That is what keeps it exact and
+    consistent with the rows it sits beside:
+
+    * the five outcome counts partition the pooled `n_targets`, and
+      `guard_partition` -- called inside `summarize` -- asserts it, so the drawn
+      stack provably closes at 100%;
+    * `accuracy_ring{0,1,2}` and `accuracy_nearest_seed_retired` are true pooled
+      rates;
+    * `error_km_p50` / `p90` are true pooled **quantiles** over the concatenated
+      errors. These are order statistics: a count-weighted mean of the three
+      runs' p50s is not the pooled p50, and there is no way to recover one from
+      the summaries, which is the whole reason this reads the parquets.
+
+    Concatenating the rows is sound because everything `summarize` touches is
+    either absolute at this rung (`ring`, `tg_cell`, `pred_cell` are HEALPix ids;
+    `error_km` is grid-free) or compared only **within a row**
+    (`nearest_seed_id_retired` against `tg_seed_id`), so the runs' per-run seed
+    namespaces never meet. `solved_mask`'s all-`BASELINE` branch still fires for
+    `shortest_ping`, whose rows are `BASELINE` in every run.
+    """
+    scored = {
+        r.run_id: set(load_rung(r, nside, analysis_root=analysis_root)["method"])
+        for r in runs
+    }
+    if methods:
+        wanted = set(methods)
+        scored = {r: ms & wanted for r, ms in scored.items()}
+        if not any(scored.values()):
+            raise ValueError(f"none of {methods} are scored at nside={nside}")
+    common = guard_common_methods(scored)
+
+    frames: dict[str, pd.DataFrame] = {}
+    seen: dict[str, set[str]] = {}
+    for method in common:
+        per_run = {
+            r.run_id: _load_cells(r, method, nside, analysis_root=analysis_root)
+            for r in runs
+        }
+        # Checked on the first method only: the roster is the run's target set,
+        # identical across methods, so repeating it per method would re-read
+        # the same answer six times over.
+        if not seen:
+            seen = {rid: set(df["target_id"]) for rid, df in per_run.items()}
+            guard_disjoint_targets(seen)
+        frames[method] = pd.concat(per_run.values(), ignore_index=True)
+
+    table = C.summarize(frames, nside)
+    # Strict coverage above matched method *names*; this is the denominator it
+    # was chosen to guarantee. Two methods can share a name set and still have
+    # been scored on different target counts -- `score_rung` builds each
+    # method's frame from whichever folds carry it -- and then the panel's `n=`
+    # is true of one bar and not the next, which is exactly the ambiguity
+    # strictness exists to avoid.
+    totals = set(table["n_targets"].astype(int))
+    if len(totals) > 1:
+        sizes = dict(zip(table["method"], table["n_targets"].astype(int)))
+        raise ValueError(
+            f"cannot pool: methods were scored on different target counts "
+            f"({sizes}), so one panel's `n=` cannot be true of every bar. "
+            f"Pass --method to pick methods that share a population, or "
+            f"--layout compare."
+        )
+
+    run_ids = [r.run_id for r in runs]
+    table.insert(0, "run_id", "+".join(sorted(run_ids)))
+    table.insert(1, "dataset", dataset_slug(run_ids))
+    for seg in SEGMENTS:
+        # EXACT, for the same reason as in `build_table`: these are the drawn
+        # geometry, and rounding them would stop the stack closing at 100%.
+        table[f"share_{seg}"] = table[seg] / table["n_targets"]
+    return table.reset_index(drop=True)
 
 
 #: **The bar sorting key, in order, all DESC:**
@@ -401,6 +627,8 @@ def render(
     *,
     order: list[str] | None = None,
     decimals: int | None = None,
+    subject: str = "Where the prediction landed",
+    png_name: str | None = None,
     dpi: int = 150,
 ) -> Path:
     """One panel per dataset, one bar per method, segments stacked bottom-up.
@@ -409,6 +637,16 @@ def render(
     panel reads as that dataset's leaderboard. `order` overrides that with a
     single shared sequence when a caller wants position comparable across
     panels instead.
+
+    `subject` leads the suptitle. The pooled layout passes its own so the figure
+    says on its face that the panel is one combined population rather than a
+    dataset -- the panel title alone (`AS01+AS02+AS03`) reads as a dataset name
+    to someone who does not already know the layout.
+
+    `png_name` overrides the filename, which is how the two layouts write into
+    separate slots in one directory. It must be passed, not patched up
+    afterwards: rendering to the default name and moving the file would have the
+    pooled pass clobber the compare figure written moments earlier.
     """
     import matplotlib
 
@@ -421,10 +659,12 @@ def render(
     nd = ACCURACY_DECIMALS if decimals is None else decimals
     slug = grid_slug(nside)
 
+    panels_w = _PANEL_W * len(datasets)
+    fig_w = max(panels_w, _MIN_FIG_W)
     fig, axes = plt.subplots(
         1,
         len(datasets),
-        figsize=(4.6 * len(datasets), 5.4),
+        figsize=(fig_w, 5.4),
         sharey=True,
         squeeze=False,
     )
@@ -530,19 +770,144 @@ def render(
         labelcolor=_INK_2,
     )
     fig.suptitle(
-        f"Where the prediction landed  ·  HEALPix nside={nside} "
+        f"{subject}  ·  HEALPix nside={nside} "
         f"({H.nominal_cell_km(nside):.0f} km cells)",
         fontsize=13,
         color=_INK,
         y=0.995,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.90))
+    # Inset the axes to the width the panels want when the floor widened the
+    # figure past it, so the surplus becomes margin and a single panel keeps a
+    # compare panel's bar geometry. Exactly zero when the panels already fill
+    # the figure, which leaves the multi-panel output bit-for-bit unchanged.
+    inset = (fig_w - panels_w) / 2 / fig_w
+    fig.tight_layout(rect=(inset, 0, 1 - inset, 0.90))
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    png = out_dir / FIGURE_PNG.format(slug=slug)
+    png = out_dir / (png_name or FIGURE_PNG.format(slug=slug))
     fig.savefig(png, dpi=dpi, facecolor=_SURFACE)
     plt.close(fig)
     return png
+
+
+#: Columns the CSV twin carries, in order. Filtered against what the frame
+#: actually has, so the pooled twin -- which comes out of `summarize` with a
+#: slightly different column set -- writes the ones it has and skips the rest.
+CSV_COLUMNS: tuple[str, ...] = (
+    "run_id", "dataset", "method", "n_targets", *SEGMENTS,
+    *[f"share_{s}" for s in SEGMENTS],
+    "accuracy_ring0", "accuracy_nearest_seed_retired",
+    "error_km_p50", "error_km_p90",
+)
+
+def _targets_per_run(
+    runs: list[RunPaths], nside: int, *, analysis_root: Path | None = None
+) -> dict[str, int]:
+    """`run_id -> n_targets`, for the pooled manifest's contribution block.
+
+    Read from each run's own `accuracy.csv` so the recorded contributions and
+    the compare CSV cannot disagree about a population size.
+    """
+    out: dict[str, int] = {}
+    for run in runs:
+        df = load_rung(run, nside, analysis_root=analysis_root)
+        sizes = set(df["n_targets"].astype(int))
+        if len(sizes) > 1:
+            raise ValueError(
+                f"{run.run_id} scored its methods on different target counts "
+                f"{sorted(sizes)}; there is no single contribution to record"
+            )
+        out[run.run_id] = sizes.pop() if sizes else 0
+    return out
+
+
+_SUBJECTS = {
+    COMPARE: "Where the prediction landed",
+    POOLED: "Where the prediction landed, datasets pooled",
+}
+
+
+def _manifest(
+    layout: str,
+    table: pd.DataFrame,
+    nside: int,
+    png_name: str,
+    csv_name: str,
+    *,
+    run_ids: list[str],
+    per_run: dict[str, int] | None = None,
+) -> str:
+    body = {
+        "figure": png_name,
+        "csv": csv_name,
+        "layout": layout,
+        "grid": H.describe(nside),
+        "runs": run_ids,
+        "methods": method_order(table),
+        "panel_order": {
+            ds: panel_order(table, ds)
+            for ds in sorted(table["dataset"].unique())
+        },
+        "method_order_note": (
+            "`methods` is the pooled order across datasets; each "
+            "panel is ranked by its OWN 'in the cell' share "
+            "descending, so a method does not keep one x slot "
+            "across panels"
+        ),
+        "segments": list(SEGMENTS),
+        "segment_labels": SEGMENT_LABELS,
+        "palette": {
+            "ink": SEGMENT_INK,
+            "validated": (
+                "dataviz validate_palette.js --ordinal: monotone "
+                "lightness, adjacent dL >= 0.06, light end 2.10:1, "
+                "hue spread 5deg — all pass. A green+red scheme was "
+                "rejected (red vs mid-green is dE 1.8 under "
+                "protanopia) and so was a grey fifth fill (dE "
+                "1.6-4.5 against the ramp under deuteranopia); "
+                "'never answered' is therefore unfilled."
+            ),
+        },
+        "weighted_arm": (
+            "absent by design — no traffic-weighted run exists, and "
+            "a placeholder would be fabricated data"
+        ),
+    }
+    if layout == POOLED:
+        total = int(table["n_targets"].iloc[0]) if len(table) else 0
+        body["pooling"] = {
+            "rule": (
+                "micro-average: the per-target rows are concatenated across "
+                "runs and re-scored, so every target weighs the same "
+                "regardless of which dataset it came from. A macro-average "
+                "(the mean of the per-dataset shares) would weight a "
+                "smaller dataset's targets more heavily for no reason."
+            ),
+            "runs": per_run or {},
+            "n_targets": total,
+            "largest_share": (
+                round(max(per_run.values()) / total, 4)
+                if per_run and total
+                else None
+            ),
+            "reading_caveat": (
+                "this is each method's accuracy on THIS target mix, not its "
+                "accuracy in general — the pooled bar is dominated by "
+                "whichever input run is largest. The compare layout is where "
+                "per-dataset divergence is visible."
+            ),
+            "percentiles": (
+                "error_km_p50/p90 are TRUE pooled quantiles over the "
+                "concatenated per-target errors, not a mean of the runs' "
+                "percentiles — order statistics cannot be averaged."
+            ),
+            "coverage": (
+                "strict — a method absent from any input run is refused "
+                "rather than pooled over the runs that carry it, so every "
+                "bar in the panel rests on the same denominator"
+            ),
+        }
+    return json.dumps(body, indent=2) + "\n"
 
 
 def build_for_runs(
@@ -550,70 +915,58 @@ def build_for_runs(
     *,
     nsides: tuple[int, ...] = H.NSIDE_LADDER,
     methods: list[str] | None = None,
+    layouts: tuple[str, ...] = LAYOUTS,
     analysis_root: Path | None = None,
 ) -> list[Path]:
-    """One figure, CSV twin and manifest per rung. Returns the PNG paths."""
+    """One figure, CSV twin and manifest per layout per rung.
+
+    Returns the PNG paths. Both layouts by default: they read the same
+    `accuracy.csv` files, so `pooled` costs only its parquet reads and the
+    pooled artifact is then always on disk beside the per-dataset one.
+    """
+    unknown = [x for x in layouts if x not in LAYOUTS]
+    if unknown:
+        raise ValueError(f"unknown layout {unknown}; pick from {list(LAYOUTS)}")
+    wanted = tuple(dict.fromkeys(layouts)) or LAYOUTS
+
     run_ids = [r.run_id for r in runs]
     out_dir = cross_dir(run_ids, analysis_root=analysis_root)
     rungs = sorted({H.validate_nside(n) for n in nsides}, reverse=True)
-    tables = {
-        n: build_table(runs, n, methods=methods, analysis_root=analysis_root)
-        for n in rungs
-    }
+
+    builders = {COMPARE: build_table, POOLED: pooled_table}
     written: list[Path] = []
-    for nside in rungs:
-        table = tables[nside]
-        slug = grid_slug(nside)
-        keep = [
-            "run_id", "dataset", "method", "n_targets", *SEGMENTS,
-            *[f"share_{s}" for s in SEGMENTS],
-            "accuracy_ring0", "accuracy_nearest_seed_retired",
-            "error_km_p50", "error_km_p90",
-        ]
-        table[[c for c in keep if c in table.columns]].to_csv(
-            out_dir / FIGURE_CSV.format(slug=slug), index=False
-        )
-        png = render(table, nside, out_dir)
-        (out_dir / FIGURE_MANIFEST.format(slug=slug)).write_text(
-            json.dumps(
-                {
-                    "figure": png.name,
-                    "csv": FIGURE_CSV.format(slug=slug),
-                    "grid": H.describe(nside),
-                    "runs": run_ids,
-                    "methods": method_order(table),
-                    "panel_order": {
-                        ds: panel_order(table, ds)
-                        for ds in sorted(table["dataset"].unique())
-                    },
-                    "method_order_note": (
-                        "`methods` is the pooled order across datasets; each "
-                        "panel is ranked by its OWN 'in the cell' share "
-                        "descending, so a method does not keep one x slot "
-                        "across panels"
-                    ),
-                    "segments": list(SEGMENTS),
-                    "segment_labels": SEGMENT_LABELS,
-                    "palette": {
-                        "ink": SEGMENT_INK,
-                        "validated": (
-                            "dataviz validate_palette.js --ordinal: monotone "
-                            "lightness, adjacent dL >= 0.06, light end 2.10:1, "
-                            "hue spread 5deg — all pass. A green+red scheme was "
-                            "rejected (red vs mid-green is dE 1.8 under "
-                            "protanopia) and so was a grey fifth fill (dE "
-                            "1.6-4.5 against the ramp under deuteranopia); "
-                            "'never answered' is therefore unfilled."
-                        ),
-                    },
-                    "weighted_arm": (
-                        "absent by design — no traffic-weighted run exists, and "
-                        "a placeholder would be fabricated data"
-                    ),
-                },
-                indent=2,
+    for layout in wanted:
+        png_name, csv_name, man_name = NAMES[layout]
+        for nside in rungs:
+            table = builders[layout](
+                runs, nside, methods=methods, analysis_root=analysis_root
             )
-            + "\n"
-        )
-        written.append(png)
+            slug = grid_slug(nside)
+            per_run = (
+                _targets_per_run(runs, nside, analysis_root=analysis_root)
+                if layout == POOLED
+                else None
+            )
+            table[[c for c in CSV_COLUMNS if c in table.columns]].to_csv(
+                out_dir / csv_name.format(slug=slug), index=False
+            )
+            png = render(
+                table,
+                nside,
+                out_dir,
+                subject=_SUBJECTS[layout],
+                png_name=png_name.format(slug=slug),
+            )
+            (out_dir / man_name.format(slug=slug)).write_text(
+                _manifest(
+                    layout,
+                    table,
+                    nside,
+                    png.name,
+                    csv_name.format(slug=slug),
+                    run_ids=run_ids,
+                    per_run=per_run,
+                )
+            )
+            written.append(png)
     return written
