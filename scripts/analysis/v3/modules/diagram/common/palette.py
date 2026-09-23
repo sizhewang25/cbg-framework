@@ -1,4 +1,8 @@
-"""Variant -> hue, fixed at import from a constant order.
+"""Method -> hue, fixed at import by identity; the one palette every figure uses.
+
+`method_colors` is the entry point for anything that draws a published method,
+`method_family` groups the ones that share a hue family (the two Octant
+variants), and `SERIES_HUES` is for categorical series that are *not* methods.
 
 Lives here rather than in `pareto.py` (where it was written) because it is keyed
 on `label_for` and `PUBLISHED_METHODS`, and because every module that draws a
@@ -7,32 +11,81 @@ variant needs it. `pareto` imports it back; the dependency only runs one way.
 
 from __future__ import annotations
 
+from scripts.analysis.v3.modules.classify import SHORTEST_PING
 from scripts.analysis.v3.modules.diagram.common.labels import (
     PUBLISHED_METHODS,
     label_for,
 )
 
 
-#: Fixed variant -> hue, assigned by **identity** (`PUBLISHED_METHODS`) and
-#: never by rank in the current selection, so `--method` cannot repaint the
-#: survivors.
+#: Method -> hue, by display label, assigned by **identity** and never by rank
+#: in the current selection, so `--method` cannot repaint the survivors.
 #:
-#: Validated with the dataviz skill's `validate_palette.js` against the
-#: reference 8-hue categorical theme, `--pairs all` on white — the right check
-#: here, since every variant is visible at once. Every 6/7/8-slot prefix of that
-#: theme FAILS (green vs orange is dE 3.2 under protanopia), and an exhaustive
-#: search over its hues found exactly two passing 6-subsets; this is the better
-#: one, worst dE 6.9 (deutan) / 7.6 (tritan). Orange is the hue that had to go.
+#: Designed rather than dealt. The previous palette walked a six-hue tuple in
+#: `PUBLISHED_METHODS` order, which put SoI on aqua and Octant-Hull on green —
+#: two greens for two unrelated methods — while the two Octant variants landed
+#: on unrelated hues. Here hue carries **family** and lightness carries the
+#: variant within it: Octant-Hull is a mid green, Octant-Spline a light green
+#: of the same hue, and SoI moves to violet, the one hue nothing else is near.
+#: Shortest-Ping, Vanilla and Spotter keep their hues, so every figure that
+#: quoted them stays readable against its old self.
 #:
-#: dE 6.9 sits in the 6-8 band that is legal *only* with secondary encoding.
-#: That is satisfied three times over: each variant owns its own x column (they
-#: never interleave spatially), the legend names every one, and the CSV is the
-#: table view. Aqua/yellow/magenta are also below 3:1 on white (2.82/2.17/2.69),
-#: a contrast WARN that obliges visible labels or a table view — the legend and
-#: CSV again. No 6-subset of this theme clears 3:1 for all six (only five hues
-#: do), so at six variants that is unavoidable rather than a shortcut; the 2 px
-#: cost line and ringed >=8 px markers give each variant more ink than a dot.
-_VARIANT_HUES: tuple[str, ...] = (
+#: Validated with the dataviz skill's `validate_palette.js --mode light
+#: --surface #ffffff --pairs all` — all pairs, because a CDF, a scatter or a
+#: frontier puts every method on one axis at once:
+#:
+#: * CVD separation PASSES: worst dE 8.6 (Spotter vs Octant-Hull, deutan), up
+#:   from 6.9 in the 6-8 band that the old palette only met with secondary
+#:   encoding. Tritan (reported, not gated) is 6.3, down from 7.6.
+#: * Normal-vision floor 16.3 (Shortest-Ping vs SoI), over the hard 15.
+#: * The Octant pair is itself 30+ dE apart in every simulation — a lightness
+#:   step survives colour-vision deficiency where a hue step would not, which
+#:   is what lets the two share a family and stay separable.
+#: * Every hue is >= dE 8.7 from `_C_OTHER` / `_C_MUTED` grey under every
+#:   simulation, so no method reads as the "other" bucket or as chrome. A
+#:   teal Octant pair scored higher on CVD but its dark step was dE 1.6 from
+#:   that grey under deuteranopia — the reason green won.
+#: * Contrast WARN: Vanilla's yellow (2.17:1) and Octant-Spline's light green
+#:   (2.02:1) sit below 3:1 on white. That obliges visible labels or a table
+#:   view; every figure drawing methods carries a legend and a CSV twin. No
+#:   light family step can clear 3:1 and stay separable from its dark sibling.
+METHOD_HUES: dict[str, str] = {
+    label_for(SHORTEST_PING): "#2a78d6",  # blue
+    label_for("million_scale_cbg"): "#4a3aa7",  # violet
+    label_for("vanilla_cbg"): "#eda100",  # yellow
+    label_for("octant_cbg_hull"): "#17890b",  # green, mid
+    label_for("octant_cbg_spl"): "#58cd78",  # green, light
+    label_for("spotter_cbg"): "#e34948",  # red
+}
+
+#: Label -> family. Two methods share a family exactly when they share a hue
+#: family in `METHOD_HUES`, so a figure that wants to group them (a legend
+#: bracket, a shared band, one hatch) reads it here instead of re-deriving it
+#: from hexes.
+METHOD_FAMILIES: dict[str, str] = {
+    label_for(SHORTEST_PING): "shortest-ping",
+    label_for("million_scale_cbg"): "soi",
+    label_for("vanilla_cbg"): "vanilla",
+    label_for("octant_cbg_hull"): "octant",
+    label_for("octant_cbg_spl"): "octant",
+    label_for("spotter_cbg"): "spotter",
+}
+
+#: The method hues as a tuple, in `PUBLISHED_METHODS` order. Kept for the
+#: callers that ask "is this colour a method's?" (the outcome-bar and
+#: proximity figures assert their own inks are not). **Not** a sequence to
+#: deal from: slots 4 and 5 are one family, so cycling it over unrelated
+#: series would pair two of them visually. Use `SERIES_HUES` for that.
+_VARIANT_HUES: tuple[str, ...] = tuple(
+    METHOD_HUES[label_for(m)] for m in PUBLISHED_METHODS
+)
+
+#: A general-purpose categorical order for series that are **not** methods —
+#: ASes, VP groups, fit families — where every slot must look unrelated to
+#: every other. Six distinct hues, validated `--pairs all` on white (worst CVD
+#: dE 6.9, in the band that needs secondary encoding: the legend). It shares
+#: hexes with `METHOD_HUES`, so never use both in one figure.
+SERIES_HUES: tuple[str, ...] = (
     "#2a78d6",  # blue
     "#1baf7a",  # aqua
     "#eda100",  # yellow
@@ -58,36 +111,26 @@ _SURFACE = "#ffffff"
 
 
 def _build_label_hues() -> dict[str, str]:
-    """Display label -> hue, fixed once from `PUBLISHED_METHODS`.
+    """Display label -> hue, checked once at import against `PUBLISHED_METHODS`.
 
     Keyed on the *label* rather than the combo id so `octant_cbg_spl` and
     `octant_cbg` land on one hue: they are one paper variant whose id differs
     per run, which is why `LABELS` already maps both onto "Octant-Spline CBG".
-    Two hues would invent a distinction the runs do not contain. That aliasing
-    is what lets `PUBLISHED_METHODS` name one id per variant and still colour
-    either spelling.
 
-    Driven by `PUBLISHED_METHODS` rather than `PREFERRED_ORDER` because the two
-    answer different questions and only one of them is capacity-bounded.
-    `PREFERRED_ORDER` is a sort key and grows whenever an arm needs a place to
-    sort; the palette has exactly six validated hues. Reading the sort key here
-    meant that adding `spotter_hybrid_cbg` to it consumed the sixth hue and
-    pushed `spotter_cbg` -- a published variant -- into the grey bucket. The
-    published set is fixed at six by the same argument that fixed the palette at
-    six, so keying on it makes the capacities match by construction.
-
-    An arm outside that set gets `_C_OTHER`. That is the documented behaviour
-    for as7018's ablation arms and it applies to `spotter_hybrid_cbg` too:
-    promoting it to a hue of its own needs a 7-hue re-validation first.
+    The mapping is explicit (`METHOD_HUES`), so there is no order to get wrong;
+    what can still drift is the *set*. A published variant with no hue would
+    silently fall into the grey bucket, and a hue for a non-published arm would
+    hand an ablation a published variant's standing — `spotter_hybrid_cbg`
+    stays in `_C_OTHER` until it is added here and the palette re-validated.
     """
-    hues: dict[str, str] = {}
-    for method in PUBLISHED_METHODS:
-        label = label_for(method)
-        if label in hues:
-            continue
-        if len(hues) < len(_VARIANT_HUES):
-            hues[label] = _VARIANT_HUES[len(hues)]
-    return hues
+    published = {label_for(m) for m in PUBLISHED_METHODS}
+    if published != set(METHOD_HUES) or published != set(METHOD_FAMILIES):
+        raise RuntimeError(
+            f"palette covers {sorted(METHOD_HUES)} but PUBLISHED_METHODS labels "
+            f"are {sorted(published)}; add or remove the hue and re-run "
+            "validate_palette.js --pairs all before changing either"
+        )
+    return dict(METHOD_HUES)
 
 
 #: Computed once, at import, from a constant order — never from the methods
@@ -110,3 +153,10 @@ def method_colors(methods) -> dict[str, str]:
     series and only six of these hues are validated.
     """
     return {m: _LABEL_HUES.get(label_for(m), _C_OTHER) for m in methods}
+
+
+def method_family(method: str) -> str | None:
+    """The method's hue family (`"octant"` for both Octant variants), or `None`
+    for anything outside the published set — which is also what folds it into
+    `_C_OTHER`."""
+    return METHOD_FAMILIES.get(label_for(method))

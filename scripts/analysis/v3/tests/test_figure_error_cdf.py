@@ -176,10 +176,11 @@ def test_the_default_methods_are_the_shared_published_six():
 
 def test_the_threshold_guides_avoid_the_variant_hues():
     """Green/orange/red guides would read as Octant-Hull/Vanilla/Spotter."""
-    from scripts.analysis.v3.modules.diagram.common.palette import _VARIANT_HUES
+    from scripts.analysis.v3.modules.diagram.common.palette import METHOD_HUES
 
     assert F.THRESHOLDS_KM == (100, 500, 1000)
-    assert "#008300" in _VARIANT_HUES  # the hue a green guide would collide with
+    # Guides are drawn in grid ink, never in a method hue.
+    assert "#e1e0d9" not in METHOD_HUES.values()
 
 
 # ---------------------------------------------------------------------------

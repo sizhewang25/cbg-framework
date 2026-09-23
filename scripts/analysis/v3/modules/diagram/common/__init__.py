@@ -25,7 +25,12 @@ from scripts.analysis.v3.modules.diagram.common.membership import (
     pooled_membership,
     restrict_to_baseline_failures,
 )
-from scripts.analysis.v3.modules.diagram.common.palette import method_colors
+from scripts.analysis.v3.modules.diagram.common.palette import (
+    METHOD_HUES,
+    SERIES_HUES,
+    method_colors,
+    method_family,
+)
 from scripts.analysis.v3.modules.diagram.common.tables import (
     SET_IDS,
     exact_combination_counts,
@@ -36,10 +41,12 @@ from scripts.analysis.v3.modules.diagram.common.tables import (
 
 __all__ = [
     "LABELS",
+    "METHOD_HUES",
     "PREFERRED_ORDER",
     "PUBLISHED_METHODS",
     "RING_LETTERS",
     "RUN_KEY_SEP",
+    "SERIES_HUES",
     "SET_IDS",
     "artifact_name",
     "available_methods",
@@ -50,6 +57,7 @@ __all__ = [
     "intersection_table",
     "label_for",
     "method_colors",
+    "method_family",
     "pairwise_table",
     "pooled_membership",
     "region_key",

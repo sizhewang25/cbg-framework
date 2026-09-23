@@ -357,6 +357,90 @@ def test_every_variant_hue_is_a_distinct_validated_slot():
     assert P._C_OTHER not in P._VARIANT_HUES
 
 
+from scripts.analysis.v3.modules.diagram.common import palette as PAL  # noqa: E402
+
+
+def _okl(hex_):
+    """OKLab lightness and hue angle, enough to check a family's shape."""
+    import math
+
+    def lin(c):
+        c = int(c, 16) / 255
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (lin(hex_[i : i + 2]) for i in (1, 3, 5))
+    l_ = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    m_ = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    s_ = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
+    a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
+    bb = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+    return L, math.degrees(math.atan2(bb, a)) % 360
+
+
+def test_the_two_octant_variants_share_a_family_split_by_lightness():
+    """Same hue family, a clear lightness step: related at a glance, and the
+    step is what survives colour-vision deficiency."""
+    got = P.method_colors(["octant_cbg_hull", "octant_cbg_spl"])
+    (l_hull, h_hull), (l_spl, h_spl) = _okl(got["octant_cbg_hull"]), _okl(got["octant_cbg_spl"])
+    assert abs(h_hull - h_spl) < 12
+    assert l_spl - l_hull > 0.12
+    assert PAL.method_family("octant_cbg_hull") == PAL.method_family("octant_cbg_spl") == "octant"
+    assert PAL.method_family("octant_cbg") == "octant"  # the RIPE spelling
+
+
+def test_no_method_outside_a_family_borrows_its_hue():
+    """The bug this palette replaced: SoI on aqua beside Octant-Hull on green
+    read as one family.
+
+    Two rules, both from `validate_palette.js`'s own vocabulary: every pair of
+    methods from different families clears the normal-vision floor (OKLab dE
+    x100 >= 15), and nothing outside the Octant family sits within 40 degrees
+    of its hue, so green means Octant and nothing else.
+    """
+    colors = P.method_colors(_PUBLISHED)
+    for a in _PUBLISHED:
+        for b in _PUBLISHED:
+            if a >= b or PAL.method_family(a) == PAL.method_family(b):
+                continue
+            assert _de(colors[a], colors[b]) >= 15, (a, b, round(_de(colors[a], colors[b]), 1))
+    octant_hue = _okl(colors["octant_cbg_hull"])[1]
+    for m in _PUBLISHED:
+        if PAL.method_family(m) == "octant":
+            continue
+        gap = abs((_okl(colors[m])[1] - octant_hue + 180) % 360 - 180)
+        assert gap > 40, (m, round(gap, 1))
+
+
+def _de(x, y):
+    """OKLab Euclidean distance x100 — the validator's unsimulated dE."""
+    import math
+
+    def lab(hex_):
+        def lin(c):
+            c = int(c, 16) / 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+        r, g, b = (lin(hex_[i : i + 2]) for i in (1, 3, 5))
+        l_ = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+        m_ = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+        s_ = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+        return (
+            0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+            1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+            0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+        )
+
+    return 100 * math.dist(lab(x), lab(y))
+
+
+def test_non_method_series_draw_from_their_own_order():
+    """`SERIES_HUES` is for ASes / groups; dealing from the method tuple would
+    hand two unrelated groups the Octant pair."""
+    assert len(set(PAL.SERIES_HUES)) == len(PAL.SERIES_HUES) == 6
+    assert P._C_OTHER not in PAL.SERIES_HUES
+
+
 # ---- dataset polylines ----
 
 

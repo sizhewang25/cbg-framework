@@ -98,7 +98,7 @@ from scripts.analysis.v3.modules.diagram.common.palette import (
     _C_INK,
     _C_INK_2,
     _C_MUTED,
-    _VARIANT_HUES,
+    SERIES_HUES,
 )
 from scripts.libs.spotter.spotter_model import SpotterRTTModel, fit_mu_sigma, sigma_km
 
@@ -998,7 +998,7 @@ def build_panel_c(
         n_valid = int(stats.loc[stats["group"].astype(str) == g, "n_valid"].iloc[0])
         ax.scatter(
             pooled_q, curves[g], s=9, alpha=0.9, zorder=4,
-            color=_VARIANT_HUES[i % len(_VARIANT_HUES)], edgecolors="none",
+            color=SERIES_HUES[i % len(SERIES_HUES)], edgecolors="none",
             label=f"{g}  (n={n_valid:,}, slope {slope_by[g]:.2f})",
         )
 
