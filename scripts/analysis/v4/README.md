@@ -64,12 +64,18 @@ a new locator.
 | shortest_ping | 0.637 / 0.369 / 0.432 | 0.301 / 0.180 / 0.175 |
 | million_scale_cbg | 0.662 / 0.366 / 0.397 | 0.301 / 0.148 / 0.170 |
 | vanilla_cbg | 0.408 / 0.306 / 0.288 | 0.043 / 0.044 / 0.098 |
-| spotter_cbg | **0.862** / 0.510 / 0.493 | **0.000** / 0.000 / 0.000 |
+| spotter_h3_cbg | **0.862** / 0.510 / 0.493 | **0.000** / 0.000 / 0.000 |
+| spotter_cbg | 0.887 / 0.510 / 0.491 | **0.000** / 0.000 / 0.000 |
 
 The ranking inverts. Spotter led as01 under nearest-seed and is last under
-containment, at exactly zero on all three datasets — its H3-cell-centre
-estimator never once lands in the truth's own cell, which the old rule could not
-see. `accuracy_nearest_seed_retired` is kept in the output **for this comparison
+containment, at exactly zero on all three datasets — its cell-centre estimator
+never once lands in the truth's own cell, which the old rule could not see.
+
+Both Spotter rows say the same thing, and that is itself a result: the top row
+is the density MTL on H3 res-4, the bottom the same MTL on HEALPix nside 128.
+Changing the hypothesis grid moved the nearest-seed number by 2.5 points on as01
+and left ring0 at exactly zero on every dataset. The estimator's problem is not
+which grid quantises it. `accuracy_nearest_seed_retired` is kept in the output **for this comparison
 only**; its name says so and the manifest says not to publish it.
 
 ## The figure
@@ -389,10 +395,26 @@ table.
 v4 reads the **v2 benchmark** tree unchanged, so it inherits that population and
 fold contract as-is.
 
-## Not in scope
+## The MTL grid moved too
 
-`GaussianDensityMTL` keeps its H3 hypothesis grid. That is a search space over
-candidate locations, independent of the scoring grid, and moving it needs the
-`top_k`/`neighbor_ring` basin-miss experiment re-run — commit `9e9df7d`
-validated `top_k=8, neighbor_ring=1` for H3 2->4 only, and HEALPix 16->128
-starts coarser (407 km vs 316 km) over three levels rather than two.
+`GaussianDensityMTL`'s hypothesis grid — the search space over candidate
+locations, which is independent of this scoring grid — **was** H3, and this
+section used to record that moving it was blocked on re-running the
+`top_k`/`neighbor_ring` basin-miss experiment. That experiment existed only as a
+result table in commit `9e9df7d`'s message; the script was never committed, so
+the numbers could not be re-derived.
+
+Both are now done. The experiment is `scripts/benchmark/v2/cli.py
+mtl-basin-miss`, citable by path rather than by commit hash, and the MTL runs on
+HEALPix nside 128 with a coarse pass at nside 16. `top_k=8, neighbor_ring=1`
+re-validated at 0/50 misses on all three datasets, against an exhaustive global
+nside-128 pass. The concern that motivated the block was real: the starved
+`top_k=1, neighbor_ring=0` setting fails on all three under HEALPix's
+three-level descent (8/50, 5/50, 7/50, up to 131 km) where under H3's two-level
+descent it failed on one (0/50, 0/50, 1/50).
+
+So the density surface and these scoring cells are now the same tessellation.
+The H3 results are preserved in the output tree as `spotter_h3_cbg` — see
+`cli.py rename-combo` — and are scored alongside, which is where the
+`Spotter (H3)` bar in the outcome-bar figures comes from. It is in no config and
+is not runnable: its stored `mtl_kwargs` predate the now-required `grid` key.

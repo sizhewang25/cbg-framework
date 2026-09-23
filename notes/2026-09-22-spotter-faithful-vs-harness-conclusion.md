@@ -1,5 +1,12 @@
 # Spotter, faithfully implemented: what changed, how it was measured, what it means
 
+
+> **SUPERSEDED IN PART (2026-09-23).** Every H3 figure below describes the
+> density MTL's *previous* hypothesis grid. It now runs on HEALPix nside 128
+> with a coarse pass at nside 16 — see `notes/2026-09-23-spotter-healpix-density-grid.md`
+> for what changed, what it cost, and why the classification outcome did not
+> move. The H3 results are preserved on disk as `spotter_h3_cbg`.
+
 **Date:** 2026-09-22
 **Source paper:** Laki et al., *Spotter: A Model Based Active Geolocation Service*,
 IEEE 2011 — `papers/references/`. Sections cited: III-A, III-B, IV-B, IV-C, V-A-2.
@@ -105,8 +112,9 @@ is what a density-aware CTR checks before refusing to run.
 the v3 analysis tree is already keyed on it. Accumulates one constraint at a time;
 a global H3-4 pass with 130 VPs would otherwise be a 300 MB intermediate.
 Coarse-to-fine: global pass at `coarse_resolution=2` (5,882 cells), then descent
-into the top-64 cells' children with a one-ring neighbour margin, to
-`resolution=4`. The pruning is the only approximation and it is recorded as one;
+into the top-8 cells' children with a one-ring neighbour margin, to
+`resolution=4`. (This said "top-64" until now, which was already wrong when
+written: `9e9df7d` moved the default to 8 and pinned it in the configs.) The pruning is the only approximation and it is recorded as one;
 `coarse_resolution >= resolution` disables it.
 
 **(d) One CTR** in

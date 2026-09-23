@@ -1,5 +1,12 @@
 # Spotter's MTL stage is not Spotter
 
+
+> **SUPERSEDED IN PART (2026-09-23).** Every H3 figure below describes the
+> density MTL's *previous* hypothesis grid. It now runs on HEALPix nside 128
+> with a coarse pass at nside 16 — see `notes/2026-09-23-spotter-healpix-density-grid.md`
+> for what changed, what it cost, and why the classification outcome did not
+> move. The H3 results are preserved on disk as `spotter_h3_cbg`.
+
 **Date:** 2026-09-18
 **Source paper:** Laki et al., *Spotter: A Model Based Active Geolocation Service*, 2011
 (`papers/references/`), §III-B, §IV-B, §V-A-2.
