@@ -317,6 +317,47 @@ def seed_rings(seeds: pd.DataFrame) -> list[list[list[float]]]:
     return out
 
 
+#: `region_mode` values. A geometric MTL answers with a feasible set that can be
+#: drawn as a polygon; a density MTL answers with a probability field over a
+#: grid, which is a different kind of object and is not drawn here at all.
+REGION_GEOMETRIC = "geometric"
+REGION_DENSITY = "density"
+
+
+def is_density_mtl(mtl_name: str) -> bool:
+    """True when this MTL's answer is a probability field, not a feasible set.
+
+    Asked of the registry rather than matched against a name list, so a future
+    density family is covered the day it is registered. `DensityMTLMethod` is
+    the marker base (`framework/v2/mtl/base.py`); today `gaussian_density` is
+    its only subclass and the four planar/spherical families are not.
+    """
+    if not mtl_name:
+        return False
+    import scripts.framework.v2  # noqa: F401  (populates the registries)
+    from scripts.framework.v2.mtl.base import DensityMTLMethod
+    from scripts.framework.v2.registry import MTL_REGISTRY
+
+    cls = MTL_REGISTRY.get(mtl_name)
+    return cls is not None and issubclass(cls, DensityMTLMethod)
+
+
+def combo_region_mode(run: RunPaths, combo_id: str) -> str:
+    """`REGION_DENSITY` if this combo's MTL is a density family, else geometric.
+
+    Read from the combo's own `run.json` rather than from a config, so it
+    describes what actually ran. A combo whose folds disagree cannot happen (one
+    `run-combo` writes them all), and an unreadable config degrades to geometric
+    -- the status quo, which is the safe default because it only costs a replay.
+    """
+    try:
+        specs = io.load_run_configs(run, [combo_id])
+    except Exception:
+        return REGION_GEOMETRIC
+    names = {str(r.mtl) for r in specs.itertuples(index=False) if r.mtl}
+    return REGION_DENSITY if any(is_density_mtl(n) for n in names) else REGION_GEOMETRIC
+
+
 def _region_task(task: tuple[str, str, list[dict]]) -> dict | None:
     """Replay one target's MTL and serialize the region. Runs in a worker process.
 
@@ -379,6 +420,28 @@ def replay_mtl(
         (int(r.fold), str(r.combo_id)): (r.mtl, r.mtl_kwargs)
         for r in io.load_run_configs(run, [combo_id]).itertuples(index=False)
     }
+
+    # A density MTL cannot be replayed from what the benchmark persisted, and
+    # this is a schema limit rather than something to work around here.
+    # `mtl_participants` stores only `echoed_upper_km` / `echoed_lower_km`
+    # (benchmark/v2/schema.py), so the `Distance` rebuilt below carries no
+    # `mu_km` / `sigma_km`; `GaussianDensityMTL` requires `has_distribution` and
+    # the bounds are explicitly not invertible back to the distribution
+    # (framework/v2/types.py). Attempting it returned INSUFFICIENT_DATA for
+    # every target -- while still paying a global-H3-grid construction each
+    # time, and while memoising `{}` so no later render would retry.
+    #
+    # Returning before the cache is touched is the point: an empty result here
+    # means "not applicable", which must stay distinguishable from an MTL that
+    # genuinely found nothing, and must not be frozen into the cache.
+    density = sorted({n for n, _ in specs.values() if n and is_density_mtl(n)})
+    if density:
+        if progress is not None:
+            progress(
+                f"    {combo_id}: {'/'.join(density)} answers with a probability "
+                f"field, not a feasible set — no region to replay"
+            )
+        return {}
 
     _invalidate_stale_cache(cache_dir, combo_id, specs, progress=progress)
 
@@ -526,6 +589,7 @@ def build_payload(
     vps: pd.DataFrame,
     regions: dict[str, dict] | None = None,
     folds: pd.DataFrame | None = None,
+    region_mode: str = REGION_GEOMETRIC,
 ) -> dict[str, Any]:
     """Assemble the whole viewer payload for one method.
 
@@ -554,6 +618,12 @@ def build_payload(
     # produce no region would otherwise be rendered as a baseline. Deciding it
     # here keeps the method name in the one module that owns the constant.
     is_baseline = method == SHORTEST_PING
+    # Stated rather than inferred from `regions` being empty, for exactly the
+    # reason `is_baseline` is: a geometric method whose every target happened to
+    # yield no region would otherwise be described as a density method, and the
+    # viewer would explain its blank map with the wrong reason.
+    if region_mode not in (REGION_GEOMETRIC, REGION_DENSITY):
+        raise ValueError(f"unknown region_mode: {region_mode!r}")
     if folds is None:
         folds = pd.DataFrame(columns=["target_id", "ltd_predictions", "mtl_participants"])
     regions = regions or {}
@@ -691,6 +761,7 @@ def build_payload(
         "resolution": int(seeds["grid_resolution"].iloc[0]),
         "earth_radius_km": EARTH_RADIUS_KM,
         "mtl_kind": mtl_kind,
+        "region_mode": region_mode,
         "is_baseline": is_baseline,
         "n_seeds": int(len(seeds)),
         "vps": {
@@ -799,6 +870,12 @@ def build_for_run(
         folds = (
             None if is_baseline else io.load_folds(run, method, include_nested=True)
         )
+        # Read once here for the payload; `replay_mtl` re-derives it for its own
+        # guard so it is safe to call directly. Both reads are a handful of
+        # small `run.json` files against a replay measured in minutes.
+        region_mode = (
+            REGION_GEOMETRIC if is_baseline else combo_region_mode(run, method)
+        )
         method_regions: dict[str, dict] = {}
         if regions and folds is not None:
             method_regions = replay_mtl(
@@ -809,7 +886,7 @@ def build_for_run(
             run, space, method,
             scores=scores, labels=labels, edges=edges, crossing=crossing,
             rings=rings, voronoi=voronoi, vps=vps,
-            regions=method_regions, folds=folds,
+            regions=method_regions, folds=folds, region_mode=region_mode,
         )
         out = out_dir / MAP_HTML.format(method=method)
         out.write_text(render_html(payload), encoding="utf-8")

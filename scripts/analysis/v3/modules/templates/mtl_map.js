@@ -10,6 +10,12 @@
   // the method name rather than sniffed from the data here, so a CBG run that
   // happened to produce nothing is not mistaken for the baseline.
   const isBaseline = data.is_baseline === true;
+  // A density MTL (Spotter's Eq. 2) answers with a probability field over an H3
+  // grid, not with a feasible set, so there is no region to draw and no
+  // inclusion filter to report. Stated by Python off the MTL's registry family,
+  // for the same reason `isBaseline` is: an empty `region` alone cannot
+  // distinguish "this method has no region" from "this target had none".
+  const isDensity = data.region_mode === "density";
 
   const statusSel = document.getElementById("status");
   const pctSel = document.getElementById("pct");
@@ -167,6 +173,14 @@
       ? statusSel.querySelector(`option[value="${value}"]`)
       : null;
     if (opt && opt.remove) opt.remove();
+  }
+  if (isDensity && !isBaseline) {
+    // The annuli stay -- they are the per-landmark constraints and still worth
+    // reading -- but these two controls have nothing to act on. `showRegion`
+    // toggles a layer this method never produces, and `post-filter only` would
+    // filter by an inclusion filter that never ran, so both would read as
+    // broken rather than as inapplicable.
+    for (const id of ["keptOnly", "showRegion"]) hideControl(id);
   }
   if (isBaseline) {
     for (const id of ["showRings", "keptOnly", "showRegion", "maxR"]) hideControl(id);
@@ -587,6 +601,13 @@
       `measured VPs ${t.n_measured}/${t.n_total} (${pct}%) · ` +
       (isBaseline
         ? ""
+        : isDensity
+        ? // No inclusion filter runs, so every constraint participates and
+          // `n_kept` carries no information; and the answer is a density
+          // surface, which this map deliberately does not draw.
+          `LTD constraints ${(t.rings || []).length} (all contribute, no ` +
+          `inclusion filter), ${shown} drawn · region=density surface ` +
+          `(${data.grid}-${data.resolution}, not drawn; ▲ is the argmax) · `
         : `LTD constraints ${t.n_kept}/${(t.rings || []).length} kept by the inclusion ` +
           `filter, ${shown} drawn${dropped ? `, ${dropped} dropped` : ""} · ` +
           `region=${t.region ? t.region.kind : "none"} · `) +

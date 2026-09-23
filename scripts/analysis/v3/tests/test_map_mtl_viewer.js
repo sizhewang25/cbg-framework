@@ -299,6 +299,9 @@ if (anyRings && highlighted === 0) {
 console.log(JSON.stringify({
   targets: nOpts, draws: reactCalls, hovers, popups, highlighted, anyRings,
   hiddenControls, statusOptions: liveStatusOptions, panels,
+  // The meta strip is prose the reader trusts; a claim in it can be false
+  // while every trace is correct, so it is reported for assertion too.
+  meta: el("meta").innerHTML,
   percentileErrors: errs,
   tooltipTraces: [...tooltipTraces],
   // `hoverinfo: "none"` keeps hover events flowing; `"skip"` would not.

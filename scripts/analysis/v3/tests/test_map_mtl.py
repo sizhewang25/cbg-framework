@@ -826,3 +826,194 @@ def test_the_two_inflation_rows_are_named_apart(tmp_path):
     assert "min-RTT inflation:" in panels["target"]
     assert "RTT inflation at this VP:" in panels["vp"]
     assert "min-RTT inflation:" not in panels["vp"], panels["vp"]
+
+
+# ---- density MTLs have no region to replay ----------------------------------
+#
+# `replay_mtl` and `_region_task` had no test at all before this block, which is
+# why the density case went unnoticed: every existing assertion still passes on
+# a payload where every `region` is null.
+
+
+def _run_with_combo(tmp_path, combo_id, mtl, mtl_kwargs=None, folds=2):
+    """A minimal on-disk run whose `run.json` names a given MTL."""
+    from scripts.analysis.v3.modules.paths import RunPaths
+
+    root = tmp_path / "outputs"
+    for f in range(folds):
+        d = root / "r" / "generic_csv" / "anchors_to_probes" / f"fold_{f}" / combo_id
+        d.mkdir(parents=True)
+        (d / "run.json").write_text(json.dumps({
+            "run_id": "r", "source": "generic_csv", "setup": "anchors_to_probes",
+            "slice": f"fold_{f}", "combo_id": combo_id,
+            "ltd": "normal_dist", "mtl": mtl, "ctr": "density_argmax",
+            "mtl_kwargs": mtl_kwargs or {},
+        }))
+        (d / "targets.parquet").write_bytes(b"")  # presence only; never read here
+    return RunPaths(run_id="r", root=root, source="generic_csv", setup="anchors_to_probes")
+
+
+def _participant_folds():
+    """One target whose participants carry only the persisted bound fields."""
+    return pd.DataFrame({
+        "target_id": ["tg-0"],
+        "fold": [0],
+        "mtl_participants": [[
+            {"vp_id": f"vp-{i}", "vp_lat": 40.0 + i, "vp_lon": -100.0 - i,
+             "rtt_ms": 10.0 + i, "echoed_upper_km": 2000.0, "echoed_lower_km": 1000.0}
+            for i in range(6)
+        ]],
+    })
+
+
+def test_gaussian_density_is_recognised_as_a_density_family():
+    from scripts.analysis.v3.modules.map_mtl import is_density_mtl
+
+    assert is_density_mtl("gaussian_density")
+    for geometric in (
+        "planar_annulus", "planar_annulus_weighted", "planar_circle", "spherical_circle"
+    ):
+        assert not is_density_mtl(geometric), geometric
+    # An unknown or absent name must not be guessed into the density branch:
+    # the geometric default merely costs a replay, the density default would
+    # silently blank a region that should have been drawn.
+    assert not is_density_mtl("no_such_mtl")
+    assert not is_density_mtl("")
+
+
+def test_a_density_combo_is_skipped_without_poisoning_the_cache(tmp_path):
+    """The defect this guards is subtle and was live.
+
+    Replaying a density MTL always fails -- `mtl_participants` persists only
+    `echoed_*_km`, so the rebuilt `Distance` has no mu/sigma and
+    `GaussianDensityMTL` rejects it as INSUFFICIENT_DATA. The old code paid a
+    global-H3-grid construction per target to discover that, then memoized `{}`,
+    which is indistinguishable from "this target genuinely had no region" and is
+    never retried. Skipping BEFORE the cache is touched is the whole point.
+    """
+    from scripts.analysis.v3.modules.map_mtl import REGION_SPEC_JSON, replay_mtl
+
+    run = _run_with_combo(tmp_path, "spotter_cbg", "gaussian_density",
+                          {"resolution": 4, "coarse_resolution": 2})
+    cache = tmp_path / "regions"
+    assert replay_mtl(run, "spotter_cbg", _participant_folds(), cache_dir=cache) == {}
+    assert not (cache / "spotter_cbg").exists(), "wrote a cache entry for a skipped combo"
+    assert not (cache / "spotter_cbg" / REGION_SPEC_JSON).exists()
+
+
+def test_a_geometric_combo_still_replays(tmp_path):
+    """The guard must not have widened: an annulus combo still gets its region."""
+    from scripts.analysis.v3.modules.map_mtl import replay_mtl
+
+    run = _run_with_combo(tmp_path, "octant_cbg_spl", "planar_annulus_weighted",
+                          {"n_pts": 32})
+    regions = replay_mtl(run, "octant_cbg_spl", _participant_folds(),
+                         cache_dir=tmp_path / "regions")
+    assert "tg-0" in regions
+    assert regions["tg-0"]["rings"], "replayed a region with no geometry"
+
+
+def test_the_replayed_distance_really_does_lack_the_distribution():
+    """Pins the *reason* the skip exists, so removing it fails loudly.
+
+    If `mtl_participants` ever grows mu/sigma this test breaks, which is the
+    signal that the skip can be replaced by a real replay.
+    """
+    from scripts.benchmark.v2.schema import _MTL_PARTICIPANT_FIELD
+
+    fields = {f.name for f in _MTL_PARTICIPANT_FIELD.type.value_type}
+    assert "mu_km" not in fields and "sigma_km" not in fields
+
+
+def test_region_mode_reaches_the_payload_and_rings_survive_it(tmp_path):
+    """Annuli and the prediction are drawn for a density method; only the
+    region layer goes away."""
+    space = _space()
+    folds = pd.DataFrame({
+        "target_id": [a for a in space.assignments["target_id"]],
+        "ltd_predictions": [[{"vp_id": "vp-0", "success": True,
+                              "upper_km": 900.0, "lower_km": 400.0}]] * len(space.assignments),
+        "mtl_participants": [[{"vp_id": "vp-0", "rtt_ms": 5.0, "vp_lat": CHI[0],
+                               "vp_lon": CHI[1], "echoed_upper_km": 900.0,
+                               "echoed_lower_km": 400.0}]] * len(space.assignments),
+    })
+    payload = _payload(space, folds=folds, regions={}, region_mode="density")
+    assert payload["region_mode"] == "density"
+    assert payload["mtl_kind"] == "annulus"
+    t0 = payload["targets"][0]
+    assert t0["rings"], "the annuli must survive the density branch"
+    assert t0["region"] is None
+    assert t0["pred"] is not None, "the argmax estimate is still shown"
+
+
+def test_the_payload_defaults_to_geometric_and_rejects_an_unknown_mode():
+    space = _space()
+    assert _payload(space)["region_mode"] == "geometric"
+    with pytest.raises(ValueError):
+        _payload(space, region_mode="probabilistic")
+
+
+def _density_payload(space):
+    folds = pd.DataFrame({
+        "target_id": space.assignments["target_id"].to_numpy(),
+        "ltd_predictions": [[
+            {"vp_id": "vp-0", "success": True, "upper_km": 900.0, "lower_km": 400.0},
+            {"vp_id": "vp-1", "success": True, "upper_km": 3000.0, "lower_km": 800.0},
+        ]] * len(space.assignments),
+        # Every VP participates -- there is no inclusion filter to drop one.
+        "mtl_participants": [[
+            {"vp_id": "vp-0"}, {"vp_id": "vp-1"},
+        ]] * len(space.assignments),
+    })
+    return _payload(space, folds=folds, regions={}, region_mode="density")
+
+
+def test_the_density_view_drops_the_two_controls_that_have_nothing_to_act_on(tmp_path):
+    """`showRegion` toggles a layer this method never produces and `keptOnly`
+    filters by an inclusion filter that never ran. `showRings` and `maxR` stay:
+    the annuli are real per-landmark constraints."""
+    space = _space()
+    out = tmp_path / "density.html"
+    out.write_text(render_html(_density_payload(space)), encoding="utf-8")
+    report = _run_harness(out)
+    assert sorted(report["hiddenControls"]) == ["keptOnly", "showRegion"]
+
+
+def test_the_density_meta_line_makes_no_inclusion_filter_claim(tmp_path):
+    """The string that was live and false.
+
+    A `gaussian_density` combo has no inclusion filter, so `n_kept` equals the
+    constraint count by construction and "133/133 kept by the inclusion filter"
+    asserted a filtering step that never happened. `region=none` was the second
+    falsehood: it reads as "this target had no region" rather than "this method
+    does not produce one".
+    """
+    space = _space()
+    out = tmp_path / "density.html"
+    out.write_text(render_html(_density_payload(space)), encoding="utf-8")
+    meta = _run_harness(out)["meta"]
+
+    # The forbidden string is the CLAIM, not the words: the density line says
+    # "no inclusion filter", which is the correction rather than the defect.
+    assert "kept by the inclusion filter" not in meta, meta
+    assert "region=none" not in meta, meta
+    assert "all contribute, no inclusion filter" in meta
+    assert "density surface" in meta
+
+    # And the geometric view must keep the claim it is entitled to make.
+    geo = tmp_path / "geo.html"
+    geo.write_text(render_html(_payload(space)), encoding="utf-8")
+    assert "kept by the inclusion filter" in _run_harness(geo)["meta"]
+
+
+def test_the_density_view_still_draws_the_annuli_and_the_estimate(tmp_path):
+    """What the map is for on this method: the constraints, and the argmax."""
+    space = _space()
+    out = tmp_path / "density.html"
+    out.write_text(render_html(_density_payload(space)), encoding="utf-8")
+    report = _run_harness(out)
+
+    every = " | ".join(report["allLayers"])
+    for expected in ("outer bounds", "prediction", "true target"):
+        assert expected in every, f"{expected!r} missing: {every!r}"
+    assert "feasible region" not in every, every
