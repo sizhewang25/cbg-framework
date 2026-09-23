@@ -141,28 +141,29 @@ from scripts.benchmark.v2.sources.cluster_ground_truth import (
     _write_outputs,
     cluster_ground_truth,
 )
-from scripts.benchmark.v2.sources.generic_csv import _raw_str
 from scripts.libs.cbg.rtt_model import (
     EARTH_RADIUS_KM,
     THEORETICAL_SLOPE,
     haversine_distance,
 )
 
-_REQUIRED = (
-    "vp_id", "vp_lat", "vp_lon",
-    "target_id", "target_lat", "target_lon",
-    "rtt_ms",
+# The canonical-CSV contract now lives in `scripts/libs/canonical/`, which
+# both this layer and `scripts/analysis/v3` can import without either reaching
+# into the other. Re-exported here under their historical names because six
+# call sites and `test_eval_source.py` import them from this module, and
+# because `_REQUIRED` is part of this file's own vocabulary below.
+from scripts.libs.canonical import (  # noqa: E402
+    apply_eval_target_filters,
+    build_pairs,
+    derive_eval_pair_weight_min as _derive_eval_pair_weight_min,
+    load_canonical_csv,
+    raw_str as _raw_str,
 )
-
-# Kept alongside the required columns, when present, so the eval-side filters
-# below (min_obs / eval_pair_weight_min / eval_kept_traffic_fraction) can be
-# applied identically to how TrafficWeightedCSVSource/GenericPresplitSource do it at
-# materialize time. `_raw_str` opts target_city out of pandas' NA-sentinel
-# coercion, same reason as generic_csv.py's `_OPTIONAL_STR`.
-_OPTIONAL_FOR_FILTERS = ("weight", "target_city")
-
-# Optional metadata used for dataset characterization when available.
-_OPTIONAL_META = ("target_asn",)
+from scripts.libs.canonical import (  # noqa: E402
+    OPTIONAL_FOR_FILTERS as _OPTIONAL_FOR_FILTERS,
+    OPTIONAL_META as _OPTIONAL_META,
+    REQUIRED_COLUMNS as _REQUIRED,
+)
 
 # Answer-space coherence radius R — matches cluster-eval's default cap.
 DEFAULT_CLUSTER_RADIUS_KM = 50.0
@@ -213,185 +214,6 @@ PER_TARGET_METRICS = (
 )
 
 _PCTS = (5, 25, 50, 75, 95)
-
-
-def load_canonical_csv(csv_path: Path) -> pd.DataFrame:
-    """Load the required canonical columns, case-insensitively, dropping rows
-    with missing values or non-positive RTTs (mirrors TrafficWeightedCSVSource).
-
-    Also keeps `weight` (normalized to a numeric >=0 column, defaulting to
-    1.0 when absent — same two-default convention as generic_csv.py) and
-    `target_city`, when either is present in the CSV, so
-    `apply_eval_target_filters` below can reproduce the materialize-time
-    eval-side filters."""
-    converters = {c: _raw_str for c in ("target_city", "TARGET_CITY")}
-    df = pd.read_csv(csv_path, converters=converters)
-    df.columns = df.columns.str.strip().str.lower()
-    missing = [c for c in _REQUIRED if c not in df.columns]
-    if missing:
-        raise ValueError(
-            f"{csv_path} is not a canonical CSV — missing columns: {missing}"
-        )
-    keep = list(_REQUIRED)
-    keep += [c for c in _OPTIONAL_FOR_FILTERS if c in df.columns]
-    keep += [c for c in _OPTIONAL_META if c in df.columns]
-    df = df[keep].copy()
-    for col in ("vp_id", "target_id"):
-        df[col] = df[col].astype(str)
-    for col in ("vp_lat", "vp_lon", "target_lat", "target_lon", "rtt_ms"):
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=list(_REQUIRED))
-    df = df[df["rtt_ms"] > 0].reset_index(drop=True)
-    if df.empty:
-        raise ValueError(
-            f"{csv_path}: no usable rows after dropping NaNs and non-positive RTTs"
-        )
-    if "weight" not in df.columns:
-        df["weight"] = 1.0
-    else:
-        df["weight"] = pd.to_numeric(df["weight"], errors="coerce").fillna(0.0)
-        if (df["weight"] < 0).any():
-            raise ValueError(f"{csv_path}: weight must be >= 0")
-    return df
-
-
-def apply_eval_target_filters(
-    df: pd.DataFrame,
-    *,
-    min_obs: int | None = None,
-    eval_pair_weight_min: float | None = None,
-    eval_kept_traffic_fraction: float | None = None,
-) -> tuple[pd.DataFrame, float | None]:
-    """Restrict `df` to the rows a real benchmark run's eval_observations.parquet
-    would actually contain, mirroring TrafficWeightedCSVSource/GenericPresplitSource's
-    materialize-time eval-side filters (see sources/generic_csv.py's
-    `_apply_min_obs_filter` / `_apply_eval_weight_filter` /
-    `_derive_eval_weight_min_from_fraction`). Without this, the precheck
-    silently scores every row in the CSV even when `source_kwargs.min_obs` or
-    the top-level `eval_pair_weight_min` / `eval_kept_traffic_fraction` yaml
-    keys shrink what the benchmark actually evaluates.
-
-    `min_obs` drops targets with fewer than that many rows (raw CSV row
-    count, matching the source classes' per-target-id row count). Then, at
-    most one of `eval_pair_weight_min` / `eval_kept_traffic_fraction` narrows
-    to eval-surviving obs: a target survives iff >= 1 of its rows has
-    `weight >= threshold`, and only rows clearing the threshold are kept for
-    surviving targets — exactly what `iter_eval_targets` would emit.
-
-    Returns (filtered_df, resolved_eval_pair_weight_min) — the second value
-    is the threshold actually used (derived from `eval_kept_traffic_fraction`
-    when that's what was passed), so callers can record it for transparency.
-    """
-    if eval_pair_weight_min is not None and eval_kept_traffic_fraction is not None:
-        raise ValueError(
-            "pass only one of eval_pair_weight_min or eval_kept_traffic_fraction"
-        )
-    if eval_pair_weight_min is not None and eval_pair_weight_min < 0:
-        raise ValueError(f"eval_pair_weight_min must be >= 0, got {eval_pair_weight_min}")
-    if eval_kept_traffic_fraction is not None and not (0 < eval_kept_traffic_fraction <= 1):
-        raise ValueError(
-            f"eval_kept_traffic_fraction must be in (0, 1], got {eval_kept_traffic_fraction}"
-        )
-
-    if min_obs is not None:
-        counts = df.groupby("target_id")["target_id"].transform("count")
-        before = df["target_id"].nunique()
-        df = df[counts >= min_obs].reset_index(drop=True)
-        after = df["target_id"].nunique()
-        print(f"min_obs={min_obs}: {before} -> {after} targets")
-        if df.empty:
-            raise ValueError(f"min_obs={min_obs} left zero targets")
-
-    if eval_kept_traffic_fraction is not None:
-        eval_pair_weight_min = _derive_eval_pair_weight_min(
-            df, eval_kept_traffic_fraction
-        )
-
-    if eval_pair_weight_min is not None:
-        thr = eval_pair_weight_min
-        before = df["target_id"].nunique()
-        surviving_targets = set(df.loc[df["weight"] >= thr, "target_id"].astype(str))
-        df = df[
-            df["target_id"].astype(str).isin(surviving_targets)
-            & (df["weight"] >= thr)
-        ].reset_index(drop=True)
-        after = df["target_id"].nunique()
-        print(
-            f"eval_pair_weight_min={thr}: {before} -> {after} targets "
-            f"({len(df)} surviving obs)"
-        )
-        if df.empty:
-            raise ValueError(f"eval_pair_weight_min={thr} left zero eval obs")
-
-    return df, eval_pair_weight_min
-
-
-def _derive_eval_pair_weight_min(df: pd.DataFrame, frac: float) -> float:
-    """Same derivation as traffic_weighted_csv.py's `_derive_eval_weight_min_from_fraction`:
-    KEYLESS (one `(vp_id, target_id)` flow = one row; no `(vp_id, target_city)`
-    dedup, so no city column is needed) and computed over the WHOLE frame, then
-    descending cumulative sum to the requested kept traffic fraction.
-
-    Must stay in lockstep with the source-side implementation — if these drift,
-    the precheck describes a different subset than the benchmark actually scores.
-    """
-    if "weight" not in df.columns:
-        raise ValueError(
-            "eval_kept_traffic_fraction needs a 'weight' column; "
-            f"columns present: {list(df.columns)}"
-        )
-    weights = pd.to_numeric(df["weight"], errors="coerce").fillna(0.0).to_numpy(float)
-    total = float(weights.sum())
-    if total <= 0:
-        raise ValueError(
-            f"eval_kept_traffic_fraction={frac} needs a traffic signal, but the "
-            f"total weight over {len(weights)} flows is {total} — all weightless"
-        )
-    weights_sorted = np.sort(weights)[::-1]
-    target = frac * total
-    cum = np.cumsum(weights_sorted)
-    idx = int(np.searchsorted(cum, target, side="left"))
-    # Load-bearing clamp: cum sums the sorted array, total the original, so at
-    # frac=1.0 float error can push searchsorted past the end.
-    idx = min(idx, len(weights_sorted) - 1)
-    threshold = float(weights_sorted[idx])
-    kept = weights >= threshold
-    print(
-        f"eval_kept_traffic_fraction={frac}: derived eval_pair_weight_min="
-        f"{threshold:.12g} over {len(weights)} whole-mesh flows "
-        f"(total weight {total:.12g}); kept_flows={int(kept.sum())} "
-        f"({100 * weights[kept].sum() / total:.2f}% traffic)"
-    )
-    return threshold
-
-
-def build_pairs(df: pd.DataFrame) -> pd.DataFrame:
-    """One row per (vp, target) pair — the min-RTT observation — with the
-    derived per-pair columns (gc_km, radius_km, inflation, rtt_rank_norm)."""
-    pairs = (
-        df.sort_values("rtt_ms", kind="stable")
-        .drop_duplicates(["vp_id", "target_id"], keep="first")
-        .reset_index(drop=True)
-    )
-    pairs["gc_km"] = haversine_distance(
-        pairs["vp_lat"].to_numpy(), pairs["vp_lon"].to_numpy(),
-        pairs["target_lat"].to_numpy(), pairs["target_lon"].to_numpy(),
-    )
-    pairs["radius_km"] = pairs["rtt_ms"] / THEORETICAL_SLOPE
-    # Routing inflation vs the 2/3c physical floor; undefined for colocated
-    # endpoints (same guard as partvp extract_features).
-    ideal_ms = THEORETICAL_SLOPE * pairs["gc_km"]
-    pairs["inflation"] = np.where(
-        ideal_ms > 1e-9, pairs["rtt_ms"] / ideal_ms, np.nan
-    )
-    # Normalized RTT rank of each pair within its target: 0 = the target's
-    # fastest VP, 1 = its slowest (0 for single-VP targets; ties share the
-    # lower rank so a tied-fastest VP still ranks 0).
-    grp = pairs.groupby("target_id")["rtt_ms"]
-    n = grp.transform("size").to_numpy(dtype=float)
-    rank = grp.rank(method="min").to_numpy(dtype=float) - 1.0
-    pairs["rtt_rank_norm"] = np.where(n > 1, rank / np.maximum(n - 1, 1), 0.0)
-    return pairs
 
 
 def per_target_metrics(

@@ -66,6 +66,11 @@ from scripts.benchmark.v2.sources.base import (
 )
 from scripts.framework.v2 import FitSample
 from scripts.framework.v2.types import Coord, Latency, VpId
+# The identity converter that keeps `_OPTIONAL_STR` cells out of pandas'
+# NA-sentinel coercion. Defined in the canonical-CSV library rather than here:
+# the precheck's reader needs the same converter, and importing it *from* this
+# module is what used to pull `scripts.framework.v2` into the analysis layer.
+from scripts.libs.canonical.schema import raw_str as _raw_str
 from scripts.processing.ripe_atlas.stratification import (
     AnchorInfo,
     DistGeoStratification,
@@ -391,12 +396,6 @@ class GenericCSVSource(DataSource):
         if self._fit_targets is not None:
             self._fit_targets &= surviving
         logger.info("min_obs=%d: %d → %d targets", self._min_obs, before, after)
-
-
-def _raw_str(value: str) -> str:
-    """Identity converter — keeps a cell's literal text so pandas' default
-    NA-sentinel coercion never fires on it (see `_OPTIONAL_STR`)."""
-    return value
 
 
 def _opt_col(row: "pd.Series", col: str, cols: "pd.Index") -> Optional[str]:
