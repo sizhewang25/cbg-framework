@@ -20,6 +20,15 @@ import pytest
 
 from scripts.benchmark.v2 import mtl_basin_miss as basin
 
+#: Forwarded verbatim to the MTL. The sweep is about pruning, not
+#: about which grid is being pruned.
+GRID = {"grid": "healpix"}
+
+#: nside 8 is 768 cells -- cheap to pass over globally, and coarse
+#: enough to leave room to descend. Not 1 or 2, where a ring-1 disk
+#: is 58% and 19% of the globe and the pruning stops being pruning.
+COARSE = 8
+
 #: Spread out enough that the surface is not trivially unimodal, and real
 #: enough to be a plausible VP fleet.
 VPS = pd.DataFrame(
@@ -80,8 +89,8 @@ class TestSweep(unittest.TestCase):
     def test_the_shipped_setting_is_a_zero_miss_row(self):
         rows = basin.sweep(
             VPS, TARGETS,
-            resolution=3, coarse_resolution=1,
-            settings=((8, 1),),
+            resolution=COARSE * 8, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((8, 1),),
             n_targets=6, seed=7,
         )
         self.assertEqual(len(rows), 1)
@@ -94,8 +103,8 @@ class TestSweep(unittest.TestCase):
         the subject disagree for a reason other than pruning."""
         rows = basin.sweep(
             VPS, TARGETS,
-            resolution=3, coarse_resolution=3,
-            settings=((1, 0),),
+            resolution=COARSE, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((1, 0),),
             n_targets=6, seed=7,
         )
         self.assertEqual(rows[0].max_km, 0.0)
@@ -104,12 +113,12 @@ class TestSweep(unittest.TestCase):
         """Settings must be compared on identical constraint sets, or a
         difference in the draw reads as a difference in pruning."""
         a = basin.sweep(
-            VPS, TARGETS, resolution=3, coarse_resolution=1,
-            settings=((8, 1), (64, 1)), n_targets=6, seed=11,
+            VPS, TARGETS, resolution=COARSE * 8, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((8, 1), (64, 1)), n_targets=6, seed=11,
         )
         b = basin.sweep(
-            VPS, TARGETS, resolution=3, coarse_resolution=1,
-            settings=((64, 1), (8, 1)), n_targets=6, seed=11,
+            VPS, TARGETS, resolution=COARSE * 8, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((64, 1), (8, 1)), n_targets=6, seed=11,
         )
         self.assertEqual(
             {(r.top_k, r.max_km) for r in a}, {(r.top_k, r.max_km) for r in b}
@@ -117,19 +126,20 @@ class TestSweep(unittest.TestCase):
 
     def test_it_samples_rather_than_demanding_the_whole_population(self):
         rows = basin.sweep(
-            VPS, TARGETS, resolution=2, coarse_resolution=1,
-            settings=((8, 1),), n_targets=3, seed=5,
+            VPS, TARGETS, resolution=COARSE * 2, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((8, 1),), n_targets=3, seed=5,
         )
         self.assertEqual(rows[0].n_targets, 3)
 
     def test_it_records_the_settings_it_ran(self):
         rows = basin.sweep(
-            VPS, TARGETS, resolution=3, coarse_resolution=2,
-            settings=((4, 0),), n_targets=6, seed=5,
+            VPS, TARGETS, resolution=COARSE * 2, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((4, 0),), n_targets=6, seed=5,
         )
         r = rows[0]
-        self.assertEqual((r.resolution, r.coarse_resolution), (3, 2))
+        self.assertEqual((r.resolution, r.coarse_resolution), (COARSE * 2, COARSE))
         self.assertEqual((r.top_k, r.neighbor_ring), (4, 0))
+        self.assertEqual(r.grid, "healpix")
 
 
 class TestItCanDetectAMiss(unittest.TestCase):
@@ -140,8 +150,8 @@ class TestItCanDetectAMiss(unittest.TestCase):
         every other row it prints is worthless."""
         rows = basin.sweep(
             VPS, TARGETS,
-            resolution=3, coarse_resolution=1,
-            settings=((1, 0), (64, 1)),
+            resolution=COARSE * 8, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((1, 0), (64, 1)),
             n_targets=6, seed=3, miss_km=50.0,
         )
         starved = next(r for r in rows if r.top_k == 1)
@@ -154,13 +164,13 @@ class TestItCanDetectAMiss(unittest.TestCase):
 
     def test_the_threshold_is_what_turns_a_gap_into_a_miss(self):
         rows = basin.sweep(
-            VPS, TARGETS, resolution=3, coarse_resolution=1,
-            settings=((1, 0),), n_targets=6, seed=3, miss_km=1e-9,
+            VPS, TARGETS, resolution=COARSE * 8, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((1, 0),), n_targets=6, seed=3, miss_km=1e-9,
         )
         self.assertGreater(rows[0].n_misses, 0)
         lenient = basin.sweep(
-            VPS, TARGETS, resolution=3, coarse_resolution=1,
-            settings=((1, 0),), n_targets=6, seed=3, miss_km=1e9,
+            VPS, TARGETS, resolution=COARSE * 8, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((1, 0),), n_targets=6, seed=3, miss_km=1e9,
         )
         self.assertEqual(lenient[0].n_misses, 0)
 
@@ -168,8 +178,8 @@ class TestItCanDetectAMiss(unittest.TestCase):
 class TestReporting(unittest.TestCase):
     def test_the_table_has_a_row_per_setting(self):
         rows = basin.sweep(
-            VPS, TARGETS, resolution=2, coarse_resolution=1,
-            settings=((1, 0), (8, 1)), n_targets=6, seed=5,
+            VPS, TARGETS, resolution=COARSE * 2, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((1, 0), (8, 1)), n_targets=6, seed=5,
         )
         text = basin.format_table(rows)
         self.assertIn("top_k", text)
@@ -177,8 +187,8 @@ class TestReporting(unittest.TestCase):
 
     def test_the_json_round_trips(self):
         rows = basin.sweep(
-            VPS, TARGETS, resolution=2, coarse_resolution=1,
-            settings=((8, 1),), n_targets=6, seed=5,
+            VPS, TARGETS, resolution=COARSE * 2, coarse_resolution=COARSE,
+            grid_kwargs=GRID, settings=((8, 1),), n_targets=6, seed=5,
         )
         with TemporaryDirectory() as tmp:
             path = basin.write_report(rows, Path(tmp) / "nested" / "out.json")

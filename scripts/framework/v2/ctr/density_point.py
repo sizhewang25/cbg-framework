@@ -21,7 +21,9 @@ it was the one kept.
 It refuses to run on an `MTLResult` with no `density`, rather than falling back
 to the `intersection` coords: a density-blind reading of a density field is
 what the geometric CTRs already do, and silently substituting it here would
-make the combo id a lie about which estimator produced the number.
+make the combo id a lie about which estimator produced the number. That matters
+more since `intersection` became the whole retained field rather than a credible
+sub-region -- a density-blind average over it would now look plausible.
 """
 
 from __future__ import annotations
@@ -48,10 +50,16 @@ def _no_density() -> CTRResult:
 class DensityArgmaxCTR(CTRMethod):
     """The single most probable cell's centre — §III-B's "the maximum".
 
-    The MAP estimate up to the grid's own resolution. An H3-4 cell is ~20 km
-    edge, so that quantisation is the estimator's floor; measured against a
-    continuous solve on the same objective it cost ~21 km at p5 and ~20 km at
-    p50 on as01.
+    The MAP estimate up to the grid's own resolution, and that quantisation is
+    the estimator's floor. On HEALPix nside 128 the cells are 50.9 km across and
+    exactly equal-area, so the floor is the cell half-diagonal -- about 36 km --
+    everywhere, rather than varying with position.
+
+    The measured cost of that floor, ~21 km at p5 and ~20 km at p50 on as01
+    against a continuous solve on the same objective, was taken on the previous
+    H3 res-4 grid (45.2 km cells, varying 33% in area). nside 128 is 13%
+    coarser, so treat those as the H3-era figures they are until re-measured;
+    the shape of the claim is unchanged.
 
     Reads `log_density` directly rather than `probabilities()`: the normalised
     form is a monotone transform of it, so the argmax is identical and the

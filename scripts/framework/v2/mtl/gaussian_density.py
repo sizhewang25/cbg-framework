@@ -35,35 +35,57 @@ reason this class exists:
 
 ## Discretisation
 
-§V-A-2 divides the globe into HTM cells and evaluates (2) per cell. We
-substitute H3, which the v3 analysis tree is already keyed on, so a density
-surface and an answer-space region are quantised the same way.
+§V-A-2 divides the globe into HTM cells and evaluates (2) per cell. We use
+**HEALPix**, which shares HTM's two load-bearing properties — aperture-4
+subdivision, with the four children exactly tiling the parent — and adds exactly
+equal-area cells, which HTM does not have (its cells vary by 110% at every
+level, against HEALPix's 0%).
 
-Evaluated **coarse-to-fine**: a global pass at `coarse_resolution`, then repeated
-descent into the children of the top-scoring cells until `resolution`. The
-paper sanctions this directly — §V-A-2 notes that "the hierarchical structure of
-HTM provides flexibility in choosing the cell size", which is what a quadtree
-is for. It also keeps the cost sane: a single global H3-4 pass is 288,122 cells,
-while `coarse_resolution=2` is 5,882 followed by two descents over a few hundred.
+This replaced H3, and the reason is not aesthetic. H3 is aperture-7, hexagons
+cannot tile hexagons, and a parent's six outer children straddle its boundary:
+measured over 400,000 random points, **7.12% land in an H3 res-3 cell that is
+not a child of their own res-2 cell**. So the coarse-to-fine descent below had
+holes at every level, and `neighbor_ring` was *patching* that rather than
+providing the margin it is documented as. Under HEALPix the descent's candidate
+set is exactly the refinement of the cells it carried.
+
+Evaluated **coarse-to-fine**: a global pass at `coarse_resolution`, then
+repeated descent into the children of the top-scoring cells until `resolution`.
+The paper sanctions this directly — §V-A-2 notes that "the hierarchical
+structure of HTM provides flexibility in choosing the cell size", which is what
+a quadtree is for. It also keeps the cost sane: a single global nside-128 pass
+is 196,608 cells at ~1,085 ms per target, against 3,072 at `coarse_resolution=16`
+plus ~104 cells per descent level, which measures at ~27.5 ms.
 
 **The pruning is the one place this is an approximation, and it is recorded as
-one.** `log_density` then covers the refined neighbourhood rather than the
-globe, so `DensityField.probabilities()` normalises over retained cells and will
-overstate confidence if a genuine secondary mode was dropped. Two mitigations,
+one.** `log_density` covers the refined neighbourhood rather than the globe, so
+a genuine secondary mode dropped at a coarse level is gone. Two mitigations,
 both on by default: the top `top_k` cells are expanded by `neighbor_ring` before
 descending, so a mode sitting just across a cell boundary survives; and setting
 `coarse_resolution >= resolution` switches to a single global pass with no
 pruning at all, which is the honest setting when a full surface is wanted.
+`top_k` and `neighbor_ring` are not guesses — `scripts/benchmark/v2/cli.py
+mtl-basin-miss` sweeps them against an exhaustive global pass, and the shipped
+values are a zero-miss row.
 
 ## Output
 
-`MTLResult.density` carries the field. `MTLResult.intersection` carries the
-credible region — the smallest set of cells whose normalised mass reaches
-`credible_mass` — as cell centres, which is §III-B's "union of the most probable
-cells according to a required confidence level". Reusing the `list[Coord]` shape
-means a density-blind CTR (`boundary_vertex_mean`) still degrades to a mean over
-those centres instead of crashing; the point estimate the paper describes comes
-from a density-aware CTR (`density_argmax`).
+`MTLResult.density` carries the field. `MTLResult.intersection` carries the same
+cells as coordinates, so a density-blind CTR (`boundary_vertex_mean`) degrades
+to a mean over them instead of crashing; the point estimate the paper describes
+comes from a density-aware CTR (`density_argmax`).
+
+It used to carry a `credible_mass` sub-region instead — §III-B's "union of the
+most probable cells according to a required confidence level". That was removed
+because it could not mean what it said. The mass is normalised over the retained
+cells, not the globe, so pruning made "95%" a statement about a neighbourhood;
+and `credible_mass = 1.0` did not even mean "all of them", because
+`probabilities()` max-shifts before exponentiating and the partial sum reaches
+1.0 in float64 after a handful of cells — measured, a sharp posterior over 104
+cells selected **1**. Nothing read the region either: `density_argmax` takes the
+maximum of `log_density` directly. Reporting the retained field, whose exact
+area is `len(cells) * pixel_area_km2(resolution)` because the cells are
+equal-area, is the honest version of what was there.
 """
 
 from __future__ import annotations
@@ -71,21 +93,42 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-import h3
 import numpy as np
 
 from scripts.framework.v2.ltd.base import LTDResult
 from scripts.framework.v2.mtl.base import DensityField, DensityMTLMethod, MTLResult
 from scripts.framework.v2.registry import register_mtl
 from scripts.framework.v2.types import Coord, Error, VpId
+from scripts.libs.healpix import grid as HP
 
-EARTH_RADIUS_KM = 6371.0
+#: Imported from the grid rather than redeclared, so the tessellation and the
+#: haversine that measures distances across it cannot disagree.
+EARTH_RADIUS_KM = HP.EARTH_RADIUS_KM
+
+#: The only accepted `grid`. A name rather than a bare flag because the config
+#: should state which tessellation produced a number, and because adding HTM
+#: later should be a new branch here rather than a silent change of meaning.
+GRID_HEALPIX = "healpix"
 
 #: Below this many distribution-carrying constraints the surface is not worth
 #: evaluating: one Gaussian ring is isotropic (the paper says so in §III-A), and
 #: two leave a two-point ambiguity. Three is the first count that can pin a
 #: position, matching `INSUFFICIENT_CONSTRAINTS` elsewhere in the framework.
 MIN_CONSTRAINTS = 3
+
+#: Largest nside either resolution may name.
+#:
+#: A budget, not a grid limit — HEALPix itself goes far higher. The global grid
+#: is built **eagerly in `__init__`**, i.e. inside `CBGModel.from_config`,
+#: before any fold output exists, so an over-large value is an OOM with no
+#: artifacts and no instrumentation to attribute it. At 24 bytes per cell (an
+#: int64 id plus two float64 coordinates) nside 512 is 3.1 M cells and ~75 MB;
+#: nside 1024 would be 12.6 M and ~302 MB. Both are plausible typos for 128,
+#: and both pass `validate_nside` since every power of two does.
+MAX_NSIDE = 512
+
+#: Bytes per cell in a cached global grid — one int64 id, two float64 degrees.
+_BYTES_PER_CELL = 24
 
 
 def _haversine_km_to_many(
@@ -105,50 +148,40 @@ def _haversine_km_to_many(
     return 2.0 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(np.minimum(1.0, a)))
 
 
-def _global_cells(resolution: int) -> list[str]:
-    """Every H3 cell at `resolution`, via the 122 base cells."""
-    if resolution == 0:
-        return list(h3.get_res0_cells())
-    out: list[str] = []
-    for base in h3.get_res0_cells():
-        out.extend(h3.cell_to_children(base, resolution))
-    return out
-
-
-#: Global first-pass grids, keyed by H3 resolution, shared across instances.
+#: Global first-pass grids, keyed by `(scheme, nside)`, shared across instances.
 #:
 #: Process-lifetime and bounded: a run uses one or two resolutions, and the
-#: largest plausible entry (H3-4, 288,122 cells) is 4.6 MB of coordinates.
-#: Shared rather than per-instance so that constructing many models -- the test
-#: suite, a sweep over combos -- pays the build once.
-_GLOBAL_GRID_CACHE: dict[int, tuple[list[str], np.ndarray, np.ndarray]] = {}
+#: largest plausible entry (nside 128, 196,608 cells) is 4.7 MB. Shared rather
+#: than per-instance so that constructing many models -- the test suite, a sweep
+#: over combos -- pays the build once.
+#:
+#: The key carries the scheme even though there is only one. The grid's identity
+#: is `(scheme, nside, order)`, and a bare nside is sufficient only because the
+#: order is a module constant in `scripts.libs.healpix.grid`. Naming the scheme
+#: keeps that from being an invisible assumption if a second one is ever added.
+_GLOBAL_GRID_CACHE: dict[tuple[str, int], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
 
-def _global_grid(resolution: int) -> tuple[list[str], np.ndarray, np.ndarray]:
-    """The global grid at `resolution` as (cells, lats, lons), memoised.
+def _global_grid(nside: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The global grid at `nside` as (cells, lats, lons), memoised.
 
-    Arrays are marked read-only. They are shared by every instance and every
-    target, so an in-place write would not corrupt one result -- it would
-    silently corrupt all of them. Nothing writes to them today; this makes a
-    future attempt fail loudly instead.
+    All three arrays are marked read-only. They are shared by every instance
+    and every target, so an in-place write would not corrupt one result -- it
+    would silently corrupt all of them. Nothing writes to them today; this
+    makes a future attempt fail loudly instead.
     """
-    hit = _GLOBAL_GRID_CACHE.get(resolution)
+    key = (GRID_HEALPIX, HP.validate_nside(nside))
+    hit = _GLOBAL_GRID_CACHE.get(key)
     if hit is None:
-        cells = _global_cells(resolution)
-        lats, lons = _cell_coords(cells)
-        lats.flags.writeable = False
-        lons.flags.writeable = False
+        cells = np.arange(HP.npix(nside), dtype=np.int64)
+        centres = HP.pix2ang(cells, nside)
+        lats = np.ascontiguousarray(centres[:, 0])
+        lons = np.ascontiguousarray(centres[:, 1])
+        for arr in (cells, lats, lons):
+            arr.flags.writeable = False
         hit = (cells, lats, lons)
-        _GLOBAL_GRID_CACHE[resolution] = hit
+        _GLOBAL_GRID_CACHE[key] = hit
     return hit
-
-
-def _cell_coords(cells: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    ll = [h3.cell_to_latlng(c) for c in cells]
-    return (
-        np.fromiter((x[0] for x in ll), dtype=float, count=len(ll)),
-        np.fromiter((x[1] for x in ll), dtype=float, count=len(ll)),
-    )
 
 
 def _log_density(
@@ -156,14 +189,14 @@ def _log_density(
     lons: np.ndarray,
     constraints: list[tuple[Coord, float, float]],
 ) -> np.ndarray:
-    """−½ Σ z² over cells, accumulated one constraint at a time.
-    H3 cells are the candidates (lats, lons).
+    """−½ Σ z² over candidate positions (lats, lons), one constraint at a time.
 
-    constraints come from vantage points
+    The candidates are HEALPix cell centres; the constraints come from vantage
+    points.
 
     Accumulating in place rather than building an (n_cells × n_vps) matrix: a
-    global H3-4 pass with ~130 VPs would be a 300 MB intermediate, and nothing
-    here needs the per-constraint residuals after they are summed.
+    global nside-128 pass with ~130 VPs would be a 204 MB intermediate, and
+    nothing here needs the per-constraint residuals after they are summed.
     """
     acc = np.zeros(lats.shape, dtype=float)
     for coord, mu, sigma in constraints:
@@ -176,47 +209,74 @@ def _log_density(
 
 @register_mtl("gaussian_density")
 class GaussianDensityMTL(DensityMTLMethod):
-    """Spotter's joint density surface over an H3 grid.
+    """Spotter's joint density surface over a HEALPix grid.
 
     Args:
-        resolution: H3 resolution the field is reported at.
-        coarse_resolution: resolution of the global first pass. Set it equal to
-            (or above) `resolution` for a single global pass with no pruning.
+        grid: Tessellation name. Required, and only `"healpix"` is accepted.
+            Deliberately has no default: the combos that ran on H3 stored
+            `resolution: 4` and no `grid`, and 4 is a legal nside, so a default
+            would let a stale payload replay as a 192-cell globe rather than
+            failing. See the class docstring's Discretisation section.
+        resolution: nside the field is reported at. 128 is 196,608 cells,
+            50.9 km nominal.
+        coarse_resolution: nside of the global first pass. Set it equal to (or
+            above) `resolution` for a single global pass with no pruning.
         top_k: cells carried forward from each level before descending.
-        neighbor_ring: rings of H3 neighbours added around each carried cell, so
-            a mode just across a cell boundary is not pruned. 0 disables.
-        credible_mass: mass the reported credible region must reach.
+        neighbor_ring: rings of HEALPix neighbours added around each carried
+            cell, so a mode just across a cell boundary is not pruned. 0
+            disables. Validated together with `top_k` by `mtl-basin-miss`.
     """
 
     def __init__(
         self,
-        resolution: int = 4,
-        coarse_resolution: int = 2,
+        *,
+        grid: str,
+        resolution: int = HP.DEFAULT_NSIDE,
+        coarse_resolution: int = 16,
         top_k: int = 8,
         neighbor_ring: int = 1,
-        credible_mass: float = 0.95,
     ) -> None:
-        if not 0 <= resolution <= 15:
-            raise ValueError(f"resolution must be in [0, 15], got {resolution}")
-        if not 0 <= coarse_resolution <= 15:
+        if grid != GRID_HEALPIX:
             raise ValueError(
-                f"coarse_resolution must be in [0, 15], got {coarse_resolution}"
+                f"grid must be {GRID_HEALPIX!r}, got {grid!r}. H3 was removed: "
+                f"its aperture-7 subdivision does not nest geometrically, so the "
+                f"coarse-to-fine descent below lost 7.12% of candidate cells at "
+                f"every level."
             )
+        self.grid = grid
+        self.resolution = self._validate_nside("resolution", resolution)
+        self.coarse_resolution = self._validate_nside(
+            "coarse_resolution", coarse_resolution
+        )
         if top_k < 1:
             raise ValueError(f"top_k must be >= 1, got {top_k}")
         if neighbor_ring < 0:
             raise ValueError(f"neighbor_ring must be >= 0, got {neighbor_ring}")
-        if not 0.0 < credible_mass <= 1.0:
-            raise ValueError(
-                f"credible_mass must be in (0, 1], got {credible_mass}"
-            )
-        self.resolution = resolution
-        self.coarse_resolution = coarse_resolution
         self.top_k = top_k
         self.neighbor_ring = neighbor_ring
-        self.credible_mass = credible_mass
         # Built EAGERLY, and that is the whole point -- see `_coarse_grid`.
         self._coarse = _global_grid(min(coarse_resolution, resolution))
+
+    @staticmethod
+    def _validate_nside(name: str, value: int) -> int:
+        """A power of two, at or below `MAX_NSIDE`."""
+        try:
+            nside = HP.validate_nside(value)
+        except ValueError as exc:
+            raise ValueError(f"{name}: {exc}") from exc
+        if nside > MAX_NSIDE:
+            mb = HP.npix(nside) * _BYTES_PER_CELL / 1e6
+            raise ValueError(
+                f"{name} must be <= {MAX_NSIDE}, got {nside}: its global grid is "
+                f"{HP.npix(nside):,} cells (~{mb:.0f} MB), built eagerly before "
+                f"any output is written"
+            )
+        return nside
+
+    @property
+    def cell_area_km2(self) -> float:
+        """Area of one reported cell. Exact, because the cells are equal-area."""
+        return HP.pixel_area_km2(self.resolution)
 
     def _multilaterate(self, results: list[LTDResult]) -> MTLResult:
         constraints: list[tuple[Coord, float, float]] = []
@@ -254,39 +314,46 @@ class GaussianDensityMTL(DensityMTLMethod):
         field = DensityField(
             cells=tuple(Coord(float(a), float(b)) for a, b in zip(lats, lons)),
             log_density=tuple(float(v) for v in logp),
-            grid="h3",
+            grid=GRID_HEALPIX,
             resolution=self.resolution,
         )
         return MTLResult(
             success=True,
-            intersection=self._credible_region(field),
+            intersection=list(field.cells),
             density=field,
             participating_vp_ids=tuple(participating),
         )
 
-    def _coarse_grid(self) -> tuple[list[str], np.ndarray, np.ndarray]:
+    def _coarse_grid(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """The global first-pass grid. Built in `__init__`, never here.
 
         It depends only on `min(coarse_resolution, resolution)`, both fixed at
-        construction, so building it per target was pure waste: 7.6 ms at H3-2
-        (5,882 cells) and **346 ms at H3-4** (288,122 cells), the latter being
-        the single-global-pass mode where it dominated the call.
+        construction, so building it per target would be pure waste.
 
-        **Built eagerly specifically so it stays out of the instrumentation.**
-        `runner.py` constructs the model before `measure_block("fit")` and
-        before the per-target loop, so construction cost is measured by
-        nothing. A lazy build instead lands inside the first target's
-        `cm("mtl")` block, and that is not a rounding error: measured, it put
-        the first target at 113 ms against a 74 ms median -- making it the
-        *maximum* in most folds -- and its `mtl_alloc_peak_bytes` at 1.15 MB
-        against 0.53 MB. `analysis/v3/modules/cost.py` reduces memory across
-        stages with `max`, and its docstring already records a 22 MB warmup
-        artifact "single-handedly setting that combo's MTL memory figure". This
-        would have been the next one.
+        **Built eagerly specifically so it stays out of the instrumentation**,
+        and that reason survived the move to HEALPix even though its original
+        numbers did not. Under H3 the argument was cost: 346 ms to build the
+        res-4 grid, which a lazy build would have charged to the first target's
+        `cm("mtl")` block. `pix2ang` is vectorised, so the same grid is now
+        27 ms and the default `coarse_resolution=16` is 3,072 cells in well
+        under a millisecond.
+
+        What replaces it is the **import**. `astropy_healpix` costs ~26 MB of
+        RSS and ~0.33 s, paid the first time `_global_grid` runs. `runner.py`
+        constructs the model between `rss_after_inputs` and
+        `measure_block("fit")`, so eager keeps that out of every per-stage
+        column: those are deltas against a baseline sampled inside the block
+        (`instrument.py`), so `fit_*` and all `{ltd,mtl,ctr}_*_peak_bytes` are
+        unaffected. Only the absolute marks `rss_after_fit_bytes` and
+        `run_peak_rss_bytes` carry it.
+
+        Do **not** move the astropy import to module scope to "fix" that.
+        `framework/v2/__init__.py` imports this module, so every combo would
+        pay the 26 MB and no previously collected run would remain comparable.
 
         The per-instance construction cost is amortised by `_global_grid`'s
         module-level cache, so a sweep or a test suite that builds many models
-        pays for each distinct resolution once.
+        pays for each distinct nside once.
         """
         return self._coarse
 
@@ -295,36 +362,38 @@ class GaussianDensityMTL(DensityMTLMethod):
     ) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
         """Coarse global pass, then descend into the best cells' children.
 
-        Returns `(lats, lons, log_density)` rather than H3 indices: the caller
-        only ever wanted the coordinates, and returning the cell ids made it
-        call `_cell_coords` a second time on the same cells -- a full duplicate
-        of the most expensive step, per target.
+        Returns `(lats, lons, log_density)` rather than pixel ids: the caller
+        only ever wanted the coordinates, and returning the ids made it
+        recompute the centres -- a full duplicate of the most expensive step,
+        per target.
+
+        **The nside advances with the cells, and nothing can check that it
+        did.** Every HEALPix id is a legal id at some nside, so calling
+        `pix2ang` or `disk` with the wrong one yields centres that are silently
+        displaced rather than an exception, which `error_km` then absorbs. H3's
+        opaque string ids raised instead. `test_gaussian_density.py` pins the
+        invariant that each descended cell degrades back into the set it came
+        from.
         """
-        start = min(self.coarse_resolution, self.resolution)
+        nside = min(self.coarse_resolution, self.resolution)
         cells, lats, lons = self._coarse_grid()
         logp = _log_density(lats, lons, constraints)
 
-        res = start
-        while res < self.resolution:
-            order = np.argsort(logp)[::-1][: self.top_k]
-            carried: set[str] = set()
-            for i in order:
-                cell = cells[int(i)]
-                if self.neighbor_ring > 0:
-                    carried.update(h3.grid_disk(cell, self.neighbor_ring))
-                else:
-                    carried.add(cell)
-            children: list[str] = []
-            for cell in carried:
-                children.extend(h3.cell_to_children(cell, res + 1))
-            if not children:
-                # Nothing to descend into: report the level actually reached
-                # rather than an empty field.
-                break
-            cells = children
-            lats, lons = _cell_coords(cells)
+        while nside < self.resolution:
+            top = cells[np.argsort(logp)[::-1][: self.top_k]]
+            carried = (
+                HP.disk(top, self.neighbor_ring, nside)
+                if self.neighbor_ring > 0
+                else np.unique(top)
+            )
+            # `disk` already returns unique cells, so overlapping rings need no
+            # deduplication here, and `children` of a non-empty set is never
+            # empty -- there is no "nothing to descend into" case to guard.
+            cells = HP.children(carried).ravel()
+            nside *= 2
+            centres = HP.pix2ang(cells, nside)
+            lats, lons = centres[:, 0], centres[:, 1]
             logp = _log_density(lats, lons, constraints)
-            res += 1
 
         finite = np.isfinite(logp)
         if not finite.any():
@@ -334,20 +403,3 @@ class GaussianDensityMTL(DensityMTLMethod):
             # aliased into the returned field.
             lats, lons, logp = lats[finite], lons[finite], logp[finite]
         return lats, lons, logp
-
-    def _credible_region(self, field: DensityField) -> list[Coord]:
-        """Cell centres of the smallest set reaching `credible_mass`.
-
-        Always at least the top cell, so a posterior sharp enough that one cell
-        carries the whole mass still yields a region rather than an empty list.
-        """
-        probs = field.probabilities()
-        order = sorted(range(len(probs)), key=lambda i: probs[i], reverse=True)
-        picked: list[Coord] = []
-        cumulative = 0.0
-        for i in order:
-            picked.append(field.cells[i])
-            cumulative += probs[i]
-            if cumulative >= self.credible_mass:
-                break
-        return picked

@@ -1148,8 +1148,8 @@ def cmd_mtl_basin_miss(
     ),
     resolution: int = typer.Option(..., help="Fine resolution the descent ends at."),
     coarse_resolution: int = typer.Option(..., help="Resolution of the global first pass."),
-    grid: Optional[str] = typer.Option(
-        None, help="Grid name, if the MTL takes one. Omit for a version that does not."
+    grid: str = typer.Option(
+        "healpix", help="Grid name forwarded to the MTL. Today only 'healpix' exists."
     ),
     setting: list[str] = typer.Option(
         None, "--setting", help="`top_k:ring` to test (repeatable). Defaults to a 5-point sweep."

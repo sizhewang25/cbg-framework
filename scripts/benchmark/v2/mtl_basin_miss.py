@@ -185,6 +185,11 @@ def sweep(
     target from `seed`. That is the point: the settings must be compared on
     identical surfaces, or a difference in the draw shows up as a difference in
     pruning.
+
+    `grid_kwargs` is forwarded verbatim to `GaussianDensityMTL`, so this stays
+    usable if a second tessellation is ever added -- the sweep is about pruning,
+    not about which grid is being pruned. `resolution` and `coarse_resolution`
+    are whatever that grid calls a resolution (an nside, today).
     """
     grid_kwargs = dict(grid_kwargs or {})
     rows = targets if len(targets) <= n_targets else targets.sample(
@@ -225,7 +230,7 @@ def sweep(
             gaps.append(haversine((got.lat, got.lon), (ref.lat, ref.lon)))
         arr = np.asarray(gaps, dtype=float) if gaps else np.zeros(0)
         row = SweepRow(
-            grid=str(grid_kwargs.get("grid", "h3")),
+            grid=str(grid_kwargs.get("grid", "unspecified")),
             resolution=resolution,
             coarse_resolution=coarse_resolution,
             top_k=top_k,
