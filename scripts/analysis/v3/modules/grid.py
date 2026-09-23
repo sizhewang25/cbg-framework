@@ -302,54 +302,6 @@ class Grid(ABC):
         it.
         """
 
-    # ---- hierarchical traversal -------------------------------------------
-    #
-    # Added for `GaussianDensityMTL`, which evaluates Spotter's density surface
-    # on a coarse global grid and then descends into the best cells. It needs
-    # the sphere enumerated, a level refined, and a neighbourhood taken -- and
-    # it must not care which tessellation supplies them, because H3 and HEALPix
-    # differ in a way that matters here: H3 is aperture-7 and its children do
-    # NOT geometrically tile their parent, so a descent can walk off the
-    # region the parent covered. HEALPix is aperture-4 and exactly nested.
-
-    @abstractmethod
-    def finer(self, resolution: int) -> int | None:
-        """The next finer level, or None when this is the finest supported.
-
-        Spelled as a method because the arithmetic is not shared: H3 counts
-        resolutions (`r + 1`), HEALPix doubles a side count (`nside * 2`). A
-        caller that wrote either one inline would be correct for one grid and
-        silently wrong for the other -- it would still run, just descend to the
-        wrong scale.
-        """
-
-    @abstractmethod
-    def all_cells(self, resolution: int) -> np.ndarray:
-        """Every cell covering the sphere at this resolution.
-
-        The coarse pass of a coarse-to-fine search. Sized by `n_cells`, so keep
-        the resolution coarse: h3-4 is 288,122 cells and healpix-128 is 196,608.
-        """
-
-    @abstractmethod
-    def children(self, cell_ids, resolution: int) -> np.ndarray:
-        """Every child of `cell_ids` at one level finer than `resolution`.
-
-        `resolution` is the level the INPUT cells are at; the return is at
-        `finer(resolution)`. Passed rather than inferred for `cell_centers`'
-        reason: a HEALPix id does not carry its own nside.
-        """
-
-    @abstractmethod
-    def neighbors(self, cell_ids, resolution: int, k: int = 1) -> np.ndarray:
-        """`cell_ids` plus every cell within `k` steps, de-duplicated.
-
-        Includes the input cells, so `k=0` is the input itself. Both grids have
-        cells with fewer neighbours than the norm -- H3's 12 pentagons per
-        resolution, HEALPix's 24 base-tessellation corners -- and both are
-        handled by the implementations rather than by callers.
-        """
-
     # ---- self description -------------------------------------------------
 
     def describe(self, resolution: int) -> dict:
