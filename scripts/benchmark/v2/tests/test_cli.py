@@ -206,6 +206,54 @@ class TestCLI(unittest.TestCase):
         combos = set(table.column("ltd").to_pylist())
         self.assertEqual(combos, {"speed_of_internet", "low_envelope"})
 
+    def test_summarize_tolerates_a_combo_missing_a_later_metric(self) -> None:
+        """A combo scored before a metric existed must not break the run.
+
+        `*_heap_peak_bytes` was added after several runs were scored. The guard
+        tested `completed.columns` and then fell back to `df[metric][:0]`, which
+        raises on exactly the case it was meant to cover -- a column missing
+        from BOTH -- so a run mixing cached pre-instrumentation combos with
+        freshly re-scored ones could not be summarized at all. The stats must
+        come back null, not KeyError: the column was never measured there.
+        """
+        import pyarrow as pa
+
+        self._materialize(run_id="drift-test")
+        r = self.runner.invoke(app, [
+            "run-combo",
+            "--source", "generic_csv", "--slice", "fold_0",
+            "--setup", "anchors_to_probes",
+            "--ltd", "speed_of_internet", "--mtl", "planar_circle",
+            "--ctr", "geometric_centroid",
+            "--run-id", "drift-test",
+            "--inputs-root", str(self.inputs_root),
+            "--outputs-root", str(self.outputs_root),
+            "--source-kwargs", json.dumps({"csv_path": str(self.csv_path), "k": 4}),
+        ])
+        self.assertEqual(r.exit_code, 0, msg=r.output)
+
+        # Age the parquet: drop every heap column, as a pre-instrumentation
+        # run's file genuinely lacks them.
+        combo = next((self.outputs_root / "drift-test").rglob("targets.parquet"))
+        table = pq.read_table(combo)
+        dropped = [n for n in table.schema.names if n.endswith("_heap_peak_bytes")]
+        self.assertTrue(dropped, "fixture no longer has the columns under test")
+        pq.write_table(table.drop_columns(dropped), combo)
+
+        result = self.runner.invoke(app, [
+            "summarize", "--run-id", "drift-test",
+            "--outputs-root", str(self.outputs_root),
+        ])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        summary = pq.read_table(self.outputs_root / "drift-test" / "summary.parquet")
+        self.assertEqual(summary.num_rows, 1)
+        # Present in the schema, null in the data.
+        for stat in ("p50", "mean"):
+            col = summary.column(f"ltd_heap_peak_bytes_{stat}")
+            self.assertEqual(col.null_count, 1, f"{stat} should be null, got {col}")
+        # A metric that IS present still aggregates.
+        self.assertIsNotNone(summary.column("ltd_ms_p50")[0].as_py())
+
     def _write_tiny_airports(self) -> Path:
         """A hermetic 3-airport reference parquet so the test doesn't depend on
         the (uncommitted, regenerated) full OurAirports artifact."""

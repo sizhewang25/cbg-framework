@@ -358,8 +358,21 @@ def _summarize_combo(run_json: Path) -> dict:
     # error_km is naturally NaN on ERROR rows, so dropna in _stat_block does
     # the right thing for that one even before filtering.
     completed = df[df["status"].isin(["SUCCESS", "FALLBACK"])]
+    # A metric absent from the frame yields an all-null stat block rather than
+    # a KeyError. The guard used to test `completed.columns` and then fall back
+    # to `df[metric][:0]`, which raises on exactly the case it was meant to
+    # cover -- a column missing from BOTH. That is not hypothetical: the
+    # `*_heap_peak_bytes` instrumentation was added after several runs were
+    # scored, so any run mixing cached pre-instrumentation combos with freshly
+    # re-scored ones failed to summarize at all. Nulls are the honest answer;
+    # the column was never measured for those rows.
+    empty = df.head(0).get("error_km", None)
+    if empty is None:  # pragma: no cover - error_km is in every schema version
+        import pandas as pd
+
+        empty = pd.Series(dtype="float64")
     for metric in bench_schema.SUMMARY_METRICS:
-        series = completed[metric] if metric in completed.columns else df[metric][:0]
+        series = completed[metric] if metric in completed.columns else empty
         for stat, value in _stat_block(series).items():
             row[f"{metric}_{stat}"] = value
     return row
