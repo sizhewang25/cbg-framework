@@ -165,7 +165,77 @@ accuracy on *this* target mix, and as03 is 36% of it; the manifest records the
 largest run's share so the number cannot be over-read. The compare layout stays
 the place to see per-dataset divergence.
 
-## The second figure: the answer-space map
+## The second figure: the Euler diagram
+
+`plot-outcome-bars` says *how much* each method places in the cell. It cannot
+say **whether those are the same targets** — two methods at 24% might agree on
+all of them or on none. `plot-euler` is that question and only that question:
+circle area is a method's share, shared area is the share **both** place, a set
+inside another is drawn inside it, and two that never agree are drawn apart.
+
+It is a **`_cross` figure at one resolution**. Where the bars sweep the rungs,
+this fixes one (`--nside`, default **128**) and sweeps the **tolerance**:
+
+| `--top-n` | correct means | printed as |
+|---|---|---|
+| 1 | `ring == 0` | in the cell |
+| 2 | `ring <= 1` | within 1 ring |
+| 3 | `ring <= 2` | within 2 rings |
+
+That is the axis worth sweeping here, because it is the one that changes *which
+targets are in which set* and therefore the only one that changes the overlaps.
+Sweeping nside instead would produce four fitted layouts whose circles cannot be
+compared by eye; the ladder already has `accuracy_by_resolution.csv` and the
+bars.
+
+**`top_n` no longer means a seed rank.** v3's ranked class seeds by distance to
+the prediction, which is the rule v4 retired — a Voronoi partition labels every
+point on Earth, so its rank-1 set contained a prediction 2,360 km from its
+truth. Here it is a containment tolerance, cumulative, so each circle can only
+grow as `top_n` rises.
+
+Pooled over as01+as02+as03 at nside 128, `placed` 97.0% (worst pair error 0.9%):
+
+| top-N | any method | none | largest set | what the picture shows |
+|---|---|---|---|---|
+| 1 | 39.6% | 60.4% | Octant-Hull 26.8% | Shortest-Ping ⊂ ~SoI; the two Octants overlap heavily but keep exclusive lobes |
+| 2 | 61.5% | 38.5% | SoI / Shortest-Ping 49.1% | Spotter's 8.2% sits almost entirely inside the others |
+| 3 | 67.8% | 32.2% | SoI 54.1% | every set overlaps every other; the tolerance has stopped discriminating |
+
+**`spotter_cbg` has no circle at top-1.** It places zero targets in the truth's
+own cell on all three meshes, and a zero-radius circle is a dot a reader takes
+for "very small" rather than "never". Dropping it is *lossless*, not a
+convenience: a set nothing belongs to appears in no region, so every other
+region's count is unchanged — asserted in `test_dropping_an_empty_set_changes_no_region`
+rather than argued. It stays in the denominator, stays in `intersections.csv`
+and `pairwise.csv` with its zeroes, and is named in the figure's footnote and
+in the manifest. Only if fewer than two sets survive is the figure skipped.
+
+v3 instead skipped the whole figure whenever any method was empty, which at
+these numbers means the default invocation produces nothing.
+
+### What the layout can and cannot do
+
+`n` circles have `2n` degrees of freedom against `2**n - 1` regions, so past two
+sets the system is overdetermined and some combination is always misdrawn. The
+figure prints its own `placed` share and worst pair error, and
+`euler.<slug>.top<N>.fit.csv` is the row-by-row audit — observed against drawn,
+with `delta` positive on exactly the regions the picture asserts and the data
+denies.
+
+Labels are placed **globally**, which is the one part of the geometry that is
+not v3's. Every circle offers the same menu — its exclusive lobe's pole of
+inaccessibility plus 36 points around its own boundary — and positions are
+taken smallest circle first, each maximizing distance to the names already
+placed (capped at one label's width) with a bonus for sitting in its own
+exclusive lobe, *scaled by how clear the position already is* so exclusivity
+can never buy a collision. v3 chose each name independently and spread only
+some of them afterwards, which drew "SoI 49.1%" on top of "Octant-Spline 40.4%".
+
+Every name still sits **inside the circle it names**, which is what lets the
+figure drop leader lines entirely.
+
+## The third figure: the answer-space map
 
 `plot-answer-space` draws the grid itself — one panel per rung, the whole ladder
 in a 2x2. Target cells filled, VP cells outlined, and **every empty cell of the
@@ -244,19 +314,30 @@ python -m scripts.analysis.v4.cli plot-outcome-bars \
     --run-id as01-260728-260802-mesh \
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh
+python -m scripts.analysis.v4.cli plot-euler \
+    --run-id as01-260728-260802-mesh \
+    --run-id as02-260728-260802-mesh \
+    --run-id as03-260728-260802-mesh
 ```
 
-`classify` needs the answer space; `build-bipartite` is independent.
-`plot-outcome-bars` needs `classify` and takes a repeatable `--run-id` because
-the figure *is* the cross-dataset comparison. `--nside` selects rungs (default:
-the full ladder) and `--layout` selects views (default: both). There is no
-`--grid`.
+`classify` needs the answer space; `build-bipartite` is independent. The two
+accuracy figures need `classify` and take a repeatable `--run-id`, because each
+*is* the cross-dataset comparison. There is no `--grid`.
 
 `plot-answer-space` is the exception on both counts: it is **per-run**, so it
-takes one `--run-id` or `--all-runs`, and it needs only `build-bipartite` — not
-`build-answer-space`. It frames the continental US by default; `--auto-extent`
+takes one `--run-id` or `--all-runs`, and it needs only `build-bipartite` —
+not `build-answer-space`. One occupied target cell is exactly one class, so the
+bipartite artifacts already carry the answer space, and the VP side with it,
+co-quantized on the same grid.
+
+`plot-answer-space` frames the continental US by default; `--auto-extent`
 derives the frame from the run's own targets and VPs instead, and `--extent`
 takes one literally.
+
+`plot-outcome-bars` sweeps rungs: `--nside` (default: the full ladder) and
+`--layout` (default: both views). `plot-euler` takes a **single** `--nside`
+(default 128) and sweeps `--top-n` instead (default: 1, 2 and 3). Roughly 6s
+per fit, so the default pass is ~18s for three figures.
 
 ## Layout
 
@@ -273,7 +354,19 @@ outputs/analysis/v4/<run_id>/
 outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>/
   outcome_bars.healpix-<nside>.{png,csv,manifest.json}         <- one panel per dataset
   outcome_bars.pooled.healpix-<nside>.{png,csv,manifest.json}  <- all of them, count-weighted
+  euler.healpix-<nside>.top<N>.png                             <- the fitted layout
+  euler.healpix-<nside>.top<N>.fit.csv                         <- observed vs drawn, per region
+  euler.healpix-<nside>.top<N>.intersections.csv               <- exact counts, per combination
+  euler.healpix-<nside>.top<N>.pairwise.csv                    <- both / a-only / b-only / neither
+  euler.healpix-<nside>.top<N>.membership.csv                  <- the boolean matrix itself
+  euler.healpix-<nside>.top<N>.manifest.json
 ```
+
+The Euler set carries `.top<N>` because a figure is a function of the
+tolerance — without it a top-3 pass would overwrite the top-1 files — and the
+grid slug because this directory is keyed by dataset set alone. Both figures
+write to the **same** directory: one comparison's artifacts belong together
+regardless of which command produced them.
 
 The pooled triple takes a `.pooled.` **infix** rather than v3's separate stem
 (`outcome_bars` vs `outcome_bars_by_dataset`) so the two layouts sort together

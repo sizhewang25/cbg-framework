@@ -7,6 +7,7 @@ Build commands first, then figures, in dependency order:
     python -m scripts.analysis.v4.cli classify           --run-id as01-260728-260802-mesh
     python -m scripts.analysis.v4.cli plot-answer-space  --run-id as01-260728-260802-mesh
     python -m scripts.analysis.v4.cli plot-outcome-bars  --run-id as01-... --run-id as02-...
+    python -m scripts.analysis.v4.cli plot-euler         --run-id as01-... --run-id as02-...
 
 `classify` needs the answer space; `build-bipartite` is independent of both and
 can run in any order. `plot-answer-space` needs only `build-bipartite` — one
@@ -19,6 +20,15 @@ Each build command writes one directory per rung of the ladder (`healpix-128` ..
 There is no `--grid`. v4 is HEALPix because the laddered metric it computes
 cannot be expressed on H3 — see `modules/healpix.py`. `--nside` selects which
 rungs to build, defaulting to the full ladder.
+
+The two cross-dataset figure commands differ in what they vary.
+`plot-outcome-bars` sweeps the **rungs**: one figure per nside, each showing
+where every method's predictions landed. `plot-euler` fixes **one** rung
+(nside 128 by default) and sweeps the **tolerance** instead — top-1 in the
+cell, top-2 within a ring, top-3 within two. That is the axis that changes
+*which targets are in which set*, and therefore the only one that changes the
+overlaps a Euler diagram is drawn from; four rungs would be four fitted
+layouts whose circles cannot be compared by eye anyway.
 """
 
 from __future__ import annotations
@@ -31,6 +41,7 @@ from scripts.analysis.v4.modules import (
     answer_space,
     bipartite,
     classify,
+    figure_euler,
     figure_outcome_bars,
     healpix,
     map_answer_space,
@@ -210,6 +221,79 @@ def plot_outcome_bars_cmd(
         raise typer.BadParameter(str(exc)) from exc
     for png in pngs:
         typer.echo(f"wrote {png}")
+
+
+@app.command("plot-euler")
+def plot_euler_cmd(
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Mesh run to pool (repeatable)."
+    ),
+    nside: int = typer.Option(
+        figure_euler.DEFAULT_NSIDE,
+        "--nside",
+        "-n",
+        help=(
+            "The ONE rung to draw at. Not a sweep: an Euler diagram is a fitted "
+            "layout per population, so four rungs would be four figures whose "
+            "circles cannot be compared by eye. Vary --top-n instead."
+        ),
+    ),
+    top_n: list[int] = typer.Option(
+        None,
+        "--top-n",
+        help=(
+            f"Tolerance rung (repeatable): 1 = in the cell (ring 0), 2 = within "
+            f"1 ring, 3 = within 2 rings. Default: all of "
+            f"{list(figure_euler.DEFAULT_TOP_NS)}."
+        ),
+    ),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Draw only these."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v4 writes."),
+) -> None:
+    """Area-proportional Euler diagram of which targets the methods agree on.
+
+    Cross-dataset by nature, so `--run-id` is repeatable and there is no
+    `--all-runs`. The runs' targets are pooled into one population (they are
+    disjoint, so this is a concat) under
+    `_cross/cls-accuracy/<dataset-set>/`.
+
+    **`--top-n` is a ring, not a seed rank.** `1` means the prediction is in
+    the truth's own cell, `2` within one ring of it, `3` within two — the same
+    containment ladder `classify` scores, cumulative, so each set can only
+    grow. v3's `top_n` ranked class seeds by distance and is retired.
+
+    A method that places nothing within the tolerance gets no circle (Spotter
+    at `--top-n 1`, which is zero on all three meshes). That is lossless: an
+    empty set belongs to no region, so every other region is unchanged. It
+    stays in the denominator and in the count tables, and the figure's
+    footnote names it.
+    """
+    if not run_id:
+        raise typer.BadParameter(
+            "pass at least one --run-id; this figure pools named datasets"
+        )
+    runs = [resolve_run(r, outputs_root) for r in run_id]
+    try:
+        sets = figure_euler.build_for_runs(
+            runs,
+            nside=nside,
+            top_ns=tuple(top_n) if top_n else figure_euler.DEFAULT_TOP_NS,
+            methods=list(method) if method else None,
+            analysis_root=analysis_root,
+        )
+    except ValueError as exc:
+        # Coverage, tolerance and target-overlap refusals are the caller's to
+        # fix, so they read as a usage error rather than a traceback.
+        raise typer.BadParameter(str(exc)) from exc
+    for written in sets:
+        if "png" in written:
+            typer.echo(f"wrote {written['png']}")
+        else:
+            typer.echo(
+                f"no figure for {written['manifest'].name}: fewer than two "
+                f"methods placed anything at this tolerance"
+            )
 
 
 @app.command("plot-answer-space")

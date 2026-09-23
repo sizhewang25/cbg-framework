@@ -140,6 +140,7 @@ import pandas as pd
 
 from scripts.analysis.v4.modules import classify as C
 from scripts.analysis.v4.modules import healpix as H
+from scripts.analysis.v4.modules import methods
 from scripts.analysis.v4.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
     MissingArtifactError,
@@ -219,23 +220,11 @@ _FAILED_EDGE = "#b5b4ad"
 #: on the channel so a later figure does not take it for something else.
 WEIGHTED_HATCH = "//"
 
-#: Display names. Shared vocabulary with v3's figures on purpose: the metric
-#: changed, the methods did not, and inventing a second set of names would make
-#: the two layers look like they scored different things.
-METHOD_LABELS = {
-    "shortest_ping": "Shortest-Ping",
-    "million_scale_cbg": "SoI",
-    "vanilla_cbg": "Vanilla",
-    "octant_cbg_hull": "Octant-Hull",
-    "octant_cbg_spl": "Octant-Spline",
-    "spotter_cbg": "Spotter",
-    "spotter_hybrid_cbg": "Spotter-Hybrid",
-}
-
-
-def method_label(method: str) -> str:
-    return METHOD_LABELS.get(method, method.replace("_", " "))
-
+#: Display names, re-exported from the shared vocabulary. Two figures now
+#: draw the same methods, so the names live in one module rather than in
+#: whichever one needed them first.
+METHOD_LABELS = methods.METHOD_LABELS
+method_label = methods.method_label
 
 _SURFACE = "#ffffff"
 _INK = "#0b0b0b"
