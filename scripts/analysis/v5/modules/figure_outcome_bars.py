@@ -33,6 +33,11 @@ serving region, how much in a neighbour's, and how much off the landmass.
 * Inside a tier, a **white line** separates the cell-label sub-segments --
   interior boundaries only, drawn as lines across the bar rather than strokes
   around each sub-segment, so widths stay equal.
+* A **rail** to the right of each bar repeats the ring tiers as narrow
+  segments in the same fills and borders, with each tier's **total** printed
+  beside it in bold ink -- the bar breaks a tier down by cell label, the rail
+  gives it back as one number. Labels of thin adjacent tiers are nudged apart,
+  never reordered. "No answer" has no rail: its in-bar label is its total.
 * Every sub-segment above `_LABEL_FLOOR` prints **its own share**, on a solid
   chip so the stripe never runs through the digits. A tier's total is the sum
   of its labels; thinner slivers stay in the CSV twin.
@@ -122,8 +127,28 @@ _MUTED = "#898781"
 _GRID = "#e1e0d9"
 _AXIS = "#c3c2b7"
 
-_BAR_FRAC = 0.62
-_PANEL_W = 4.6
+#: Bar thickness as a share of the slot. Narrower than v4's 0.62, and the
+#: panel wider, to leave room on the right of each bar for its rail and the
+#: tier totals printed beside it.
+_BAR_FRAC = 0.50
+_PANEL_W = 5.6
+
+#: The tier rail: a narrow strip to the right of each bar, one segment per
+#: ring tier spanning that tier's height, in the tier's fill and border, with
+#: the tier's total share printed beside it. The bar breaks each tier down by
+#: cell label; the rail gives the tier back as one number.
+_RAIL_GAP = 0.08
+_RAIL_W = 0.07
+_RAIL_TEXT_PAD = 0.03
+
+#: Vertical gap between consecutive rail segments, in share units, so each
+#: tier reads as its own mark (as the bar's tier borders do).
+_RAIL_SEG_GAP = 0.006
+
+#: Minimum vertical distance between two rail labels, in share units. Thin
+#: adjacent tiers would otherwise print their totals on top of each other, so
+#: labels are nudged apart (never reordered) until they clear this.
+_RAIL_LABEL_GAP = 0.045
 _MIN_FIG_W = 8.0
 #: Below this share a sub-segment is too thin to hold its label; the value
 #: stays in the CSV twin.
@@ -311,8 +336,10 @@ def _contrast_ink(face: str) -> str:
 
 def _draw_bar(ax, x: float, row: pd.Series, nd: int) -> None:
     """One method's stack: per tier, the cell-label sub-segments, white
-    separators between them, then the tier border; every sub-segment labelled."""
+    separators between them, then the tier border; every sub-segment labelled.
+    Then the tier rail to its right."""
     half = _BAR_FRAC / 2
+    tiers: list[tuple[str, float, float]] = []
     bottom = 0.0
     for tier in STACK:
         face = TIER_INK[tier]
@@ -354,6 +381,46 @@ def _draw_bar(ax, x: float, row: pd.Series, nd: int) -> None:
                     ha="center", va="center", fontsize=7.5, color=ink, zorder=5,
                     bbox=dict(boxstyle="square,pad=0.12", facecolor=face, edgecolor="none"),
                 )
+        if tier != FAILED:
+            tiers.append((tier, tier_bottom, height))
+    _draw_rail(ax, x, tiers, nd)
+
+
+def _spread(ys: list[float], gap: float) -> list[float]:
+    """Nudge sorted label positions apart to at least `gap`, inside [0, 1]."""
+    out = list(ys)
+    for i in range(1, len(out)):
+        out[i] = max(out[i], out[i - 1] + gap)
+    overflow = out[-1] - (1 - gap / 2) if out else 0
+    if overflow > 0:
+        out = [y - overflow for y in out]
+        for i in range(len(out) - 2, -1, -1):
+            out[i] = min(out[i], out[i + 1] - gap)
+    return out
+
+
+def _draw_rail(ax, x: float, tiers: list[tuple[str, float, float]], nd: int) -> None:
+    """The tier rail right of the bar, with each tier's total beside it.
+
+    "No answer" has no rail: it has no cell-label breakdown, so its in-bar
+    label already is its total. Totals are text ink, not the tier colour --
+    the rail segment beside each one carries the identity.
+    """
+    rail_x = x + _BAR_FRAC / 2 + _RAIL_GAP + _RAIL_W / 2
+    shown = [(t, b, h) for t, b, h in tiers if h > 0]
+    for tier, bottom, height in shown:
+        trim = min(_RAIL_SEG_GAP / 2, height / 4)
+        ax.bar(
+            rail_x, height - 2 * trim, bottom=bottom + trim, width=_RAIL_W,
+            facecolor=TIER_INK[tier], edgecolor=TIER_EDGE, linewidth=0.8, zorder=3,
+        )
+    labelled = [(t, b, h) for t, b, h in shown if round(h, nd) > 0]
+    ys = _spread([b + h / 2 for _, b, h in labelled], _RAIL_LABEL_GAP)
+    for (tier, bottom, height), y in zip(labelled, ys):
+        ax.text(
+            rail_x + _RAIL_W / 2 + _RAIL_TEXT_PAD, y, f"{round(height, nd) * 100:.0f}%",
+            ha="left", va="center", fontsize=7.5, fontweight="bold", color=_INK, zorder=5,
+        )
 
 
 def _legend_handles():
@@ -414,7 +481,8 @@ def render(
             ax.set_xticklabels(
                 [method_label(m) for m in ranked], rotation=35, ha="right", fontsize=9, color=_INK_2
             )
-            ax.set_xlim(-0.6, len(ranked) - 0.4)
+            # Room on the right of the last bar for its rail and labels.
+            ax.set_xlim(-0.5, len(ranked) - 0.5 + 0.25)
             ax.set_ylim(0, 1)
             ticks = np.arange(0, 1.01, 0.2)
             ax.set_yticks(ticks)
@@ -495,6 +563,7 @@ def _manifest(layout, table, nside, png_name, csv_name, *, run_ids, per_run=None
             "tier_border": f"{TIER_EDGE} {TIER_EDGE_PT} pt around every tier, 'no answer' included",
             "labels": "each tier x cell-label share at whole percent, above the label floor",
             "separator": f"white {SEPARATOR_PT} pt between cell labels inside a tier",
+            "rail": "per-tier strip right of each bar, tier fill and border; tier total beside it in ink",
         },
         "order_note": (
             "each panel ranked by its own cumulative (ring0, <=ring1, <=ring2, answered) "
