@@ -86,6 +86,8 @@ outputs/analysis/v5/<run>/answer-space/healpix-<n>/{grids,sites,seeds,tgs}.csv, 
 outputs/analysis/v5/<run>/answer-space/sweep.csv
 outputs/analysis/v5/<run>/classify/healpix-<n>/accuracy.csv, <method>_tgs.parquet, manifest.json
 outputs/analysis/v5/<run>/classify/accuracy_by_grid.csv
+outputs/analysis/v5/<run>/classify/error_cdf.{png,csv,manifest.json}
+outputs/analysis/v5/_cross/classify/<datasets>@<arm>/outcome_bars.*, error_cdf.pooled.*
 ```
 
 `accuracy.csv` contains:
@@ -129,6 +131,18 @@ within that, how far off?". The encoding is as follows:
 Each panel ranks methods by `true` share, then by how tight their true
 predictions are (`true & ring0`, `true & <=ring1`, ...).
 
+**`plot-error-cdf`** (ported from v4) draws the empirical CDF of
+`pred_dist_to_tg_km`, one curve per method, on a log x axis. S-P is the
+dark-grey dashed baseline. There are two layouts: `per-run`, written to
+`classify/error_cdf.*`, and `pooled`, written to `_cross/.../error_cdf.pooled.*`.
+The pooled layout concatenates the runs' rows and recomputes the percentiles
+rather than averaging them. Unanswered rows are excluded (`solved_mask`), so
+each curve covers the outcome bars' answered stack. A percentile box under the
+legend gives p5/25/50/90/95 and `plotted/total`. The distance is to the raw
+TG, never to the seed, so it's the same at every rung. That's why the
+filenames carry no `healpix-<n>`. p50/p90 match `accuracy.csv` digit for
+digit.
+
 ## Guarantees
 
 - `ring` and `pred_dist_to_tg_km` match v4's `ring` and `error_km` row for row
@@ -145,6 +159,10 @@ python -m scripts.analysis.v5.cli build-answer-space --run-id as01-260728-260802
 python -m scripts.analysis.v5.cli classify           --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v5.cli plot-answer-space  --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v5.cli plot-outcome-bars \
+    --run-id as01-260728-260802-mesh \
+    --run-id as02-260728-260802-mesh \
+    --run-id as03-260728-260802-mesh
+python -m scripts.analysis.v5.cli plot-error-cdf --layout per-run --layout pooled \
     --run-id as01-260728-260802-mesh \
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh

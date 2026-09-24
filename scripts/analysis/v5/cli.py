@@ -8,9 +8,13 @@
         --run-id as01-260728-260802-mesh \
         --run-id as02-260728-260802-mesh \
         --run-id as03-260728-260802-mesh
+    python -m scripts.analysis.v5.cli plot-error-cdf --layout per-run --layout pooled \
+        --run-id as01-260728-260802-mesh \
+        --run-id as02-260728-260802-mesh \
+        --run-id as03-260728-260802-mesh
 
 `classify` and `plot-answer-space` need the answer space; `plot-outcome-bars`
-needs `classify` on every run. Everything writes under `outputs/analysis/v5/`.
+and `plot-error-cdf` need `classify` on every run. Everything writes under `outputs/analysis/v5/`.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ import typer
 from scripts.analysis.v5.modules import (
     answer_space,
     classify,
+    figure_error_cdf,
     figure_outcome_bars,
     map_answer_space,
     mapping,
@@ -202,6 +207,91 @@ def plot_outcome_bars_cmd(
             methods=list(method) if method else None,
             layouts=layouts,
             analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for png in pngs:
+        typer.echo(f"wrote {png}")
+
+
+@app.command("plot-error-cdf")
+def plot_error_cdf_cmd(
+    run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable)."),
+    all_runs: bool = typer.Option(
+        False, "--all-runs", help="Every run under --outputs-root (per-run only)."
+    ),
+    layout: list[str] = typer.Option(
+        None,
+        "--layout",
+        help=(
+            f"{figure_error_cdf.PER_RUN} (one figure per run) or "
+            f"{figure_error_cdf.POOLED} (every run's TGs as one population, one "
+            f"curve per method). Repeatable; default: {figure_error_cdf.PER_RUN}."
+        ),
+    ),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Plot only these."),
+    nside: int = typer.Option(
+        figure_error_cdf.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help=(
+            "Which rung's *_tgs.parquet to read. It does not change the output -- "
+            "pred_dist_to_tg_km is identical at every rung -- so this exists to "
+            "let you prove that, not to select a variant."
+        ),
+    ),
+    min_x_km: float = typer.Option(
+        figure_error_cdf.X_MIN_KM,
+        "--min-x-km",
+        help="Lower bound of the log x axis (km). Distances below it are clamped "
+        "up in the drawn curve only; the CSV is unclamped.",
+    ),
+    max_x_km: float = typer.Option(
+        figure_error_cdf.DEFAULT_X_MAX_KM, "--max-x-km", help="Upper bound (km)."
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Error-distance CDF per method (pred_dist_to_tg_km), log x, unanswered
+    rows excluded.
+
+    The companion to `plot-outcome-bars`: those say where a prediction landed,
+    this says how far off it was. Artifacts carry **no rung in their names**:
+    `per-run` writes `error_cdf.{png,csv,manifest.json}` into `classify/`,
+    beside the `healpix-<n>/` directories; `pooled` writes the `.pooled.`
+    triple into `_cross/classify/<datasets>[@<arm>]/`, beside the outcome bars.
+    Pooled percentiles are recomputed from the concatenated rows, never
+    averaged. Needs `classify` on every run.
+    """
+    if all_runs and run_id:
+        raise typer.BadParameter("pass --run-id or --all-runs, not both")
+    layouts = tuple(dict.fromkeys(layout or ())) or (figure_error_cdf.PER_RUN,)
+    unknown = [x for x in layouts if x not in figure_error_cdf.LAYOUTS]
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown --layout {unknown}; pick from {list(figure_error_cdf.LAYOUTS)}"
+        )
+    if all_runs and figure_error_cdf.POOLED in layouts:
+        raise typer.BadParameter(
+            f"--layout {figure_error_cdf.POOLED} needs explicit --run-id: which "
+            "datasets form one population is the caller's call"
+        )
+    runs = (
+        discover_runs(outputs_root)
+        if all_runs
+        else [resolve_run(r, outputs_root) for r in (run_id or [])]
+    )
+    if not runs:
+        raise typer.BadParameter("pass at least one --run-id, or --all-runs")
+    try:
+        pngs = figure_error_cdf.build_for_runs(
+            runs,
+            layouts=layouts,
+            nside=nside,
+            methods=list(method) if method else None,
+            analysis_root=analysis_root,
+            min_x_km=min_x_km,
+            max_x_km=max_x_km,
         )
     except (ValueError, MissingArtifactError) as exc:
         raise typer.BadParameter(str(exc)) from exc
