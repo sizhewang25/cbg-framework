@@ -6,7 +6,7 @@ TG's own serving region or inside a neighbour's, and an operator needs to know
 which. v5 adds a second partition, the landmass-bounded Voronoi **cell**, so
 every prediction carries `(ring, cell_label)`.
 
-Scope so far: the answer space and classify. Figures come later.
+Scope: the answer space, classify, the answer-space map and the outcome bars.
 
 ## Glossary
 
@@ -81,6 +81,28 @@ outputs/analysis/v5/<run>/classify/accuracy_by_grid.csv
 The denominator is every evaluated TG. FALLBACK and ERROR rows count as wrong.
 A FALLBACK row still gets both labels, but it isn't counted.
 
+## Figures
+
+**`plot-answer-space`** draws one 2x2 per run, one panel per rung, with both
+partitions on it: the full HEALPix lattice with the TG grids filled, the cell
+boundaries, the buffered landmass (dashed blue), sites (dots) and seeds
+(crosses). It's written to `answer-space/answer_space_map.healpix.png`. The
+cells are drawn as a planar Voronoi in EPSG:5070, with edges densified before
+converting back to lon/lat. On a point sample they agree with the great-circle
+nearest-seed rule that `classify` uses on 99.4–99.7% of inland points, and the
+manifest records that share per rung.
+
+**`plot-outcome-bars`** draws one figure per rung, in two layouts: `compare`
+(one panel per dataset) and `pooled` (a micro-average). They are written to
+`_cross/classify/<datasets>@<arm>/`. Each bar stacks the ring tiers
+bottom-up, **colour = ring tier** (green, light blue, light purple, light grey
+for "further out", dark grey for "no answer"). Inside each tier, **stripe = cell label**: plain for
+`true`, `//` for `wrong`, `\\` for `outland`. Each tier, including "no
+answer", has the same thicker border, so its three sub-segments read as one
+unit and no segment gains apparent width. Inside a tier, white lines separate
+the cell labels, and every sub-segment wide enough prints its own share. The ordering, pooling and coverage
+rules are v4's.
+
 ## Guarantees
 
 - `ring` and `pred_dist_to_tg_km` match v4's `ring` and `error_km` row for row
@@ -95,5 +117,10 @@ A FALLBACK row still gets both labels, but it isn't counted.
 ```bash
 python -m scripts.analysis.v5.cli build-answer-space --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v5.cli classify           --run-id as01-260728-260802-mesh
+python -m scripts.analysis.v5.cli plot-answer-space  --run-id as01-260728-260802-mesh
+python -m scripts.analysis.v5.cli plot-outcome-bars \
+    --run-id as01-260728-260802-mesh \
+    --run-id as02-260728-260802-mesh \
+    --run-id as03-260728-260802-mesh
 python -m pytest scripts/analysis/v5/tests -q
 ```

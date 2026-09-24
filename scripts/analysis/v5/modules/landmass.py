@@ -76,6 +76,19 @@ class Landmass:
             out[ok] = shapely.contains_xy(self.geometry, np.asarray(x), np.asarray(y))
         return out
 
+    def project(self, lat_deg, lon_deg) -> tuple[np.ndarray, np.ndarray]:
+        """`(x, y)` metres in `PROJECTED_CRS`, the plane the landmass lives in."""
+        lat = np.asarray(lat_deg, dtype=float).ravel()
+        lon = np.asarray(lon_deg, dtype=float).ravel()
+        x, y = _to_projected().transform(lon.tolist(), lat.tolist())
+        return np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+
+    def to_lonlat(self, geom: shapely.Geometry) -> shapely.Geometry:
+        """A projected geometry back in `(lon, lat)` degrees, for drawing."""
+        from shapely.ops import transform
+
+        return transform(_to_geographic().transform, geom)
+
     def describe(self) -> dict:
         return {
             "name": LANDMASS_NAME,
@@ -92,6 +105,13 @@ def _to_projected():
     from pyproj import Transformer
 
     return Transformer.from_crs("EPSG:4326", PROJECTED_CRS, always_xy=True)
+
+
+@lru_cache(maxsize=1)
+def _to_geographic():
+    from pyproj import Transformer
+
+    return Transformer.from_crs(PROJECTED_CRS, "EPSG:4326", always_xy=True)
 
 
 @lru_cache(maxsize=1)

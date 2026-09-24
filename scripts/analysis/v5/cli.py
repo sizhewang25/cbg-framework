@@ -3,7 +3,14 @@
     python -m scripts.analysis.v5.cli build-answer-space --run-id as01-260728-260802-mesh
     python -m scripts.analysis.v5.cli classify           --run-id as01-260728-260802-mesh
 
-`classify` needs the answer space. Both write under `outputs/analysis/v5/`.
+    python -m scripts.analysis.v5.cli plot-answer-space  --run-id as01-260728-260802-mesh
+    python -m scripts.analysis.v5.cli plot-outcome-bars \
+        --run-id as01-260728-260802-mesh \
+        --run-id as02-260728-260802-mesh \
+        --run-id as03-260728-260802-mesh
+
+`classify` and `plot-answer-space` need the answer space; `plot-outcome-bars`
+needs `classify` on every run. Everything writes under `outputs/analysis/v5/`.
 """
 
 from __future__ import annotations
@@ -12,11 +19,18 @@ from pathlib import Path
 
 import typer
 
-from scripts.analysis.v5.modules import answer_space, classify
+from scripts.analysis.v5.modules import (
+    answer_space,
+    classify,
+    figure_outcome_bars,
+    map_answer_space,
+    mapping,
+)
 from scripts.analysis.v5.modules import grid as G
 from scripts.analysis.v5.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
     DEFAULT_OUTPUTS_ROOT,
+    MissingArtifactError,
     discover_runs,
     resolve_run,
 )
@@ -105,6 +119,92 @@ def classify_cmd(
             typer.echo(bad.to_string(index=False), err=True)
             if strict:
                 raise typer.Exit(code=1)
+
+
+@app.command("plot-answer-space")
+def plot_answer_space_cmd(
+    run_id: str = typer.Option(None, help="Run to map."),
+    all_runs: bool = typer.Option(False, "--all-runs", help="Every run under the root."),
+    us_only: bool = typer.Option(
+        True,
+        "--us-only/--auto-extent",
+        help="Frame the continental US (default), or derive the frame from the run's sites.",
+    ),
+    extent: tuple[float, float, float, float] = typer.Option(
+        (None, None, None, None),
+        "--extent",
+        help="LON_MIN LON_MAX LAT_MIN LAT_MAX. Overrides --us-only/--auto-extent.",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Map both partitions: the grid lattice and TG grids, the cells, the landmass.
+
+    No `--nside`: the figure draws the whole ladder in one 2x2, because grid_km
+    turns both partitions at once and how they coarsen together is the figure.
+    Written into `answer-space/`, beside `sweep.csv`.
+    """
+    chosen = None
+    if extent and all(v is not None for v in extent):
+        chosen = tuple(float(v) for v in extent)
+    for run in _runs(run_id, all_runs, outputs_root):
+        frame = chosen or (
+            mapping.US_MAINLAND_EXTENT
+            if us_only
+            else map_answer_space.auto_extent_for_run(run, analysis_root=analysis_root)
+        )
+        try:
+            png = map_answer_space.build_for_run(run, extent=frame, analysis_root=analysis_root)
+        except MissingArtifactError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo(f"wrote {png}")
+
+
+@app.command("plot-outcome-bars")
+def plot_outcome_bars_cmd(
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Mesh run, one per dataset (repeatable)."
+    ),
+    nside: list[int] = typer.Option(None, "--nside", "-n", help=_NSIDE_HELP),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Plot only these."),
+    layout: list[str] = typer.Option(
+        None,
+        "--layout",
+        help=(
+            f"{figure_outcome_bars.COMPARE} (one panel per dataset) or "
+            f"{figure_outcome_bars.POOLED} (every run's TGs as one population). "
+            f"Repeatable; default: both."
+        ),
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Outcome bars, one figure per rung: ring tier by colour, cell label by stripe.
+
+    Cross-dataset by nature, so `--run-id` is repeatable and there is no
+    `--all-runs`. Written to `_cross/classify/<datasets>[@<arm>]/`.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id; this figure compares named datasets")
+    layouts = tuple(dict.fromkeys(layout or ())) or figure_outcome_bars.LAYOUTS
+    unknown = [x for x in layouts if x not in figure_outcome_bars.LAYOUTS]
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown --layout {unknown}; pick from {list(figure_outcome_bars.LAYOUTS)}"
+        )
+    runs = [resolve_run(r, outputs_root) for r in run_id]
+    try:
+        pngs = figure_outcome_bars.build_for_runs(
+            runs,
+            nsides=_nsides(nside),
+            methods=list(method) if method else None,
+            layouts=layouts,
+            analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for png in pngs:
+        typer.echo(f"wrote {png}")
 
 
 if __name__ == "__main__":

@@ -167,6 +167,28 @@ def ring_distance(a, b, nside: int, max_ring: int = MAX_RING) -> np.ndarray:
     return out
 
 
+def grid_rings(pix, nside: int, *, step: int = 8) -> list[np.ndarray]:
+    """One `(V, 2)` `(lon, lat)`-degree boundary ring per grid, for drawing.
+
+    **`(lon, lat)`, the opposite order from `pix2ang`**, because that is what
+    plotting wants. `step` points per edge so curvature shows. Each ring is made
+    contiguous in longitude so a grid straddling the antimeridian does not smear
+    across the map. Ported from v4's `cell_rings`.
+    """
+    p = np.asarray(pix, dtype=np.int64).ravel()
+    if p.size == 0:
+        return []
+    lon, lat = _healpix(validate_nside(nside)).boundaries_lonlat(p, step=step)
+    lon = np.asarray(lon.to_value("deg"), dtype=float)
+    lat = np.asarray(lat.to_value("deg"), dtype=float)
+    rings = []
+    for i in range(p.size):
+        lo = ((lon[i] + 180.0) % 360.0) - 180.0
+        lo = lo[0] + ((lo - lo[0] + 180.0) % 360.0) - 180.0
+        rings.append(np.column_stack([lo, lat[i]]))
+    return rings
+
+
 def describe(nside: int) -> dict:
     """Static facts about the grid at this nside, for a `meta.json` block."""
     n = validate_nside(nside)
