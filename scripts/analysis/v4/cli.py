@@ -591,8 +591,9 @@ def plot_vp_proximity_cmd(
         "--cohort",
         "-c",
         help=(
-            "Which targets to describe: p5 / p25 (each method's own most "
-            "accurately placed 5% or 25%) or all. Repeatable; default p25."
+            "Which targets to describe: p5 / p25 / p95 (each method's own most "
+            "accurately placed 5%, 25% or 95%) or all -- which, unlike p95, "
+            "keeps the unanswered rows too. Repeatable; default p25."
         ),
     ),
     method: list[str] = typer.Option(None, "--method", "-m", help="Draw only these."),

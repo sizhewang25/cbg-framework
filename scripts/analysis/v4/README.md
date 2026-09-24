@@ -520,11 +520,20 @@ Everything below, over the finals runs, in dependency order:
 
 It is also the tail of `run_finals.sh`, which hands it the run ids of the
 benchmark arms that succeeded. Runs are grouped into two **arms**, mesh and
-traffic-weighted, and the three cross-dataset figures are built once per arm
+traffic-weighted, and the cross-dataset figures are built once per arm
 rather than once over both: a weighted run is a subset of its own mesh's
 targets, so pooling them would count a site twice and compare a dataset against
 itself. A run id with no benchmark tree is a skip, not a failure — the weighted
 arms depend on traffic-annotated meshes that are generally not collected.
+
+The one place the two arms are asked different questions is the VP-proximity
+cohorts, `MESH_COHORTS` and `WEIGHTED_COHORTS` at the top of the script. The
+mesh arm draws `p5` and `p25` — each method's own easy cases, which is where
+the proximity story is. The weighted arm adds `p95`: its targets are a
+traffic-selected subset, so it is worth seeing whether the story survives with
+nearly every answered target in, and `p95` is that view with each method's
+worst 5% trimmed off. They are passed into `cross_arm`, not looked up from the
+arm's name inside it.
 
 The individual commands:
 
@@ -543,6 +552,10 @@ python -m scripts.analysis.v4.cli plot-euler \
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh
 python -m scripts.analysis.v4.cli plot-error-cdf --layout per-run --layout pooled \
+    --run-id as01-260728-260802-mesh \
+    --run-id as02-260728-260802-mesh \
+    --run-id as03-260728-260802-mesh
+python -m scripts.analysis.v4.cli plot-vp-proximity --cohort p5 --cohort p25 \
     --run-id as01-260728-260802-mesh \
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh
@@ -572,6 +585,15 @@ takes one literally.
 `--layout` (default: both views). `plot-euler` takes a **single** `--nside`
 (default 128) and sweeps `--top-n` instead (default: 1, 2 and 3). Roughly 6s
 per fit, so the default pass is ~18s for three figures.
+
+`plot-vp-proximity` needs `classify` and is cross-dataset, so `--run-id` is
+repeatable and there is no `--all-runs`. It sweeps `--cohort` (default `p25`),
+which selects *which targets* to describe rather than which rung: `p5`, `p25`
+and `p95` are each method's own best 5%, 25% and 95% by `error_km`, and `all`
+is the evaluated population with the unanswered rows still in it. Its `--nside`
+names a file, not a variant — `error_km` is identical at every rung. It writes
+to `_cross/<datasets>[@<arm>]/vp_proximity/`, which groups by dataset set first
+and is therefore a different tree from `_cross/cls-accuracy/<datasets>/` above.
 
 The case viewer has its own driver, because it costs minutes rather than
 seconds:
@@ -623,7 +645,16 @@ outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>@<arm>/
   error_cdf.pooled.{png,csv,manifest.json}                     <- every run's targets, one curve
   class_collapse.{csv,manifest.json}                           <- sites vs classes, every rung;
                                                                   no figure, no method, no scoring
+
+outputs/analysis/v4/_cross/<dataset-set>@<arm>/vp_proximity/
+  vp_proximity.<cohort>.{png,csv,manifest.json}  <- two violins per method, per cohort;
+                                                    rung-free, like the error CDF
 ```
+
+Note the second tree is `_cross/<datasets>/<kind>/` where the first is
+`_cross/<kind>/<datasets>/`. The accuracy figures are one family keyed by what
+they compare; `vp_proximity` groups by the dataset set first so everything
+derived from one combination of runs sits together. Both still key on `<arm>`.
 
 `<arm>` is whatever the pooled run ids share after their dataset head —
 `260728-260802-mesh`, `260728-260802-weighted`. Without it the two arms of the

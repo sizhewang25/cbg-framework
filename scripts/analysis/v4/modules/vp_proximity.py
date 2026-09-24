@@ -24,10 +24,16 @@ RTT-inflation story, which is why `--geo/--sping` default to both on.
 ## The cohort is each method's own best targets
 
 `--cohort p5` takes the 5% of targets *that method* placed most accurately,
-`p25` the best 25%, `all` the whole population. The cohorts therefore hold
-different targets for different methods, which is the point: the question is
-"what did this method's easy cases have in common", not "how did every method
-do on one fixed subset".
+`p25` the best 25%, `p95` the best 95%, `all` the whole population. The cohorts
+therefore hold different targets for different methods, which is the point: the
+question is "what did this method's easy cases have in common", not "how did
+every method do on one fixed subset".
+
+`p95` and `all` are not the same cohort, and the difference is the reason both
+exist. `all` is the evaluated population, unanswered rows included; `p95` ranks
+on `error_km` and so drops both the unanswered rows and each method's own worst
+5%. It is the near-whole population with the tail that would set the bound
+trimmed off -- read it against `all` to see what that tail was carrying.
 
 Selection runs over `classify.solved_mask` rows only -- an unanswered target
 has no error to rank on. That is a different denominator from the outcome
@@ -124,7 +130,12 @@ GRID = "#e6e4dd"
 #: Cohort names the CLI accepts, mapped to the fraction of the population they
 #: keep. `all` is the whole evaluated set and is the reference every cohort is
 #: read against.
-COHORTS: dict[str, float | None] = {"p5": 0.05, "p25": 0.25, "all": None}
+COHORTS: dict[str, float | None] = {
+    "p5": 0.05,
+    "p25": 0.25,
+    "p95": 0.95,
+    "all": None,
+}
 
 #: Percentiles the stats CSV reports. `max` is the one the prose quotes -- it
 #: is the *bound*, the claim that no target in this cohort was further than
@@ -307,20 +318,42 @@ def load(
     return long, meta
 
 
+def cohort_k(long: pd.DataFrame, cohort: str) -> int | None:
+    """How many rows per method `cohort` asks for. `None` for `all`.
+
+    A fraction of the POOLED target count, not of what a method answered, so
+    every method is asked for the same number and the bounds are comparable.
+    Whether a method can *supply* it is a separate question -- see
+    `cohort_frame`.
+    """
+    if cohort not in COHORTS:
+        raise ValueError(f"unknown cohort {cohort!r}; known: {sorted(COHORTS)}")
+    frac = COHORTS[cohort]
+    if frac is None:
+        return None
+    return int(round(frac * long.groupby("method").size().max()))
+
+
 def cohort_frame(long: pd.DataFrame, cohort: str) -> pd.DataFrame:
     """The rows `cohort` keeps, per method.
 
     `all` keeps every evaluated row, answered or not, because the population
     reference has to be the population. A percentile cohort ranks on
     `error_km`, so it can only see answered rows.
+
+    At small fractions every method fills `cohort_k` and the cohorts are
+    equal-sized. At large ones they need not be: a method that answered fewer
+    targets than k supplies everything it has and no more. That is a **short**
+    cohort, and it is not padded -- there is nothing to pad it with, and
+    ranking is by error so the rows it lacks are the worst ones, which would
+    flatter its bound if borrowed from anywhere. It is reported instead: the
+    manifest carries `cohort_k_requested` beside `n_cohort_per_method`, the
+    figure's title gives the range rather than one number, and a reader
+    comparing bounds across a short cohort is comparing different n.
     """
-    if cohort not in COHORTS:
-        raise ValueError(f"unknown cohort {cohort!r}; known: {sorted(COHORTS)}")
-    frac = COHORTS[cohort]
-    if frac is None:
+    k = cohort_k(long, cohort)
+    if k is None:
         return long.copy()
-    n_targets = long.groupby("method").size().max()
-    k = int(round(frac * n_targets))
     out = (
         long[long.solved]
         .sort_values("error_km", kind="mergesort")
@@ -519,10 +552,19 @@ def plot(
         loc="upper center", bbox_to_anchor=(0.5, -0.155 - 0.02 * (6 - len(labels))),
         ncol=len(measures), frameon=False, fontsize=9.5,
     )
-    n_per = int(cohort_rows.groupby("method").size().max()) if len(cohort_rows) else 0
-    title = (f"{cohort} cohort: the {n_per:,} targets each method placed most accurately"
-             if COHORTS[cohort] is not None
-             else f"all {meta['n_targets']:,} evaluated targets")
+    sizes = cohort_rows.groupby("method").size()
+    lo = int(sizes.min()) if len(sizes) else 0
+    hi = int(sizes.max()) if len(sizes) else 0
+    if COHORTS[cohort] is None:
+        title = f"all {meta['n_targets']:,} evaluated targets"
+    elif lo == hi:
+        title = (f"{cohort} cohort: the {hi:,} targets each method "
+                 f"placed most accurately")
+    else:
+        # A short cohort: someone answered fewer targets than the cohort asks
+        # for. One number here would be true of some rows and not others.
+        title = (f"{cohort} cohort: each method's {lo:,}-{hi:,} most accurately "
+                 f"placed targets (fewer where it answered fewer)")
     ax.set_title(title, loc="left", fontsize=11.5, color=INK, pad=12)
     fig.tight_layout(rect=[0, 0.06, 1, 1])
     out_png.parent.mkdir(parents=True, exist_ok=True)
@@ -534,10 +576,19 @@ def plot(
 def _manifest(meta: dict, cohort: str, measures: list[str],
               cohort_rows: pd.DataFrame, stats: pd.DataFrame) -> str:
     n_per = (cohort_rows.groupby("method").size().to_dict() if len(cohort_rows) else {})
+    # From the pooled target count, not from `cohort_rows` -- those are the
+    # rows k already selected, so asking them what k was is circular.
+    frac = COHORTS[cohort]
+    k = None if frac is None else int(round(frac * meta["n_targets"]))
     body = {
         "figure": "vp_proximity",
         "cohort": cohort,
         "cohort_fraction": COHORTS[cohort],
+        "cohort_k_requested": k,
+        "n_cohort_short": {
+            method_label(m): int(v) for m, v in n_per.items()
+            if k is not None and int(v) < k
+        },
         "measures": measures,
         "datasets": dataset_slug(meta["run_ids"]),
         "run_ids": meta["run_ids"],
@@ -554,10 +605,13 @@ def _manifest(meta: dict, cohort: str, measures: list[str],
                 "Each method's own smallest error_km, over solved rows only "
                 "(classify.solved_mask). An unanswered target has no error to "
                 "rank on. This is NOT the outcome-bars denominator, where a "
-                "refusal counts as wrong. The cohort size k is a fraction of "
-                "the POOLED target count, identical for every method, so a "
-                "method that answered fewer targets draws its cohort from a "
-                "smaller pool rather than getting a smaller cohort."
+                "refusal counts as wrong. The cohort size k "
+                "(cohort_k_requested) is a fraction of the POOLED target "
+                "count, so every method is ASKED for the same number and a "
+                "method that answered fewer draws from a smaller pool. At "
+                "large fractions it may not be able to supply k at all; those "
+                "methods are listed in n_cohort_short and their bound rests "
+                "on fewer rows than the rest."
             ),
             "d_geo_km": (
                 "Great-circle distance to the geographically closest VP that "

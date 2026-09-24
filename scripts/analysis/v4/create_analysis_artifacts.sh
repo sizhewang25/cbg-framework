@@ -7,13 +7,14 @@
 #   ./create_analysis_artifacts.sh --mesh R1 R2 --weighted R3 R4
 #
 # Runs are grouped into two ARMS -- mesh and traffic-weighted -- because the
-# three cross-dataset figures pool their inputs into one population, and a mesh
+# cross-dataset figures pool their inputs into one population, and a mesh
 # run and its weighted subset are not one population: the weighted arm is a
 # proper subset of the same targets, so pooling them would count a site twice
 # and compare a dataset against itself. Each arm therefore gets its own pooled
-# bars, its own Euler diagram and its own pooled error CDF, and
-# `cross.cross_dir` keys the output directory on the arm as well as the dataset
-# set so the second pass cannot overwrite the first.
+# bars, its own Euler diagram, its own pooled error CDF and its own VP-proximity
+# violins, and both output-directory rules -- `cross.cross_dir` and
+# `vp_proximity.output_dir` -- key on the arm as well as the dataset set, so the
+# second pass cannot overwrite the first.
 #
 # The arms are passed rather than sniffed off a `-weighted` suffix. run_finals.sh
 # already holds both lists, and a caller with a differently-named arm should not
@@ -47,6 +48,22 @@ DEFAULT_WEIGHTED=(
   as02-260728-260802-weighted
   as03-260728-260802-weighted
 )
+
+# Which cohorts the VP-proximity violins are drawn over, per arm. Set here and
+# passed into `cross_arm` rather than looked up from the arm label inside it,
+# so the arm name stays a label and not a switch -- same reason the arms
+# themselves are passed rather than sniffed off a `-weighted` suffix.
+#
+# The mesh arm gets the two easy-case cohorts: p5 and p25 are each method's own
+# best 5% and 25%, and they are where the proximity story is -- the targets a
+# method nails are the targets sitting on a VP.
+#
+# The weighted arm adds p95. Its targets are a traffic-selected subset, so the
+# question there is not only "what did the easy cases have in common" but "does
+# that hold once nearly every answered target is in", and p95 is that view with
+# each method's worst 5% -- the tail that otherwise sets the bound -- trimmed.
+MESH_COHORTS="p5 p25"
+WEIGHTED_COHORTS="p5 p25 p95"
 
 # No command here restricts its methods. Every one of them discovers what to
 # score or draw from the benchmark output tree, which is the single place to
@@ -168,10 +185,15 @@ done
 # even where they are the default, because this is a driver and what it writes
 # should be readable here rather than inferred from the CLI's defaults.
 cross_arm() {
-  local arm=$1; shift
+  local arm=$1 cohorts=$2; shift 2
   local runs=("$@")
   local args=()
   for r in "${runs[@]}"; do args+=(--run-id "$r"); done
+  local cohort_args=()
+  # Unquoted on purpose: $cohorts is a space-separated list and the split is
+  # what turns it into one --cohort flag each.
+  # shellcheck disable=SC2086
+  for c in $cohorts; do cohort_args+=(--cohort "$c"); done
 
   R="_cross[$arm]"
   printf '\n==================== cross-dataset: %s (%d run(s)) ====================\n' \
@@ -206,6 +228,20 @@ cross_arm() {
 
   # The pooled error distribution, beside the pooled bars.
   run plot-error-cdf-pooled $V4 plot-error-cdf --layout pooled "${args[@]}"
+
+  # Why the easy ones were easy: how close a VP was, for the targets each
+  # method placed best. The bars say where a prediction landed and the CDF how
+  # far off it was; neither can say what those targets had in common, and on
+  # these meshes the answer is VP proximity. Two violins per method -- the
+  # geographically closest VP and the smallest-RTT one -- so the gap between
+  # them reads as RTT inflation rather than sparse coverage. Cohorts are the
+  # arm's, see MESH_COHORTS/WEIGHTED_COHORTS above.
+  #
+  # Rung-free in substance like the error CDF -- error_km is identical at every
+  # nside -- but it writes under `_cross/<datasets>[@<arm>]/vp_proximity/`,
+  # which is dataset-set-first and so a different tree from the figures above.
+  run "plot-vp-proximity[$cohorts]" $V4 plot-vp-proximity \
+    "${cohort_args[@]}" "${args[@]}"
 }
 
 # Guarded on the arm being non-empty rather than on it having two runs: a
@@ -213,12 +249,12 @@ cross_arm() {
 # population), and refusing it would mean a single collected weighted dataset
 # produced no figures at all.
 if [ "${#MESH[@]}" -gt 0 ]; then
-  cross_arm mesh "${MESH[@]}"
+  cross_arm mesh "$MESH_COHORTS" "${MESH[@]}"
 else
   SKIPPED+=("_cross[mesh] :: no mesh run has a benchmark tree")
 fi
 if [ "${#WEIGHTED[@]}" -gt 0 ]; then
-  cross_arm weighted "${WEIGHTED[@]}"
+  cross_arm weighted "$WEIGHTED_COHORTS" "${WEIGHTED[@]}"
 else
   SKIPPED+=("_cross[weighted] :: no weighted run has a benchmark tree")
 fi

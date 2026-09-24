@@ -17,6 +17,8 @@ were selected off different frames and every distance downstream is garbage.
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -104,6 +106,93 @@ class TestCohortExcludesUnanswered:
     def test_unknown_cohort_names_the_known_ones(self):
         with pytest.raises(ValueError, match="p25"):
             V.cohort_frame(_long(), "p50")
+
+
+class TestP95IsNotAll:
+    """The near-whole cohort the weighted arm draws, and how it differs.
+
+    `p95` exists to be read against `all`, so the two must not be the same
+    rows. It trims each method's worst 5% -- the tail that otherwise sets the
+    bound -- and, being a percentile cohort, it cannot see unanswered rows at
+    all.
+    """
+
+    @staticmethod
+    def _twenty() -> pd.DataFrame:
+        """Twenty targets, so `round(.95 * n)` actually drops one."""
+        # From 1, not 0: a 0 km distance is a log10(0) in the KDE, and this
+        # fixture is about cohort sizes rather than about that edge.
+        err = [float(i) for i in range(1, 21)]
+        base = pd.DataFrame(
+            {
+                "run_id": ["r"] * 40,
+                "target_id": [f"tg-{i}" for i in range(20)] * 2,
+                "method": ["m_a"] * 20 + ["m_b"] * 20,
+                "error_km": err * 2,
+                "status": ["SUCCESS"] * 40,
+                "d_geo_km": err * 2,
+                "d_sping_km": [e * 10 for e in err] * 2,
+            }
+        )
+        base["solved"] = True
+        return base
+
+    def test_it_drops_each_methods_worst(self):
+        rows = V.cohort_frame(self._twenty(), "p95")  # k = round(.95 * 20) = 19
+        for method in ("m_a", "m_b"):
+            kept = rows[rows.method == method]
+            assert len(kept) == 19
+            assert "tg-19" not in set(kept.target_id)
+
+    def test_it_excludes_unanswered_where_all_keeps_them(self):
+        long = self._twenty()
+        long.loc[long.target_id == "tg-0", "status"] = "FALLBACK"
+        long["solved"] = long["status"] == "SUCCESS"
+        assert len(V.cohort_frame(long, "all")) == 40
+        # 19 per method are asked for, but only 19 are answered, and tg-0 --
+        # the smallest error of all -- is not among them.
+        rows = V.cohort_frame(long, "p95")
+        assert "tg-0" not in set(rows.target_id)
+        assert len(rows) == 38
+
+    def test_a_method_that_cannot_fill_k_supplies_what_it_has(self):
+        """The short cohort. Not a bug and not padded -- but reported.
+
+        `TestCohortSizeIsShared` holds at p5/p25 because k is small enough for
+        every method to fill. At p95 it need not: m_b answers 15 of the 19 the
+        cohort asks for, so its bound rests on 15 rows where m_a's rests on
+        19, and a reader comparing the two is comparing different n.
+        """
+        long = self._twenty()
+        short = [f"tg-{i}" for i in range(15, 20)]
+        long.loc[(long.method == "m_b") & long.target_id.isin(short),
+                 "status"] = "FALLBACK"
+        long["solved"] = long["status"] == "SUCCESS"
+
+        assert V.cohort_k(long, "p95") == 19
+        sizes = V.cohort_frame(long, "p95").groupby("method").size()
+        assert sizes["m_a"] == 19
+        assert sizes["m_b"] == 15
+
+    def test_the_title_gives_a_range_when_the_cohort_is_short(self, tmp_path):
+        """One number in the title would be true of some rows and not others."""
+        long = self._twenty()
+        long.loc[(long.method == "m_b") & long.target_id.isin(
+            [f"tg-{i}" for i in range(15, 20)]), "status"] = "FALLBACK"
+        long["solved"] = long["status"] == "SUCCESS"
+        meta = {"run_ids": ["r"], "nside": 128, "methods": ["m_a", "m_b"],
+                "n_targets": 20, "n_vp_per_target_median": 4.0}
+        rows = V.cohort_frame(long, "p95")
+
+        png = V.plot(long, rows, cohort="p95", measures=[V.GEO, V.SPING],
+                     meta=meta, out_png=tmp_path / "p95.png")
+        assert png.exists()
+
+        body = json.loads(V._manifest(meta, "p95", [V.GEO, V.SPING], rows,
+                                      V.stats_table(long, rows,
+                                                    measures=[V.GEO, V.SPING])))
+        assert body["cohort_k_requested"] == 19
+        assert body["n_cohort_short"] == {V.method_label("m_b"): 15}
 
 
 class TestCohortSizeIsShared:
