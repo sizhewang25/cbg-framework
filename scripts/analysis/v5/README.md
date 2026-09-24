@@ -6,7 +6,8 @@ TG's own serving region or inside a neighbour's, and an operator needs to know
 which. v5 adds a second partition, the landmass-bounded Voronoi **cell**, so
 every prediction carries `(ring, cell_label)`.
 
-Scope: the answer space, classify, the answer-space map and the outcome bars.
+Scope: the answer space, classify, the answer-space map, the outcome bars,
+the error-distance CDF and the VP-proximity violins.
 
 ## Glossary
 
@@ -88,6 +89,7 @@ outputs/analysis/v5/<run>/classify/healpix-<n>/accuracy.csv, <method>_tgs.parque
 outputs/analysis/v5/<run>/classify/accuracy_by_grid.csv
 outputs/analysis/v5/<run>/classify/error_cdf.{png,csv,manifest.json}
 outputs/analysis/v5/_cross/classify/<datasets>@<arm>/outcome_bars.*, error_cdf.pooled.*
+outputs/analysis/v5/_cross/vp-proximity/<datasets>@<arm>/vp_proximity.<cohort>.{png,csv,manifest.json}
 ```
 
 `accuracy.csv` contains:
@@ -143,6 +145,20 @@ TG, never to the seed, so it's the same at every rung. That's why the
 filenames carry no `healpix-<n>`. p50/p90 match `accuracy.csv` digit for
 digit.
 
+**`plot-vp-proximity`** (ported from v4) pools the given runs and draws two
+violins per method on a log x axis: the distance from the TG to its
+**geographically closest** VP (`geo_vp_dist_to_tg_km`, blue) and to its
+**smallest-RTT** VP (`sping_vp_dist_to_tg_km`, orange), which is the coordinate
+S-P returns. The gap between them is RTT inflation. Both come from the run's
+canonical edge CSV (`edges.resolve_source_csv`, which refuses a mesh superset
+on a weighted arm). `--cohort` picks each method's own best `p5`/`p25`/`p95` by
+`pred_dist_to_tg_km` over `solved_mask` rows (FALLBACK can't enter), or `all`
+(unanswered included). Rows are ordered by the bound (the max), tightest
+first. The stats CSV carries `max_km` beside `distinct_values` and
+`max_tie_share`, because at p5 ~20 replicas per site make the violin mostly
+smoothing. S-P's row is `circular`. On as01-03 the CSVs match v4's cell for
+cell (`test_figure_vp_proximity.TestRealRuns`).
+
 ## Guarantees
 
 - `ring` and `pred_dist_to_tg_km` match v4's `ring` and `error_km` row for row
@@ -163,6 +179,10 @@ python -m scripts.analysis.v5.cli plot-outcome-bars \
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh
 python -m scripts.analysis.v5.cli plot-error-cdf --layout per-run --layout pooled \
+    --run-id as01-260728-260802-mesh \
+    --run-id as02-260728-260802-mesh \
+    --run-id as03-260728-260802-mesh
+python -m scripts.analysis.v5.cli plot-vp-proximity -c p5 -c p25 -c all \
     --run-id as01-260728-260802-mesh \
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh

@@ -67,8 +67,10 @@ def arm(run_ids: list[str]) -> str | None:
     return tails.pop() or None
 
 
-def cross_dir(run_ids: list[str], *, analysis_root: Path | None = None) -> Path:
-    """`_cross/classify/<datasets>[@<arm>]/`, created.
+def cross_dir(
+    run_ids: list[str], *, analysis_root: Path | None = None, kind: str = CROSS_KIND
+) -> Path:
+    """`_cross/<kind>/<datasets>[@<arm>]/`, created. `kind` defaults to `classify`.
 
     The arm is a directory-name concern only. `dataset_slug` also supplies the
     `dataset` column of every CSV twin and the label in the pooled figures'
@@ -78,7 +80,7 @@ def cross_dir(run_ids: list[str], *, analysis_root: Path | None = None) -> Path:
     shared = arm(run_ids)
     if shared is not None:
         name = f"{name}@{shared}"
-    out = (analysis_root or DEFAULT_ANALYSIS_ROOT) / "_cross" / CROSS_KIND / name
+    out = (analysis_root or DEFAULT_ANALYSIS_ROOT) / "_cross" / kind / name
     out.mkdir(parents=True, exist_ok=True)
     return out
 

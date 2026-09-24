@@ -2,10 +2,10 @@
 
 ## Phase 0: Port to v5
 - [ ] Re-run v4 `plot-vp-proximity` for p5/p25/all and confirm the committed CSVs still match the numbers quoted in §1b (`plan.md` Context).
-- [ ] Port `v4/modules/vp_proximity.py` to `v5/modules/figure_vp_proximity.py` against v5's `classify`/`cross`/`paths`/`methods`.
-- [ ] Carry all 15 tests from `v4/tests/test_vp_proximity.py` across; `TestCohortExcludesUnanswered` is the load-bearing one.
-- [ ] Diff the ported module's output against the v4 CSVs cell for cell before building anything on top.
-- [ ] Register `plot-vp-proximity` on the v5 CLI and decide `_cross/<combo>/<kind>/` naming for the two new kinds.
+- [x] Port `v4/modules/vp_proximity.py` to `v5/modules/figure_vp_proximity.py` against v5's `classify`/`cross`/`paths`/`methods`.
+- [x] Carry all 15 tests from `v4/tests/test_vp_proximity.py` across; `TestCohortExcludesUnanswered` is the load-bearing one.
+- [x] Diff the ported module's output against the v4 CSVs cell for cell before building anything on top.
+- [x] Register `plot-vp-proximity` on the v5 CLI and decide `_cross/<combo>/<kind>/` naming for the two new kinds. (Figure: `_cross/vp-proximity/<combo>/`, i.e. v5's `_cross/<kind>/<combo>/` via `cross.cross_dir(kind=...)`.)
 
 ## Phase 1: `cohort_overlap`
 - [ ] `v5/modules/cohort_overlap.py` reusing the ported `load` / `cohort_frame` unchanged.

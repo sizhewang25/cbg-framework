@@ -12,9 +12,13 @@
         --run-id as01-260728-260802-mesh \
         --run-id as02-260728-260802-mesh \
         --run-id as03-260728-260802-mesh
+    python -m scripts.analysis.v5.cli plot-vp-proximity -c p5 -c p25 -c all \
+        --run-id as01-260728-260802-mesh \
+        --run-id as02-260728-260802-mesh \
+        --run-id as03-260728-260802-mesh
 
 `classify` and `plot-answer-space` need the answer space; `plot-outcome-bars`
-and `plot-error-cdf` need `classify` on every run. Everything writes under `outputs/analysis/v5/`.
+`plot-error-cdf` and `plot-vp-proximity` need `classify` on every run. Everything writes under `outputs/analysis/v5/`.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from scripts.analysis.v5.modules import (
     classify,
     figure_error_cdf,
     figure_outcome_bars,
+    figure_vp_proximity,
     map_answer_space,
     mapping,
 )
@@ -292,6 +297,62 @@ def plot_error_cdf_cmd(
             analysis_root=analysis_root,
             min_x_km=min_x_km,
             max_x_km=max_x_km,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for png in pngs:
+        typer.echo(f"wrote {png}")
+
+
+@app.command("plot-vp-proximity")
+def plot_vp_proximity_cmd(
+    run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable); pooled."),
+    cohort: list[str] = typer.Option(
+        None,
+        "--cohort",
+        "-c",
+        help=(
+            "Which TGs to describe: p5 / p25 / p95 (each method's own most "
+            "accurately placed 5%, 25% or 95%) or all -- which, unlike p95, "
+            "keeps the unanswered rows too. Repeatable; default p25."
+        ),
+    ),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Draw only these."),
+    geo: bool = typer.Option(True, "--geo/--no-geo", help="Draw the geographically closest VP violin."),
+    sping: bool = typer.Option(True, "--sping/--no-sping", help="Draw the smallest-RTT VP violin."),
+    nside: int = typer.Option(
+        figure_vp_proximity.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help=(
+            "Which rung's *_tgs.parquet supplies pred_dist_to_tg_km and status. "
+            "It does not change the answer, so this selects a file, not a variant."
+        ),
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """How close a VP was, for the TGs each method placed best (ported from v4).
+
+    Two violins per method: the geographically closest VP, and the smallest-RTT
+    VP whose coordinate S-P returns. The gap between them is RTT inflation.
+    Writes `vp_proximity.<cohort>.{png,csv,manifest.json}` into
+    `_cross/vp-proximity/<datasets>[@<arm>]/`. The CSV carries `max_km` -- the
+    bound -- beside `distinct_values` and `max_tie_share`, which say how much
+    of the drawn violin is smoothing over replica ties. Needs `classify` on
+    every run.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id")
+    try:
+        pngs = figure_vp_proximity.build_for_runs(
+            [resolve_run(r, outputs_root) for r in run_id],
+            cohorts=list(cohort) if cohort else None,
+            methods=list(method) if method else None,
+            geo=geo,
+            sping=sping,
+            nside=nside,
+            analysis_root=analysis_root,
         )
     except (ValueError, MissingArtifactError) as exc:
         raise typer.BadParameter(str(exc)) from exc

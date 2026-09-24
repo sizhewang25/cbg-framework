@@ -33,6 +33,20 @@ def elementwise_km(lat_a, lon_a, lat_b, lon_b) -> np.ndarray:
     return EARTH_RADIUS_KM * np.arccos(np.clip(np.sum(a * b, axis=1), -1.0, 1.0))
 
 
+def haversine_km(lat_a, lon_a, lat_b, lon_b) -> np.ndarray:
+    """Paired distance by haversine: `out[i] = d(a[i], b[i])`.
+
+    `elementwise_km`'s arccos of a dot product loses precision near zero
+    (arccos(1 - eps) ~ sqrt(2 eps)), which is invisible at grid scale and not at
+    the sub-kilometre VP distances the VP-proximity figure draws on a log axis.
+    """
+    lat1, lon1, lat2, lon2 = (
+        np.radians(np.asarray(v, dtype=float)) for v in (lat_a, lon_a, lat_b, lon_b)
+    )
+    a = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+
 def spherical_centroid(lat_deg, lon_deg) -> tuple[float, float]:
     """Normalised mean of the unit vectors, as `(lat, lon)` degrees.
 
