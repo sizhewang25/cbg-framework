@@ -44,8 +44,13 @@ ratios. Everything below is the layer above that.
   - Overlap with Shortest-Ping's cohort — p5: SoI 96.8, OCT-S 11.1, OCT-H 9.5,
     SPO 0.0, VAN 0.0; p25: 94.0, 47.0, 42.6, 43.8, 25.6.
   - Refusal on S-P's cohort — VAN 57.1% (p5) / 59.3% (p25), all others 0%.
-  - Error p50 on S-P's cohort — p5: SoI 0.5, OCT-S 41.1, OCT-H 7.5, SPO 149.1,
-    VAN 85.2; p25: 13.8, 20.8, 20.8, 152.9, 59.0.
+  - Error p50 on S-P's cohort — **S-P reference 0.46 / 8.77**; p5: SoI 0.5,
+    OCT-S 41.1, OCT-H 7.5, SPO 149.1, VAN 85.2; p25: 13.8, 20.8, 20.8, 152.9,
+    59.0. The reference row must be emitted, not left implicit: without it the
+    err column has no scale and SoI's 13.8 km reads as good.
+  - Per-target share closer than S-P on S-P's own cohort (p5 / p25) — OCT-H
+    7.9 / 26.2, OCT-S 9.5 / 26.8, SoI 0.0 / 16.7, VAN 3.9 (solved only) / 0.0,
+    SPO 0.0 / 0.0.
   - Baseline-beats-method by >1 km on the method's own cohort — SPO 87.3% (p5)
     / 83.9% (p25), VAN 51.4% (p25), Octants 0% / 14.8%.
   - Far-tail counts at p25, `d_sping >` 100/200/400 km — OCT-H 8/1/1,
