@@ -1,4 +1,4 @@
-"""Outcome bars: the stack partitions, the encoding holds, the order is the ladder."""
+"""Outcome bars: cell label outer, ring tier inner, ranked by correct-region share."""
 
 from __future__ import annotations
 
@@ -52,10 +52,16 @@ def _scored(space, preds, statuses=None):
 
 @pytest.fixture(scope="module")
 def table(space):
-    good = [_offset(SEATTLE, north_km=2)] * 6 + [OMAHA] * 2 + [ARCTIC] * 2
-    bad = [_offset(SEATTLE, east_km=400)] * 3 + [OMAHA] * 4 + [ARCTIC] * 2 + [None]
+    # "tight": in its grid, but few; "regional": far off yet in the right
+    # serving region more often, plus one unanswered. Ranking by ring would put
+    # tight first; ranking by serving region puts regional first.
+    tight = [_offset(SEATTLE, north_km=2)] * 3 + [OMAHA] * 7
+    regional = [_offset(SEATTLE, east_km=400)] * 5 + [ARCTIC] * 4 + [None]
     summary = C.summarize(
-        {"good": _scored(space, good), "bad": _scored(space, bad, ["SUCCESS"] * 9 + ["ERROR"])},
+        {
+            "tight": _scored(space, tight),
+            "regional": _scored(space, regional, ["SUCCESS"] * 9 + ["ERROR"]),
+        },
         128,
     )
     summary.insert(0, "run_id", "syn-x")
@@ -68,10 +74,15 @@ def test_the_drawn_segments_close_at_one(table):
     assert np.allclose(table[cols].sum(axis=1), 1.0)
 
 
-def test_segments_are_tiers_by_cell_label_then_failed():
+def test_group_shares_close_at_one(table):
+    cols = [f"share_{F.group_col(g)}" for g in F.GROUPS]
+    assert np.allclose(table[cols].sum(axis=1), 1.0)
+
+
+def test_segments_are_cell_label_outer_ring_inner():
     segs = F.segments()
+    assert segs[:4] == [("ring0", "true"), ("ring1", "true"), ("ring2", "true"), ("beyond", "true")]
     assert segs[-1] == (F.FAILED, None)
-    assert segs[:3] == [("ring0", "true"), ("ring0", "wrong"), ("ring0", "outland")]
     assert len(segs) == len(F.TIERS) * len(C.CELL_LABELS) + 1
 
 
@@ -79,11 +90,11 @@ def test_hatches_are_empty_right_left():
     assert F.CELL_HATCH == {"true": "", "wrong": "//", "outland": "\\\\"}
 
 
-def test_each_panel_ranks_down_the_ring_ladder(table):
-    assert F.panel_order(table, "syn") == ["good", "bad"]
+def test_each_panel_ranks_by_serving_region_first(table):
+    assert F.panel_order(table, "syn") == ["regional", "tight"]
 
 
-def test_render_draws_hatches_and_one_border_per_tier(table, tmp_path, monkeypatch):
+def test_render_borders_wrap_cell_groups_and_rails_carry_stripes(table, tmp_path, monkeypatch):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -94,15 +105,22 @@ def test_render_draws_hatches_and_one_border_per_tier(table, tmp_path, monkeypat
     monkeypatch.setattr(plt, "close", lambda fig=None: captured.setdefault("fig", fig))
     png = F.render(table, 128, tmp_path)
     real_close(captured["fig"])
-    assert png.exists()
+    assert png.name == "outcome_bars.healpix-128.png" and png.exists()
 
     ax = captured["fig"].axes[0]
-    patches = [p for p in ax.patches]
-    borders = [p for p in patches if p.get_facecolor()[3] == 0 and p.get_linewidth() > 1.0]
-    hatched = {p.get_hatch() for p in patches if p.get_facecolor()[3] > 0}
-    # good: ring0 + beyond; bad: beyond + failed.
-    assert len(borders) == 4
-    assert {"//", "\\\\"} <= hatched and ("" in hatched or None in hatched)
+    borders = [p for p in ax.patches if p.get_facecolor()[3] == 0 and p.get_linewidth() > 1.0]
+    # tight: true + wrong; regional: true + outland + no answer.
+    assert len(borders) == 5
+    rails = [p for p in ax.patches if p.get_width() == pytest.approx(F._RAIL_W)]
+    assert {p.get_hatch() or "" for p in rails} == {"", "//", "\\\\"}
+    # No rail for "no answer": 2 groups for tight, 2 for regional.
+    assert len(rails) == 4
+
+
+def test_rail_labels_stay_inside_the_axis():
+    ys = F._spread([0.01, 0.02, 0.97, 0.99], F._RAIL_LABEL_GAP)
+    assert ys[0] >= F._RAIL_LABEL_GAP / 2 - 1e-9 and ys[-1] <= 1 - F._RAIL_LABEL_GAP / 2 + 1e-9
+    assert all(b - a >= F._RAIL_LABEL_GAP - 1e-9 for a, b in zip(ys, ys[1:]))
 
 
 def test_guard_rejects_a_table_whose_cross_tab_does_not_close(table, tmp_path):
@@ -116,6 +134,8 @@ def test_guard_rejects_a_table_whose_cross_tab_does_not_close(table, tmp_path):
         C.guard_cross_tab(bad)
 
 
-def test_csv_columns_are_all_emitted_by_summarize(table):
+def test_csv_columns_are_all_emitted(table):
     missing = [c for c in F.csv_columns() if c not in table.columns and c not in ("run_id", "dataset")]
     assert missing == []
+    for g in F.GROUPS:
+        assert F.group_col(g) in F.csv_columns()

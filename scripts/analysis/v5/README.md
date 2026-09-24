@@ -30,6 +30,23 @@ every `meta.json` and manifest.
 v4 used `seed` to mean a HEALPix centre and `cell` to mean a HEALPix pixel.
 That clash is why v5 is a separate package and not an edit to v4.
 
+## Methods
+
+Methods are named by short terms throughout v5, in figures, manifests and
+prose. The lookup table is `methods.METHOD_TERMS`:
+
+| term  | full name             | combo id(s)                |
+|-------|-----------------------|----------------------------|
+| OCT-H | Octant-Hull CBG       | octant_cbg_hull            |
+| OCT-S | Octant-Spline CBG     | octant_cbg_spl, octant_cbg |
+| SOI   | Speed-of-Internet CBG | million_scale_cbg          |
+| S-P   | Shortest-Ping         | shortest_ping              |
+| SPO   | Spotter CBG           | spotter_cbg                |
+| VAN   | Vanilla CBG           | vanilla_cbg                |
+
+Each outcome-bar figure prints the terms it uses under its panels, and its
+manifest records them.
+
 ## The two labels
 
 | label | values | bounded by |
@@ -94,14 +111,23 @@ manifest records that share per rung.
 
 **`plot-outcome-bars`** draws one figure per rung, in two layouts: `compare`
 (one panel per dataset) and `pooled` (a micro-average). They are written to
-`_cross/classify/<datasets>@<arm>/`. Each bar stacks the ring tiers
-bottom-up, **colour = ring tier** (green, light blue, light purple, light grey
-for "further out", dark grey for "no answer"). Inside each tier, **stripe = cell label**: plain for
-`true`, `//` for `wrong`, `\\` for `outland`. Each tier, including "no
-answer", has the same thicker border, so its three sub-segments read as one
-unit and no segment gains apparent width. Inside a tier, white lines separate
-the cell labels, and every sub-segment wide enough prints its own share. The ordering, pooling and coverage
-rules are v4's.
+`_cross/classify/<datasets>@<arm>/`. Each bar stacks the **cell label**
+first, bottom-up (`true`, `wrong`, `outland`, no answer), and breaks each
+group down by **ring tier**. That asks "right serving region or not, and
+within that, how far off?". The encoding is as follows:
+
+- **Colour = ring tier**: green (in the TG grid), light blue (1 ring out),
+  light purple (2 rings out), light grey (further out), dark grey (no answer).
+- **Stripe = cell label**: plain for `true`, `//` for `wrong`, `\\` for
+  `outland`.
+- **Borders and separators:** each cell-label group has a thick border, and
+  white lines separate the ring tiers inside it.
+- **Labels:** every sub-segment wide enough prints its own share.
+- **Rail:** right of each bar, one white striped segment per group, with the
+  group total set vertically beside it.
+
+Each panel ranks methods by `true` share, then by how tight their true
+predictions are (`true & ring0`, `true & <=ring1`, ...).
 
 ## Guarantees
 

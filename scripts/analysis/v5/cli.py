@@ -179,7 +179,9 @@ def plot_outcome_bars_cmd(
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
 ) -> None:
-    """Outcome bars, one figure per rung: ring tier by colour, cell label by stripe.
+    """Outcome bars, one figure per rung: cell label first (true / wrong /
+    outland / no answer), each broken down by ring tier. Colour = ring tier,
+    stripe = cell label.
 
     Cross-dataset by nature, so `--run-id` is repeatable and there is no
     `--all-runs`. Written to `_cross/classify/<datasets>[@<arm>]/`.
