@@ -238,3 +238,48 @@ class TestCellRings:
         rings = H.cell_rings(pix, 64)
         assert len(rings) == 5
         assert all(r.ndim == 2 and r.shape[1] == 2 for r in rings)
+
+
+class TestRingCells:
+    """The set form of `ring_distance`: which cells are k steps out.
+
+    Load-bearing because two implementations of one breadth-first growth are
+    kept -- `ring_distance` vectorised over pairs, `ring_cells` scalar over one
+    seed -- and they are only safe while they answer identically. Every cell
+    `ring_cells` returns at ring k must make `ring_distance` say k.
+    """
+
+    @pytest.mark.parametrize("nside", [16, 128])
+    def test_it_agrees_with_ring_distance(self, nside):
+        for pix in (0, 85, 1000, H.npix(nside) - 1):
+            rings = H.ring_cells(pix, nside)
+            for k, ring in enumerate(rings):
+                if not ring:
+                    continue
+                got = H.ring_distance(np.full(len(ring), pix), np.array(ring), nside)
+                assert (got == k).all(), (nside, pix, k)
+
+    def test_the_interior_case_is_one_eight_sixteen(self):
+        assert [len(r) for r in H.ring_cells(1000, 128)] == [1, 8, 16]
+
+    def test_corner_cells_are_short(self):
+        """24 cells at every nside sit on a corner of the 12-face base
+        tessellation and have 7 neighbours. A caller that assumed 8 would draw
+        a cell that is not there."""
+        allpix = np.arange(H.npix(16))
+        corners = allpix[(H.neighbours(allpix, 16) < 0).any(axis=1)]
+        assert len(corners) == 24
+        for pix in corners[:3]:
+            assert [len(r) for r in H.ring_cells(int(pix), 16)] == [1, 7, 13]
+
+    def test_the_rings_are_disjoint(self):
+        """A cell reached at ring k-1 must not be re-listed at ring k, or a
+        filled drawing of the two would stack its alpha."""
+        flat = [c for r in H.ring_cells(1000, 128) for c in r]
+        assert len(flat) == len(set(flat))
+
+    def test_max_ring_zero_is_just_the_cell(self):
+        assert H.ring_cells(1000, 128, max_ring=0) == [[1000]]
+
+    def test_it_starts_at_the_seed(self):
+        assert H.ring_cells(1000, 128)[0] == [1000]

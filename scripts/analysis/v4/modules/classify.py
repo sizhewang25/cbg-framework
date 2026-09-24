@@ -81,7 +81,10 @@ MANIFEST_JSON = "manifest.json"
 #: Merged across rungs, one level above the rung directories.
 BY_RESOLUTION_CSV = "accuracy_by_resolution.healpix.csv"
 
-_TARGET_COLUMNS = (
+#: The flat per-target columns every scoring path needs. Public because
+#: `map_mtl` asks for these *plus* the nested constraint columns, and a second
+#: literal copy of the list is the thing that drifts.
+TARGET_COLUMNS = (
     "target_id", "target_lat", "target_lon", "pred_lat", "pred_lon", "status",
 )
 
@@ -99,14 +102,28 @@ def solved_mask(df: pd.DataFrame) -> pd.Series:
     return status == "SUCCESS"
 
 
-def load_method_frame(run: RunPaths, method: str) -> pd.DataFrame:
-    """One row per evaluated target for `method`, across every fold."""
+def load_method_frame(
+    run: RunPaths, method: str, *, columns: tuple[str, ...] = TARGET_COLUMNS
+) -> pd.DataFrame:
+    """One row per evaluated target for `method`, across every fold.
+
+    `columns` exists for the case viewer, which needs the nested
+    `ltd_predictions` / `mtl_participants` structs alongside the flat columns.
+    Widening here rather than adding a second fold walker: this is the only
+    function in v4 that knows how `fold_*/<combo>/targets.parquet` is laid out
+    and how the `fold` column is stamped, and a second one would be free to
+    disagree with it.
+
+    Columns `score_method` does not write ride through it untouched (it copies
+    the frame and only assigns named columns), so a caller that widens here
+    gets them back on the scored frame.
+    """
     frames = []
     for fold in run.fold_ids:
         path = run.combo_dir(method, fold) / "targets.parquet"
         if not path.exists():
             continue
-        t = pq.read_table(path, columns=list(_TARGET_COLUMNS)).to_pandas()
+        t = pq.read_table(path, columns=list(columns)).to_pandas()
         t["fold"] = int(fold.split("_")[1])
         frames.append(t)
     if not frames:

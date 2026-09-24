@@ -73,12 +73,17 @@ The grey is `_INK_2`, **not** `methods.OTHER_HUE`, and the difference is not
 cosmetic. v3 claims a dash is enough to tell its baseline from the
 unpublished-method bucket -- but v3's `_C_MUTED` and `_C_OTHER` are the *same
 hex*, `#898781`, so the claim rests on the dash alone. That was survivable
-while nothing occupied the bucket. It is not survivable here: `spotter_h3_cbg`
-is scored on all three meshes and falls through `LABEL_HUES` to `OTHER_HUE`,
-so porting v3's choice put a solid `#898781` curve on the same axis as a
-dashed `#898781` one, tracking it closely for much of the range. A darker grey
-keeps the baseline recessive while making the two separable by colour as well
-as by dash.
+while nothing occupied the bucket. It was not survivable here: `spotter_h3_cbg`
+was scored on all three meshes and fell through `LABEL_HUES` to `OTHER_HUE`, so
+porting v3's choice put a solid `#898781` curve on the same axis as a dashed
+`#898781` one, tracking it closely for much of the range. A darker grey keeps
+the baseline recessive while making the two separable by colour as well as by
+dash.
+
+That arm is now parked (`outputs/benchmark/_parked/`) and the bucket is empty
+again, which changes nothing here: the choice holds whether or not anything
+currently occupies it, and going back to `OTHER_HUE` would only reinstate a
+collision the next unpublished arm would find.
 
 v3 also had to drop the grey-dashed baseline entirely in its cross-run views,
 where a dash meant "traffic-weighted". v4 has no weighted arm, so the
@@ -680,11 +685,12 @@ def _manifest(
             "dark grey (_INK_2) and dashed rather than its own hue: the "
             "figure shows variants against a reference. Deliberately NOT "
             "methods.OTHER_HUE, which is the same hex as this module's "
-            "_MUTED -- an unpublished arm such as spotter_h3_cbg takes that "
-            "bucket, and v3's claim that a dash alone separates them holds "
-            "only while the bucket is empty. v4 has no traffic-weighted arm, "
-            "so nothing else claims the dash and the convention holds in "
-            "both layouts."
+            "_MUTED -- any unpublished arm takes that bucket, and v3's "
+            "claim that a dash alone separates them holds only while the "
+            "bucket is empty. It is empty today (spotter_h3_cbg occupied it "
+            "until it was parked), which is not something the encoding "
+            "should depend on. No traffic-weighted arm claims the dash "
+            "either, so the convention holds in both layouts."
         ),
         "x_axis": {
             "scale": "log",

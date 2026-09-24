@@ -41,6 +41,9 @@ _NON_SOURCE_DIRS = frozenset({"eval_source", "eval_dataset", "bench_eval"})
 #: parent, where the grid-independent figures land.
 CLS_ACCURACY_KIND = "target-cls-accuracy"
 
+#: The case viewer's tree. Not under `CLS_ACCURACY_KIND` — see `mtl_map_dir`.
+MTL_MAP_KIND = "mtl-map"
+
 
 class MissingArtifactError(FileNotFoundError):
     """A required artifact is absent, with a hint on how to produce it."""
@@ -78,6 +81,17 @@ class RunPaths:
     @property
     def eval_source_dir(self) -> Path:
         return self.run_dir / "eval_source"
+
+    @property
+    def target_space_json(self) -> Path:
+        """Provenance of `targets.csv`/`vps.csv`, written by
+        `materialize-target-space`.
+
+        Its `csv` key is the only record of a run's canonical edge CSV before
+        `eval_source/` exists, which is why `edges.resolve_source_csv` falls
+        back to it.
+        """
+        return self.setup_dir / "target_space.json"
 
     def eval_file(self, suffix: str) -> Path:
         """`eval_source/<basename>_<suffix>` — the dataset-scored sidecar.
@@ -160,6 +174,31 @@ class RunPaths:
         a reader to look for a difference that cannot exist.
         """
         return self.analysis_dir(CLS_ACCURACY_KIND, root=root)
+
+    def mtl_map_dir(self, nside: int, *, root: Path | None = None) -> Path:
+        """`<root>/<run_id>/mtl-map/healpix-<nside>/` — the rendered viewers.
+
+        Its own kind rather than a subdirectory of `target-cls-accuracy/`:
+        `plot-mtl-map` rebuilds the answer space and the scoring in-process
+        instead of reading them, so it runs on a bare benchmark run. Writing
+        into the scoring directory would imply `classify` had run and leave
+        that directory's provenance ambiguous.
+        """
+        return self.rung_dir(MTL_MAP_KIND, nside, root=root)
+
+    def mtl_region_cache_dir(self, *, root: Path | None = None) -> Path:
+        """`<root>/<run_id>/mtl-map/regions/` — deliberately rung-free.
+
+        A replayed MTL feasible region is a function of `(run, combo, target,
+        mtl_kwargs)`; `replay_mtl` never sees an nside. Filing the cache under
+        `healpix-<nside>/` would make a second rung re-pay the full replay --
+        ~7 s per target on the Octant family, ~47 minutes serial for 399
+        targets -- for bytes it already has.
+
+        Same argument `cls_accuracy_root` makes for the error CDF, applied to
+        a cache rather than to an artifact.
+        """
+        return self.analysis_dir(MTL_MAP_KIND, root=root) / "regions"
 
 
 def discover_runs(root: Path | str = DEFAULT_OUTPUTS_ROOT) -> list[RunPaths]:

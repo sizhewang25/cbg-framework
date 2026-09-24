@@ -51,6 +51,7 @@ import numpy as np
 import pandas as pd
 
 from scripts.analysis.v4.modules import healpix as H
+from scripts.analysis.v4.modules import sites as S
 from scripts.analysis.v4.modules import mapping as M
 from scripts.analysis.v4.modules.bipartite import (
     OCCUPANCY_CSV,
@@ -93,8 +94,13 @@ def distinct_sites(targets: pd.DataFrame) -> pd.DataFrame:
     ~20 replicas share a coordinate on these meshes, so the per-target frame
     would put 20 coincident marks on one pixel. Deduplicating is what lets a
     two-dot cell be read as two merged sites.
+
+    Keyed on `sites.SITE_COLUMNS` rather than on a literal pair, so this figure
+    and the tables that count sites cannot come to disagree about what one is.
+    The run id is not needed here: a figure is drawn for one run at a time, so
+    every row already shares it.
     """
-    return targets.drop_duplicates(["target_lat", "target_lon"])
+    return targets.drop_duplicates(list(S.SITE_COLUMNS))
 
 
 def count_merged_cells(targets: pd.DataFrame) -> int:

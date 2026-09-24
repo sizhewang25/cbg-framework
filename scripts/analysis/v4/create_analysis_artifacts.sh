@@ -48,25 +48,16 @@ DEFAULT_WEIGHTED=(
   as03-260728-260802-weighted
 )
 
-# The six published variants, passed to plot-euler explicitly.
+# No command here restricts its methods. Every one of them discovers what to
+# score or draw from the benchmark output tree, which is the single place to
+# decide it: `combo_ids` globs `fold_*/<combo>/targets.parquet`, and the two
+# figures that do not go through `classify` glob `*_cells.parquet`.
 #
-# `combo_ids` globs the OUTPUT TREE, not the config, so the mesh runs also carry
-# `spotter_h3_cbg` -- the density MTL's preserved H3 backup, kept for the
-# grid-change comparison and runnable from no config. As a seventh circle it
-# saturates the layout (its label cannot clear Octant-Hull's at nside 16), so it
-# is excluded here rather than by a default exclusion list inside the figure,
-# which is what `guard_common_methods` exists to prevent.
-#
-# Only plot-euler is restricted. The outcome bars and the error CDF have room for
-# the extra arm and it is a real scored method, so they keep it where it exists.
-EULER_METHODS=(
-  vanilla_cbg
-  million_scale_cbg
-  octant_cbg_hull
-  octant_cbg_spl
-  spotter_cbg
-  shortest_ping
-)
+# That is why `spotter_h3_cbg` -- the density MTL's preserved H3 backup, in no
+# config and not runnable -- is PARKED under outputs/benchmark/_parked/ rather
+# than filtered out with `--method` here. An allow-list in this script would have
+# to be edited again the next time a combo is added, and until it was, the new
+# combo would be silently unscored. See outputs/benchmark/_parked/README.md.
 
 MESH=()
 WEIGHTED=()
@@ -186,6 +177,12 @@ cross_arm() {
   printf '\n==================== cross-dataset: %s (%d run(s)) ====================\n' \
     "$arm" "${#runs[@]}"
 
+  # What the grid costs before any method is asked: how many of the operator's
+  # own sites each rung can still tell apart. Reads the answer space only, so it
+  # is built whether or not any scoring succeeded -- and it is the denominator
+  # every accuracy figure below is implicitly quoted against.
+  run class-collapse $V4 class-collapse "${args[@]}"
+
   # Where every prediction landed, one figure per rung. `compare` gives one
   # panel per dataset, `pooled` a single count-weighted panel over all of them.
   run plot-outcome-bars $V4 plot-outcome-bars \
@@ -193,9 +190,19 @@ cross_arm() {
 
   # Whether those are the SAME targets -- the question the bars cannot answer.
   # One rung (nside 128), swept over the containment tolerance instead.
-  local m=()
-  for x in "${EULER_METHODS[@]}"; do m+=(--method "$x"); done
-  run plot-euler $V4 plot-euler "${args[@]}" "${m[@]}"
+  #
+  # Six circles is what the layout holds: a seventh label cannot clear
+  # Octant-Hull's at nside 16. Kept to six by what is in the benchmark tree, not
+  # by a `--method` list here -- see the note above.
+  run plot-euler $V4 plot-euler "${args[@]}"
+
+  # The coarse rung, top-1 only. The command's own default is nside 128, which
+  # is the rung to RANK on; this one is the rung to show the metric SATURATE on
+  # -- at 407 km cells the single largest region is all six methods at once,
+  # bigger than any exclusive lobe. The four figures this section writes are the
+  # four variants the package README publishes, so it produces all of them
+  # rather than leaving the last as a step someone has to remember.
+  run plot-euler[nside16] $V4 plot-euler --nside 16 --top-n 1 "${args[@]}"
 
   # The pooled error distribution, beside the pooled bars.
   run plot-error-cdf-pooled $V4 plot-error-cdf --layout pooled "${args[@]}"

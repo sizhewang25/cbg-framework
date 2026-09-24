@@ -8,6 +8,12 @@ Build commands first, then figures, in dependency order:
     python -m scripts.analysis.v4.cli plot-answer-space  --run-id as01-260728-260802-mesh
     python -m scripts.analysis.v4.cli plot-outcome-bars  --run-id as01-... --run-id as02-...
     python -m scripts.analysis.v4.cli plot-euler         --run-id as01-... --run-id as02-...
+    python -m scripts.analysis.v4.cli plot-mtl-map       --run-id as01-... -m vanilla_cbg
+
+`plot-mtl-map` needs **nothing**: it rebuilds the answer space and the scoring
+in-process, so it renders on a bare benchmark run. It is driven by its own
+sweep script, `create_mtl_map.sh`, because it costs minutes per run where every
+other command here costs seconds.
 
 `classify` needs the answer space; `build-bipartite` is independent of both and
 can run in any order. `plot-answer-space` needs only `build-bipartite` — one
@@ -40,13 +46,16 @@ import typer
 from scripts.analysis.v4.modules import (
     answer_space,
     bipartite,
+    class_collapse,
     classify,
     figure_error_cdf,
     figure_euler,
     figure_outcome_bars,
     healpix,
     map_answer_space,
+    map_mtl,
     mapping,
+    vp_proximity,
 )
 from scripts.analysis.v4.modules.paths import (
     DEFAULT_ANALYSIS_ROOT,
@@ -157,6 +166,44 @@ def classify_cmd(
             typer.echo(bad.to_string(index=False), err=True)
             if strict:
                 raise typer.Exit(code=1)
+
+
+@app.command("class-collapse")
+def class_collapse_cmd(
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Run to include (repeatable)."
+    ),
+    nside: list[int] = typer.Option(None, "--nside", "-n", help=_NSIDE_HELP),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v4 writes."),
+) -> None:
+    """How many operator sites each rung can still tell apart.
+
+    The prior question to every accuracy figure. Those ask whether a method
+    found the right class; this asks how many classes there are to find, and
+    the answer falls as cells grow: 65 sites occupy 52 classes at nside-16, so
+    38% of them are not separable even in principle, by any estimator.
+
+    Reads the answer space only -- no scoring, no method. It describes the
+    question every method was asked rather than anyone's answer, so it is
+    available as soon as `build-answer-space` has run.
+
+    There is no `--all-runs`. Which datasets belong in one table is the
+    caller's call, and sweeping the tree would merge runs never meant to share
+    a row.
+
+    Needs `build-answer-space` on every run.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id")
+    runs = [resolve_run(r, outputs_root) for r in run_id]
+    try:
+        csv = class_collapse.build_for_runs(
+            runs, nsides=_nsides(nside), analysis_root=analysis_root
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"wrote {csv}")
 
 
 @app.command("plot-outcome-bars")
@@ -450,6 +497,154 @@ def plot_answer_space_cmd(
         except MissingArtifactError as exc:
             raise typer.BadParameter(str(exc)) from exc
         typer.echo(f"wrote {png}")
+
+
+@app.command("plot-mtl-map")
+def plot_mtl_map_cmd(
+    run_id: str = typer.Option(..., help="Run to render. One run per invocation."),
+    method: list[str] = typer.Option(
+        [],
+        "--method",
+        "-m",
+        help=(
+            "Method to render; repeatable. Defaults to every combo in the run "
+            f"plus the {map_mtl.SHORTEST_PING!r} control."
+        ),
+    ),
+    nside: int = typer.Option(
+        healpix.DEFAULT_NSIDE,
+        "--nside",
+        "-n",
+        help=(
+            "The ONE rung to render at. Not a sweep: this is a case viewer, and "
+            "four HTML files are four answers to a question asked about one target."
+        ),
+    ),
+    no_regions: bool = typer.Option(
+        False,
+        "--no-regions",
+        help=(
+            "Skip the MTL feasible-region layer — the only expensive part. The "
+            "benchmark never stores the regions, so each is a full re-run of the "
+            "planar intersection (~7 s/target on the Octant family). Cached under "
+            "mtl-map/regions/, which is rung-free, so the cost is paid once per "
+            "(method, target) no matter which --nside you render."
+        ),
+    ),
+    workers: int = typer.Option(
+        map_mtl.DEFAULT_WORKERS, "--workers", "-j", help="Processes for the replay."
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v4 writes."),
+) -> None:
+    """Interactive per-target map of one method's MTL result and its verdict.
+
+    Depends on no other v4 command: the answer space and the ring-graded scoring
+    are rebuilt in-process by the same functions that write them, so this runs
+    on a bare benchmark run and cannot go stale against the artifacts.
+
+    Draws the truth's cell and its ring-1/ring-2 neighbours, the cell the
+    prediction fell in, every VP's LTD constraint, and the MTL feasible region
+    those constraints intersect to. The Voronoi overlay is drawn as context —
+    it is v3's retired decision boundary, and the page says so.
+    """
+    try:
+        nside = healpix.validate_nside(nside)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    try:
+        run = resolve_run(run_id, outputs_root)
+        methods = list(method) or [*run.combo_ids, map_mtl.SHORTEST_PING]
+        rendered = map_mtl.build_for_run(
+            run,
+            methods=methods,
+            nside=nside,
+            analysis_root=analysis_root,
+            regions=not no_regions,
+            workers=max(1, int(workers)),
+            progress=typer.echo,
+        )
+    except MissingArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    for name, path, payload in rendered:
+        # The tally is the assertion that this map and `accuracy.csv` agree, so
+        # a mismatch is visible without opening the file.
+        counts = {s: 0 for s in map_mtl.STATUSES}
+        for t in payload["targets"]:
+            counts[t["status"]] += 1
+        tally = " / ".join(f"{s} {counts[s]}" for s in map_mtl.STATUSES)
+        typer.echo(
+            f"{run.run_id}: nside={payload['nside']} ({payload['cell_km']} km) · "
+            f"{name} · {len(payload['targets'])} targets ({tally}) · "
+            f"K={payload['n_seeds']}"
+        )
+        typer.echo(f"wrote {path}")
+
+
+@app.command("plot-vp-proximity")
+def plot_vp_proximity_cmd(
+    run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable)."),
+    cohort: list[str] = typer.Option(
+        None,
+        "--cohort",
+        "-c",
+        help=(
+            "Which targets to describe: p5 / p25 (each method's own most "
+            "accurately placed 5% or 25%) or all. Repeatable; default p25."
+        ),
+    ),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Draw only these."),
+    geo: bool = typer.Option(
+        True, "--geo/--no-geo", help="Draw the geographically closest VP violin."
+    ),
+    sping: bool = typer.Option(
+        True, "--sping/--no-sping", help="Draw the smallest-RTT VP violin."
+    ),
+    nside: int = typer.Option(
+        vp_proximity.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help=(
+            "Which rung's *_cells.parquet supplies error_km and status. It "
+            "does not change the answer -- error_km is identical at every "
+            "rung -- so this selects a file, not a variant."
+        ),
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v4 writes."),
+) -> None:
+    """How close a VP was, for the targets each method placed best.
+
+    Two violins per method: the geographically closest VP, and the smallest-RTT
+    VP whose coordinate Shortest-Ping returns. The gap between them is RTT
+    inflation, and it is what separates the methods that only win where latency
+    already points at a near VP from the methods that recover a location when
+    it does not.
+
+    Writes into `_cross/<datasets>[@<arm>]/vp_proximity/`, one PNG, stats CSV
+    and manifest per cohort. The CSV carries `max_km` -- the bound -- beside
+    `distinct_values` and `max_tie_share`, which say how much of the drawn
+    violin is smoothing over replica ties.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id")
+    try:
+        written = vp_proximity.build_for_runs(
+            list(run_id),
+            cohorts=list(cohort) if cohort else None,
+            methods=list(method) if method else None,
+            geo=geo,
+            sping=sping,
+            nside=nside,
+            outputs_root=outputs_root,
+            analysis_root=analysis_root,
+        )
+    except (MissingArtifactError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for path in written:
+        typer.echo(f"wrote {path}")
 
 
 if __name__ == "__main__":

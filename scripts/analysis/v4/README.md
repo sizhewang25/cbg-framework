@@ -71,6 +71,11 @@ The ranking inverts. Spotter led as01 under nearest-seed and is last under
 containment, at exactly zero on all three datasets — its cell-centre estimator
 never once lands in the truth's own cell, which the old rule could not see.
 
+`spotter_h3_cbg` is **parked** — see `outputs/benchmark/_parked/README.md`. The
+row is kept here because the measurement is the point; the arm is no longer
+drawn in any figure. Everything below that names it is likewise a record of what
+was measured, not a description of the current outputs.
+
 Both Spotter rows say the same thing, and that is itself a result: the top row
 is the density MTL on H3 res-4, the bottom the same MTL on HEALPix nside 128.
 Changing the hypothesis grid moved the nearest-seed number by 2.5 points on as01
@@ -220,14 +225,16 @@ The fit degrades predictably as the sets grow into each other — `placed` runs
 97.0% -> 84.8% across those four — which is the overdetermination the figure
 reports rather than hides.
 
-**The method set is passed explicitly.** `spotter_h3_cbg` — the density MTL's
-preserved H3 backup — is scored at every rung because `combo_ids` globs the
-output tree, so the figure's default (every method scored in every run) picks
-it up as a seventh circle. At nside 16 that saturated the layout: its label
-could not clear Octant-Hull's. It is excluded with `--method` rather than by a
-default exclusion list, because silently dropping a scored method is what
-`guard_common_methods` exists to prevent; park it by moving its directory if
-you want it gone for good.
+**The method set comes from the output tree.** `combo_ids` globs it, so the
+figure's default is every method scored in every run — which is six, and six
+circles is what the layout holds. It was briefly seven: `spotter_h3_cbg`, the
+density MTL's preserved H3 backup, saturated the layout at nside 16 because its
+label could not clear Octant-Hull's. It is now **parked** (moved out of
+`outputs/benchmark/v2/`, see `outputs/benchmark/_parked/README.md`) rather than
+filtered with `--method`, so the tree is the one place that decides what is
+scored. `--method` remains the way to narrow a single invocation; use it rather
+than adding a default exclusion list, which is what `guard_common_methods`
+exists to prevent.
 
 **`spotter_cbg` has no circle at top-1.** It places zero targets in the truth's
 own cell on all three meshes, and a zero-radius circle is a dot a reader takes
@@ -388,6 +395,120 @@ had to drop the grey dashed baseline in its cross-run views because a dash
 there meant "traffic-weighted"; v4 has no weighted arm, so the convention
 holds everywhere.
 
+## The table with no figure: class collapse
+
+Every figure above asks whether a method found the right class. This table asks
+the prior question — **how many classes are there to find?** — and the answer
+falls as the cells grow:
+
+| rung | cell | sites | classes | sites that merge |
+|---|--:|--:|--:|---|
+| nside-128 | 51 km | 65 | 63 | 4 -> 2 cells |
+| nside-64 | 102 km | 65 | 63 | 4 -> 2 |
+| nside-32 | 204 km | 65 | 60 | 10 -> 5 |
+| nside-16 | 407 km | 65 | **52** | 25 -> 12 (one holds 3) |
+
+At nside-16, 38.5% of the operator's own sites are not separable **even in
+principle**, by any estimator. Coarsening does not merely relax the tolerance a
+method is graded against; it destroys class distinctions. It is also why
+containment and proximity can disagree on a direct hit at coarse rungs — two
+real sites in one cell means landing in the right cell can still leave the
+prediction nearest the wrong site's seed.
+
+It is drawn from the answer space alone: no scoring is read and no method
+appears, so it is available as soon as `build-answer-space` has run. There is no
+figure because four rows of two columns are a table.
+
+### A site is `(run_id, target_lat, target_lon)`
+
+`modules/sites.py` owns that key, and it is the only spelling — the figure above
+that de-duplicates coordinates now calls into it too. The run id is **part of
+the key** because operators geolocate ASN by ASN: a facility serving two
+autonomous systems poses two geolocation problems, with different targets and a
+separately fit calibration.
+
+That makes the published site count 65 — the sum of the runs' 20 / 22 / 23 — and
+it is not a count of places. Pooled, the three meshes hold only **43 distinct
+coordinates**: 7 appear in all three runs, 8 in exactly two. Both numbers go
+into the manifest under `sites`, so 65 cannot be read as "65 unique
+coordinates", which is what it is not.
+
+Replicas carry byte-identical coordinates, so the rounding in `SITE_DECIMALS` is
+a guard against a future jittered dataset rather than a tuning knob; the
+manifest reports the count at 2 through 6 decimals so such a dataset announces
+itself.
+
+### The ladder is a dial on the quantization cost, not a switch
+
+as01 holds 20 sites but never exceeds 18 classes, at any rung including the
+finest — two pairs share a cell all the way up, capping its separability at 0.90
+before any method is asked. `quantizer_floor` in the manifest reports this per
+run. Refining the grid buys back some of the cost and never all of it.
+
+## The case viewer: `plot-mtl-map`
+
+Every figure above shows a distribution. This one shows a **case** — pick a
+target and read, on one map, every quantity the verdict is made of:
+
+* the **truth's cell** (ring 0) and its ring-1 and ring-2 neighbours, drawn as
+  the HEALPix cells they actually are, so "correct" is a region you can see
+  rather than a rank you have to trust;
+* the **cell the prediction fell in**, which is what `ring` compares against;
+* every VP's **LTD constraint** — a disk, or an annulus where the LTD emits a
+  lower bound — and the **MTL feasible region** those constraints intersect to;
+* the **prediction** and the **truth**, joined by the error.
+
+Output is one self-contained HTML per method: Plotly from a CDN, payload
+inlined, no sibling files, so it opens over `file://` with no web server.
+
+### What was ported from v3, and what was not
+
+v3's viewer drew a **nearest-seed** verdict: a top-1/2/3 seed ramp, a margin
+circle, and a Voronoi partition that *was* the decision boundary. That is the
+rule this package exists to retire, so none of those layers survive as the
+verdict, and neither does v3's three-level `proximity` label — both of the
+flags under it are defined over unbounded nearest-seed rank and half-gap
+margin, so printing it beside a `ring2` verdict would put the retired rule back
+in the popup looking authoritative. The two fields worth keeping from that
+table, `sping_vp_id` and `min_inflation`, are plain columns of
+`eval_per_target.csv` and are read straight from it.
+
+**The Voronoi overlay is still drawn**, seeded by the centres of every occupied
+target cell — which is exactly what `build_answer_space` computes, since v4
+seeds each class at its cell centre. It is context, not the verdict, and the
+page says so in as many words. At nside 128 the class cells are 51 km while the
+Voronoi cells spanning them are hundreds of km across; that mismatch is the
+argument v4 makes, drawn.
+
+### It depends on nothing, and nothing depends on it
+
+The answer space and the ring-graded scoring are rebuilt **in-process** by
+calling the same functions that write them, which costs milliseconds. So the
+map renders on a bare benchmark run — no `build-answer-space`, no `classify` —
+and it cannot show a verdict `accuracy.csv` disagrees with. The CLI echoes its
+five-way tally per render for exactly that reason, and the test suite asserts
+the two match on all three mesh runs.
+
+The canonical edge CSV is the one input from outside the benchmark tree. When
+it is missing the map drops the per-VP RTT layer and renders anyway; when
+`target_space.json` marks it a **mesh superset** of a weighted arm the command
+refuses instead, because that file parses and every RTT in it is real but they
+are edges the run never measured.
+
+### Why a separate driver script
+
+`create_mtl_map.sh`, not `create_analysis_artifacts.sh`, for three reasons.
+Every command in that script is seconds; this one is minutes to tens of minutes
+per run, because the benchmark never serializes the feasible region and each
+one is a full re-run of the planar intersection (~7 s per target on the Octant
+family). Nothing depends on it. And it is looked at rather than computed over —
+it answers "why did this method do *that*, on *this* target?", which is a
+question you ask deliberately.
+
+The replay cache is **rung-free** (`mtl-map/regions/`) while the pages are not
+(`mtl-map/healpix-<nside>/`): no nside enters the replay, so rendering a second
+rung must not re-pay it.
+
 ## Usage
 
 Everything below, over the finals runs, in dependency order:
@@ -411,6 +532,7 @@ The individual commands:
 python -m scripts.analysis.v4.cli build-answer-space --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v4.cli build-bipartite    --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v4.cli classify           --run-id as01-260728-260802-mesh
+python -m scripts.analysis.v4.cli class-collapse     --run-id as01-... --run-id as02-...
 python -m scripts.analysis.v4.cli plot-answer-space  --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v4.cli plot-outcome-bars \
     --run-id as01-260728-260802-mesh \
@@ -451,6 +573,27 @@ takes one literally.
 (default 128) and sweeps `--top-n` instead (default: 1, 2 and 3). Roughly 6s
 per fit, so the default pass is ~18s for three figures.
 
+The case viewer has its own driver, because it costs minutes rather than
+seconds:
+
+```bash
+./scripts/analysis/v4/create_mtl_map.sh                    # the three meshes
+./scripts/analysis/v4/create_mtl_map.sh as7018-ripe-mesh   # named runs
+NO_REGIONS=1 ./scripts/analysis/v4/create_mtl_map.sh       # seconds, not minutes
+WORKERS=8 NSIDE=64 METHODS="vanilla_cbg octant_cbg_hull" ./scripts/analysis/v4/create_mtl_map.sh
+
+python -m scripts.analysis.v4.cli plot-mtl-map \
+    --run-id as01-260728-260802-mesh -m vanilla_cbg --nside 128
+```
+
+`--nside` here is a **single** rung, like `plot-euler`'s and unlike the build
+commands': this is a case viewer, and four HTML files are four answers to a
+question asked about one target. `--method` is repeatable and defaults to every
+combo in the run plus the `shortest_ping` control; the script invokes the
+command once per method so a broken combo cannot block the rest of the alphabet
+and the summary names the method rather than just the run. `--no-regions` skips
+the only expensive layer.
+
 ## Layout
 
 ```
@@ -464,6 +607,9 @@ outputs/analysis/v4/<run_id>/
   target-cls-accuracy/accuracy_by_resolution.healpix.csv <- accuracy curve
   target-cls-accuracy/error_cdf.{png,csv,manifest.json}  <- rung-free: error_km
                                                             is the same at every rung
+  mtl-map/healpix-<nside>/mtl_map.<method>.html <- the case viewer, one page per method
+  mtl-map/regions/<method>/{<target_id>.json,_spec.json}  <- rung-free: a replayed
+                                                             region never sees an nside
 
 outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>@<arm>/
   outcome_bars.healpix-<nside>.{png,csv,manifest.json}         <- one panel per dataset
@@ -475,6 +621,8 @@ outputs/analysis/v4/_cross/cls-accuracy/<dataset-set>@<arm>/
   euler.healpix-<nside>.top<N>.membership.csv                  <- the boolean matrix itself
   euler.healpix-<nside>.top<N>.manifest.json
   error_cdf.pooled.{png,csv,manifest.json}                     <- every run's targets, one curve
+  class_collapse.{csv,manifest.json}                           <- sites vs classes, every rung;
+                                                                  no figure, no method, no scoring
 ```
 
 `<arm>` is whatever the pooled run ids share after their dataset head —
@@ -532,7 +680,10 @@ three-level descent (8/50, 5/50, 7/50, up to 131 km) where under H3's two-level
 descent it failed on one (0/50, 0/50, 1/50).
 
 So the density surface and these scoring cells are now the same tessellation.
-The H3 results are preserved in the output tree as `spotter_h3_cbg` — see
-`cli.py rename-combo` — and are scored alongside, which is where the
-`Spotter (H3)` bar in the outcome-bar figures comes from. It is in no config and
-is not runnable: its stored `mtl_kwargs` predate the now-required `grid` key.
+The H3 results are preserved as `spotter_h3_cbg` — see `cli.py rename-combo` —
+and were scored alongside for exactly as long as that comparison needed. With it
+made, the arm is **parked** under `outputs/benchmark/_parked/v2/`, outside the
+root both analysis layers read, so no figure carries a `Spotter (H3)` bar any
+more. The data is kept, not deleted: it is in no config and is not runnable —
+its stored `mtl_kwargs` predate the now-required `grid` key — so it could not be
+re-derived. That directory's README says how to restore it.

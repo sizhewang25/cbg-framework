@@ -253,6 +253,47 @@ def ring_distance(
     return out
 
 
+def ring_cells(pix: int, nside: int, max_ring: int = MAX_RING) -> list[list[int]]:
+    """The neighbourhood of one cell, split by ring: `[[pix], ring 1, ring 2]`.
+
+    The **set** form of `ring_distance`: that answers "how far is b from a",
+    this answers "which cells are k steps out from a". Same breadth-first
+    growth, same treatment of the absent neighbours `neighbours` reports as
+    `-1`, and the same guarantee that the rings are disjoint -- a cell already
+    reached at ring `k-1` is not re-listed at ring `k`.
+
+    Deliberately **not** a refactor target for `ring_distance`. That function
+    is vectorised over pairs, carries a shared-frontier optimisation, and is
+    pinned by the ladder tests; this one is scalar and runs once per distinct
+    occupied cell (~18 per run). Unifying them would trade a live correctness
+    guarantee for a small deduplication. `TestRingCells` cross-checks the two
+    instead: every cell this returns at ring `k` must make `ring_distance`
+    answer `k`.
+
+    Ring 1 holds **7** rather than 8 cells at the 24 base-face corner cells of
+    every nside, and ring 2 is correspondingly short. Callers must read the
+    lengths rather than assume 8 and 16.
+    """
+    n = validate_nside(nside)
+    seed = int(pix)
+    rings: list[list[int]] = [[seed]]
+    if max_ring < 1:
+        return rings
+
+    reached = {seed}
+    shell = {seed}
+    for _ in range(1, int(max_ring) + 1):
+        if not shell:
+            rings.append([])
+            continue
+        block = neighbours(np.fromiter(shell, dtype=np.int64), n).ravel()
+        new = {int(c) for c in block if c >= 0} - reached
+        reached |= new
+        shell = new
+        rings.append(sorted(new))
+    return rings
+
+
 def occupied_cells_by_nside(
     lat_deg, lon_deg, nsides: tuple[int, ...] = NSIDE_LADDER
 ) -> dict[int, int]:
