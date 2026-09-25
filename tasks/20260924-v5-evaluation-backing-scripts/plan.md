@@ -23,14 +23,25 @@ ratios. Everything below is the layer above that.
 
 - Substrate: `as01/as02/as03-260728-260802-mesh` pooled, **1,269 targets**,
   six methods, nside 128 for `solved_mask`.
-- **The active line is `scripts/analysis/v5/`, not v4.** v5 already carries
-  `classify`, `cross`, `paths`, `methods`, `grid`, `sites`, `figure_error_cdf`
-  and `figure_outcome_bars`. It does **not** yet carry `vp_proximity`, so
-  porting that is step one of this task, not an assumption.
+- **The active line is `scripts/analysis/v5/`, not v4.**
   Naming convention observed in v5: figure-producing modules are prefixed
   `figure_`; analysis modules are plain. `cohort_overlap` and `vp_ranking`
-  emit CSVs only, so they stay unprefixed; the port becomes
-  `figure_vp_proximity.py`.
+  emit CSVs only, so they stay unprefixed.
+- **Step 0 is DONE (2026-09-24), committed as `177edf8`.**
+  `v5/modules/figure_vp_proximity.py` and
+  `v5/tests/test_figure_vp_proximity.py` are tracked, and
+  `outputs/analysis/v5/_cross/vp-proximity/<combo>/vp_proximity.{p5,p25,p95,all}.csv`
+  are written. Verified against the committed v4 CSVs: **numerically identical
+  on p5, p25 and all**, the only differences being `method_label` (v5 emits
+  `S-P`/`SOI`/`OCT-H`/`OCT-S`/`VAN`/`SPO` and `all TGs`) and row order in
+  `all`. The paper's §1b provenance line points at v5 and is now valid.
+- **v5 renamed the columns this task consumes.** `target_id` → `tg_id`,
+  `error_km` → `pred_dist_to_tg_km`, and `vp_distances` emits
+  `geo_vp_dist_to_tg_km`, `geo_vp_rtt_ms`, `sping_vp_dist_to_tg_km`,
+  `sping_vp_rtt_ms`, `n_vp` and the **new** `n_sping_vp_ties`. `load` takes a
+  list of `RunPaths` (not run-id strings) and `solved_mask` moved to
+  `v5/modules/status.py`. Any code carried over from v4 must be renamed, not
+  copied.
 - Reusable from v4 until ported: `scripts/analysis/v4/modules/vp_proximity.py`
   (`load`, `cohort_frame`, `stats_table`, `vp_distances`, `COHORTS`) and
   `modules/edges.resolve_source_csv` (gives `sping_rtt_ms`, `geo_vp_rtt_ms`,
@@ -43,13 +54,21 @@ ratios. Everything below is the layer above that.
     max degree **4**; p25 union **686**, `{1:147, 2:191, 3:157, 4:88, 5:68, 6:35}`.
   - Overlap with Shortest-Ping's cohort — p5: SoI 96.8, OCT-S 11.1, OCT-H 9.5,
     SPO 0.0, VAN 0.0; p25: 94.0, 47.0, 42.6, 43.8, 25.6.
+  - **VP-ranking agreement** (share of targets whose smallest-RTT VP *is* the
+    geographically closest VP, i.e. `d_sping == d_geo`) — population
+    **19.1%**, S-P's p25 cohort **67.5%**, S-P's p5 cohort **100%**. Exact
+    agreement equals within-1-km agreement at every scope, so the metric is
+    bimodal and needs no threshold. Median population gap
+    `d_sping - d_geo` = **113.83 km**. RTT ties: **3.9%** of targets have more
+    than one VP at the minimum RTT, at most three. This triple is quoted in
+    the §4.2 opening of `evaluation.tex` and is the newest unbacked claim.
   - Refusal on S-P's cohort — VAN 57.1% (p5) / 59.3% (p25), all others 0%.
   - Error p50 on S-P's cohort — **S-P reference 0.46 / 8.77**; p5: SoI 0.5,
     OCT-S 41.1, OCT-H 7.5, SPO 149.1, VAN 85.2; p25: 13.8, 20.8, 20.8, 152.9,
     59.0. The reference row must be emitted, not left implicit: without it the
     err column has no scale and SoI's 13.8 km reads as good.
   - Per-target share closer than S-P on S-P's own cohort (p5 / p25) — OCT-H
-    7.9 / 26.2, OCT-S 9.5 / 26.8, SoI 0.0 / 16.7, VAN 3.9 (solved only) / 0.0,
+    7.9 / 26.2, OCT-S 9.5 / 26.8, SoI 0.0 / 16.7, VAN 0.0 / 3.9 (solved only),
     SPO 0.0 / 0.0.
   - Baseline-beats-method by >1 km on the method's own cohort — SPO 87.3% (p5)
     / 83.9% (p25), VAN 51.4% (p25), Octants 0% / 14.8%.
@@ -61,8 +80,12 @@ ratios. Everything below is the layer above that.
 
 ## Goals
 
-1. Every number in §1b traces to a committed CSV under
-   `_cross/<combo>/<kind>/`, and the `[PENDING MODULE]` block is deleted.
+1. Every number in §1b traces to a named column of a named CSV under
+   `_cross/<kind>/<combo>/`, emitted by a **committed module and command**,
+   and the `[PENDING MODULE]` block is deleted. Note `outputs/` is
+   gitignored (`.gitignore:209`), so the CSV itself is never committed --
+   "traceable" here means regenerable by a committed command, and the
+   provenance map in `evaluation.md` names the column, not just the file.
 2. A `cohort_overlap` module: per-cohort set structure (union, degree
    histogram, pairwise overlap matrix) plus the behaviour-on-a-reference-cohort
    decomposition (shared / answered-not-best / refused, with error percentiles).
@@ -80,24 +103,40 @@ ratios. Everything below is the layer above that.
 Three steps, all on the v5 line, each mirroring how `vp_proximity` is laid out
 (module + typer command + test file + stats CSV written beside any figure).
 
-**Step 0 — port `vp_proximity` to v5** as `figure_vp_proximity.py`, against
-v5's `classify`/`cross`/`paths`/`methods`. Carry all 15 tests across. Confirm
-the ported module reproduces the committed v4 CSVs cell for cell before
-anything is built on top of it; the numbers in Context are the check.
+**Step 0 — port `vp_proximity` to v5** as `figure_vp_proximity.py`.
+**DONE, committed as `177edf8`.** The v4/v5 CSV equivalence is verified (see
+Context); do not redo it.
 
-**Step 1 — `v5/modules/cohort_overlap.py`**
-- Reuse the ported `load` and `cohort_frame` verbatim; do not re-derive
-  cohorts, or the `solved_mask` trap re-opens.
+**Step 1 — `v5/modules/cohort_overlap.py`** — the first task, and the one that
+backs §4.2 of `evaluation.tex` end to end.
+- Reuse `figure_vp_proximity.load` and `cohort_frame` verbatim; do not
+  re-derive cohorts, or the `solved_mask` trap re-opens.
 - `set_structure(rows)` → union size, degree histogram, pairwise overlap.
 - `against_reference(long, rows, reference="shortest_ping")` → per method:
   shared / answered-not-best / refused shares over the *reference's* cohort,
-  plus error percentiles on solved rows only.
-- `baseline_margin(rows, margin_km=1.0)` → share where `d_sping < error_km -
-  margin`. The margin is required, not cosmetic: at zero margin Shortest-Ping
-  scores 100% against itself on floating-point noise, since `d_sping` and
-  `error_km` agree to ~0.006 km.
-- Emits one tidy CSV per cohort; no figure (the overlap bar chart was
-  considered and rejected — see Caveats).
+  plus error percentiles on solved rows only. **The reference method's own row
+  must be emitted**, not left implicit: it is the scale the error column is
+  read against, and without it SOI's 13.8 km at p25 reads as good rather than
+  as worse than the 8.8 km baseline on the identical targets.
+- `beats_reference(long, rows, reference="shortest_ping")` → per method, the
+  **per-target** share strictly closer to the truth than the reference on the
+  reference's own cohort, over solved rows. This is a separate number from the
+  median comparison and is the defensible form of the claim: the cohort is
+  selected on the reference's error, so part of the median gap is regression
+  to the mean, but a per-target win rate is not exposed to that.
+- `ranking_agreement(long, rows)` → share of targets where the smallest-RTT VP
+  *is* the geographically closest VP (`d_sping == d_geo`), reported for the
+  population **and** per cohort. Emit the exact-equality share, the
+  within-1-km share (they coincide today — if a run ever separates them the
+  metric has stopped being bimodal and the paper's phrasing must change), the
+  median gap `d_sping - d_geo`, and the share of targets with
+  `n_sping_vp_ties > 1` so the "the smallest-RTT VP" phrasing stays honest.
+- `baseline_margin(rows, margin_km=1.0)` → share where `d_sping <
+  pred_dist_to_tg_km - margin`. The margin is required, not cosmetic: at zero
+  margin Shortest-Ping scores 100% against itself on floating-point noise,
+  since `d_sping` and the prediction distance agree to ~0.006 km.
+- Emits one tidy CSV per cohort plus one population-scope row; no figure (the
+  overlap bar chart was considered and rejected — see Caveats).
 
 **Step 2 — `v5/modules/vp_ranking.py`**
 - `radii(distances, soi_kms=200_000)` → constraint radius implied by each RTT.

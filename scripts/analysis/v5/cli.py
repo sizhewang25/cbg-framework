@@ -17,8 +17,13 @@
         --run-id as02-260728-260802-mesh \
         --run-id as03-260728-260802-mesh
 
+    python -m scripts.analysis.v5.cli report-cohort-overlap -c p5 -c p25 \
+        --run-id as01-260728-260802-mesh \
+        --run-id as02-260728-260802-mesh \
+        --run-id as03-260728-260802-mesh
+
 `classify` and `plot-answer-space` need the answer space; `plot-outcome-bars`
-`plot-error-cdf` and `plot-vp-proximity` need `classify` on every run. Everything writes under `outputs/analysis/v5/`.
+`plot-error-cdf`, `plot-vp-proximity` and `report-cohort-overlap` need `classify` on every run. Everything writes under `outputs/analysis/v5/`.
 """
 
 from __future__ import annotations
@@ -30,8 +35,10 @@ import typer
 from scripts.analysis.v5.modules import (
     answer_space,
     classify,
+    cohort_overlap,
     figure_error_cdf,
     figure_outcome_bars,
+    figure_vp_distance_cdf,
     figure_vp_proximity,
     map_answer_space,
     mapping,
@@ -358,6 +365,130 @@ def plot_vp_proximity_cmd(
         raise typer.BadParameter(str(exc)) from exc
     for png in pngs:
         typer.echo(f"wrote {png}")
+
+
+@app.command("plot-vp-distance-cdf")
+def plot_vp_distance_cdf_cmd(
+    run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable); pooled."),
+    method: list[str] = typer.Option(
+        None,
+        "--method",
+        "-m",
+        help=(
+            "Restrict which methods must be scored before a TG is included. "
+            "It does not change the curves -- the two distances are TG "
+            "properties, not method outputs."
+        ),
+    ),
+    nside: int = typer.Option(
+        figure_vp_distance_cdf.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help="Which rung's *_tgs.parquet is read. It does not change the answer.",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """How far a TG is from its nearest VP, from its smallest-RTT VP, and the gap.
+
+    One panel over the whole population, no method on the axis. The third
+    curve is the one that matters: `d_geo <= d_sp` is a per-TG inequality, and
+    two marginal CDFs show only stochastic dominance, which is weaker. The gap
+    is computed per TG, so its support establishes the pointwise claim --
+    `min_gap_km` is in the manifest because a log axis cannot draw a negative
+    gap and would hide a violation rather than show it.
+
+    The gap is exactly 0 for the TGs whose two VPs coincide (19.1% on
+    as01-03), which `log` cannot place. The curve starts at the axis floor
+    already carrying that share; read the left intercept as the share.
+
+    Writes `vp_distance_cdf.{png,csv,manifest.json}` into
+    `_cross/vp-distance-cdf/<datasets>[@<arm>]/`. Needs `classify` on every run.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id")
+    try:
+        pngs = figure_vp_distance_cdf.build_for_runs(
+            [resolve_run(r, outputs_root) for r in run_id],
+            methods=list(method) if method else None,
+            nside=nside,
+            analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for png in pngs:
+        typer.echo(f"wrote {png}")
+
+
+@app.command("report-cohort-overlap")
+def report_cohort_overlap_cmd(
+    run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable); pooled."),
+    cohort: list[str] = typer.Option(
+        None,
+        "--cohort",
+        "-c",
+        help=(
+            "Which TGs to describe: p5 / p25 / p95 (each method's own most "
+            "accurately placed 5%, 25% or 95%) or all. Repeatable; default "
+            "p5 and p25."
+        ),
+    ),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Report only these."),
+    reference: str = typer.Option(
+        cohort_overlap.DEFAULT_REFERENCE,
+        "--reference",
+        help=(
+            "Whose cohort the other methods are measured on. Its own row is "
+            "emitted, as the scale the error column is read against."
+        ),
+    ),
+    margin_km: float = typer.Option(
+        cohort_overlap.DEFAULT_MARGIN_KM,
+        "--margin-km",
+        help=(
+            "How much closer the shortest-ping VP must be than a prediction to "
+            "count as beating it. Required, not cosmetic: at 0 the S-P control "
+            "scores ~100% against itself on floating-point noise."
+        ),
+    ),
+    nside: int = typer.Option(
+        figure_vp_proximity.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help=(
+            "Which rung's *_tgs.parquet supplies pred_dist_to_tg_km and status. "
+            "It does not change the answer, so this selects a file, not a variant."
+        ),
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Whose easy TGs are whose, and what the others did on them.
+
+    The layer above `plot-vp-proximity`: cohort union and degree histogram, the
+    pairwise overlap matrix, the shared / answered-not-best / refused split on
+    the reference's cohort with error percentiles, the per-TG win rate against
+    it, how often the smallest-RTT VP is the closest VP, and how often the
+    baseline's own VP beats a method's prediction. Writes seven CSVs and a
+    manifest per cohort into `_cross/cohort-overlap/<datasets>[@<arm>]/`.
+    No figure -- see the module docstring for why. Needs `classify` on every run.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id")
+    try:
+        paths = cohort_overlap.build_for_runs(
+            [resolve_run(r, outputs_root) for r in run_id],
+            cohorts=list(cohort) if cohort else None,
+            methods=list(method) if method else None,
+            reference=reference,
+            margin_km=margin_km,
+            nside=nside,
+            analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for path in paths:
+        typer.echo(f"wrote {path}")
 
 
 if __name__ == "__main__":
