@@ -38,6 +38,7 @@ from scripts.analysis.v5.modules import (
     cohort_overlap,
     figure_error_cdf,
     figure_outcome_bars,
+    figure_vp_dist_gap,
     figure_vp_distance_cdf,
     figure_vp_proximity,
     map_answer_space,
@@ -358,6 +359,70 @@ def plot_vp_proximity_cmd(
             methods=list(method) if method else None,
             geo=geo,
             sping=sping,
+            nside=nside,
+            analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for png in pngs:
+        typer.echo(f"wrote {png}")
+
+
+@app.command("plot-vp-dist-gap")
+def plot_vp_dist_gap_cmd(
+    run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable); pooled."),
+    reference: str = typer.Option(
+        figure_vp_dist_gap.SHORTEST_PING,
+        "--reference",
+        "-r",
+        help="Method whose best-case cohorts are drawn. Its error is d_sp when it is S-P.",
+    ),
+    cohort: list[str] = typer.Option(
+        None,
+        "--cohort",
+        "-c",
+        help="Percentile cohorts drawn beside the population (repeatable). Default p25, p5.",
+    ),
+    method: list[str] = typer.Option(
+        None,
+        "--method",
+        "-m",
+        help="Restrict which methods must be scored before a TG is included.",
+    ),
+    nside: int = typer.Option(
+        figure_vp_dist_gap.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help="Which rung's *_tgs.parquet is read. It does not change the gap.",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """The gap `d_sp - d_geo` over the population and a method's best cases.
+
+    S-P's error *is* `d_sp`, and `d_sp = d_geo + gap` splits it into VP
+    proximity and a term measuring how faithfully latency orders VPs by
+    distance. This asks whether S-P's near-exact predictions are the TGs
+    where that second term vanishes.
+
+    **Quote `max_km`, not the zero share.** At p5 an all-zero gap is forced by
+    arithmetic: the cohort bound (1.55 km on as01-03) sits below the smallest
+    positive gap in the population (1.71 km), so no nonzero gap can fit.
+    `forced_zero_gap` in the manifest carries that test per cohort. At p25 the
+    zero share (67.5%) understates a cohort whose gap never exceeds 5.62 km
+    against a bound of 25.3 km that would have admitted four times that.
+
+    Writes `vp_dist_gap.{png,csv,manifest.json}` into
+    `_cross/vp-dist-gap/<datasets>[@<arm>]/`. Needs `classify` on every run.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id")
+    try:
+        pngs = figure_vp_dist_gap.build_for_runs(
+            [resolve_run(r, outputs_root) for r in run_id],
+            methods=list(method) if method else None,
+            reference=reference,
+            cohorts=tuple(cohort) if cohort else figure_vp_dist_gap.DEFAULT_COHORTS,
             nside=nside,
             analysis_root=analysis_root,
         )
