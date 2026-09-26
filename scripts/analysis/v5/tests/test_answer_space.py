@@ -40,9 +40,12 @@ class TestInputContract:
         with pytest.raises(ValueError, match="duplicate tg_id"):
             A.build_answer_space(t, run_id="r")
 
-    def test_a_site_off_the_landmass_is_refused(self):
-        with pytest.raises(ValueError, match="outside the landmass"):
-            _space(coords=(SEATTLE, HONOLULU))
+    def test_a_site_far_offshore_is_accepted(self):
+        """There is no landmass to be off. An unbounded Voronoi is defined for
+        seeds anywhere, so Honolulu is a site like any other -- the guard that
+        used to refuse this is gone with the polygon it tested against."""
+        space = _space(coords=(SEATTLE, HONOLULU))
+        assert space.n_seeds == 2
 
 
 class TestBothPartitions:
@@ -70,14 +73,11 @@ class TestBothPartitions:
         gap = pairwise_km([EWR[0]], [EWR[1]], [JFK[0]], [JFK[1]])[0, 0]
         assert ny.iloc[0] == pytest.approx(gap / 2, abs=0.05)
 
-    def test_seeds_never_split_as_the_grid_grows(self):
-        counts = [_space(nside=n).n_seeds for n in G.NSIDE_LADDER]
-        assert counts == sorted(counts, reverse=True)
-
-    def test_meta_carries_the_glossary_and_landmass(self):
+    def test_meta_carries_the_glossary_and_the_seed_rule(self):
         m = _space().meta
         assert m["glossary"] == A.GLOSSARY
-        assert m["landmass"]["buffer_km"] == pytest.approx(G.grid_km(128), abs=1e-3)
+        assert "landmass" not in m and "landmass" not in m["glossary"]
+        assert m["projection"]["projected_crs"] == "EPSG:5070"
         assert m["seed_rule"]["diameter_km"] == pytest.approx(G.grid_km(128), abs=1e-3)
 
 
@@ -92,6 +92,3 @@ class TestRoundTrip:
             )
         assert back.tgs["tg_seed_id"].dtype == "int64"
 
-    def test_sweep_row_reports_both_partitions(self):
-        row = A.sweep_row(_space())
-        assert row["n_grids"] == 4 and row["n_seeds"] == 3

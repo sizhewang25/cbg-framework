@@ -1,8 +1,10 @@
 """Two labels per prediction, and the cross-tab that partitions them.
 
-`TestTheArcticCase` pins the reason the cell partition must be bounded: the
-prediction v3 credited to Seattle 2,360 km away is beyond on the grid axis and
-outland on the cell axis, at every rung.
+`TestTheArcticCase` pins the reason the two labels must be read together. The
+prediction v3 credited to Seattle 2,360 km away is `correct` on the cell axis
+-- the cell partition is unbounded, so it says so -- and `beyond` on the grid
+axis. v4 suppressed that with a landmass polygon and a fourth label; v5 keeps
+it, because a nearest-seed verdict crediting a 2,360 km miss is the finding.
 """
 
 from __future__ import annotations
@@ -55,10 +57,10 @@ def _offset(point, north_km=0.0, east_km=0.0):
 
 
 class TestCellLabel:
-    def test_near_the_site_is_true(self):
+    def test_near_the_site_is_correct(self):
         s = _space()
         out = C.score_method(_frame(s, [_offset(SEATTLE, north_km=2)]), s)
-        assert out["cell_label"].iloc[0] == "true"
+        assert out["cell_label"].iloc[0] == "correct"
         assert out["ring"].iloc[0] == 0
 
     def test_in_another_serving_region_is_wrong(self):
@@ -67,20 +69,24 @@ class TestCellLabel:
         assert out["cell_label"].iloc[0] == "wrong"
         assert out["pred_seed_id"].iloc[0] != out["tg_seed_id"].iloc[0]
 
-    def test_no_prediction_is_none(self):
+    def test_no_prediction_is_unanswered(self):
+        """The `has_pred` guard in `score_method` is what makes this pass. A
+        row with no prediction keeps `pred_seed_id == -1`, which never equals
+        a real `tg_seed_id`, so masking on inequality alone would label it
+        `wrong` -- a refusal silently recorded as a wrong answer."""
         s = _space()
         out = C.score_method(_frame(s, [None]), s)
-        assert out["cell_label"].iloc[0] == C.NO_PREDICTION
+        assert out["cell_label"].iloc[0] == C.UNANSWERED
         assert out["ring"].iloc[0] == -1 and out["pred_seed_id"].iloc[0] == -1
 
     def test_far_but_in_the_right_serving_region(self):
-        """Beyond on the grid axis, true on the cell axis: 400 km east of
+        """Beyond on the grid axis, correct on the cell axis: 400 km east of
         Seattle is still nearer Seattle's seed than Omaha's. The case the
         cross-tab exists to show."""
         s = _space()
         out = C.score_method(_frame(s, [_offset(SEATTLE, east_km=400)]), s)
         assert out["ring"].iloc[0] == -1
-        assert out["cell_label"].iloc[0] == "true"
+        assert out["cell_label"].iloc[0] == "correct"
 
     def test_distances_to_tg_and_to_seed(self):
         s = _space()
@@ -91,13 +97,16 @@ class TestCellLabel:
 
 
 class TestTheArcticCase:
-    @pytest.mark.parametrize("nside", G.NSIDE_LADDER)
-    def test_it_is_beyond_and_outland_at_every_rung(self, nside):
-        s = _space(nside=nside)
+    def test_the_cell_axis_credits_it_and_the_ring_axis_does_not(self):
+        """2,360 km from the truth, in the Canadian Arctic, and the nearest of
+        the US seeds is still Seattle's -- so the unbounded cell rule calls it
+        `correct`. That is not a bug to patch here: it is why `ring` is read
+        beside `cell_label`, and why `cell_label` alone is not a verdict."""
+        s = _space()
         out = C.score_method(_frame(s, [ARCTIC]), s)
+        assert out["cell_label"].iloc[0] == "correct"
         assert out["ring"].iloc[0] == -1
-        assert out["cell_label"].iloc[0] == "outland"
-        assert not out["pred_in_landmass"].iloc[0]
+        assert out["pred_dist_to_tg_km"].iloc[0] > 2000
 
 
 class TestSummary:
@@ -112,18 +121,25 @@ class TestSummary:
             ["SUCCESS"] * 4 + ["ERROR"],
         )
         assert row["n_tgs"] == 5 and row["n_solved"] == 4 and row["n_failed"] == 1
-        assert row["n_ring0_cell_true"] == 1
+        assert row["n_ring0_cell_correct"] == 1
         assert row["n_beyond_cell_wrong"] == 1  # Omaha
-        assert row["n_beyond_cell_outland"] == 1  # Arctic
-        assert row["n_beyond_cell_true"] == 1  # 400 km east
-        assert row["n_cell_true"] == 2 and row["accuracy_cell_true"] == pytest.approx(0.4)
+        # The Arctic joins the 400 km-east row: both beyond, both credited.
+        assert row["n_beyond_cell_correct"] == 2
+        assert row["n_cell_correct"] == 3
+        assert row["accuracy_cell_correct"] == pytest.approx(0.6)
+        # The three cell labels partition n_tgs, and `unanswered` is the same
+        # rows the grid axis calls failed.
+        parts = row["n_cell_correct"] + row["n_cell_wrong"] + row["n_cell_unanswered"]
+        assert parts == row["n_tgs"]
+        assert row["n_cell_unanswered"] == row["n_failed"] == 1
 
     def test_fallback_is_labelled_but_not_counted(self):
         s = _space()
         scored = C.score_method(_frame(s, [_offset(SEATTLE, north_km=2)], ["FALLBACK"]), s)
-        assert scored["cell_label"].iloc[0] == "true"
+        assert scored["cell_label"].iloc[0] == "correct"
         row = C.summarize({"m": scored}, s.nside).iloc[0]
-        assert row["n_cell_true"] == 0 and row["n_failed"] == 1
+        assert row["n_cell_correct"] == 0 and row["n_failed"] == 1
+        assert row["n_cell_unanswered"] == 1
         assert row["accuracy_ring0"] == 0.0
 
     def test_answered_without_a_coordinate_is_failed_not_beyond(self):
@@ -135,7 +151,17 @@ class TestSummary:
         row = self._summary([OMAHA])
         bad = pd.DataFrame([row])
         bad["n_beyond_cell_wrong"] = 0
-        with pytest.raises(ValueError, match="do not partition the ring tiers"):
+        with pytest.raises(ValueError, match="does not close"):
+            C.guard_cross_tab(bad)
+
+    def test_guard_catches_the_two_axes_disagreeing(self):
+        """`n_cell_unanswered` and `n_failed` count the same rows along the
+        two axes, so a drift between them is a real inconsistency."""
+        row = self._summary([None], ["ERROR"])
+        bad = pd.DataFrame([row])
+        bad["n_cell_unanswered"] = 0
+        bad["n_cell_wrong"] = 1
+        with pytest.raises(ValueError, match="unanswered"):
             C.guard_cross_tab(bad)
 
 
@@ -146,17 +172,3 @@ class TestPopulationContract:
         f["tg_id"] = "nobody"
         with pytest.raises(ValueError, match="not in the nside=128 answer space"):
             C.score_method(f, s)
-
-
-class TestGridAxisIsMonotone:
-    def test_ring0_never_falls_as_grids_grow(self):
-        rng = np.random.default_rng(3)
-        preds = [
-            _offset(SEATTLE, north_km=float(n), east_km=float(e))
-            for n, e in rng.normal(0, 120, (200, 2))
-        ]
-        rows = []
-        for nside in G.NSIDE_LADDER:
-            s = _space(nside=nside)
-            rows.append(C.summarize({"m": C.score_method(_frame(s, preds), s)}, nside))
-        assert C.monotonicity_violations(pd.concat(rows, ignore_index=True)).empty

@@ -2,13 +2,19 @@
 
 Each bar is one method's **entire** TG set, stacked bottom-up by cell label
 
-    true | wrong | outland | no answer
+    correct | wrong | no answer
 
-and each cell-label group broken down by ring tier (ring0, ring1, ring2,
-beyond). The bar's primary split answers "did the prediction land in the TG's
-serving region?"; the breakdown answers "and how far off?". It is the same
-cross-tab classify writes (`n_<tier>_cell_<label>`); grouping by cell label
-first puts the operator's first question on the bar's main division.
+In `bounded` mode each *answered* group is broken down by ring tier (ring0,
+ring1, ring2, beyond): the bar's primary split answers "did the prediction
+land in the TG's serving region?", the breakdown answers "and how far off?".
+It is the same cross-tab classify writes (`n_<tier>_cell_<label>`); grouping
+by cell label first puts the operator's first question on the bar's main
+division.
+
+In `unbounded` mode the breakdown is dropped and the cell axis is drawn alone
+-- the plain nearest-seed verdict, with nothing bounding how far a `correct`
+may be. The pair is the argument: same predictions, same denominator, and a
+method can lead on serving region while holding no ring0 at all.
 
 ## Encoding
 
@@ -16,11 +22,12 @@ first puts the operator's first question on the bar's main division.
   light purple (2 rings out), light grey (further out -- ungraded, so no
   hue), dark grey (no answer). See `TIER_INK` for the reasoning and the
   validation.
-* **Stripe = cell label.** Plain for `true`, `//` for `wrong`, `\\\\` for
-  `outland`. Two stripe directions rather than two densities: direction
-  survives print and colour-vision deficiency, and the empty pattern is the
-  good outcome so the eye reads stripes as "something went wrong". Stripes are
-  white on dark fills and ink on light ones, by the same rule as the labels.
+* **Stripe = cell label** in `bounded`: plain for `correct`, `//` for
+  `wrong`. A stripe rather than a second hue, because hue is already spent on
+  the ring tier; the empty pattern is the good outcome, so the eye reads
+  stripes as "something went wrong". Stripes are white on dark fills and ink
+  on light ones, by the same rule as the labels. In `unbounded` the colour
+  *is* the cell label (`MODE_INK`) and the stripe merely reinforces it.
 * **A thicker border around each cell-label group**, "no answer" included,
   so a group's ring breakdown reads as one unit. Every group takes the same
   border, so no segment gains apparent width -- in a stacked share chart width
@@ -71,17 +78,19 @@ from scripts.analysis.v5.modules import grid as G
 from scripts.analysis.v5.modules import methods
 from scripts.analysis.v5.modules.paths import MissingArtifactError, RunPaths, grid_slug
 
-#: Ring tiers bottom-up, then the unanswered slot.
+#: Ring tiers bottom-up, then the ungraded slot. `unanswered` is a cell label
+#: rather than a tier, but it takes a slot in the stack because it has no ring
+#: and so no breakdown.
 TIERS: tuple[str, ...] = C.RING_TIERS
-FAILED = "failed"
-STACK: tuple[str, ...] = (*TIERS, FAILED)
+UNANSWERED = C.UNANSWERED
+STACK: tuple[str, ...] = (*TIERS, UNANSWERED)
 
 TIER_LABELS = {
     "ring0": "in the TG grid",
     "ring1": "1 ring out",
     "ring2": "2 rings out",
     "beyond": "further out",
-    FAILED: "no answer",
+    UNANSWERED: "no answer",
 }
 
 #: Ring tier -> fill. Hue for the three graded tiers -- green for the TG's own
@@ -108,19 +117,31 @@ TIER_INK = {
     "ring1": "#b8d2f8",
     "ring2": "#a58bd6",
     "beyond": "#d8d7cf",
-    FAILED: "#6b6a65",
+    UNANSWERED: "#6b6a65",
 }
 
-#: Cell label -> hatch. Plain is the good outcome.
-CELL_HATCH = {"true": "", "wrong": "//", "outland": "\\\\"}
+#: Cell label -> hatch. Plain is the good outcome. `unanswered` carries no
+#: stripe: it is not a wrong answer, it is the absence of one, and the dark
+#: grey already separates it from everything else.
+CELL_HATCH = {"correct": "", "wrong": "//", UNANSWERED: ""}
 CELL_LEGEND = {
-    "true": "true cell",
+    "correct": "correct cell",
     "wrong": "wrong cell (//)",
-    "outland": "outland (\\\\)",
+    UNANSWERED: "no answer",
 }
 
-#: Cell-label groups bottom-up, then the unanswered slot.
-GROUPS: tuple[str, ...] = (*C.CELL_LABELS, FAILED)
+#: `unbounded` mode draws the cell axis alone, with no ring breakdown, so it
+#: needs fills of its own. A deeper green than `TIER_INK["ring0"]` so the two
+#: figures cannot be confused at a glance, a red for `wrong`, and the same
+#: dark grey for `unanswered` -- that one outcome means the same thing in both
+#: modes, so it keeps its ink.
+MODE_INK = {"correct": "#3f8f6b", "wrong": "#c9564e", UNANSWERED: "#6b6a65"}
+
+#: Cell-label groups bottom-up. `unanswered` is last and ungraded.
+GROUPS: tuple[str, ...] = C.CELL_LABELS
+
+#: The cell labels that carry a ring breakdown, i.e. everything but the last.
+GRADED: tuple[str, ...] = C.GRADED_CELL_LABELS
 
 METHOD_LABELS = methods.METHOD_LABELS
 method_label = methods.method_label
@@ -190,46 +211,94 @@ COMPARE = "compare"
 POOLED = "pooled"
 LAYOUTS: tuple[str, ...] = (COMPARE, POOLED)
 
+#: How the bar is broken down. `bounded` grades every answer by ring, so a
+#: correct cell far from the TG is visibly far. `unbounded` is the cell axis
+#: alone -- the plain nearest-seed verdict, with nothing bounding how far a
+#: "correct" may be. The pair is the section's argument: the same predictions,
+#: scored with and without the ring.
+BOUNDED = "bounded"
+UNBOUNDED = "unbounded"
+MODES: tuple[str, ...] = (BOUNDED, UNBOUNDED)
+
+
+def validate_mode(mode: str) -> str:
+    if mode not in MODES:
+        raise ValueError(f"unknown mode {mode!r}; pick from {list(MODES)}")
+    return mode
+
+#: `{mode}` is empty for `bounded`, so the ring-graded figure keeps the paths
+#: it has always had and only the new mode takes a token.
 NAMES: dict[str, tuple[str, str, str]] = {
-    COMPARE: ("outcome_bars.{slug}.png", "outcome_bars.{slug}.csv", "outcome_bars.{slug}.manifest.json"),
+    COMPARE: (
+        "outcome_bars{mode}.{slug}.png",
+        "outcome_bars{mode}.{slug}.csv",
+        "outcome_bars{mode}.{slug}.manifest.json",
+    ),
     POOLED: (
-        "outcome_bars.pooled.{slug}.png",
-        "outcome_bars.pooled.{slug}.csv",
-        "outcome_bars.pooled.{slug}.manifest.json",
+        "outcome_bars{mode}.pooled.{slug}.png",
+        "outcome_bars{mode}.pooled.{slug}.csv",
+        "outcome_bars{mode}.pooled.{slug}.manifest.json",
     ),
 }
 
+
+def mode_token(mode: str) -> str:
+    """The filename infix for a mode: nothing for `bounded`."""
+    return "" if validate_mode(mode) == BOUNDED else f".{mode}"
+
+
 _SUBJECTS = {
-    COMPARE: "Serving region, then distance",
-    POOLED: "Serving region, then distance, datasets pooled",
+    (COMPARE, BOUNDED): "Serving region, then distance",
+    (POOLED, BOUNDED): "Serving region, then distance, datasets pooled",
+    (COMPARE, UNBOUNDED): "Serving region alone, unbounded",
+    (POOLED, UNBOUNDED): "Serving region alone, unbounded, datasets pooled",
 }
 
 
 def count_col(tier: str, label: str | None = None) -> str:
     """The `accuracy.csv` count column for a tier, or a tier x cell label."""
-    if tier == FAILED:
-        return "n_failed"
+    if tier == UNANSWERED:
+        return f"n_cell_{UNANSWERED}"
     return f"n_{tier}" if label is None else f"n_{tier}_cell_{label}"
 
 
 def group_col(group: str) -> str:
     """The `accuracy.csv` count column for a whole cell-label group."""
-    return "n_failed" if group == FAILED else f"n_cell_{group}"
+    return f"n_cell_{group}"
 
 
-def segments() -> list[tuple[str, str | None]]:
-    """Every drawn segment bottom-up, as `(tier, cell label)`: cell label
-    outer, ring tier inner; `(failed, None)` last."""
-    return [(t, lab) for lab in C.CELL_LABELS for t in TIERS] + [(FAILED, None)]
+def segments(mode: str = BOUNDED) -> list[tuple[str, str | None]]:
+    """Every drawn segment bottom-up, as `(tier, cell label)`.
+
+    `bounded` is cell label outer, ring tier inner, for the two graded labels;
+    `unbounded` is the cell axis alone. Either way the ungraded `unanswered`
+    slot comes last, because it has no ring to break down.
+    """
+    validate_mode(mode)
+    if mode == UNBOUNDED:
+        return [(UNANSWERED, lab) if lab == UNANSWERED else (None, lab) for lab in GROUPS]
+    return [(t, lab) for lab in GRADED for t in TIERS] + [(UNANSWERED, UNANSWERED)]
+
+
+def segment_col(tier: str | None, label: str | None) -> str:
+    """The count column a drawn segment reads, in either mode."""
+    return group_col(label) if tier is None else count_col(tier, label)
+
+
+def segment_ink(tier: str | None, label: str | None, mode: str) -> str:
+    """The fill a drawn segment takes. Ring tier in `bounded`, cell label in
+    `unbounded`; `unanswered` is the same grey in both."""
+    if mode == UNBOUNDED or tier is None:
+        return MODE_INK[label]
+    return TIER_INK[tier]
 
 
 def _add_shares(table: pd.DataFrame) -> pd.DataFrame:
     """Exact shares -- the drawn geometry. Rounding lives in labels and sort keys."""
-    for tier, lab in segments():
-        col = count_col(tier, lab)
+    cols = {segment_col(t, lab) for mode in MODES for t, lab in segments(mode)}
+    cols |= {group_col(g) for g in GROUPS}
+    for col in cols:
         table[f"share_{col}"] = table[col] / table["n_tgs"]
-    for group in GROUPS:
-        table[f"share_{group_col(group)}"] = table[group_col(group)] / table["n_tgs"]
     return table
 
 
@@ -318,7 +387,7 @@ def pooled_table(
 #: The sort key, all descending: correct-region share, then how tight the
 #: correct-region predictions are.
 _RANK_KEYS: tuple[str, ...] = (
-    "cell_true", "true_within_ring0", "true_within_ring1", "true_within_ring2",
+    "cell_correct", "correct_within_ring0", "correct_within_ring1", "correct_within_ring2",
 )
 
 
@@ -326,10 +395,10 @@ def _with_rank_keys(table: pd.DataFrame) -> pd.DataFrame:
     """Cumulative counts, divided and rounded **once** -- summing rounded
     shares compounds the error."""
     out = table.copy()
-    out["cell_true"] = (out["n_cell_true"] / out["n_tgs"]).round(ACCURACY_DECIMALS)
+    out["cell_correct"] = (out["n_cell_correct"] / out["n_tgs"]).round(ACCURACY_DECIMALS)
     running = 0
     for key, tier in zip(_RANK_KEYS[1:], TIERS):
-        running = running + out[count_col(tier, "true")]
+        running = running + out[count_col(tier, "correct")]
         out[key] = (running / out["n_tgs"]).round(ACCURACY_DECIMALS)
     return out
 
@@ -360,20 +429,27 @@ def _contrast_ink(face: str) -> str:
     return "#ffffff" if 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.55 else _INK
 
 
-def _draw_bar(ax, x: float, row: pd.Series, nd: int) -> None:
+def _draw_bar(ax, x: float, row: pd.Series, nd: int, mode: str = BOUNDED) -> None:
     """One method's stack: per cell-label group, its ring-tier sub-segments,
     white separators between them, the group border; every sub-segment
-    labelled. Then the rail to its right."""
+    labelled. Then the rail to its right.
+
+    In `unbounded` each group is a single segment and there is no rail: the
+    bar already *is* the cell-label breakdown, so a rail would repeat it."""
+    validate_mode(mode)
     half = _BAR_FRAC / 2
     groups: list[tuple[str, float, float]] = []
     bottom = 0.0
+    by_group: dict[str, list[tuple[str | None, str | None]]] = {}
+    for tier, lab in segments(mode):
+        by_group.setdefault(lab, []).append((tier, lab))
     for group in GROUPS:
         group_bottom = bottom
-        parts = [(FAILED, None)] if group == FAILED else [(t, group) for t in TIERS]
+        parts = by_group.get(group, [])
         drawn: list[tuple[float, float, str]] = []
         for tier, lab in parts:
-            v = float(row[f"share_{count_col(tier, lab)}"])
-            face = TIER_INK[tier]
+            v = float(row[f"share_{segment_col(tier, lab)}"])
+            face = segment_ink(tier, lab, mode)
             if v > 0:
                 ax.bar(
                     x, v, bottom=bottom, width=_BAR_FRAC,
@@ -406,9 +482,10 @@ def _draw_bar(ax, x: float, row: pd.Series, nd: int) -> None:
                     ha="center", va="center", fontsize=7.5, color=_contrast_ink(face), zorder=5,
                     bbox=dict(boxstyle="square,pad=0.12", facecolor=face, edgecolor="none"),
                 )
-        if group != FAILED:
+        if group != UNANSWERED:
             groups.append((group, group_bottom, height))
-    _draw_rail(ax, x, groups, nd)
+    if mode == BOUNDED:
+        _draw_rail(ax, x, groups, nd)
 
 
 def _spread(ys: list[float], gap: float) -> list[float]:
@@ -467,9 +544,21 @@ def rail_labels(ax, rail_x: float, spans: list[tuple[float, float]], nd: int) ->
         )
 
 
-def _legend_handles():
+def _legend_handles(mode: str = BOUNDED):
+    """`(top row, bottom row)`. `unbounded` has one row: colour is the cell
+    label there, so there is no colour-vs-stripe split to explain."""
     from matplotlib.patches import Patch
 
+    validate_mode(mode)
+    if mode == UNBOUNDED:
+        cells = [
+            Patch(
+                facecolor=MODE_INK[lab], edgecolor=GROUP_EDGE, linewidth=0.8,
+                hatch=CELL_HATCH[lab], label=CELL_LEGEND[lab],
+            )
+            for lab in GROUPS
+        ]
+        return cells, []
     tiers = [
         Patch(facecolor=TIER_INK[t], edgecolor=GROUP_EDGE, linewidth=0.8, label=TIER_LABELS[t])
         for t in STACK
@@ -479,7 +568,7 @@ def _legend_handles():
             facecolor=_SURFACE, edgecolor=_INK_2, hatch=CELL_HATCH[lab], linewidth=0.8,
             label=CELL_LEGEND[lab],
         )
-        for lab in C.CELL_LABELS
+        for lab in GRADED
     ]
     return tiers, cells
 
@@ -491,8 +580,9 @@ def render(
     *,
     order: list[str] | None = None,
     decimals: int | None = None,
-    subject: str = _SUBJECTS[COMPARE],
+    subject: str = _SUBJECTS[(COMPARE, BOUNDED)],
     png_name: str | None = None,
+    mode: str = BOUNDED,
     dpi: int = 150,
 ) -> Path:
     """One panel per dataset, one bar per method, each panel ranked by itself."""
@@ -517,15 +607,17 @@ def render(
             ax.set_facecolor(_SURFACE)
             xs = np.arange(len(ranked))
             for x, m in zip(xs, ranked):
-                _draw_bar(ax, x, sub.loc[m], nd)
+                _draw_bar(ax, x, sub.loc[m], nd, mode)
 
             n = int(sub["n_tgs"].iloc[0]) if len(sub) else 0
             ax.set_title(f"{ds.upper()}  ·  n={n}", fontsize=11, color=_INK, pad=10)
             ax.set_xticks(xs)
             # Short terms (see `methods.METHOD_TERMS`), so no rotation.
             ax.set_xticklabels([method_label(m) for m in ranked], fontsize=9, color=_INK_2)
-            # Room on the right of the last bar for its rail and labels.
-            ax.set_xlim(-0.5, len(ranked) - 0.5 + 0.25)
+            # Room on the right of the last bar for its rail and labels;
+            # `unbounded` draws no rail, so it needs none.
+            pad = 0.25 if mode == BOUNDED else 0.0
+            ax.set_xlim(-0.5, len(ranked) - 0.5 + pad)
             ax.set_ylim(0, 1)
             ticks = np.arange(0, 1.01, 0.2)
             ax.set_yticks(ticks)
@@ -543,15 +635,16 @@ def render(
                 ax.tick_params(axis="y", length=0)
         axes[0].set_ylabel("Share of TGs", fontsize=11, color=_INK_2)
 
-        tiers, cells = _legend_handles()
+        tiers, cells = _legend_handles(mode)
         fig.legend(
             handles=tiers, loc="upper center", ncol=len(tiers), frameon=False, fontsize=9,
             bbox_to_anchor=(0.5, 0.955), labelcolor=_INK_2,
         )
-        fig.legend(
-            handles=cells, loc="upper center", ncol=len(cells), frameon=False, fontsize=9,
-            bbox_to_anchor=(0.5, 0.915), labelcolor=_INK_2, handleheight=1.2,
-        )
+        if cells:
+            fig.legend(
+                handles=cells, loc="upper center", ncol=len(cells), frameon=False, fontsize=9,
+                bbox_to_anchor=(0.5, 0.915), labelcolor=_INK_2, handleheight=1.2,
+            )
         fig.suptitle(
             f"{subject}  ·  HEALPix nside={nside} (grid_km {G.grid_km(nside):.0f})",
             fontsize=13, color=_INK, y=0.995,
@@ -570,23 +663,34 @@ def render(
             ha="center", va="bottom", fontsize=8, color=_MUTED, linespacing=1.5,
         )
         inset = (fig_w - panels_w) / 2 / fig_w
-        fig.tight_layout(rect=(inset, 0.04 * len(rows), 1 - inset, 0.885))
+        # `unbounded` draws one legend row rather than two, so the panels may
+        # climb into the space the second row would have taken.
+        top = 0.885 if mode == BOUNDED else 0.925
+        fig.tight_layout(rect=(inset, 0.04 * len(rows), 1 - inset, top))
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        png = out_dir / (png_name or NAMES[COMPARE][0].format(slug=grid_slug(nside)))
+        png = out_dir / (
+            png_name
+            or NAMES[COMPARE][0].format(slug=grid_slug(nside), mode=mode_token(mode))
+        )
         fig.savefig(png, dpi=dpi, facecolor=_SURFACE)
         plt.close(fig)
     return png
 
 
-def csv_columns() -> list[str]:
-    """The CSV twin's columns, in order."""
-    counts = [count_col(t, lab) for t, lab in segments() if t != FAILED]
+def csv_columns(mode: str = BOUNDED) -> list[str]:
+    """The CSV twin's columns, in order. Follows `segments`, so the twin holds
+    exactly what the figure drew."""
     groups = [group_col(g) for g in GROUPS]
+    counts = [
+        segment_col(tier, lab)
+        for tier, lab in segments(mode)
+        if segment_col(tier, lab) not in groups
+    ]
     return [
         "run_id", "dataset", "method", "n_tgs", "n_solved", *groups, *counts,
         *[f"share_{c}" for c in (*groups, *counts)],
-        "accuracy_ring0", "accuracy_ring1", "accuracy_ring2", "accuracy_cell_true",
+        "accuracy_ring0", "accuracy_ring1", "accuracy_ring2", "accuracy_cell_correct",
         "pred_dist_to_tg_km_p50", "pred_dist_to_tg_km_p90",
         "pred_dist_to_seed_km_p50", "pred_dist_to_seed_km_p90",
     ]
@@ -602,11 +706,18 @@ def _tgs_per_run(runs, nside, *, analysis_root=None) -> dict[str, int]:
     return out
 
 
-def _manifest(layout, table, nside, png_name, csv_name, *, run_ids, per_run=None) -> str:
+def _manifest(layout, table, nside, png_name, csv_name, *, run_ids, mode=BOUNDED, per_run=None) -> str:
     body = {
         "figure": png_name,
         "csv": csv_name,
         "layout": layout,
+        "mode": mode,
+        "mode_note": (
+            "bounded: each cell label broken down by ring tier, so a correct "
+            "cell far from the TG is visibly far. unbounded: the cell axis "
+            "alone, the plain nearest-seed verdict with nothing bounding how "
+            "far a correct may be. Same predictions, same denominator."
+        ),
         "grid": G.describe(nside),
         "runs": run_ids,
         "arm": cross.arm(run_ids),
@@ -630,7 +741,10 @@ def _manifest(layout, table, nside, png_name, csv_name, *, run_ids, per_run=None
                 "group total beside it, vertical, in ink"
             ),
         },
-        "grouping": "cell label outer (true, wrong, outland, no answer), ring tier inner",
+        "grouping": (
+            "cell label outer (correct, wrong, no answer); ring tier inner in "
+            "bounded mode, absent in unbounded"
+        ),
         "order_note": (
             "each panel ranked by its own cumulative (true, true & ring0, true & <=ring1, "
             "true & <=ring2) shares at whole percent, descending; `methods` is the pooled order"
@@ -654,34 +768,47 @@ def build_for_runs(
     nsides: tuple[int, ...] = G.NSIDE_LADDER,
     methods: list[str] | None = None,
     layouts: tuple[str, ...] = LAYOUTS,
+    modes: tuple[str, ...] = (BOUNDED,),
     analysis_root: Path | None = None,
 ) -> list[Path]:
-    """One figure, CSV twin and manifest per layout per rung. Returns the PNGs."""
+    """One figure, CSV twin and manifest per layout x mode x rung. Returns the PNGs."""
     unknown = [x for x in layouts if x not in LAYOUTS]
     if unknown:
         raise ValueError(f"unknown layout {unknown}; pick from {list(LAYOUTS)}")
+    bad = [x for x in modes if x not in MODES]
+    if bad:
+        raise ValueError(f"unknown mode {bad}; pick from {list(MODES)}")
     wanted = tuple(dict.fromkeys(layouts)) or LAYOUTS
+    wanted_modes = tuple(dict.fromkeys(modes)) or (BOUNDED,)
     run_ids = [r.run_id for r in runs]
     out_dir = cross.cross_dir(run_ids, analysis_root=analysis_root)
     builders = {COMPARE: build_table, POOLED: pooled_table}
     written: list[Path] = []
     for layout in wanted:
         png_t, csv_t, man_t = NAMES[layout]
-        for nside in sorted({G.validate_nside(n) for n in nsides}, reverse=True):
-            slug = grid_slug(nside)
-            table = builders[layout](runs, nside, methods=methods, analysis_root=analysis_root)
-            table[[c for c in csv_columns() if c in table.columns]].to_csv(
-                out_dir / csv_t.format(slug=slug), index=False
-            )
-            png = render(
-                table, nside, out_dir, subject=_SUBJECTS[layout], png_name=png_t.format(slug=slug)
-            )
-            per_run = _tgs_per_run(runs, nside, analysis_root=analysis_root) if layout == POOLED else None
-            (out_dir / man_t.format(slug=slug)).write_text(
-                _manifest(
-                    layout, table, nside, png.name, csv_t.format(slug=slug),
-                    run_ids=run_ids, per_run=per_run,
+        for mode in wanted_modes:
+            tok = mode_token(mode)
+            for nside in sorted({G.validate_nside(n) for n in nsides}, reverse=True):
+                slug = grid_slug(nside)
+                names = {k: v.format(slug=slug, mode=tok) for k, v in
+                         zip(("png", "csv", "man"), (png_t, csv_t, man_t))}
+                table = builders[layout](runs, nside, methods=methods, analysis_root=analysis_root)
+                table[[c for c in csv_columns(mode) if c in table.columns]].to_csv(
+                    out_dir / names["csv"], index=False
                 )
-            )
-            written.append(png)
+                png = render(
+                    table, nside, out_dir, subject=_SUBJECTS[(layout, mode)],
+                    png_name=names["png"], mode=mode,
+                )
+                per_run = (
+                    _tgs_per_run(runs, nside, analysis_root=analysis_root)
+                    if layout == POOLED else None
+                )
+                (out_dir / names["man"]).write_text(
+                    _manifest(
+                        layout, table, nside, png.name, names["csv"],
+                        run_ids=run_ids, mode=mode, per_run=per_run,
+                    )
+                )
+                written.append(png)
     return written

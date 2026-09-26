@@ -87,7 +87,7 @@ def build_answer_space_cmd(
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
 ) -> None:
-    """Place TGs in the grid partition and the landmass-bounded cell partition."""
+    """Place TGs in the grid partition and the unbounded cell partition."""
     for run in _runs(run_id, all_runs, outputs_root):
         spaces = answer_space.build_for_run(
             run, nsides=_nsides(nside), analysis_root=analysis_root
@@ -107,15 +107,8 @@ def classify_cmd(
     method: list[str] = typer.Option(None, "--method", "-m", help="Score only these."),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
-    strict: bool = typer.Option(
-        True,
-        help=(
-            "Fail if ring0 accuracy is not monotone across the ladder. Exact "
-            "nesting guarantees it, so a violation is a bug, not data."
-        ),
-    ),
 ) -> None:
-    """Label every prediction with its ring and its cell, at every rung."""
+    """Label every prediction with its ring and its cell."""
     for run in _runs(run_id, all_runs, outputs_root):
         long = classify.score_for_run(
             run,
@@ -127,16 +120,9 @@ def classify_cmd(
             typer.echo(
                 f"{run.run_id} nside={int(r.nside)} {r.method}: "
                 f"ring0={r.accuracy_ring0} ring1={r.accuracy_ring1} ring2={r.accuracy_ring2} "
-                f"beyond={int(r.n_beyond)} | cell true={int(r.n_cell_true)} "
-                f"wrong={int(r.n_cell_wrong)} outland={int(r.n_cell_outland)} "
-                f"failed={int(r.n_failed)}"
+                f"beyond={int(r.n_beyond)} | cell correct={int(r.n_cell_correct)} "
+                f"wrong={int(r.n_cell_wrong)} unanswered={int(r.n_cell_unanswered)}"
             )
-        bad = classify.monotonicity_violations(long)
-        if len(bad):
-            typer.echo(f"MONOTONICITY VIOLATIONS ({len(bad)}):", err=True)
-            typer.echo(bad.to_string(index=False), err=True)
-            if strict:
-                raise typer.Exit(code=1)
 
 
 @app.command("plot-answer-space")
@@ -156,11 +142,11 @@ def plot_answer_space_cmd(
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
 ) -> None:
-    """Map both partitions: the grid lattice and TG grids, the cells, the landmass.
+    """Map both partitions: the grid lattice and TG grids, and the cells.
 
-    No `--nside`: the figure draws the whole ladder in one 2x2, because grid_km
-    turns both partitions at once and how they coarsen together is the figure.
-    Written into `answer-space/`, beside `sweep.csv`.
+    The cells are unbounded, so they run to the edge of whatever frame is
+    drawn -- that overreach is the point of the figure. Written into
+    `answer-space/`, one level above the rung directories.
     """
     chosen = None
     if extent and all(v is not None for v in extent):
@@ -194,12 +180,23 @@ def plot_outcome_bars_cmd(
             f"Repeatable; default: both."
         ),
     ),
+    mode: list[str] = typer.Option(
+        None,
+        "--mode",
+        help=(
+            f"{figure_outcome_bars.BOUNDED} (cell label broken down by ring "
+            f"tier) or {figure_outcome_bars.UNBOUNDED} (the cell axis alone, "
+            f"the plain nearest-seed verdict). Repeatable; default: "
+            f"{figure_outcome_bars.BOUNDED}."
+        ),
+    ),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
 ) -> None:
-    """Outcome bars, one figure per rung: cell label first (true / wrong /
-    outland / no answer), each broken down by ring tier. Colour = ring tier,
-    stripe = cell label.
+    """Outcome bars, one figure per rung: cell label first (correct / wrong /
+    no answer). In `bounded` each label is broken down by ring tier, colour =
+    ring tier and stripe = cell label; in `unbounded` the cell axis is drawn
+    alone and colour = cell label.
 
     Cross-dataset by nature, so `--run-id` is repeatable and there is no
     `--all-runs`. Written to `_cross/classify/<datasets>[@<arm>]/`.
@@ -212,6 +209,12 @@ def plot_outcome_bars_cmd(
         raise typer.BadParameter(
             f"unknown --layout {unknown}; pick from {list(figure_outcome_bars.LAYOUTS)}"
         )
+    modes = tuple(dict.fromkeys(mode or ())) or (figure_outcome_bars.BOUNDED,)
+    bad = [x for x in modes if x not in figure_outcome_bars.MODES]
+    if bad:
+        raise typer.BadParameter(
+            f"unknown --mode {bad}; pick from {list(figure_outcome_bars.MODES)}"
+        )
     runs = [resolve_run(r, outputs_root) for r in run_id]
     try:
         pngs = figure_outcome_bars.build_for_runs(
@@ -219,6 +222,7 @@ def plot_outcome_bars_cmd(
             nsides=_nsides(nside),
             methods=list(method) if method else None,
             layouts=layouts,
+            modes=modes,
             analysis_root=analysis_root,
         )
     except (ValueError, MissingArtifactError) as exc:
@@ -260,13 +264,36 @@ def plot_error_cdf_cmd(
         "up in the drawn curve only; the CSV is unclamped.",
     ),
     max_x_km: float = typer.Option(
-        figure_error_cdf.DEFAULT_X_MAX_KM, "--max-x-km", help="Upper bound (km)."
+        None,
+        "--max-x-km",
+        help=(
+            f"Upper bound (km). Default: {figure_error_cdf.DEFAULT_X_MAX_KM:,.0f} under "
+            f"--unanswered {figure_error_cdf.EXCLUDE}, {figure_error_cdf.SENTINEL_X_MAX_KM:,.0f} "
+            f"under {figure_error_cdf.SENTINEL}, which has to clear the sentinel."
+        ),
+    ),
+    unanswered: str = typer.Option(
+        figure_error_cdf.EXCLUDE,
+        "--unanswered",
+        help=(
+            f"{figure_error_cdf.EXCLUDE}: drop the rows a method did not answer, so "
+            f"each curve rests on its own population (the default; the only one that "
+            f"joins to accuracy.csv). {figure_error_cdf.SENTINEL}: park them at "
+            f"--sentinel-km so every curve is drawn over the same denominator and the "
+            f"height at the sentinel is the method's answer rate. Writes "
+            f"`.sentinel.` filenames, so it does not overwrite the other."
+        ),
+    ),
+    sentinel_km: float = typer.Option(
+        figure_error_cdf.SENTINEL_KM,
+        "--sentinel-km",
+        help="Where --unanswered sentinel parks an unanswered TG (km).",
     ),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
 ) -> None:
     """Error-distance CDF per method (pred_dist_to_tg_km), log x, unanswered
-    rows excluded.
+    rows excluded — or parked at a sentinel, with `--unanswered sentinel`.
 
     The companion to `plot-outcome-bars`: those say where a prediction landed,
     this says how far off it was. Artifacts carry **no rung in their names**:
@@ -275,6 +302,11 @@ def plot_error_cdf_cmd(
     triple into `_cross/classify/<datasets>[@<arm>]/`, beside the outcome bars.
     Pooled percentiles are recomputed from the concatenated rows, never
     averaged. Needs `classify` on every run.
+
+    `--unanswered sentinel` adds the `.sentinel.` triple beside them: the same
+    curves over the whole TG roster, unanswered rows at 10,000 km, so refusal
+    rates are readable off the figure. Its percentiles are censored and do not
+    join to `accuracy.csv`.
     """
     if all_runs and run_id:
         raise typer.BadParameter("pass --run-id or --all-runs, not both")
@@ -305,6 +337,8 @@ def plot_error_cdf_cmd(
             analysis_root=analysis_root,
             min_x_km=min_x_km,
             max_x_km=max_x_km,
+            unanswered=unanswered,
+            sentinel_km=sentinel_km,
         )
     except (ValueError, MissingArtifactError) as exc:
         raise typer.BadParameter(str(exc)) from exc

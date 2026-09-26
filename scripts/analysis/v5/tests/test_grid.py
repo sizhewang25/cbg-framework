@@ -34,10 +34,6 @@ class TestValidation:
         for good in (1, 2, 16, 128, 1024):
             assert H.validate_nside(good) == good
 
-    def test_degrade_refuses_to_refine(self):
-        with pytest.raises(ValueError, match="must not exceed"):
-            H.degrade([0], 16, 128)
-
 
 class TestGeometry:
     def test_grid_count_and_area_close_the_sphere(self):
@@ -69,27 +65,6 @@ class TestGeometry:
     def test_empty_input_is_shaped_not_raised(self):
         assert H.pix2ang([], 128).shape == (0, 2)
         assert H.neighbours([], 128).shape == (0, 8)
-
-
-class TestDegradeEqualsRebinning:
-    """The bit shift must equal geometric containment, or the ladder is a lie.
-
-    This is what buys the whole ladder for one `ang2pix` pass, and it is exactly
-    what H3 cannot offer: `cell_to_parent` there is exact on the index but is
-    not a geometric container, and the two disagreed on 552 of 5,906 targets at
-    res 2 on this repo's own data.
-    """
-
-    @pytest.mark.parametrize("nside_to", [64, 32, 16, 8, 4, 2, 1])
-    def test_shift_matches_ang2pix(self, nside_to):
-        pix = H.ang2pix(_LAT, _LON, 128)
-        assert np.array_equal(
-            H.degrade(pix, 128, nside_to), H.ang2pix(_LAT, _LON, nside_to)
-        )
-
-    def test_degrade_is_identity_at_the_same_nside(self):
-        pix = H.ang2pix(_LAT, _LON, 128)
-        assert np.array_equal(H.degrade(pix, 128, 128), pix)
 
 
 class TestLadderIsMonotone:
@@ -180,10 +155,7 @@ class TestRingDistance:
         so no arrangement of far-away grids can make this adjacent."""
         truth = H.ang2pix([SEATTLE[0]], [SEATTLE[1]], 128)
         pred = H.ang2pix([ARCTIC[0]], [ARCTIC[1]], 128)
-        for nside in H.NSIDE_LADDER:
-            t = H.degrade(truth, 128, nside)
-            p = H.degrade(pred, 128, nside)
-            assert H.ring_distance(t, p, nside)[0] == -1, f"placed at nside={nside}"
+        assert H.ring_distance(truth, pred, 128)[0] == -1
 
     def test_max_ring_zero_only_reports_exact_matches(self):
         a = H.ang2pix([DENVER[0]], [DENVER[1]], 128)
@@ -195,17 +167,3 @@ class TestRingDistance:
         with pytest.raises(ValueError, match="same length"):
             H.ring_distance([1, 2], [1], 128)
 
-    def test_ring_grows_with_coarser_grids(self):
-        """Two fixed points get closer in grid steps as grids grow -- the
-        property that makes the ladder a tolerance dial."""
-        a = H.ang2pix([DENVER[0]], [DENVER[1]], 128)
-        b = H.ang2pix([DENVER[0] + 0.9], [DENVER[1]], 128)
-        rings = []
-        for nside in H.NSIDE_LADDER:
-            r = H.ring_distance(
-                H.degrade(a, 128, nside), H.degrade(b, 128, nside), nside
-            )[0]
-            rings.append(r)
-        # -1 sorts as "unplaced", so compare only the rungs that placed it.
-        placed = [r for r in rings if r >= 0]
-        assert placed == sorted(placed, reverse=True) or len(set(placed)) <= 1

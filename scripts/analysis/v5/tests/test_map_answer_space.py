@@ -14,7 +14,11 @@ from scripts.analysis.v5.modules import answer_space as A
 from scripts.analysis.v5.modules import grid as G
 from scripts.analysis.v5.modules import map_answer_space as MA
 from scripts.analysis.v5.modules import mapping as M
-from scripts.analysis.v5.modules.paths import MissingArtifactError, grid_slug
+from scripts.analysis.v5.modules.paths import (
+    ANSWER_SPACE_KIND,
+    MissingArtifactError,
+    grid_slug,
+)
 
 EWR = (40.6895, -74.1745)
 JFK = (40.6413, -73.7781)
@@ -37,7 +41,7 @@ class _Run:
         return d
 
     def answer_space_dir(self, nside, *, root=None):
-        d = self.analysis_dir(A.ANSWER_SPACE_KIND, root=root) / grid_slug(nside)
+        d = self.analysis_dir(ANSWER_SPACE_KIND, root=root) / grid_slug(nside)
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -86,4 +90,4 @@ def test_render_writes_the_figure_and_a_manifest_per_rung(run):
     for r in rungs.values():
         assert r["n_cells_drawn"] == r["n_seeds"]
         assert r["cell_polygon_agreement"] > 0.98
-        assert r["landmass_buffer_km"] == pytest.approx(G.grid_km(r["nside"]), abs=1e-3)
+        assert "landmass_buffer_km" not in r

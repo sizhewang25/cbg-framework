@@ -1,20 +1,21 @@
-"""The grid: HEALPix, NESTED, laddered. Ported from v4's `healpix.py`.
+"""The grid: HEALPix, NESTED, at one resolution. Ported from v4's `healpix.py`.
 
-In v5's vocabulary a **grid** is one HEALPix pixel at a rung (and, by
-extension, the partition those pixels form). v4 called these "cells"; v5
-reserves *cell* for the landmass-bounded Voronoi cell of the seeds, so nothing
-in this module says cell.
+In v5's vocabulary a **grid** is one HEALPix pixel (and, by extension, the
+partition those pixels form). v4 called these "cells"; v5 reserves *cell* for
+the Voronoi cell of the seeds, so nothing in this module says cell.
 
-Why HEALPix and not H3 is argued in v4's module of the same role and holds
-unchanged: aperture-4 with exact nesting, so `ring == 0` is monotone
-non-increasing as grids grow (H3 produced 705 violations on this repo's data);
-exactly equal-area; and in NESTED ordering the parent of `pix` is `pix >> 2`.
+Why HEALPix and not H3: exactly equal-area, so a grid count converts to an
+area and the quantisation floor is the same everywhere; aperture-4 with exact
+nesting, so in NESTED ordering the parent of `pix` is `pix >> 2`. The nesting
+property is what made `ring == 0` monotone across resolutions where H3
+produced 705 violations on this repo's data. **v5 now runs one resolution**,
+so that monotonicity is no longer exercised here -- the equal-area argument is
+what still carries weight.
 
-`grid_km` is the **nominal grid distance**, `sqrt(area)`: 50.9 km at nside 128,
-407 km at nside 16. It is one number with three jobs in v5 -- the grid pitch,
-the complete-linkage diameter that groups sites into seeds, and the distance
-the landmass is buffered by -- so that both partitions of the answer space are
-built at one tolerance.
+`grid_km` is the **nominal grid distance**, `sqrt(area)`: 50.9 km at nside
+128. It is one number with two jobs -- the grid pitch, and the
+complete-linkage diameter that groups sites into seeds -- so that both
+partitions of the answer space are built at one tolerance.
 """
 
 from __future__ import annotations
@@ -28,10 +29,12 @@ from scripts.libs.cbg.rtt_model import EARTH_RADIUS_KM
 #: Working resolution: 2,594 km^2 grids, 50.9 km nominal.
 DEFAULT_NSIDE = 128
 
-#: The ladder, finest first. Each step is one 4-to-1 subdivision.
-NSIDE_LADDER: tuple[int, ...] = (128, 64, 32, 16)
+#: The resolutions v5 builds. One rung: the cell partition is the granularity
+#: dial now, not a ladder of grids.
+NSIDE_LADDER: tuple[int, ...] = (128,)
 
-#: Fixed, not a parameter: RING ordering would break `degrade`.
+#: Fixed, not a parameter: NESTED is what makes a parent a bit shift away, and
+#: `ang2pix`/`neighbours` are written against it.
 _ORDER = "nested"
 
 #: How many rings out `ring_distance` grades before answering -1 (beyond).
@@ -91,18 +94,6 @@ def pix2ang(pix, nside: int = DEFAULT_NSIDE) -> np.ndarray:
     lon = np.asarray(lon.to_value("deg"), dtype=float)
     lat = np.asarray(lat.to_value("deg"), dtype=float)
     return np.column_stack([lat, ((lon + 180.0) % 360.0) - 180.0])
-
-
-def degrade(pix, nside_from: int, nside_to: int) -> np.ndarray:
-    """Coarsen NESTED ids by bit shift. Equals geometric re-binning exactly."""
-    validate_nside(nside_from)
-    validate_nside(nside_to)
-    if nside_to > nside_from:
-        raise ValueError(
-            f"nside_to ({nside_to}) must not exceed nside_from ({nside_from})"
-        )
-    shift = 2 * int(np.log2(nside_from // nside_to))
-    return np.asarray(pix, dtype=np.int64) >> shift
 
 
 def neighbours(pix, nside: int) -> np.ndarray:

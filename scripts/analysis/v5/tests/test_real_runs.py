@@ -12,7 +12,6 @@ import pytest
 from scripts.analysis.v5.modules import answer_space as A
 from scripts.analysis.v5.modules import classify as C
 from scripts.analysis.v5.modules import grid as G
-from scripts.analysis.v5.modules.landmass import load_landmass
 from scripts.analysis.v5.modules.paths import MissingArtifactError, resolve_run
 
 MESH_RUNS = (
@@ -41,25 +40,31 @@ def scored(request, tmp_path_factory):
     return run, root, spaces, long
 
 
-def test_every_site_is_inland_at_every_rung(scored):
+def test_seeds_never_outnumber_sites(scored):
     _, _, spaces, _ = scored
     for s in spaces:
-        assert load_landmass(s.grid_km).contains(s.sites["site_lat"], s.sites["site_lon"]).all()
+        assert s.n_seeds <= s.meta["n_sites"]
 
 
-def test_seeds_never_outnumber_sites_and_only_merge_as_grids_grow(scored):
+def test_every_seed_gets_a_cell_covering_the_frame(scored):
+    """The unbounded partition leaves no seed without a cell and no part of
+    the drawn frame unassigned -- the guarantee the landmass clip removed."""
+    import shapely
+
+    from scripts.analysis.v5.modules import cells as CL
+    from scripts.analysis.v5.modules import mapping as M
+
     _, _, spaces, _ = scored
-    by_nside = {s.nside: s for s in spaces}
-    counts = [by_nside[n].n_seeds for n in G.NSIDE_LADDER]
-    assert counts == sorted(counts, reverse=True)
-    assert counts[0] <= by_nside[128].meta["n_sites"]
+    for s in spaces:
+        extent = M.auto_extent(s.sites["site_lat"].to_numpy(), s.sites["site_lon"].to_numpy())
+        polys = CL.cell_polygons(s.seeds, extent)
+        assert sorted(polys) == sorted(s.seeds["seed_id"].tolist())
+        frame = shapely.box(extent[0], extent[2], extent[1], extent[3])
+        union = shapely.union_all(list(polys.values()))
+        assert frame.difference(union).area / frame.area < 1e-9
 
 
-def test_the_grid_axis_is_monotone(scored):
-    assert C.monotonicity_violations(scored[3]).empty
-
-
-def test_both_guards_hold_on_every_rung(scored):
+def test_both_guards_hold(scored):
     long = scored[3]
     C.guard_partition(long)
     C.guard_cross_tab(long)

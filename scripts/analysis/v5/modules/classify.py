@@ -4,36 +4,37 @@
 
 Ported unchanged from v4. `ring == 0` is the TG's own grid, 1 and 2 the first
 and second neighbour rings, `-1` beyond. Local by construction, and `ring <= k`
-is monotone non-increasing as grids grow (HEALPix nests exactly), which
-`monotonicity_violations` asserts.
+would be monotone non-increasing as grids grew, because HEALPix nests exactly
+-- v5 runs one resolution, so nothing exercises that any more.
 
-## `cell_label` -- direction, bounded by the landmass
+## `cell_label` -- direction, unbounded
 
-* `outland` -- the prediction is outside the landmass (US mainland buffered by
-  `grid_km`);
-* `true` -- inside it, and its nearest seed is the TG's seed: the prediction
-  is in the TG's cell, its serving region;
-* `wrong` -- inside it, in another seed's cell;
-* `none` -- no prediction to label.
+* `correct` -- the prediction's nearest seed is the TG's seed: it is in the
+  TG's cell, its serving region;
+* `wrong` -- it is in another seed's cell;
+* `unanswered` -- there is no prediction to label.
 
-The cell label is **not** a correctness verdict on its own, and it is not the
-nearest-seed rule v4 retired: that rule had no outland, so it credited a
-prediction 2,360 km away in the Canadian Arctic to Seattle. Here the landmass
-bounds it, and the ring bounds how far a `true` can be from the TG. Read the
-two together: within each ring tier, how many landed in the right serving
-region, a wrong one, or off the landmass.
+The three labels partition every evaluated TG, so the cell axis and the grid
+axis share one denominator.
 
-The cell axis is **not** monotone across rungs -- the seeds change with the
-rung -- so it is reported but not asserted.
+**This is deliberately the unbounded nearest-seed rule** -- the one v4 retired
+for crediting a prediction 2,360 km away in the Canadian Arctic to Seattle.
+v4's fix was a landmass polygon and a fourth label, `outland`. v5 removes both
+and keeps the failure visible, because the failure is the finding: a
+nearest-seed verdict alone will call a prediction correct at any distance,
+and `ring` is what bounds it. Read the two labels together -- within each ring
+tier, how many landed in the right serving region and how many in a
+neighbour's.
 
 ## Denominator
 
-Every evaluated TG. FALLBACK and ERROR rows are wrong, not excluded: a method
-that declines to answer has not earned a smaller denominator than one that
-answers badly. A FALLBACK row still gets both labels (its prediction is the
-shortest-ping VP's coordinate), but only `solved_mask` rows enter the counts.
-An answered row with no coordinate counts as failed, not as beyond: it has no
-cell label to put in the cross-tab.
+Every evaluated TG, on both axes. FALLBACK and ERROR rows are wrong, not
+excluded: a method that declines to answer has not earned a smaller
+denominator than one that answers badly. A FALLBACK row still gets both labels
+(its prediction is the shortest-ping VP's coordinate), but only `solved_mask`
+rows enter the `correct`/`wrong` counts -- the rest are `unanswered`, which is
+a label rather than an exclusion, so `n_cell_unanswered == n_failed` by
+construction and `guard_cross_tab` asserts it.
 """
 
 from __future__ import annotations
@@ -53,7 +54,6 @@ from scripts.analysis.v5.modules.answer_space import (
     load_answer_space,
 )
 from scripts.analysis.v5.modules.geodesy import elementwise_km, pairwise_km
-from scripts.analysis.v5.modules.landmass import load_landmass
 from scripts.analysis.v5.modules.paths import CLASSIFY_KIND, MissingArtifactError, RunPaths
 from scripts.analysis.v5.modules.status import SHORTEST_PING, solved_mask
 
@@ -62,10 +62,13 @@ TGS_PARQUET = "{method}_tgs.parquet"
 MANIFEST_JSON = "manifest.json"
 BY_GRID_CSV = "accuracy_by_grid.csv"
 
-#: The labelled outcomes of the cell axis, and the label of a row with no
-#: prediction.
-CELL_LABELS: tuple[str, ...] = ("true", "wrong", "outland")
-NO_PREDICTION = "none"
+#: The cell axis, exhaustive: every evaluated TG carries exactly one. The
+#: ungraded one comes last -- it has no ring, so no tier breakdown.
+CELL_LABELS: tuple[str, ...] = ("correct", "wrong", "unanswered")
+
+#: The cell labels that carry a ring tier, i.e. everything but `unanswered`.
+GRADED_CELL_LABELS: tuple[str, ...] = ("correct", "wrong")
+UNANSWERED = "unanswered"
 
 #: The ring tiers, exclusive, finest first.
 RING_TIERS: tuple[str, ...] = ("ring0", "ring1", "ring2", "beyond")
@@ -168,33 +171,28 @@ def score_method(
 
     # -- cell axis ----------------------------------------------------------
     seeds = space.seeds
-    in_landmass = np.zeros(len(out), dtype=bool)
     pred_seed = np.full(len(out), -1, dtype=np.int64)
     dist_seed = np.full(len(out), np.nan)
     if idx.size:
-        in_landmass[idx] = load_landmass(space.grid_km).contains(plat, plon)
-        inside = idx[in_landmass[idx]]
-        if inside.size:
-            d = pairwise_km(
-                out["pred_lat"].to_numpy(dtype=float)[inside],
-                out["pred_lon"].to_numpy(dtype=float)[inside],
-                seeds["seed_lat"], seeds["seed_lon"],
-            )
-            pred_seed[inside] = seeds["seed_id"].to_numpy()[d.argmin(axis=1)]
+        # Every prediction gets a nearest seed. No containment test, no gate:
+        # the rule is unbounded and this is the whole of it.
+        d = pairwise_km(plat, plon, seeds["seed_lat"], seeds["seed_lon"])
+        pred_seed[idx] = seeds["seed_id"].to_numpy()[d.argmin(axis=1)]
         tg_seed_xy = (
             seeds.set_index("seed_id")
             .loc[out["tg_seed_id"].to_numpy()[idx], ["seed_lat", "seed_lon"]]
             .to_numpy()
         )
         dist_seed[idx] = elementwise_km(plat, plon, tg_seed_xy[:, 0], tg_seed_xy[:, 1])
-    out["pred_in_landmass"] = in_landmass
     out["pred_seed_id"] = pred_seed
     out["pred_dist_to_seed_km"] = np.round(dist_seed, 3)
 
-    label = np.full(len(out), NO_PREDICTION, dtype=object)
-    label[has_pred & ~in_landmass] = "outland"
-    label[in_landmass & (pred_seed == out["tg_seed_id"].to_numpy())] = "true"
-    label[in_landmass & (pred_seed != out["tg_seed_id"].to_numpy())] = "wrong"
+    # `has_pred` is load-bearing on both lines. Without it a row with no
+    # prediction keeps `pred_seed == -1`, never matches `tg_seed_id`, and is
+    # silently labelled `wrong` instead of `unanswered`.
+    label = np.full(len(out), UNANSWERED, dtype=object)
+    label[has_pred & (pred_seed == out["tg_seed_id"].to_numpy())] = "correct"
+    label[has_pred & (pred_seed != out["tg_seed_id"].to_numpy())] = "wrong"
     out["cell_label"] = label
     return out
 
@@ -234,12 +232,17 @@ def summarize(scored: dict[str, pd.DataFrame], nside: int) -> pd.DataFrame:
             row[f"n_{name}"] = int((answered & (tier == name)).sum())
         row["n_failed"] = int((~answered).sum())
 
-        # Cell axis, and the cross-tab that is the point of v5.
-        row["accuracy_cell_true"] = round(float((answered & (label == "true")).mean()), 4)
-        for lab in CELL_LABELS:
+        # Cell axis, and the cross-tab that is the point of v5. `unanswered`
+        # is the complement of `answered`, so the three counts close on n_tgs
+        # and only the two graded labels get a tier breakdown.
+        row["accuracy_cell_correct"] = round(
+            float((answered & (label == "correct")).mean()), 4
+        )
+        for lab in GRADED_CELL_LABELS:
             row[f"n_cell_{lab}"] = int((answered & (label == lab)).sum())
+        row[f"n_cell_{UNANSWERED}"] = int((~answered).sum())
         for name in RING_TIERS:
-            for lab in CELL_LABELS:
+            for lab in GRADED_CELL_LABELS:
                 row[f"n_{name}_cell_{lab}"] = int(
                     (answered & (tier == name) & (label == lab)).sum()
                 )
@@ -267,21 +270,36 @@ def guard_partition(summary: pd.DataFrame) -> None:
 
 
 def guard_cross_tab(summary: pd.DataFrame) -> None:
-    """Each tier's three cell labels sum to the tier; the cell totals to `n_solved`.
+    """The cell axis closes, per tier and overall, and agrees with the grid axis.
+
+    Three assertions. Each tier's two graded labels sum to the tier; all three
+    cell labels sum to `n_tgs`; and `n_cell_unanswered` equals the grid axis's
+    `n_failed`, which is the same rows counted along the other axis and so is
+    a free cross-check on both.
 
     Asserted because the failure is invisible in the artifact: a stack that
     sums to 98% looks like a stack.
     """
     problems = []
     for name in RING_TIERS:
-        parts = summary[[f"n_{name}_cell_{lab}" for lab in CELL_LABELS]].sum(axis=1)
+        parts = summary[[f"n_{name}_cell_{lab}" for lab in GRADED_CELL_LABELS]].sum(axis=1)
         for i in summary.index[parts != summary[f"n_{name}"]]:
-            problems.append(f"{summary.at[i, 'method']} {name}: {parts[i]} vs {summary.at[i, f'n_{name}']}")
+            problems.append(
+                f"{summary.at[i, 'method']} {name}: {parts[i]} vs {summary.at[i, f'n_{name}']}"
+            )
     cells = summary[[f"n_cell_{lab}" for lab in CELL_LABELS]].sum(axis=1)
-    for i in summary.index[cells != summary["n_solved"]]:
-        problems.append(f"{summary.at[i, 'method']} cell total: {cells[i]} vs {summary.at[i, 'n_solved']}")
+    for i in summary.index[cells != summary["n_tgs"]]:
+        problems.append(
+            f"{summary.at[i, 'method']} cell total: {cells[i]} vs {summary.at[i, 'n_tgs']}"
+        )
+    unanswered = summary[f"n_cell_{UNANSWERED}"]
+    for i in summary.index[unanswered != summary["n_failed"]]:
+        problems.append(
+            f"{summary.at[i, 'method']} unanswered: {unanswered[i]} vs "
+            f"n_failed {summary.at[i, 'n_failed']}"
+        )
     if problems:
-        raise ValueError("cell labels do not partition the ring tiers: " + "; ".join(problems))
+        raise ValueError("the cell axis does not close: " + "; ".join(problems))
 
 
 def score_rung(
@@ -322,7 +340,7 @@ def score_rung(
                 "source": run.source,
                 "setup": run.setup,
                 "grid": G.describe(nside),
-                "landmass": space.meta["landmass"],
+                "projection": space.meta["projection"],
                 "seed_rule": space.meta["seed_rule"],
                 "n_sites": space.meta["n_sites"],
                 "n_seeds": space.meta["n_seeds"],
@@ -330,10 +348,11 @@ def score_rung(
                 "max_ring": G.MAX_RING,
                 "ring": "grid steps from the TG's grid; ringK cumulative; -1 beyond",
                 "cell_label": (
-                    "outland = outside the landmass; true / wrong = nearest seed is / "
-                    "is not the TG's seed; none = no prediction"
+                    "correct / wrong = the prediction's nearest seed is / is not "
+                    "the TG's seed, unbounded -- no containment test of any kind; "
+                    "unanswered = no prediction. The three partition n_tgs."
                 ),
-                "cross_tab": "n_<tier>_cell_<label>, exclusive, answered rows only",
+                "cross_tab": "n_<tier>_cell_<label>, exclusive; graded labels only",
                 "fallback_policy": "FALLBACK and ERROR rows are wrong, not excluded",
                 "glossary": GLOSSARY,
             },
@@ -360,28 +379,3 @@ def score_for_run(
     if len(parts) > 1:
         long.to_csv(run.analysis_dir(CLASSIFY_KIND, root=analysis_root) / BY_GRID_CSV, index=False)
     return long
-
-
-def monotonicity_violations(long: pd.DataFrame) -> pd.DataFrame:
-    """Rows where a coarser rung scored a lower `accuracy_ring0`. Must be empty.
-
-    The grid axis only: exact nesting guarantees it. The cell axis has no such
-    guarantee, because the seeds are regrouped at every rung.
-    """
-    bad = []
-    for method, g in long.groupby("method"):
-        g = g.sort_values("nside", ascending=False)
-        acc = g["accuracy_ring0"].to_numpy()
-        ns = g["nside"].to_numpy()
-        for i in range(1, len(acc)):
-            if acc[i] < acc[i - 1] - 1e-9:
-                bad.append(
-                    {
-                        "method": method,
-                        "finer_nside": int(ns[i - 1]),
-                        "coarser_nside": int(ns[i]),
-                        "finer_accuracy": float(acc[i - 1]),
-                        "coarser_accuracy": float(acc[i]),
-                    }
-                )
-    return pd.DataFrame(bad)

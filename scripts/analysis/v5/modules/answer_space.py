@@ -1,4 +1,4 @@
-"""The TG answer space: a grid partition and a cell partition, per rung.
+"""The TG answer space: a grid partition and a cell partition.
 
 v4's answer space had one partition, the HEALPix grid, and graded a prediction
 by `ring` -- how many grids out it landed. That bounds the **distance** but is
@@ -8,24 +8,31 @@ serving region or in a neighbour's, and an operator cares which.
 v5 adds the second partition. Both are built at one tolerance, `grid_km`:
 
 * **grid** -- HEALPix pixels at nside, `grid_km = sqrt(area)` across.
-* **cell** -- the Voronoi cell of each **seed**, bounded by the **landmass**.
-  Seeds are the spherical centroids of sites grouped by complete linkage with
-  diameter `grid_km`; the landmass is the US mainland buffered by `grid_km`.
-  Also called the serving region: people are served by the nearest site.
+* **cell** -- the Voronoi cell of each **seed**, unbounded. Seeds are the
+  spherical centroids of sites grouped by complete linkage with diameter
+  `grid_km`. Also called the serving region: people are served by the nearest
+  site.
 
 A prediction then carries two labels: `ring` against the grid partition and
 `cell_label` against the cell partition (see `classify`).
+
+## The cell partition is unbounded, deliberately
+
+Every point on Earth is nearest to some seed, so `cell_label` alone will call
+a prediction thousands of km away "correct" whenever it happens to fall on the
+right side of a distant bisector. That is not a defect to patch here: it is
+the property the evaluation measures, by reading `ring` beside `cell_label`.
+Nothing in this module restricts where a cell may reach.
 
 ## Glossary
 
 `GLOSSARY` below is binding for every name in v5 and is written into every
 `meta.json` and manifest, so an artifact carries its own definitions.
 
-## Artifacts, per rung
+## Artifacts
 
 `grids.csv` (occupied grids), `sites.csv`, `seeds.csv`, `tgs.csv` (one row per
-TG, with its site, grid and seed), `meta.json`; and `sweep.csv` one level up,
-one row per rung.
+TG, with its site, grid and seed), and `meta.json`.
 """
 
 from __future__ import annotations
@@ -40,8 +47,8 @@ import pandas as pd
 from scripts.analysis.v5.modules import grid as G
 from scripts.analysis.v5.modules import sites as S
 from scripts.analysis.v5.modules.geodesy import elementwise_km
-from scripts.analysis.v5.modules.landmass import load_landmass
-from scripts.analysis.v5.modules.paths import ANSWER_SPACE_KIND, RunPaths
+from scripts.analysis.v5.modules import projection
+from scripts.analysis.v5.modules.paths import RunPaths
 from scripts.analysis.v5.modules.seeds import build_seeds
 
 GLOSSARY: dict[str, str] = {
@@ -51,8 +58,7 @@ GLOSSARY: dict[str, str] = {
     "ring": "grid steps between the TG's grid and the prediction's grid; -1 = beyond max_ring",
     "site": "unique location of TGs, keyed (run_id, tg_lat, tg_lon)",
     "seed": "spherical centroid of sites grouped by complete linkage, diameter <= grid_km",
-    "landmass": "US mainland (lower 48, Great Lakes inland) buffered by grid_km",
-    "cell": "Voronoi cell of a seed bounded by the landmass; the serving region",
+    "cell": "Voronoi cell of a seed, unbounded; the serving region",
     "answer_space": "the TG answer space: grid partition and cell partition at one rung",
     "*_dist_to_tg_km": "distance to the raw TG coordinate",
     "*_dist_to_seed_km": "distance to the TG's seed",
@@ -63,7 +69,6 @@ SITES_CSV = "sites.csv"
 SEEDS_CSV = "seeds.csv"
 TGS_CSV = "tgs.csv"
 META_JSON = "meta.json"
-SWEEP_CSV = "sweep.csv"
 
 #: The TG columns v5 works in. `load_tgs` is the one place the v2 benchmark's
 #: `target_*` names are mapped onto them.
@@ -201,15 +206,8 @@ def build_answer_space(
     )
 
     # -- cell partition -----------------------------------------------------
-    landmass = load_landmass(grid_km)
-    outland = ~landmass.contains(sites["site_lat"], sites["site_lon"])
-    if outland.any():
-        bad = sites.loc[outland, ["site_lat", "site_lon"]].round(4).values.tolist()
-        raise ValueError(
-            f"{int(outland.sum())} site(s) lie outside the landmass buffered by "
-            f"{grid_km:.1f} km, e.g. {bad[:3]}: their own TGs would be outland. "
-            f"The dataset and the landmass do not match."
-        )
+    # No admissibility guard: an unbounded Voronoi is well defined for seeds
+    # anywhere on Earth, so there is nothing a site could violate.
     seed_of_site, seeds = build_seeds(sites, grid_km)
     sites["seed_id"] = seed_of_site
     too_wide = seeds["seed_diameter_km"] > grid_km + 1e-6
@@ -229,7 +227,7 @@ def build_answer_space(
         "run_id": run_id,
         "grid": G.describe(nside),
         "grid_km": round(grid_km, 3),
-        "landmass": landmass.describe(),
+        "projection": projection.describe(),
         "seed_rule": {
             "method": "complete linkage over site great-circle distances",
             "diameter_km": round(grid_km, 3),
@@ -248,23 +246,6 @@ def build_answer_space(
         "glossary": GLOSSARY,
     }
     return AnswerSpace(nside=nside, grids=grids, sites=sites, seeds=seeds, tgs=t, meta=meta)
-
-
-def sweep_row(space: AnswerSpace) -> dict:
-    """One row of `sweep.csv`: how both partitions coarsen up the ladder."""
-    m = space.meta
-    return {
-        "nside": space.nside,
-        "grid_km": round(space.grid_km, 1),
-        "n_tgs": m["n_tgs"],
-        "n_sites": m["n_sites"],
-        "n_grids": m["n_grids"],
-        "n_seeds": m["n_seeds"],
-        "n_sites_merged": m["n_sites_merged"],
-        "tg_dist_to_grid_centre_km_p50": m["tg_dist_to_grid_centre_km"]["percentiles"]["p50"],
-        "tg_dist_to_seed_km_p50": m["tg_dist_to_seed_km"]["percentiles"]["p50"],
-        "tg_dist_to_seed_km_max": m["tg_dist_to_seed_km"]["max"],
-    }
 
 
 def load_tgs(run: RunPaths) -> pd.DataFrame:
@@ -304,7 +285,7 @@ def build_for_run(
     nsides: tuple[int, ...] = G.NSIDE_LADDER,
     analysis_root: Path | None = None,
 ) -> list[AnswerSpace]:
-    """Build and write every rung for one run, plus `sweep.csv`."""
+    """Build and write every requested rung for one run."""
     tgs = load_tgs(run)
     label = f"{run.run_id}/{run.source}/{run.setup}"
     spaces: list[AnswerSpace] = []
@@ -312,9 +293,4 @@ def build_for_run(
         space = build_answer_space(tgs, nside=nside, run_id=run.run_id, source_label=label)
         space.write(run.answer_space_dir(nside, root=analysis_root))
         spaces.append(space)
-    if len(spaces) > 1:
-        pd.DataFrame([sweep_row(s) for s in spaces]).to_csv(
-            run.analysis_dir(ANSWER_SPACE_KIND, root=analysis_root) / SWEEP_CSV,
-            index=False,
-        )
     return spaces

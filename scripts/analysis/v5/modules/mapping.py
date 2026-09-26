@@ -2,13 +2,13 @@
 
 Ported from v4's `mapping.py`, with its "cell" drawing renamed to *grid* (v5's
 word for a HEALPix pixel) and one addition v4 could not have: `draw_cells`,
-which inks the landmass-bounded Voronoi cells. v4 had no partition beside the
+which inks the Voronoi cells. v4 had no partition beside the
 grid to draw -- correctness was containment in a grid -- so v3's Voronoi layer
 was deleted there. v5 grades against both partitions, so both go on the map.
 
 Ink is v4's validated pair: `TARGET_FILL` for TG grids (filled), and
-`LANDMASS_EDGE` -- v4's VP blue, free here because v5's answer space has no VP
-side -- for the buffered landmass outline.
+v4's VP blue is unused here: the answer space has no VP side, and the
+landmass outline it once drew is gone with the landmass.
 """
 
 from __future__ import annotations
@@ -26,9 +26,9 @@ _PAD_FRAC = 0.08
 TARGET_FILL = "#eb6834"
 TARGET_EDGE = "#b8451c"
 
-#: The buffered landmass: outline only, dashed, so it reads as a limit rather
-#: than a region. v4's `VP_EDGE`; the pair was validated all-pairs against
-#: `TARGET_FILL` (worst CVD dE 24.7).
+#: Unused since the landmass was retired, and kept for one reason: this blue
+#: and `TARGET_FILL` were validated all-pairs together (worst CVD dE 24.7),
+#: and that validation is why `TARGET_FILL` is the hue it is.
 LANDMASS_EDGE = "#2a78d6"
 
 #: The unoccupied grid lattice.
@@ -217,7 +217,7 @@ def draw_geometry(ax, geom, *, edgecolor: str, linewidth: float, linestyle="-", 
 
 
 def draw_cells(ax, polygons: dict, *, linewidth: float = 0.9, zorder: int = 4) -> int:
-    """The landmass-bounded Voronoi cells, as boundaries. Returns the count."""
+    """The Voronoi cells, as boundaries. Returns the count."""
     for geom in polygons.values():
         draw_geometry(ax, geom, edgecolor=CELL_EDGE, linewidth=linewidth, zorder=zorder)
     return len(polygons)

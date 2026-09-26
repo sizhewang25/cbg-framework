@@ -2,7 +2,7 @@
 
 A **seed** is the spherical centroid of a group of sites whose pairwise
 distances are all at most `grid_km`. The seeds generate the cell partition:
-a cell is the Voronoi cell of one seed, bounded by the landmass.
+a cell is the Voronoi cell of one seed, unbounded.
 
 ## Why group sites at all
 
