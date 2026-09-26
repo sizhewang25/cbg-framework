@@ -7,6 +7,12 @@ and second neighbour rings, `-1` beyond. Local by construction, and `ring <= k`
 would be monotone non-increasing as grids grew, because HEALPix nests exactly
 -- v5 runs one resolution, so nothing exercises that any more.
 
+`pred_dist_to_tg_grid` is the same measure uncapped, and the two agree exactly
+wherever `ring` answers at all. The cap is what the tiers and the figures are
+built on and it stays; the uncapped column exists because `-1` is over half of
+the rows on the current runs, spanning 3 to 68 grids out, and one flat "further
+out" bucket hides all of that. Read `ring` for the verdict, this for the shape.
+
 ## `cell_label` -- direction, unbounded
 
 * `correct` -- the prediction's nearest seed is the TG's seed: it is in the
@@ -69,6 +75,11 @@ CELL_LABELS: tuple[str, ...] = ("correct", "wrong", "unanswered")
 #: The cell labels that carry a ring tier, i.e. everything but `unanswered`.
 GRADED_CELL_LABELS: tuple[str, ...] = ("correct", "wrong")
 UNANSWERED = "unanswered"
+
+#: The uncapped grid axis: `ring` without the cap, so `-1` here means only
+#: "no prediction". Written by `score_method`; parquets from before it exists
+#: are refused by `summarize` rather than silently dropping the column.
+GRID_OFFSET = "pred_dist_to_tg_grid"
 
 #: The ring tiers, exclusive, finest first.
 RING_TIERS: tuple[str, ...] = ("ring0", "ring1", "ring2", "beyond")
@@ -162,6 +173,15 @@ def score_method(
     out["pred_grid_id"] = pred_grid
     out["ring"] = ring
 
+    # The same measure as `ring` without the cap, so the spread `ring` pools
+    # into `-1` stays readable. Note the two distance-to-TG columns mark "no
+    # answer" differently: `-1` here because the column is integral, NaN for
+    # the kilometre one below.
+    offset = np.full(len(out), -1, dtype=np.int64)
+    if idx.size:
+        offset[idx] = G.grid_offset(out["tg_grid_id"].to_numpy()[idx], pred_grid[idx], nside)
+    out["pred_dist_to_tg_grid"] = offset
+
     dist_tg = np.full(len(out), np.nan)
     if idx.size:
         dist_tg[idx] = elementwise_km(
@@ -205,6 +225,12 @@ def _tier(ring: np.ndarray) -> np.ndarray:
 
 def summarize(scored: dict[str, pd.DataFrame], nside: int) -> pd.DataFrame:
     """One row per method: the grid axis, the cell axis, and their cross-tab."""
+    stale = [m for m, df in scored.items() if GRID_OFFSET not in df.columns]
+    if stale:
+        raise MissingArtifactError(
+            f"{stale} have no {GRID_OFFSET!r} column; these are per-TG frames from "
+            f"before it existed -- re-run `classify` to rewrite them"
+        )
     rows = []
     for method, df in scored.items():
         n = len(df)
@@ -251,6 +277,17 @@ def summarize(scored: dict[str, pd.DataFrame], nside: int) -> pd.DataFrame:
             v = df.loc[answered, col].dropna()
             row[f"{col}_p50"] = round(float(v.quantile(0.50)), 3) if len(v) else None
             row[f"{col}_p90"] = round(float(v.quantile(0.90)), 3) if len(v) else None
+
+        # The grid axis as a distribution rather than four tiers: this is what
+        # `n_beyond` pools. Its own block, not a third column in the loop
+        # above -- `dropna` does not catch the `-1`, and a count wants a max
+        # and coarser rounding than a kilometre does. `answered` already
+        # implies a prediction, so the filter is belt and braces.
+        g = df.loc[answered, GRID_OFFSET]
+        g = g[g >= 0]
+        row[f"{GRID_OFFSET}_p50"] = round(float(g.quantile(0.50)), 1) if len(g) else None
+        row[f"{GRID_OFFSET}_p90"] = round(float(g.quantile(0.90)), 1) if len(g) else None
+        row[f"{GRID_OFFSET}_max"] = int(g.max()) if len(g) else None
         rows.append(row)
     out = pd.DataFrame(rows).sort_values("accuracy_ring0", ascending=False)
     guard_partition(out)
@@ -347,6 +384,10 @@ def score_rung(
                 "methods": sorted(scored),
                 "max_ring": G.MAX_RING,
                 "ring": "grid steps from the TG's grid; ringK cumulative; -1 beyond",
+                GRID_OFFSET: (
+                    "the same grid steps uncapped, so the spread ring pools into "
+                    "-1 stays readable; -1 only when there is no prediction"
+                ),
                 "cell_label": (
                     "correct / wrong = the prediction's nearest seed is / is not "
                     "the TG's seed, unbounded -- no containment test of any kind; "

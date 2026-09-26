@@ -56,6 +56,7 @@ GLOSSARY: dict[str, str] = {
     "grid": "HEALPix pixel at this rung (NESTED); the grid partition",
     "grid_km": "nominal grid distance, sqrt(grid area)",
     "ring": "grid steps between the TG's grid and the prediction's grid; -1 = beyond max_ring",
+    "pred_dist_to_tg_grid": "the same grid steps uncapped; -1 = no prediction",
     "site": "unique location of TGs, keyed (run_id, tg_lat, tg_lon)",
     "seed": "spherical centroid of sites grouped by complete linkage, diameter <= grid_km",
     "cell": "Voronoi cell of a seed, unbounded; the serving region",

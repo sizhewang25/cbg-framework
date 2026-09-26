@@ -16,6 +16,7 @@ import pytest
 from scripts.analysis.v5.modules import answer_space as A
 from scripts.analysis.v5.modules import classify as C
 from scripts.analysis.v5.modules import grid as G
+from scripts.analysis.v5.modules.paths import MissingArtifactError
 
 SEATTLE = (47.449, -122.309)
 OMAHA = (41.2565, -95.9345)
@@ -78,6 +79,8 @@ class TestCellLabel:
         out = C.score_method(_frame(s, [None]), s)
         assert out["cell_label"].iloc[0] == C.UNANSWERED
         assert out["ring"].iloc[0] == -1 and out["pred_seed_id"].iloc[0] == -1
+        # The one case where the uncapped column also says -1.
+        assert out[C.GRID_OFFSET].iloc[0] == -1
 
     def test_far_but_in_the_right_serving_region(self):
         """Beyond on the grid axis, correct on the cell axis: 400 km east of
@@ -86,6 +89,7 @@ class TestCellLabel:
         s = _space()
         out = C.score_method(_frame(s, [_offset(SEATTLE, east_km=400)]), s)
         assert out["ring"].iloc[0] == -1
+        assert out[C.GRID_OFFSET].iloc[0] > G.MAX_RING
         assert out["cell_label"].iloc[0] == "correct"
 
     def test_distances_to_tg_and_to_seed(self):
@@ -107,6 +111,30 @@ class TestTheArcticCase:
         assert out["cell_label"].iloc[0] == "correct"
         assert out["ring"].iloc[0] == -1
         assert out["pred_dist_to_tg_km"].iloc[0] > 2000
+        # What the `-1` was hiding: tens of grids out, not merely "further".
+        assert out[C.GRID_OFFSET].iloc[0] > 20
+
+
+class TestUncappedGridAxis:
+    """`pred_dist_to_tg_grid` grades what `ring` pools into one `-1` bucket."""
+
+    def test_it_agrees_with_ring_wherever_ring_answers(self):
+        s = _space()
+        preds = [_offset(SEATTLE, north_km=2), _offset(SEATTLE, north_km=60), OMAHA, ARCTIC]
+        out = C.score_method(_frame(s, preds), s)
+        answered = out["ring"] >= 0
+        assert answered.any()
+        assert (out.loc[answered, C.GRID_OFFSET] == out.loc[answered, "ring"]).all()
+
+    def test_rows_ring_pools_into_beyond_are_told_apart(self):
+        """The point of the column: Omaha and the Arctic are both `-1` to
+        `ring`, and nowhere near each other in grids."""
+        s = _space()
+        out = C.score_method(_frame(s, [OMAHA, ARCTIC]), s)
+        assert (out["ring"] == -1).all()
+        omaha, arctic = out[C.GRID_OFFSET].tolist()
+        assert omaha > G.MAX_RING and arctic > G.MAX_RING
+        assert omaha != arctic
 
 
 class TestSummary:
@@ -146,6 +174,30 @@ class TestSummary:
         """A BASELINE row with no eval-source match: answered, nothing to label."""
         row = self._summary([SEATTLE, None], ["BASELINE", "BASELINE"])
         assert row["n_failed"] == 1 and row["n_beyond"] == 0
+
+    def test_grid_offset_percentiles_are_over_answered_rows(self):
+        row = self._summary(
+            [_offset(SEATTLE, north_km=2), OMAHA, None],
+            ["SUCCESS", "SUCCESS", "ERROR"],
+        )
+        # Two answered rows, at 0 and tens of grids out. Were the unanswered
+        # row's -1 included, it would sort first and pull p50 down to 0.
+        biggest = row[f"{C.GRID_OFFSET}_max"]
+        assert biggest > G.MAX_RING
+        assert row[f"{C.GRID_OFFSET}_p50"] == pytest.approx(biggest / 2)
+
+    def test_percentiles_are_none_when_nothing_was_answered(self):
+        row = self._summary([None], ["ERROR"])
+        assert row[f"{C.GRID_OFFSET}_p50"] is None
+        assert row[f"{C.GRID_OFFSET}_max"] is None
+
+    def test_a_frame_from_before_the_column_existed_is_refused(self):
+        """`figure_outcome_bars` re-summarizes per-TG parquets off disk, so a
+        stale artifact must say so rather than raise a bare KeyError."""
+        s = _space()
+        scored = C.score_method(_frame(s, [OMAHA]), s).drop(columns=[C.GRID_OFFSET])
+        with pytest.raises(MissingArtifactError, match="re-run"):
+            C.summarize({"m": scored}, s.nside)
 
     def test_guard_catches_a_broken_cross_tab(self):
         row = self._summary([OMAHA])

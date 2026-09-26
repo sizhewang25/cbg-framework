@@ -158,6 +158,69 @@ def ring_distance(a, b, nside: int, max_ring: int = MAX_RING) -> np.ndarray:
     return out
 
 
+#: Neighbour tables, one per nside, built on first use. The table is
+#: `n_grids(nside)` by 8 int32 -- 6.3 MB at nside 128 -- and every
+#: `grid_offset` call reuses it, which is the only thing here worth keeping.
+_NEIGHBOUR_TABLES: dict[int, np.ndarray] = {}
+
+
+def _neighbour_table(nside: int) -> np.ndarray:
+    """Every grid's neighbours at this nside, as one `(n_grids, 8)` array."""
+    tbl = _NEIGHBOUR_TABLES.get(nside)
+    if tbl is None:
+        tbl = neighbours(np.arange(n_grids(nside), dtype=np.int64), nside).astype(np.int32)
+        _NEIGHBOUR_TABLES[nside] = tbl
+    return tbl
+
+
+def grid_offset(a, b, nside: int) -> np.ndarray:
+    """Exact grid steps separating each `(a, b)` pair. Never gives up.
+
+    The uncapped twin of `ring_distance`, and the same measure: `grid_offset
+    == k` reads exactly as `ring == k` does, k grids out, and the two agree
+    wherever `ring_distance` answers at all. What `ring` reports as `-1` this
+    reports as a number, so the spread past the second ring stays visible
+    instead of pooling into one bucket.
+
+    `-1` is unreachable for a real pair: the neighbour graph is connected --
+    at nside 128 its diameter is 315 -- so every pair resolves.
+
+    Breadth-first like `ring_distance`, but grown over one shared neighbour
+    table per **distinct `a`** rather than per pair. Without a cap the disk a
+    deep pair sweeps is far too large to rebuild row by row: at offset 68 it
+    is some 15,000 grids. Each source stops as soon as it has reached every
+    `b` asked of it.
+    """
+    a = np.asarray(a, dtype=np.int64).ravel()
+    b = np.asarray(b, dtype=np.int64).ravel()
+    if a.shape != b.shape:
+        raise ValueError(f"a and b must be the same length, got {a.shape} vs {b.shape}")
+    nside = validate_nside(nside)
+    out = np.full(a.shape, -1, dtype=np.int64)
+    if a.size == 0:
+        return out
+
+    tbl = _neighbour_table(nside)
+    # One `dist` is live at a time and it is not cached across sources, so
+    # memory stays flat however many distinct `a` a caller passes.
+    for src in np.unique(a):
+        rows = np.flatnonzero(a == src)
+        wanted = b[rows]
+        dist = np.full(tbl.shape[0], -1, dtype=np.int32)
+        dist[src] = 0
+        frontier = np.array([src], dtype=np.int64)
+        k = 0
+        while frontier.size and (dist[wanted] < 0).any():
+            k += 1
+            nbrs = np.unique(tbl[frontier].ravel())
+            nbrs = nbrs[nbrs >= 0]
+            nbrs = nbrs[dist[nbrs] < 0]
+            dist[nbrs] = k
+            frontier = nbrs
+        out[rows] = dist[wanted]
+    return out
+
+
 def grid_rings(pix, nside: int, *, step: int = 8) -> list[np.ndarray]:
     """One `(V, 2)` `(lon, lat)`-degree boundary ring per grid, for drawing.
 

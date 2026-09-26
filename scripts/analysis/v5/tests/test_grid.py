@@ -167,3 +167,65 @@ class TestRingDistance:
         with pytest.raises(ValueError, match="same length"):
             H.ring_distance([1, 2], [1], 128)
 
+
+class TestGridOffset:
+    """`grid_offset` is `ring_distance` without the cap.
+
+    `test_it_agrees_with_ring_distance_wherever_ring_answers` is the
+    load-bearing one: it is the whole claim the uncapped column rests on, so
+    if the two ever drift, `pred_dist_to_tg_grid == 2` and `ring == 2` stop
+    meaning the same thing and the new column is no longer readable as rings.
+    """
+
+    def test_it_agrees_with_ring_distance_wherever_ring_answers(self):
+        a = H.ang2pix(_LAT[:400], _LON[:400], 128)
+        b = H.ang2pix(_LAT[400:800], _LON[400:800], 128)
+        # Near pairs, so `ring_distance` has something to say beyond -1.
+        near = np.concatenate([a, np.repeat(a[:50], 8)])
+        far = np.concatenate([b, H.neighbours(a[:50], 128).ravel()])
+        keep = far >= 0
+        near, far = near[keep], far[keep]
+        ring = H.ring_distance(near, far, 128)
+        offset = H.grid_offset(near, far, 128)
+        answered = ring >= 0
+        assert answered.any()
+        assert np.array_equal(offset[answered], ring[answered])
+        # And where `ring` gave up, the offset is a real number past the cap.
+        assert np.all(offset[~answered] > H.MAX_RING)
+
+    def test_same_grid_is_zero(self):
+        pix = H.ang2pix(_LAT[:100], _LON[:100], 128)
+        assert np.all(H.grid_offset(pix, pix, 128) == 0)
+
+    def test_every_immediate_neighbour_is_one(self):
+        a = H.ang2pix([DENVER[0]], [DENVER[1]], 128)
+        nb = H.neighbours(a, 128)[0]
+        nb = nb[nb >= 0]
+        assert np.all(H.grid_offset(np.repeat(a, nb.size), nb, 128) == 1)
+
+    def test_a_far_pair_gets_a_number_not_minus_one(self):
+        """The half of the point `ring` cannot serve: Seattle and the Arctic
+        are both `-1` to `ring_distance`, and 68-odd grids apart in truth."""
+        truth = H.ang2pix([SEATTLE[0]], [SEATTLE[1]], 128)
+        pred = H.ang2pix([ARCTIC[0]], [ARCTIC[1]], 128)
+        assert H.ring_distance(truth, pred, 128)[0] == -1
+        assert H.grid_offset(truth, pred, 128)[0] > H.MAX_RING
+
+    def test_antipodes_resolve_rather_than_giving_up(self):
+        """The neighbour graph is connected, so no pair is unreachable."""
+        a = H.ang2pix([45.0], [0.0], 128)
+        b = H.ang2pix([-45.0], [180.0], 128)
+        assert H.grid_offset(a, b, 128)[0] > 0
+
+    def test_it_is_symmetric(self):
+        a = H.ang2pix(_LAT[:60], _LON[:60], 128)
+        b = H.ang2pix(_LAT[60:120], _LON[60:120], 128)
+        assert np.array_equal(H.grid_offset(a, b, 128), H.grid_offset(b, a, 128))
+
+    def test_empty_input_is_empty_output(self):
+        assert H.grid_offset([], [], 128).size == 0
+
+    def test_mismatched_lengths_are_rejected(self):
+        with pytest.raises(ValueError, match="same length"):
+            H.grid_offset([1, 2], [1], 128)
+
