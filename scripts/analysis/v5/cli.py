@@ -13,6 +13,10 @@
         --run-id as01-260728-260802-mesh \
         --run-id as02-260728-260802-mesh \
         --run-id as03-260728-260802-mesh
+    python -m scripts.analysis.v5.cli plot-outcome-map \
+        --run-id as01-260728-260802-mesh \
+        --run-id as02-260728-260802-mesh \
+        --run-id as03-260728-260802-mesh
     python -m scripts.analysis.v5.cli plot-vp-proximity -c p5 -c p25 -c all \
         --run-id as01-260728-260802-mesh \
         --run-id as02-260728-260802-mesh \
@@ -24,7 +28,8 @@
         --run-id as03-260728-260802-mesh
 
 `classify`, `plot-answer-space` and `plot-mtl-map` need the answer space; `plot-outcome-bars`
-`plot-error-cdf`, `plot-vp-proximity` and `report-cohort-overlap` need `classify` on every run. Everything writes under `outputs/analysis/v5/`.
+`plot-error-cdf`, `plot-vp-proximity` and `report-cohort-overlap` need `classify` on every run.
+`plot-outcome-map` needs both. Everything writes under `outputs/analysis/v5/`.
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ from scripts.analysis.v5.modules import (
     cohort_overlap,
     figure_error_cdf,
     figure_outcome_bars,
+    figure_outcome_map,
     figure_vp_dist_gap,
     figure_vp_distance_cdf,
     figure_vp_proximity,
@@ -225,6 +231,70 @@ def plot_outcome_bars_cmd(
             methods=list(method) if method else None,
             layouts=layouts,
             modes=modes,
+            analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for png in pngs:
+        typer.echo(f"wrote {png}")
+
+
+@app.command("plot-outcome-map")
+def plot_outcome_map_cmd(
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Mesh run, one per dataset (repeatable); one column each."
+    ),
+    cohort: list[str] = typer.Option(
+        None,
+        "--cohort",
+        "-c",
+        help=(
+            f"Which cell label to map: {figure_outcome_map.COHORTS[0]} or "
+            f"{figure_outcome_map.COHORTS[1]}. Repeatable; default: both. "
+            f"{classify.UNANSWERED!r} has no coordinate, so it cannot be drawn."
+        ),
+    ),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Draw only these rows."),
+    extent: tuple[float, float, float, float] = typer.Option(
+        figure_outcome_map.DEFAULT_EXTENT,
+        "--extent",
+        help=(
+            "Shared frame, as lon_min lon_max lat_min lat_max. One frame for "
+            "every panel, so the columns compare; predictions outside it are "
+            "drawn as carets at the edge, never dropped."
+        ),
+    ),
+    nside: int = typer.Option(
+        figure_outcome_map.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help="Which rung's answer space and *_tgs.parquet to draw.",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Where one cohort's predictions landed: a map per method x dataset.
+
+    The companion to `plot-outcome-bars`: those count the outcomes, this one
+    places them. Each panel draws the run's cells and seeds, every prediction
+    of the cohort coloured by its grid offset with a line to its target, and a
+    per-cell count keyed on `tg_seed_id` -- so on the `wrong` map the number
+    reads "predictions that should have landed in this cell". `solved_mask` is
+    applied, and the FALLBACK rows it removes are named in the panel title.
+
+    Writes `outcome_map.<cohort>.{png,csv,manifest.json}` into
+    `_cross/outcome-map/<datasets>[@<arm>]/`. Needs `build-answer-space` and
+    `classify` on every run.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id; this figure compares named datasets")
+    try:
+        pngs = figure_outcome_map.build_for_runs(
+            [resolve_run(r, outputs_root) for r in run_id],
+            cohorts=list(cohort) if cohort else None,
+            methods=list(method) if method else None,
+            extent=tuple(extent),
+            nside=nside,
             analysis_root=analysis_root,
         )
     except (ValueError, MissingArtifactError) as exc:

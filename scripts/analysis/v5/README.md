@@ -7,7 +7,8 @@ second partition, the **unbounded** Voronoi **cell**, so every prediction
 carries `(pred_dist_to_tg_grid, cell_label)`. One resolution: nside 128.
 
 Scope: the answer space, classify, the answer-space map, the outcome bars,
-the error-distance CDF, the VP-proximity violins and the MTL case viewer.
+the outcome map, the error-distance CDF, the VP-proximity violins and the MTL
+case viewer.
 
 ## Glossary
 
@@ -83,6 +84,7 @@ outputs/analysis/v5/<run>/answer-space/healpix-128/{grids,sites,seeds,tgs}.csv, 
 outputs/analysis/v5/<run>/classify/healpix-128/accuracy.csv, <method>_tgs.parquet, manifest.json
 outputs/analysis/v5/<run>/classify/error_cdf[.sentinel].{png,csv,manifest.json}
 outputs/analysis/v5/_cross/classify/<datasets>@<arm>/outcome_bars.*, error_cdf.pooled[.sentinel].*
+outputs/analysis/v5/_cross/outcome-map/<datasets>@<arm>/outcome_map.<cohort>.{png,csv,manifest.json}
 outputs/analysis/v5/_cross/vp-proximity/<datasets>@<arm>/vp_proximity.<cohort>.{png,csv,manifest.json}
 outputs/analysis/v5/<run>/mtl-map/healpix-128/mtl_map.<method>.html
 outputs/analysis/v5/<run>/mtl-map/regions/<method>/<tg>.json          # replay cache, rung-free
@@ -143,6 +145,45 @@ drawn alone. Read as a pair: a method can lead on serving region while holding
 
 Each panel ranks methods by `true` share, then by how tight their true
 predictions are (`true & ring0`, `true & <=ring1`, ...).
+
+**`plot-outcome-map`** places what the bars count. One panel per
+`(method, dataset)` — rows in `methods.TERM_ORDER`, columns in the order the
+runs were named — drawing one cohort of the cell axis, `correct` or `wrong`,
+as a separate figure each. A panel carries the run's Voronoi cells and seeds,
+every prediction of the cohort as a marker filled by `pred_dist_to_tg_grid` on
+a discrete `turbo` ramp binned at `[0, 1, 2, 3, 5, 8, 12, 20, 40]` (the first
+three bins are `classify`'s ring tiers), a thin grey line from each prediction
+to its target, and a per-cell count.
+
+The counts key on **`tg_seed_id`, never `pred_seed_id`**, so on the `wrong`
+map a cell's number reads "predictions that should have landed here". They are
+pushed apart by a spring relaxation and joined back to their seed once
+displaced past 1.3°.
+
+`solved_mask` is applied before anything is drawn: a FALLBACK row carries the
+S-P baseline's coordinate, and counting it reads as01/VAN at **270 correct
+instead of 163**. The 107 rows removed are named in the panel title
+(`107 FB excl.`), as is the offset p50/max and the off-map count.
+
+All panels share one frame, `--extent`, defaulting to `(-128, -63, 21, 55)` —
+wider than `US_MAINLAND_EXTENT` because SPO answers into Canada and over the
+Gulf. A shared frame is the point: a per-panel auto-extent would rescale every
+map and a reader comparing down a column would be comparing different
+pictures. Predictions outside it are drawn as dark-red carets pinned at the
+edge and counted (as01/SPO: 20 of 354 `correct`), never cropped.
+
+The CSV twin carries one row per `(run, method, cohort, seed)` — the drawn
+count, its distinct site count and its offset percentiles — plus the panel's
+own totals repeated onto every row, so each title is reconstructible without
+re-reading a parquet.
+
+**Known limitation:** the relaxation repels labels from labels, not from the
+prediction markers, so in the dense north-east cluster (NYC / Philadelphia /
+DC / Boston) a count can come to rest on a marker and two leader lines can
+cross. The numbers stay right and are in the CSV. Unimplemented candidates:
+treat markers as obstacles in the repulsion; allocate labels by angle around a
+cluster centroid so leaders cannot cross; a callout column for the densest
+cluster.
 
 **`plot-error-cdf`** (ported from v4) draws the empirical CDF of
 `pred_dist_to_tg_km`, one curve per method, on a log x axis. S-P is the
@@ -268,6 +309,10 @@ python -m scripts.analysis.v5.cli build-answer-space --run-id as01-260728-260802
 python -m scripts.analysis.v5.cli classify           --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v5.cli plot-answer-space  --run-id as01-260728-260802-mesh
 python -m scripts.analysis.v5.cli plot-outcome-bars \
+    --run-id as01-260728-260802-mesh \
+    --run-id as02-260728-260802-mesh \
+    --run-id as03-260728-260802-mesh
+python -m scripts.analysis.v5.cli plot-outcome-map \
     --run-id as01-260728-260802-mesh \
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh
