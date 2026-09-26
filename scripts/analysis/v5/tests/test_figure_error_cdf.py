@@ -4,6 +4,11 @@ Ported from v4. Two invariants carry most of these tests: the population is
 `status.solved_mask`, so `n_plotted` is `accuracy.csv`'s `n_solved`; and the
 percentiles are the same pandas call `classify.summarize` makes, so the two
 files agree digit for digit.
+
+`TestSentinel` covers the policy that suspends both: `--unanswered sentinel`
+puts the dropped rows back at 10,000 km, which is what makes every curve share
+a denominator, and is also why its artifacts are named apart from the ones
+`accuracy.csv` joins to.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from scripts.analysis.v5.modules import classify as C
 from scripts.analysis.v5.modules import cross
 from scripts.analysis.v5.modules import figure_error_cdf as E
 from scripts.analysis.v5.modules import grid as G
+from scripts.analysis.v5.modules.methods import method_label
 from scripts.analysis.v5.modules.paths import CLASSIFY_KIND, MissingArtifactError, RunPaths
 from scripts.analysis.v5.modules.status import SHORTEST_PING
 
@@ -36,8 +42,8 @@ def _tgs(*, solved: int = 0, failed: int = 0, errors=None, first_id: int = 0) ->
             "status": ["SUCCESS"] * solved + ["FALLBACK"] * failed,
             "pred_lat": [40.0] * n,
             "pred_lon": [-100.0] * n,
-            "ring": [0] * n,
-            "cell_label": ["true"] * n,
+            "ring": [0] * solved + [-1] * failed,
+            "cell_label": ["correct"] * solved + [C.UNANSWERED] * failed,
             "pred_dist_to_tg_km": [*dist, *([123.0] * failed)],
             "pred_dist_to_seed_km": [*dist, *([123.0] * failed)],
         }
@@ -130,15 +136,17 @@ class TestPercentiles:
         assert table.iloc[0]["method_label"] == "OCT-H"
 
 
-class TestCurveOrder:
-    def test_curves_rank_by_median_ascending(self, tmp_path):
+class TestTableRanking:
+    """The CSV stays best-first. Only the legend and box are fixed-order."""
+
+    def test_rows_rank_by_median_ascending(self, tmp_path):
         run = _write_run(tmp_path, "as01", {
             "far": _tgs(solved=4, errors=[300.0, 310, 320, 330]),
             "near": _tgs(solved=4, errors=[10.0, 11, 12, 13]),
             "mid": _tgs(solved=4, errors=[100.0, 101, 102, 103]),
         })
         table = E.percentile_table(E.load_errors(run, analysis_root=tmp_path))
-        assert E.curve_order(table) == ["near", "mid", "far"]
+        assert list(table["method"]) == ["near", "mid", "far"]
 
     def test_a_p50_tie_is_broken_by_the_tail(self, tmp_path):
         run = _write_run(tmp_path, "as01", {
@@ -146,7 +154,7 @@ class TestCurveOrder:
             "thin_tail": _tgs(solved=4, errors=[10.0, 10, 10, 11]),
         })
         table = E.percentile_table(E.load_errors(run, analysis_root=tmp_path))
-        assert E.curve_order(table) == ["thin_tail", "fat_tail"]
+        assert list(table["method"]) == ["thin_tail", "fat_tail"]
 
     def test_the_order_is_total(self, tmp_path):
         run = _write_run(tmp_path, "as01", {
@@ -154,7 +162,52 @@ class TestCurveOrder:
             "a_same": _tgs(solved=3, errors=[1.0, 2, 3]),
         })
         table = E.percentile_table(E.load_errors(run, analysis_root=tmp_path))
-        assert E.curve_order(table) == ["a_same", "b_same"]
+        assert list(table["method"]) == ["a_same", "b_same"]
+
+
+class TestCurveOrder:
+    """Legend and box order: fixed, and the same one in every v5 figure."""
+
+    PUBLISHED = [
+        SHORTEST_PING, "million_scale_cbg", "vanilla_cbg",
+        "octant_cbg_hull", "octant_cbg_spl", "spotter_cbg",
+    ]
+
+    def _table(self, tmp_path, methods, errors_for=lambda m: None):
+        run = _write_run(
+            tmp_path, "as01",
+            {m: _tgs(solved=4, errors=errors_for(m)) for m in methods},
+        )
+        return E.percentile_table(E.load_errors(run, analysis_root=tmp_path))
+
+    def test_the_legend_reads_s_p_soi_van_oct_h_oct_s_spo(self, tmp_path):
+        table = self._table(tmp_path, self.PUBLISHED)
+        order = E.curve_order(table)
+        assert [method_label(m) for m in order] == [
+            "S-P", "SOI", "VAN", "OCT-H", "OCT-S", "SPO"
+        ]
+
+    def test_the_order_does_not_move_when_the_data_does(self, tmp_path):
+        """The point of fixing it: the same figure twice is the same key."""
+        near = {m: [1.0, 2, 3, 4] for m in self.PUBLISHED}
+        far = {m: [900.0, 910, 920, 930] for m in self.PUBLISHED}
+        a = E.curve_order(self._table(tmp_path / "a", self.PUBLISHED, near.get))
+        b = E.curve_order(self._table(tmp_path / "b", self.PUBLISHED, far.get))
+        assert a == b == self.PUBLISHED
+
+    def test_it_is_the_package_order_not_this_figures(self, tmp_path):
+        from scripts.analysis.v5.modules.methods import TERM_ORDER
+
+        table = self._table(tmp_path, self.PUBLISHED)
+        assert [method_label(m) for m in E.curve_order(table)] == list(TERM_ORDER)
+
+    def test_an_unpublished_method_sorts_last(self, tmp_path):
+        table = self._table(tmp_path, [*self.PUBLISHED, "spotter_h3_cbg"])
+        assert E.curve_order(table)[-1] == "spotter_h3_cbg"
+
+    def test_a_filtered_selection_keeps_its_relative_order(self, tmp_path):
+        table = self._table(tmp_path, ["spotter_cbg", "octant_cbg_hull", SHORTEST_PING])
+        assert E.curve_order(table) == [SHORTEST_PING, "octant_cbg_hull", "spotter_cbg"]
 
 
 class TestPooling:
@@ -190,6 +243,118 @@ class TestPooling:
         b = _write_run(tmp_path, "as02", {"m": _tgs(solved=4)})
         with pytest.raises(ValueError, match="share 4 TG ids"):
             E.pooled_errors([a, b], analysis_root=tmp_path)
+
+
+class TestSentinel:
+    def test_exclude_is_the_default_and_changes_nothing(self, tmp_path):
+        loaded = E.load_errors(
+            _write_run(tmp_path, "as01", {"m": _tgs(solved=5, failed=5)}), analysis_root=tmp_path
+        )
+        assert len(E.censor(loaded)["m"]["errors"]) == 5
+
+    def test_every_method_is_drawn_over_the_whole_roster(self, tmp_path):
+        """The point of the policy: one denominator, so the shapes compare."""
+        run = _write_run(tmp_path, "as01", {
+            "picky": _tgs(solved=2, failed=8),
+            "eager": _tgs(solved=9, failed=1, errors=[500.0] * 9),
+        })
+        censored = E.censor(E.load_errors(run, analysis_root=tmp_path), policy=E.SENTINEL)
+        assert {m: len(e["errors"]) for m, e in censored.items()} == {"picky": 10, "eager": 10}
+        assert censored["picky"]["n_censored"] == 8
+
+    def test_the_curve_reaches_one_only_at_the_sentinel(self, tmp_path):
+        run = _write_run(tmp_path, "as01", {"m": _tgs(solved=6, failed=4)})
+        entry = E.censor(E.load_errors(run, analysis_root=tmp_path), policy=E.SENTINEL)["m"]
+        xs, ys = E._cdf(entry["errors"])
+        below = ys[xs < E.SENTINEL_KM]
+        assert below[-1] == pytest.approx(0.6)  # the answer rate, read off the figure
+        assert ys[-1] == 1.0 and xs[-1] == E.SENTINEL_KM
+
+    def test_an_answered_row_without_a_distance_is_censored_too(self, tmp_path):
+        """It has no distance to draw, so leaving it out would shrink n."""
+        df = _tgs(solved=4)
+        df.loc[0, ["pred_lat", "pred_lon", "pred_dist_to_tg_km", "pred_dist_to_seed_km"]] = np.nan
+        run = _write_run(tmp_path, "as01", {"m": df})
+        entry = E.censor(E.load_errors(run, analysis_root=tmp_path), policy=E.SENTINEL)["m"]
+        assert entry["n_censored"] == 1 and len(entry["errors"]) == entry["n_tgs"] == 4
+
+    def test_a_method_that_answered_nothing_is_a_flat_line_at_the_sentinel(self, tmp_path):
+        run = _write_run(tmp_path, "as01", {"m": _tgs(failed=5)})
+        table = E.percentile_table(
+            E.censor(E.load_errors(run, analysis_root=tmp_path), policy=E.SENTINEL)
+        )
+        assert table.iloc[0]["n_plotted"] == 5
+        assert table.iloc[0][E.pcol(50)] == E.SENTINEL_KM
+
+    def test_a_censored_percentile_prints_as_the_bare_sentinel(self):
+        assert E._percentile_cell(E.SENTINEL_KM, E.SENTINEL_KM).strip() == "10,000"
+        assert E._percentile_cell(412.0, E.SENTINEL_KM).strip() == "412"
+        assert E._percentile_cell(412.0, None).strip() == "412"
+
+    def test_a_censored_cell_still_fits_its_column(self):
+        """Six characters plus a space; seven would collide with p50's."""
+        assert len(E._percentile_cell(E.SENTINEL_KM, E.SENTINEL_KM)) == E._CELL_W
+        assert E._percentile_cell(E.SENTINEL_KM, E.SENTINEL_KM).startswith(" ")
+
+    def test_pooling_happens_before_censoring(self, tmp_path):
+        """`pool` sums the counts `censor` divides by; the other order double-counts."""
+        runs = [
+            _write_run(tmp_path, ds, {"m": _tgs(solved=2, failed=2, first_id=100 * i)})
+            for i, ds in enumerate(("as01", "as02"))
+        ]
+        entry = E.censor(E.pooled_errors(runs, analysis_root=tmp_path), policy=E.SENTINEL)["m"]
+        assert entry["n_tgs"] == 8 and entry["n_censored"] == 4 and len(entry["errors"]) == 8
+
+    def test_the_two_policies_write_different_files(self, tmp_path):
+        run = _write_run(tmp_path, "as01", {"m": _tgs(solved=3, failed=3)})
+        E.build_for_runs([run], analysis_root=tmp_path)
+        E.build_for_runs([run], analysis_root=tmp_path, unanswered=E.SENTINEL)
+        out = run.analysis_dir(CLASSIFY_KIND, root=tmp_path)
+        assert {p.name for p in out.glob("error_cdf*")} == {
+            *E.artifact_names(E.PER_RUN), *E.artifact_names(E.PER_RUN, E.SENTINEL)
+        }
+
+    def test_the_sentinel_csv_declares_its_policy(self, tmp_path):
+        run = _write_run(tmp_path, "as01", {"m": _tgs(solved=3, failed=3)})
+        E.build_for_runs([run], analysis_root=tmp_path, unanswered=E.SENTINEL)
+        out = run.analysis_dir(CLASSIFY_KIND, root=tmp_path)
+        csv = pd.read_csv(out / E.artifact_names(E.PER_RUN, E.SENTINEL)[1])
+        assert csv.loc[0, "unanswered_policy"] == E.SENTINEL
+        assert csv.loc[0, "sentinel_km"] == E.SENTINEL_KM
+        assert csv.loc[0, "n_plotted"] == 6 and csv.loc[0, "n_censored"] == 3
+        body = json.loads((out / E.artifact_names(E.PER_RUN, E.SENTINEL)[2]).read_text())
+        assert body["unanswered"]["sentinel_km"] == E.SENTINEL_KM
+        assert body["unanswered"]["n_censored"]["m"] == 3
+
+    def test_the_default_artifacts_still_say_they_dropped_them(self, tmp_path):
+        run = _write_run(tmp_path, "as01", {"m": _tgs(solved=3, failed=3)})
+        E.build_for_runs([run], analysis_root=tmp_path)
+        out = run.analysis_dir(CLASSIFY_KIND, root=tmp_path)
+        body = json.loads((out / E.NAMES[E.PER_RUN][2]).read_text())
+        assert body["unanswered"] == {
+            "policy": E.EXCLUDE, "sentinel_km": None,
+            "n_censored": {"m": 0}, "n_real_at_or_above_sentinel": {},
+            "note": body["unanswered"]["note"],
+        }
+        assert "accuracy.csv joins to" in body["unanswered"]["note"]
+
+    def test_the_default_axis_widens_so_the_sentinel_is_not_on_the_spine(self):
+        assert E.resolve_x_max(E.EXCLUDE) == E.DEFAULT_X_MAX_KM
+        assert E.resolve_x_max(E.SENTINEL) > E.SENTINEL_KM
+        assert E.resolve_x_max(E.SENTINEL, 12_000.0) == 12_000.0
+
+    def test_an_axis_that_would_hide_the_sentinel_is_refused(self, tmp_path):
+        run = _write_run(tmp_path, "as01", {"m": _tgs(solved=3, failed=3)})
+        with pytest.raises(ValueError, match="must sit inside the axis"):
+            E.build_for_runs(
+                [run], analysis_root=tmp_path, unanswered=E.SENTINEL,
+                max_x_km=E.DEFAULT_X_MAX_KM,
+            )
+
+    def test_an_unknown_policy_is_refused_by_name(self, tmp_path):
+        run = _write_run(tmp_path, "as01", {"m": _tgs(solved=2)})
+        with pytest.raises(ValueError, match="unknown unanswered policy"):
+            E.build_for_runs([run], analysis_root=tmp_path, unanswered="drop")
 
 
 class TestBaselineEncoding:
@@ -231,6 +396,11 @@ def test_an_unknown_layout_is_refused_by_name(tmp_path):
 
 # --- real runs ---------------------------------------------------------------
 
+#: A fine and a coarse rung, scored side by side purely to prove the error
+#: distance is the same in both. Not the shipped ladder -- that is nside 128
+#: alone -- so these are named here rather than read from `grid`.
+_RUNG_PAIR: tuple[int, int] = (128, 16)
+
 MESH_RUNS = ("as01-260728-260802-mesh", "as02-260728-260802-mesh", "as03-260728-260802-mesh")
 
 
@@ -241,7 +411,11 @@ def built(tmp_path_factory):
     from scripts.analysis.v5.modules.paths import resolve_run
 
     root = tmp_path_factory.mktemp("v5cdf")
-    rungs = (G.NSIDE_LADDER[0], G.NSIDE_LADDER[-1])
+    # Explicit, not `NSIDE_LADDER`: v5 ships one resolution, and this test
+    # exists to show the error distance does not depend on the resolution at
+    # all. Taking both ends of a one-entry ladder would compare an artifact
+    # to itself and pass vacuously.
+    rungs = _RUNG_PAIR
     runs = []
     for run_id in MESH_RUNS:
         try:
@@ -262,8 +436,8 @@ class TestRealRuns:
         """The premise the rung-free filenames rest on."""
         runs, root, _ = built
         for run in runs:
-            fine = E.load_errors(run, G.NSIDE_LADDER[0], analysis_root=root)
-            coarse = E.load_errors(run, G.NSIDE_LADDER[-1], analysis_root=root)
+            fine = E.load_errors(run, _RUNG_PAIR[0], analysis_root=root)
+            coarse = E.load_errors(run, _RUNG_PAIR[1], analysis_root=root)
             assert set(fine) == set(coarse)
             for m in fine:
                 assert np.array_equal(np.sort(fine[m]["errors"]), np.sort(coarse[m]["errors"]))

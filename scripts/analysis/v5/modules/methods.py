@@ -17,6 +17,10 @@ Colour is pinned to a method's **identity**, never to its rank in the current
 selection, so `--method` cannot repaint the survivors and the same variant is
 the same colour in every figure. The hexes are v4's (and v3's), re-keyed on the
 terms.
+
+`TERM_ORDER` applies the same rule to position: legends and tables list methods
+in one fixed order, so a method sits in the same row of every figure and the
+reader compares down a column instead of re-reading the key each time.
 """
 
 from __future__ import annotations
@@ -81,6 +85,28 @@ LABEL_HUES: dict[str, str] = {
 #: Anything `LABEL_HUES` does not name folds into one grey bucket rather than
 #: being handed a generated hue.
 OTHER_HUE = "#898781"
+
+#: The order figures list methods in: `LABEL_HUES`'s, which is the package's
+#: canonical one -- the baseline first, then the CBG variants, Octant's two
+#: adjacent. Fixed rather than ranked, so a reader comparing two figures finds
+#: a method in the same row of both and the legend does not re-order itself
+#: when the data moves.
+TERM_ORDER: tuple[str, ...] = tuple(LABEL_HUES)
+
+
+def method_sort_key(method: str) -> tuple[int, str]:
+    """Sort key putting `method` in `TERM_ORDER`. Unpublished ones sort last.
+
+    By term, not by combo id, so `octant_cbg_spl` and `octant_cbg` -- one
+    variant under two spellings -- cannot straddle the order.
+    """
+    term = method_label(method)
+    return (TERM_ORDER.index(term) if term in TERM_ORDER else len(TERM_ORDER), term)
+
+
+def method_order(methods) -> list[str]:
+    """`methods` in `TERM_ORDER`, whatever order they arrived in."""
+    return sorted(methods, key=method_sort_key)
 
 
 def method_colors(methods) -> dict[str, str]:

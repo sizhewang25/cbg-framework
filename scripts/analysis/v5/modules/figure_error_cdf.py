@@ -32,6 +32,24 @@ fallbacks).
 It also carries the case a hand-written filter gets wrong: S-P's rows are all
 `BASELINE`, never `SUCCESS`, so `status == "SUCCESS"` would empty the baseline.
 
+## ...unless they are parked at the 10,000 km sentinel
+
+`--unanswered sentinel` puts every unanswered row back in at `SENTINEL_KM`
+instead of dropping it, so each curve is drawn over the same denominator --
+the whole TG roster -- and reaches y=1 only at the sentinel. A method's refusal
+rate then reads straight off the figure: the height of its curve just left of
+the sentinel line is the fraction it answered. `exclude` cannot show that,
+because there every curve reaches 1 on its own population and VAN's refusals
+are invisible in the shape.
+
+The cost is that the percentiles move with the policy, and a censored one is
+not a distance anyone measured -- it means "this method had not answered that
+share of its TGs yet". A censored cell prints the sentinel plainly, so the
+footnote and the labelled sentinel line carry that reading; the CSV declares
+`unanswered_policy`/`sentinel_km`, and the artifacts take a `.sentinel.` infix
+so the two populations cannot overwrite each other. Only the `exclude` files
+join to `accuracy.csv`.
+
 ## Pooling concatenates rows; it cannot average percentiles
 
 `--layout pooled` draws one curve per method over every selected run's solved
@@ -69,6 +87,7 @@ from scripts.analysis.v5.modules import grid as G
 from scripts.analysis.v5.modules.methods import (
     method_colors,
     method_label,
+    method_order,
     method_term_table,
 )
 from scripts.analysis.v5.modules.paths import (
@@ -86,9 +105,17 @@ DIST_COLUMN = "pred_dist_to_tg_km"
 #: Only what the curve and the percentile box need.
 READ_COLUMNS: tuple[str, ...] = ("tg_id", "status", DIST_COLUMN)
 
-#: Reported per method in the box under the legend. 50 and 90 are the two
-#: `accuracy.csv` publishes, so this CSV joins to it on its headline numbers.
-PERCENTILES: tuple[int, ...] = (5, 25, 50, 90, 95)
+#: Computed per method and written to the CSV. 50 and 90 are the two
+#: `accuracy.csv` publishes, so this CSV joins to it on its headline numbers,
+#: and 90 is the rank cascade's tail term.
+PERCENTILES: tuple[int, ...] = (5, 25, 50, 75, 90, 95)
+
+#: The subset the box prints -- five columns is what fits under the legend.
+#: p75 rather than p90 because p90 is the first one the sentinel policy
+#: censors: VAN answers 78% of the pooled roster, so its p90 is the sentinel
+#: and says nothing about how far off it was, while its p75 is still a
+#: measurement. The CSV keeps both.
+BOX_PERCENTILES: tuple[int, ...] = (5, 25, 50, 75, 95)
 
 #: Reference verticals (km). Neutral ink, **not** green/red: green is the
 #: Octant family and red is SPO, so coloured guides would read as series.
@@ -100,20 +127,48 @@ THRESHOLDS_KM: tuple[int, ...] = (100, 500, 1000)
 X_MIN_KM = 0.1
 DEFAULT_X_MAX_KM = 10_000.0
 
+#: What to do with a TG the method did not answer.
+EXCLUDE = "exclude"
+SENTINEL = "sentinel"
+UNANSWERED_POLICIES: tuple[str, ...] = (EXCLUDE, SENTINEL)
+
+#: Where `sentinel` parks an unanswered row. Beyond any error a method could
+#: plausibly *make* on this roster, and short of the 20,015 km antipodal
+#: maximum, so a real distance can never be mistaken for a censored one.
+SENTINEL_KM = 10_000.0
+
+#: The sentinel layout's default right edge: half the Earth's circumference,
+#: the largest surface error that exists. It has to clear `SENTINEL_KM` or the
+#: riser to y=1 would be drawn on the spine, and it clears every real value
+#: too, so nothing falls off the edge unnoticed.
+SENTINEL_X_MAX_KM = 20_015.1
+
 PER_RUN = "per-run"
 POOLED = "pooled"
 LAYOUTS: tuple[str, ...] = (PER_RUN, POOLED)
 
-#: `layout -> (png, csv, manifest)`. No `{slug}`: the figure does not vary with
-#: the rung, so the name does not pretend it might.
-NAMES: dict[str, tuple[str, str, str]] = {
-    PER_RUN: ("error_cdf.png", "error_cdf.csv", "error_cdf.manifest.json"),
-    POOLED: (
-        "error_cdf.pooled.png",
-        "error_cdf.pooled.csv",
-        "error_cdf.pooled.manifest.json",
-    ),
-}
+STEM = "error_cdf"
+
+
+def artifact_names(layout: str, policy: str = EXCLUDE) -> tuple[str, str, str]:
+    """`(png, csv, manifest)` for a layout and unanswered policy.
+
+    No `{slug}`: the figure does not vary with the rung, so the name does not
+    pretend it might. It *does* vary with the policy -- same axes, different
+    population and different percentiles -- so `sentinel` takes its own infix
+    rather than overwriting the file `accuracy.csv` joins to.
+    """
+    parts = [STEM]
+    if layout == POOLED:
+        parts.append("pooled")
+    if policy == SENTINEL:
+        parts.append(SENTINEL)
+    stem = ".".join(parts)
+    return (f"{stem}.png", f"{stem}.csv", f"{stem}.manifest.json")
+
+
+#: `layout -> (png, csv, manifest)` under the default policy.
+NAMES: dict[str, tuple[str, str, str]] = {layout: artifact_names(layout) for layout in LAYOUTS}
 
 #: Which rung's parquets to read. Any would do -- that is the point -- so the
 #: finest is the default and `--nside` exists to demonstrate nothing changes.
@@ -143,6 +198,17 @@ FOOTNOTE = (
     "outcome bars' “no answer” segment — the n above is that figure's "
     "answered stack. Distance is prediction to the raw\nTG; neither grid nor "
     "seed enters it, which is why this figure is the same at every rung."
+)
+
+#: Its `--unanswered sentinel` replacement. The denominator claim is the whole
+#: point of the policy, so it leads.
+SENTINEL_FOOTNOTE = (
+    "Unanswered rows are parked at the {km:,.0f} km sentinel rather than dropped, so every "
+    "curve rests on the same denominator — the\nfull TG roster. Where a curve meets the "
+    "sentinel line is the fraction that method answered; the rest of its rise is "
+    "the\noutcome bars' “no answer” segment. Percentiles at the sentinel are censored "
+    "at 10,000, not measured, and do not join to accuracy.csv.\nDistance is prediction to the "
+    "raw TG; neither grid nor seed enters it."
 )
 
 
@@ -254,6 +320,65 @@ def pooled_errors(
     return pool(load_per_run(runs, nside, methods=methods, analysis_root=analysis_root))
 
 
+def censor(
+    loaded: dict[str, dict],
+    *,
+    policy: str = EXCLUDE,
+    sentinel_km: float = SENTINEL_KM,
+) -> dict[str, dict]:
+    """Apply the unanswered-row policy. `exclude` is a pass-through.
+
+    `sentinel` appends one `sentinel_km` value per unanswered row, so
+    `len(errors) == n_tgs` for every method and the curves share a denominator.
+    Unanswered means whatever `solved_mask` rejected **plus** the answered rows
+    with no coordinate: both are TGs this figure has no distance for, and both
+    would otherwise shrink one method's denominator and not another's.
+
+    Pool first, censor second -- the counts this reads are the ones `pool` sums.
+    """
+    if policy not in UNANSWERED_POLICIES:
+        raise ValueError(
+            f"unknown unanswered policy {policy!r}; pick from {list(UNANSWERED_POLICIES)}"
+        )
+    out: dict[str, dict] = {}
+    for method, entry in loaded.items():
+        values = np.asarray(entry["errors"], dtype=float)
+        # From n_tgs, not n_failed + n_no_distance: the identity the figure
+        # needs is len(errors) == n_tgs, so derive it from the denominator.
+        n_censored = int(entry["n_tgs"] - len(values)) if policy == SENTINEL else 0
+        out[method] = {
+            **entry,
+            "errors": (
+                np.concatenate([values, np.full(n_censored, float(sentinel_km))])
+                if n_censored
+                else values
+            ),
+            "n_censored": n_censored,
+            # A measured distance out here would be indistinguishable from a
+            # censored one. Zero on every run today; the manifest carries it so
+            # it cannot start happening quietly.
+            "n_real_at_or_above_sentinel": (
+                int((values >= sentinel_km).sum()) if policy == SENTINEL else 0
+            ),
+        }
+    return out
+
+
+def resolve_x_max(
+    policy: str, max_x_km: float | None = None, sentinel_km: float = SENTINEL_KM
+) -> float:
+    """The right edge: the caller's, else the policy's default.
+
+    `sentinel` needs a wider axis than `exclude` -- its rightmost mass sits
+    *at* `SENTINEL_KM`, which is `exclude`'s edge -- so the two layouts cannot
+    share one default. Within a layout the bound is still fixed, which is what
+    per-run and pooled comparability actually rests on.
+    """
+    if max_x_km is not None:
+        return float(max_x_km)
+    return SENTINEL_X_MAX_KM if policy == SENTINEL else DEFAULT_X_MAX_KM
+
+
 # ---- the table --------------------------------------------------------------
 
 #: The sort cascade, best first: p50 (drawn as the dashed horizontal), then the
@@ -274,7 +399,9 @@ def percentile_table(loaded: dict[str, dict]) -> pd.DataFrame:
 
     `Series.quantile` (linear) rounded to 3dp -- the same call
     `classify.summarize` makes, so p50/p90 agree with `accuracy.csv` digit for
-    digit.
+    digit. That holds under `exclude` only: `censor` changes the population,
+    and a quantile of a censored sample is a different quantity. The `sentinel`
+    artifacts are named apart for exactly that reason.
     """
     rows: list[dict] = []
     for method, entry in loaded.items():
@@ -285,6 +412,9 @@ def percentile_table(loaded: dict[str, dict]) -> pd.DataFrame:
             "is_baseline": method == SHORTEST_PING,
             **{k: int(entry[k]) for k in COUNT_KEYS},
             "n_plotted": int(len(values)),
+            # 0 under `exclude`; under `sentinel`, n_plotted - n_censored is
+            # the number of rows that are a measurement.
+            "n_censored": int(entry.get("n_censored", 0)),
         }
         for p in PERCENTILES:
             row[pcol(p)] = round(float(values.quantile(p / 100)), 3) if len(values) else np.nan
@@ -294,8 +424,14 @@ def percentile_table(loaded: dict[str, dict]) -> pd.DataFrame:
 
 
 def curve_order(table: pd.DataFrame) -> list[str]:
-    """The ranked method ids -- legend order, and the percentile box's."""
-    return list(table["method"])
+    """Legend and box order: `methods.TERM_ORDER`, not the table's ranking.
+
+    Fixed, so a method holds the same row in every figure in the package and
+    the legend does not reshuffle when the data moves. Rank is still on the
+    panel -- the box's p50 column is sorted-looking or not, and that is itself
+    readable -- and the CSV is still written best-first.
+    """
+    return method_order(table["method"])
 
 
 # ---- drawing ----------------------------------------------------------------
@@ -325,7 +461,29 @@ def _draw_guides(ax, min_x_km: float, max_x_km: float) -> None:
     ax.axhline(0.5, color=_GRID, linestyle="--", linewidth=1.2, zorder=1)
 
 
-def _style_axes(ax, min_x_km: float, max_x_km: float) -> None:
+def _draw_sentinel(ax, sentinel_km: float, max_x_km: float) -> None:
+    """The censoring line. Darker than the threshold guides, and labelled.
+
+    Those are reference marks on a measured axis; this one is the boundary
+    between measurement and "no answer", so it has to read as a different kind
+    of thing. Still ink, never a series colour.
+    """
+    if not sentinel_km < max_x_km:
+        raise ValueError(
+            f"sentinel {sentinel_km:g} km must sit inside the axis (max {max_x_km:g} km), "
+            "or the rise to y=1 is drawn on the spine; raise --max-x-km"
+        )
+    ax.axvline(sentinel_km, color=_INK_2, linestyle="-.", linewidth=1.2, alpha=0.8, zorder=1)
+    ax.annotate(
+        f"unanswered → {sentinel_km:,.0f} km", xy=(sentinel_km, 0.995),
+        xytext=(-4, 0), textcoords="offset points", fontsize=7.5, color=_INK_2,
+        ha="right", va="top", rotation=90, zorder=1,
+    )
+
+
+def _style_axes(
+    ax, min_x_km: float, max_x_km: float, *, sentinel_km: float | None = None
+) -> None:
     """Log x on the fixed range, 0-1 y, and the package's quiet spines."""
     from matplotlib.ticker import FuncFormatter
 
@@ -335,7 +493,12 @@ def _style_axes(ax, min_x_km: float, max_x_km: float) -> None:
     ax.set_xlim(min_x_km, max_x_km)
     ax.set_ylim(0, 1)
     ax.set_xlabel("pred_dist_to_tg (km)", fontsize=10.5, color=_INK_2)
-    ax.set_ylabel("Fraction of TGs answered", fontsize=10.5, color=_INK_2)
+    # Under `sentinel` the denominator is the roster, so "answered" would be
+    # a lie about the axis: the curve's top decade is the unanswered rows.
+    ax.set_ylabel(
+        "Fraction of TGs" if sentinel_km else "Fraction of TGs answered",
+        fontsize=10.5, color=_INK_2,
+    )
     ax.grid(True, which="both", color=_GRID, linewidth=0.7, alpha=0.9, zorder=0)
     ax.set_axisbelow(True)
     for side in ("top", "right"):
@@ -353,20 +516,41 @@ def _curve_style(method: str, colors: dict[str, str]) -> dict:
     return {"color": colors[method], "linestyle": "-", "linewidth": 2.0, "zorder": 2}
 
 
-def _percentile_box(ax, table: pd.DataFrame, legend) -> None:
+#: Percentile column width, wide enough for the sentinel's "10,000".
+_CELL_W = 7
+
+
+def _percentile_cell(value: float, sentinel_km: float | None) -> str:
+    """One right-aligned cell; a censored percentile reads as the sentinel.
+
+    At or past the sentinel the quantile is not a distance -- it is the
+    statement that the method had not answered that share of its TGs. The cell
+    prints the sentinel plainly, with the thousands comma the only thing
+    setting it apart from a measurement; the footnote and the labelled
+    sentinel line on the axis carry the reading.
+    """
+    if not np.isfinite(value):
+        return f"{_NO_VALUE:>{_CELL_W}}"
+    if sentinel_km is not None and value >= sentinel_km:
+        return f"{format(sentinel_km, ',.0f'):>{_CELL_W}}"
+    return f"{value:>{_CELL_W}.0f}"
+
+
+def _percentile_box(ax, table: pd.DataFrame, legend, *, sentinel_km: float | None = None) -> None:
     """The monospace percentile table, hung under `legend`, in legend order.
 
-    Needs a drawn canvas, so the legend's extent is real.
+    Prints `BOX_PERCENTILES`, a subset of the CSV's columns. Needs a drawn
+    canvas, so the legend's extent is real.
     """
     box = legend.get_window_extent().transformed(ax.transAxes.inverted())
-    header = f"{'':<8}{'plotted':>11}" + "".join(f"{'p' + str(p):>7}" for p in PERCENTILES)
+    header = f"{'':<8}{'plotted':>11}" + "".join(
+        f"{'p' + str(p):>{_CELL_W}}" for p in BOX_PERCENTILES
+    )
     lines = [header]
-    for _, row in table.iterrows():
+    # Legend order, not the table's ranking, so the two read as one block.
+    for row in table.set_index("method").loc[curve_order(table)].reset_index().to_dict("records"):
         counts = f"{int(row['n_plotted'])}/{int(row['n_tgs'])}"
-        cells = "".join(
-            f"{row[pcol(p)]:>7.0f}" if np.isfinite(row[pcol(p)]) else f"{_NO_VALUE:>7}"
-            for p in PERCENTILES
-        )
+        cells = "".join(_percentile_cell(row[pcol(p)], sentinel_km) for p in BOX_PERCENTILES)
         lines.append(f"{row['method_label'][:8]:<8}{counts:>11}{cells}")
     ax.text(
         0.02, box.ymin - 0.03, "\n".join(lines), transform=ax.transAxes,
@@ -384,14 +568,20 @@ def plot_cdf(
     subtitle: str,
     min_x_km: float = X_MIN_KM,
     max_x_km: float = DEFAULT_X_MAX_KM,
+    sentinel_km: float | None = None,
     figsize: tuple[float, float] = (8.6, 6.6),
     dpi: int = 200,
 ) -> Path:
     """One panel, one curve per method, log x. Both layouts draw through here.
 
     Honest limit: CDF curves **cross**, so no single ranking holds across the
-    axis. The legend is ordered by p50 and the percentile box beneath it shows
-    p5..p95 in the same order, so the reader sees where the order stops holding.
+    axis. The legend does not claim one -- it is `methods.TERM_ORDER`, fixed --
+    and the percentile box beneath it gives p5..p95 in that same order, so the
+    reader ranks on the column they care about rather than on the key.
+
+    `sentinel_km` is the censoring mark, set when `loaded` came through
+    `censor(policy=SENTINEL)`. It only draws and labels -- the sentinel values
+    are already in `loaded`, and this function never invents rows.
     """
     from matplotlib.lines import Line2D
 
@@ -402,6 +592,8 @@ def plot_cdf(
     fig.patch.set_facecolor(_SURFACE)
     ax.set_facecolor(_SURFACE)
     _draw_guides(ax, min_x_km, max_x_km)
+    if sentinel_km is not None:
+        _draw_sentinel(ax, sentinel_km, max_x_km)
 
     # Baseline last, so the dashed reference reads on top. Draw order is not
     # legend order, hence the explicit handles below.
@@ -413,7 +605,7 @@ def plot_cdf(
         xs, ys = _cdf(values, min_x_km)
         ax.plot(xs, ys, alpha=0.95, gid=method, **_curve_style(method, colors))
 
-    _style_axes(ax, min_x_km, max_x_km)
+    _style_axes(ax, min_x_km, max_x_km, sentinel_km=sentinel_km)
 
     handles = [
         Line2D(
@@ -436,13 +628,14 @@ def plot_cdf(
     entries = [f"{t}: {name}" for t, name in method_term_table(order).items()]
     half = (len(entries) + 1) // 2
     terms = "\n".join("   ·   ".join(r) for r in (entries[:half], entries[half:]) if r)
+    footnote = FOOTNOTE if sentinel_km is None else SENTINEL_FOOTNOTE.format(km=sentinel_km)
     ax.annotate(
-        f"{terms}\n\n{FOOTNOTE}", xy=(0.5, -0.135), xycoords="axes fraction",
+        f"{terms}\n\n{footnote}", xy=(0.5, -0.135), xycoords="axes fraction",
         ha="center", va="top", fontsize=7.5, color=_MUTED,
     )
 
     fig.canvas.draw()
-    _percentile_box(ax, table, legend)
+    _percentile_box(ax, table, legend, sentinel_km=sentinel_km)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight", facecolor=_SURFACE)
@@ -454,9 +647,12 @@ def plot_cdf(
 
 #: The CSV twin's columns. `run_id` and `dataset` lead so per-run and pooled
 #: files concatenate into one frame.
+#: `unanswered_policy`/`sentinel_km` ride along so a concatenation of the two
+#: policies' files cannot silently average a censored percentile with a real one.
 CSV_COLUMNS: tuple[str, ...] = (
-    "run_id", "dataset", "method", "method_label", "is_baseline",
-    *COUNT_KEYS, "n_plotted", *[pcol(p) for p in PERCENTILES],
+    "run_id", "dataset", "unanswered_policy", "sentinel_km",
+    "method", "method_label", "is_baseline",
+    *COUNT_KEYS, "n_plotted", "n_censored", *[pcol(p) for p in PERCENTILES],
 )
 
 
@@ -480,9 +676,12 @@ def _manifest(
     csv_name: str,
     min_x_km: float,
     max_x_km: float,
+    policy: str = EXCLUDE,
+    sentinel_km: float = SENTINEL_KM,
     per_run: dict[str, int] | None = None,
 ) -> str:
     order = curve_order(table)
+    censored = policy == SENTINEL
     body: dict = {
         "figure": png_name,
         "csv": csv_name,
@@ -495,6 +694,7 @@ def _manifest(
         "baseline": SHORTEST_PING,
         "dist_column": DIST_COLUMN,
         "percentiles": list(PERCENTILES),
+        "box_percentiles": list(BOX_PERCENTILES),
         "source_rung": {
             "nside": int(nside),
             "slug": grid_slug(nside),
@@ -508,6 +708,13 @@ def _manifest(
             "solved rows only, via status.solved_mask -- FALLBACK and ERROR "
             "excluded, S-P's all-BASELINE rows counted as solved. n_plotted equals "
             "accuracy.csv's n_solved; n_failed is the outcome bars' 'no answer'."
+        )
+        + (
+            " Then every unanswered row re-enters at the sentinel, so n_plotted "
+            "is the whole roster and n_plotted - n_censored is accuracy.csv's "
+            "n_solved."
+            if censored
+            else ""
         ),
         "distance_policy": (
             f"{DIST_COLUMN}: prediction to the raw TG coordinate. Not "
@@ -517,11 +724,40 @@ def _manifest(
         "percentile_policy": (
             "pandas Series.quantile (linear) rounded to 3dp -- the call "
             "classify.summarize makes, so p50/p90 agree with accuracy.csv."
+        )
+        + (
+            " Taken over the censored sample here, so they do NOT agree with "
+            "accuracy.csv: a value at the sentinel means the method had not "
+            "answered that share of its TGs, not that it missed by that far."
+            if censored
+            else ""
         ),
+        "unanswered": {
+            "policy": policy,
+            "sentinel_km": float(sentinel_km) if censored else None,
+            "n_censored": {m: int(e.get("n_censored", 0)) for m, e in loaded.items()},
+            "n_real_at_or_above_sentinel": {
+                m: int(e.get("n_real_at_or_above_sentinel", 0))
+                for m, e in loaded.items()
+                if e.get("n_real_at_or_above_sentinel", 0)
+            },
+            "note": (
+                "each unanswered TG -- solved_mask rejects, plus answered rows "
+                "with no coordinate -- is drawn at sentinel_km, so every curve "
+                "shares the roster as its denominator and the height at the "
+                "sentinel is the method's answer rate. Real distances at or "
+                "past the sentinel would be indistinguishable from censored "
+                "ones; the count above is how many there were."
+                if censored
+                else "unanswered rows are dropped; each curve rests on its own "
+                "solved population. This is the file accuracy.csv joins to."
+            ),
+        },
         "curve_order": (
-            "p50 ascending, then p90, then n_solved descending, then method id. "
-            "CDF curves cross, so this is the order they reach the median line; "
-            "the percentile box shows p5..p95 in the same order."
+            "methods.TERM_ORDER -- fixed, so a method holds the same legend row "
+            "in every figure. CDF curves cross, so no ranking holds across the "
+            "axis and the legend does not assert one; the CSV rows are still "
+            "written best-first (p50, then p90, then n_solved, then method id)."
         ),
         "baseline_encoding": (
             "dark grey (_INK_2) and dashed; deliberately not methods.OTHER_HUE, "
@@ -531,6 +767,7 @@ def _manifest(
             "scale": "log",
             "min_km": min_x_km,
             "max_km": max_x_km,
+            "sentinel_km": float(sentinel_km) if censored else None,
             "n_clamped_to_floor": _clamped(loaded, min_x_km),
             "clamp_note": (
                 f"a log axis cannot render 0, so the drawn curve clamps distances "
@@ -573,26 +810,46 @@ def _write(
     subtitle: str,
     min_x_km: float,
     max_x_km: float,
+    policy: str = EXCLUDE,
+    sentinel_km: float = SENTINEL_KM,
     per_run: dict[str, int] | None = None,
 ) -> Path:
-    """Table, CSV twin, PNG and manifest for one layout. Returns the PNG."""
-    png_name, csv_name, manifest_name = NAMES[layout]
-    table = percentile_table(loaded)
+    """Table, CSV twin, PNG and manifest for one layout. Returns the PNG.
+
+    `loaded` arrives uncensored; the policy is applied here, once, so the
+    table and the curve can never disagree about which rows are in.
+    """
+    png_name, csv_name, manifest_name = artifact_names(layout, policy)
+    drawn = censor(loaded, policy=policy, sentinel_km=sentinel_km)
+    mark = sentinel_km if policy == SENTINEL else None
+    table = percentile_table(drawn)
     table.insert(0, "run_id", "+".join(sorted(run_ids)))
     table.insert(1, "dataset", cross.dataset_slug(run_ids))
+    table["unanswered_policy"] = policy
+    table["sentinel_km"] = float(sentinel_km) if policy == SENTINEL else np.nan
     table[[c for c in CSV_COLUMNS if c in table.columns]].to_csv(out_dir / csv_name, index=False)
     png = plot_cdf(
-        loaded, table, out_dir / png_name,
+        drawn, table, out_dir / png_name,
         title="Error distance to the TG", subtitle=subtitle,
-        min_x_km=min_x_km, max_x_km=max_x_km,
+        min_x_km=min_x_km, max_x_km=max_x_km, sentinel_km=mark,
     )
     (out_dir / manifest_name).write_text(
         _manifest(
-            layout, table, loaded, run_ids=run_ids, nside=nside, png_name=png_name,
-            csv_name=csv_name, min_x_km=min_x_km, max_x_km=max_x_km, per_run=per_run,
+            layout, table, drawn, run_ids=run_ids, nside=nside, png_name=png_name,
+            csv_name=csv_name, min_x_km=min_x_km, max_x_km=max_x_km,
+            policy=policy, sentinel_km=sentinel_km, per_run=per_run,
         )
     )
     return png
+
+
+def _subtitle_tail(policy: str, sentinel_km: float) -> str:
+    """How the panel names its own population, in the subtitle."""
+    return (
+        f"unanswered at {sentinel_km:,.0f} km"
+        if policy == SENTINEL
+        else "answered rows only"
+    )
 
 
 def _n_tgs(loaded: dict[str, dict]) -> int:
@@ -607,7 +864,9 @@ def build_for_run(
     methods: list[str] | None = None,
     analysis_root: Path | None = None,
     min_x_km: float = X_MIN_KM,
-    max_x_km: float = DEFAULT_X_MAX_KM,
+    max_x_km: float | None = None,
+    unanswered: str = EXCLUDE,
+    sentinel_km: float = SENTINEL_KM,
 ) -> Path:
     """One run's CDF, written into `classify/`, beside its `healpix-<n>/` rungs."""
     loaded = load_errors(run, nside, methods=methods, analysis_root=analysis_root)
@@ -617,9 +876,14 @@ def build_for_run(
         PER_RUN,
         run_ids=[run.run_id],
         nside=nside,
-        subtitle=f"{run.run_id} · n={_n_tgs(loaded):,} TGs · answered rows only",
+        subtitle=(
+            f"{run.run_id} · n={_n_tgs(loaded):,} TGs · "
+            f"{_subtitle_tail(unanswered, sentinel_km)}"
+        ),
         min_x_km=min_x_km,
-        max_x_km=max_x_km,
+        max_x_km=resolve_x_max(unanswered, max_x_km, sentinel_km),
+        policy=unanswered,
+        sentinel_km=sentinel_km,
     )
 
 
@@ -631,18 +895,30 @@ def build_for_runs(
     methods: list[str] | None = None,
     analysis_root: Path | None = None,
     min_x_km: float = X_MIN_KM,
-    max_x_km: float = DEFAULT_X_MAX_KM,
+    max_x_km: float | None = None,
+    unanswered: str = EXCLUDE,
+    sentinel_km: float = SENTINEL_KM,
 ) -> list[Path]:
     """Render the requested layouts; returns the PNG paths, layout-major.
 
     `per-run` writes one figure per run into that run's own tree; `pooled`
     writes one into the cross-dataset directory, beside the outcome bars.
+
+    `unanswered` picks the population: `exclude` (the default, and the only one
+    that joins to `accuracy.csv`) or `sentinel`, which parks unanswered TGs at
+    `sentinel_km` so every curve shares a denominator. The two write different
+    filenames, so building both leaves both on disk.
     """
     ordered = tuple(dict.fromkeys(layouts)) or (PER_RUN,)
     unknown = [x for x in ordered if x not in LAYOUTS]
     if unknown:
         raise ValueError(f"unknown layout {unknown}; pick from {list(LAYOUTS)}")
+    if unanswered not in UNANSWERED_POLICIES:
+        raise ValueError(
+            f"unknown unanswered policy {unanswered!r}; pick from {list(UNANSWERED_POLICIES)}"
+        )
     nside = G.validate_nside(nside)
+    max_x_km = resolve_x_max(unanswered, max_x_km, sentinel_km)
     run_ids = [r.run_id for r in runs]
 
     out: list[Path] = []
@@ -652,6 +928,7 @@ def build_for_runs(
                 build_for_run(
                     run, nside=nside, methods=methods, analysis_root=analysis_root,
                     min_x_km=min_x_km, max_x_km=max_x_km,
+                    unanswered=unanswered, sentinel_km=sentinel_km,
                 )
                 for run in runs
             )
@@ -667,9 +944,14 @@ def build_for_runs(
                 POOLED,
                 run_ids=run_ids,
                 nside=nside,
-                subtitle=f"{label} pooled · n={_n_tgs(loaded):,} TGs · answered rows only",
+                subtitle=(
+                    f"{label} pooled · n={_n_tgs(loaded):,} TGs · "
+                    f"{_subtitle_tail(unanswered, sentinel_km)}"
+                ),
                 min_x_km=min_x_km,
                 max_x_km=max_x_km,
+                policy=unanswered,
+                sentinel_km=sentinel_km,
                 per_run=per_run,
             )
         )
