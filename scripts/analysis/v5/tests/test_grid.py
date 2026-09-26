@@ -180,3 +180,38 @@ class TestGridOffset:
             H.grid_offset([1, 2], [1], 128)
 
 
+class TestRingGrids:
+    """The set form of `grid_offset`, used to draw a neighbourhood.
+
+    `grid_offset` answers "how far is b from a"; `ring_grids` answers "which
+    grids are k out from a". The cross-check below is what keeps the two from
+    drifting -- they are separate breadth-first walks, and `map_mtl` shades
+    the rings this returns while labelling them with the offset that one
+    reports.
+    """
+
+    def test_every_grid_at_ring_k_is_offset_k(self):
+        for pix in (0, 1000, 12345, H.n_grids(128) - 1):
+            rings = H.ring_grids(pix, 128, 2)
+            for k, shell in enumerate(rings):
+                grids = np.asarray(shell, dtype=np.int64)
+                assert np.all(H.grid_offset(np.full(grids.size, pix), grids, 128) == k)
+
+    def test_ring_zero_is_the_grid_itself(self):
+        assert H.ring_grids(4242, 128, 2)[0] == [4242]
+
+    def test_the_rings_are_disjoint(self):
+        rings = H.ring_grids(4242, 128, 2)
+        flat = [c for shell in rings for c in shell]
+        assert len(flat) == len(set(flat))
+
+    def test_max_ring_zero_is_just_the_grid(self):
+        assert H.ring_grids(4242, 128, 0) == [[4242]]
+
+    def test_max_ring_is_required(self):
+        """No default: the band edge lives in `classify.MAX_RING`, and a
+        second copy here is a number that could drift."""
+        with pytest.raises(TypeError):
+            H.ring_grids(4242, 128)
+
+

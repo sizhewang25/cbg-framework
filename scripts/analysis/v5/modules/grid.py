@@ -173,26 +173,29 @@ def grid_offset(a, b, nside: int) -> np.ndarray:
     return out
 
 
-def ring_grids(pix: int, nside: int, max_ring: int = MAX_RING) -> list[list[int]]:
+def ring_grids(pix: int, nside: int, max_ring: int) -> list[list[int]]:
     """The neighbourhood of one grid, split by ring: `[[pix], ring 1, ring 2]`.
 
-    The **set** form of `ring_distance`: that answers "how far is b from a",
-    this answers "which grids are k steps out from a". Same breadth-first
-    growth, same treatment of the absent neighbours `neighbours` reports as
-    `-1`, and the same guarantee that the rings are disjoint -- a grid already
-    reached at ring `k-1` is not re-listed at ring `k`.
+    Same breadth-first growth as `grid_offset`, the same treatment of the
+    absent neighbours `neighbours` reports as `-1`, and the same guarantee
+    that the rings are disjoint -- a grid already reached at ring `k-1` is not
+    re-listed at ring `k`.
 
-    Deliberately **not** a refactor target for `ring_distance` or
-    `grid_offset`. Those are vectorised over pairs and carry their own
-    frontier bookkeeping; this one is scalar and runs once per distinct
-    occupied grid (~18 per run). `test_grid` cross-checks them instead: every
-    grid this returns at ring `k` must make `ring_distance` answer `k`.
+    The **set** form of `grid_offset`: that answers "how far is b from a",
+    this answers "which grids are k steps out from a". `test_grid`
+    cross-checks the two -- every grid this returns at ring `k` must make
+    `grid_offset` answer `k`.
+
+    `max_ring` is **required**, with no default. Where to stop is a property
+    of the metric and lives in `classify.MAX_RING`, not here; grid.py cannot
+    import classify without a cycle, and a local default would be a second
+    copy of a number that must not drift.
 
     **Only ever called with a small `max_ring`.** It grows a disk, so the cost
     is quadratic in the radius: at offset 68 -- a real `grid_offset` value on
     these runs -- the disk is some 15,000 grids. `map_mtl` draws the
-    neighbourhood at `MAX_RING` and reports anything further as a number
-    rather than a region, which is why that is not a problem in practice.
+    neighbourhood at `classify.MAX_RING` and reports anything further as a
+    number rather than a region, which is why that is not a problem here.
 
     Ring 1 holds **7** rather than 8 grids at the 24 base-face corner grids of
     every nside, and ring 2 is correspondingly short. Callers must read the

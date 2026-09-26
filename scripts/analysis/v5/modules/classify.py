@@ -105,14 +105,36 @@ TG_FRAME_COLUMNS = ("tg_id", "tg_lat", "tg_lon", "pred_lat", "pred_lon", "status
 _BENCHMARK_FRAME_COLUMNS = (*BENCHMARK_TG_COLUMNS, "pred_lat", "pred_lon", "status")
 
 
-def load_method_frame(run: RunPaths, method: str) -> pd.DataFrame:
-    """One row per evaluated TG for `method`, across every fold, in v5 names."""
+def load_method_frame(
+    run: RunPaths, method: str, *, columns: tuple[str, ...] = ()
+) -> pd.DataFrame:
+    """One row per evaluated TG for `method`, across every fold, in v5 names.
+
+    `columns` names **extra** benchmark columns to read alongside the ones
+    scoring needs. It exists for `map_mtl`, which draws the nested
+    `ltd_predictions` / `mtl_participants` structs and needs them on the same
+    frame that goes through `score_method` -- that copies the frame and writes
+    only named columns, so anything extra rides through scoring untouched.
+
+    Empty by default, so every other caller reads exactly what it did before.
+    A widened read is not free: the nested structs are most of a
+    `targets.parquet`.
+    """
+    extra = [c for c in columns if c not in _BENCHMARK_FRAME_COLUMNS]
     frames = []
     for fold in run.fold_ids:
         path = run.combo_dir(method, fold) / "targets.parquet"
         if not path.exists():
             continue
-        t = pq.read_table(path, columns=list(_BENCHMARK_FRAME_COLUMNS)).to_pandas()
+        # Intersected with the file's own schema rather than requested blind.
+        # `pq.read_table` raises `ArrowInvalid` on a column it does not hold,
+        # and a `targets.parquet` written before the nested constraint columns
+        # existed is ordinary stale state -- the map degrades to "no LTD
+        # layer" for it, which is a missing layer rather than a crash.
+        have = set(pq.read_schema(path).names)
+        t = pq.read_table(
+            path, columns=list(_BENCHMARK_FRAME_COLUMNS) + [c for c in extra if c in have]
+        ).to_pandas()
         t["fold"] = int(fold.split("_")[1])
         frames.append(t)
     if not frames:

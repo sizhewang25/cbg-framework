@@ -29,6 +29,7 @@ _NON_SOURCE_DIRS = frozenset({"eval_source", "eval_dataset", "bench_eval"})
 
 ANSWER_SPACE_KIND = "answer-space"
 CLASSIFY_KIND = "classify"
+MTL_MAP_KIND = "mtl-map"
 
 
 class MissingArtifactError(FileNotFoundError):
@@ -142,6 +143,29 @@ class RunPaths:
 
     def classify_dir(self, nside: int, *, root: Path | None = None) -> Path:
         return self.rung_dir(CLASSIFY_KIND, nside, root=root)
+
+    def mtl_map_dir(self, nside: int, *, root: Path | None = None) -> Path:
+        """`<root>/<run_id>/mtl-map/healpix-<nside>/` -- the rendered viewers.
+
+        Its own kind rather than a subdirectory of `classify/`. The map reads
+        that directory's answer space but writes a different kind of artifact
+        -- one HTML per method, not a scored table -- and mixing the two would
+        put a five-megabyte page next to the CSVs every other command globs.
+        """
+        return self.rung_dir(MTL_MAP_KIND, nside, root=root)
+
+    def mtl_region_cache_dir(self, *, root: Path | None = None) -> Path:
+        """`<root>/<run_id>/mtl-map/regions/` -- deliberately rung-free.
+
+        A replayed MTL feasible region is a function of `(run, combo, tg,
+        mtl_kwargs)`; `replay_mtl` never sees an nside. Filing the cache under
+        `healpix-<nside>/` would make a second rung re-pay the full replay --
+        ~7 s per TG on the Octant family, ~47 minutes serial for 399 TGs --
+        for bytes it already has.
+        """
+        out = self.analysis_dir(MTL_MAP_KIND, root=root) / "regions"
+        out.mkdir(parents=True, exist_ok=True)
+        return out
 
 
 def discover_runs(root: Path | str = DEFAULT_OUTPUTS_ROOT) -> list[RunPaths]:

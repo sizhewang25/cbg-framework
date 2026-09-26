@@ -6,14 +6,17 @@ refusal. The refusal is the point: on a traffic-weighted arm the recorded CSV
 is the **mesh** superset, and silently accepting it would measure VP distances
 over edges the weighted run never had.
 
-The CSV speaks benchmark names (`target_id`, `target_lat`, ...). Callers rename
-to `tg_*` at load time, the one place those names appear in v5.
+The CSV speaks benchmark names (`target_id`, `target_lat`, ...). `load_min_rtt`
+and the VP-proximity figure rename to `tg_*` at load time, the one place those
+names appear in v5.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+
+import pandas as pd
 
 from scripts.analysis.v5.modules.paths import (
     REPO_ROOT,
@@ -110,4 +113,39 @@ def resolve_source_csv(run: RunPaths, override: Path | None = None) -> Path:
         f"cannot locate the canonical edge CSV for {run.run_id}: "
         f"{stem or '<unknown basename>'}.csv is not under datasets/ and "
         f"eval_stats.json records {recorded!r}. Pass --source-csv <path>."
+    )
+
+
+#: What `load_min_rtt` returns, in v5 names. `tg_id`, not `target_id`: the
+#: canonical CSV speaks benchmark names and this is where they are left behind.
+MIN_RTT_COLUMNS = ("tg_id", "vp_id", "rtt_ms")
+
+
+def load_min_rtt(run: RunPaths, *, source_csv: Path | None = None) -> pd.DataFrame:
+    """`(tg_id, vp_id, rtt_ms)`, one row per pair at its minimum RTT.
+
+    Deduplicated to the minimum because a dataset can measure a pair
+    repeatedly and a viewer shows one number per VP. Minimum rather than mean:
+    it is what every LTD in the framework consumes, so the RTT drawn beside a
+    VP is the RTT its constraint was built from, and the per-VP inflation here
+    cannot disagree with `eval_per_target.csv`'s `min_inflation` about which
+    edge it describes.
+
+    Read through `load_canonical_csv`, which owns the schema, lowercases the
+    header and drops NaN rows and `rtt_ms <= 0` exactly as the benchmark's own
+    source does -- so these are the observations the benchmark ran on.
+
+    Raises `MeshSupersetError` through `resolve_source_csv` on a weighted arm.
+    That refusal is not degradable; see the class docstring.
+    """
+    from scripts.libs.canonical.schema import load_canonical_csv
+
+    from scripts.analysis.v5.modules.answer_space import BENCHMARK_TG_COLUMNS
+
+    path = Path(source_csv) if source_csv is not None else resolve_source_csv(run)
+    df = load_canonical_csv(path).rename(columns=BENCHMARK_TG_COLUMNS)
+    return (
+        df.groupby(["tg_id", "vp_id"], as_index=False)["rtt_ms"]
+        .min()
+        .reset_index(drop=True)[list(MIN_RTT_COLUMNS)]
     )

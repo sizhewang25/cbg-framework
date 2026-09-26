@@ -35,7 +35,7 @@ great-circle nearest-seed partition: the projection's ~1-2% distance
 distortion shifts a boundary far from its seeds by several km.
 `agreement_with_nearest_seed` measures it on a point sample and the map's
 manifest records the number, so the figure states how faithfully it draws the
-rule rather than asserting it. Without edge densification (`_SEGMENT_M`) it
+rule rather than asserting it. Without edge densification (`SEGMENT_M`) it
 was ~98% even against the old clipped cells.
 """
 
@@ -51,7 +51,11 @@ from scripts.analysis.v5.modules.projection import project, to_lonlat
 #: Edge densification before leaving the projection. A straight edge in
 #: EPSG:5070 is a curve in lon/lat; unsegmented, a 1,000 km cell edge would be
 #: redrawn as a lon/lat chord and bow away from the boundary it represents.
-_SEGMENT_M = 10_000.0
+#:
+#: Public because it describes the polygons this module hands out, and a
+#: caller that decimates them (`map_mtl`, which has a page-size budget this
+#: module does not) has to report what it decimated FROM.
+SEGMENT_M = 10_000.0
 
 #: Pad on the frame, in metres: enough that no cell edge coincides with the
 #: drawn boundary, small enough to stay inside EPSG:5070's usable domain.
@@ -103,7 +107,7 @@ def cell_polygons(
     if len(ids) == 1:
         # One seed owns everything. The frame is the whole drawing, which is
         # the honest picture: its edge is the figure's, not the partition's.
-        return {int(ids[0]): to_lonlat(shapely.segmentize(frame, _SEGMENT_M))}
+        return {int(ids[0]): to_lonlat(shapely.segmentize(frame, SEGMENT_M))}
 
     points = shapely.points(x, y)
     diagram = shapely.voronoi_polygons(shapely.multipoints(points), extend_to=frame)
@@ -114,7 +118,7 @@ def cell_polygons(
         if hit.size != 1:
             raise AssertionError(f"a Voronoi polygon holds {hit.size} seeds, not 1")
         clipped = poly.intersection(frame)
-        out[int(ids[hit[0]])] = to_lonlat(shapely.segmentize(clipped, _SEGMENT_M))
+        out[int(ids[hit[0]])] = to_lonlat(shapely.segmentize(clipped, SEGMENT_M))
     if len(out) != len(ids):
         raise AssertionError(f"{len(out)} cells for {len(ids)} seeds; every seed must get one")
     bad = sorted(k for k, v in out.items() if not v.is_valid or not np.isfinite(v.bounds).all())

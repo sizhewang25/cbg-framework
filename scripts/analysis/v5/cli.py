@@ -4,6 +4,7 @@
     python -m scripts.analysis.v5.cli classify           --run-id as01-260728-260802-mesh
 
     python -m scripts.analysis.v5.cli plot-answer-space  --run-id as01-260728-260802-mesh
+    python -m scripts.analysis.v5.cli plot-mtl-map       --run-id as01-260728-260802-mesh -m vanilla_cbg
     python -m scripts.analysis.v5.cli plot-outcome-bars \
         --run-id as01-260728-260802-mesh \
         --run-id as02-260728-260802-mesh \
@@ -22,7 +23,7 @@
         --run-id as02-260728-260802-mesh \
         --run-id as03-260728-260802-mesh
 
-`classify` and `plot-answer-space` need the answer space; `plot-outcome-bars`
+`classify`, `plot-answer-space` and `plot-mtl-map` need the answer space; `plot-outcome-bars`
 `plot-error-cdf`, `plot-vp-proximity` and `report-cohort-overlap` need `classify` on every run. Everything writes under `outputs/analysis/v5/`.
 """
 
@@ -42,6 +43,7 @@ from scripts.analysis.v5.modules import (
     figure_vp_distance_cdf,
     figure_vp_proximity,
     map_answer_space,
+    map_mtl,
     mapping,
 )
 from scripts.analysis.v5.modules import grid as G
@@ -587,6 +589,141 @@ def report_cohort_overlap_cmd(
     except (ValueError, MissingArtifactError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     for path in paths:
+        typer.echo(f"wrote {path}")
+
+
+@app.command("plot-mtl-map")
+def plot_mtl_map_cmd(
+    run_id: str = typer.Option(..., help="Run to render. One run per invocation."),
+    method: list[str] = typer.Option(
+        [],
+        "--method",
+        "-m",
+        help=(
+            "Method to render; repeatable. Defaults to every combo in the run "
+            f"plus the {map_mtl.SHORTEST_PING!r} control."
+        ),
+    ),
+    nside: int = typer.Option(
+        G.DEFAULT_NSIDE,
+        "--nside",
+        "-n",
+        help=(
+            "The ONE rung to render at. Not a sweep: this is a case viewer, and "
+            "two HTML files are two answers to a question asked about one TG."
+        ),
+    ),
+    cell_extent: tuple[float, float, float, float] = typer.Option(
+        (None, None, None, None),
+        "--cell-extent",
+        help=(
+            "LON_MIN LON_MAX LAT_MIN LAT_MAX to build the serving cells against. "
+            "NOT the view: the map is pannable and refits per TG. This only sets "
+            "how far the unbounded cells are drawn before they are cut. Shrunk "
+            "automatically if it leaves EPSG:5070's usable domain."
+        ),
+    ),
+    us_only: bool = typer.Option(
+        False,
+        "--us-only",
+        help=(
+            "Cut the cells to the continental US instead of the default frame. "
+            "Tighter, but it clips predictions that land north of it."
+        ),
+    ),
+    no_regions: bool = typer.Option(
+        False,
+        "--no-regions",
+        help=(
+            "Skip the MTL feasible-region layer -- the only expensive part. The "
+            "benchmark never stores the regions, so each is a full re-run of the "
+            "planar intersection (~7 s/TG on the Octant family). Cached under "
+            "mtl-map/regions/, which is rung-free, so the cost is paid once per "
+            "(method, TG) no matter which --nside you render."
+        ),
+    ),
+    workers: int = typer.Option(
+        map_mtl.DEFAULT_WORKERS, "--workers", "-j", help="Processes for the replay."
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Interactive per-TG map of one method's MTL result and BOTH verdicts.
+
+    Draws the TG's grid and its ring-1/ring-2 neighbours, the grid the
+    prediction fell in, the serving cell of every seed with the TG's own and
+    the prediction's highlighted, each VP's LTD constraint, and the MTL
+    feasible region those constraints intersect to.
+
+    The cells are unbounded -- the frame they are cut to is a rendering bound,
+    and the page says so. Read `cell_label` beside the grid offset: neither is
+    a verdict alone.
+    """
+    try:
+        nside = G.validate_nside(nside)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if cell_extent and all(v is not None for v in cell_extent):
+        extent = tuple(float(v) for v in cell_extent)
+    elif us_only:
+        extent = mapping.US_MAINLAND_EXTENT
+    else:
+        extent = map_mtl.CELL_FRAME
+
+    try:
+        run = resolve_run(run_id, outputs_root)
+        methods = list(method) or [*run.combo_ids, map_mtl.SHORTEST_PING]
+        rendered = map_mtl.build_for_run(
+            run,
+            methods=methods,
+            nside=nside,
+            extent=extent,
+            analysis_root=analysis_root,
+            regions=not no_regions,
+            workers=max(1, int(workers)),
+            progress=typer.echo,
+        )
+    except MissingArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    for name, path, payload in rendered:
+        # The tally is the assertion that this map and `accuracy.csv` agree on
+        # BOTH axes, so a mismatch is visible without opening the file.
+        grid = {s: 0 for s in map_mtl.STATUSES}
+        cell = {lab: 0 for lab in classify.CELL_LABELS}
+        offsets = []
+        for t in payload["tgs"]:
+            grid[t["status"]] += 1
+            cell[t["cell_label"]] += 1
+            # ANSWERED rows only, and linear interpolation, because that is
+            # what `summarize` does -- `df.loc[answered, GRID_OFFSET]` then
+            # `.quantile()`. Pooling the fallbacks in moves vanilla_cbg's p50
+            # from 2 to 1, and this line exists to be diffed against
+            # `accuracy.csv`, so it has to be the same statistic.
+            if t["status"] != "failed" and t["grid_offset"] >= 0:
+                offsets.append(t["grid_offset"])
+
+        def _q(frac: float) -> str:
+            if not offsets:
+                return "—"
+            import numpy as _np
+
+            return f"{float(_np.quantile(offsets, frac)):g}"
+
+        typer.echo(
+            f"{run.run_id}: nside={payload['nside']} ({payload['grid_km']} km) · "
+            f"{name} · {len(payload['tgs'])} TGs · K={payload['n_seeds']} seeds"
+        )
+        typer.echo(
+            "  grid: " + " / ".join(f"{s} {grid[s]}" for s in map_mtl.STATUSES)
+            + f" | offset p50={_q(0.50)} p90={_q(0.90)} max={max(offsets) if offsets else '—'}"
+        )
+        typer.echo(
+            "  cell: " + " / ".join(f"{lab} {cell[lab]}" for lab in classify.CELL_LABELS)
+            + f" | {payload['cell_meta']['agreement']:.4f} agreement, "
+            f"frame {tuple(round(v, 1) for v in extent)}"
+        )
         typer.echo(f"wrote {path}")
 
 

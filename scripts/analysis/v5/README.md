@@ -7,7 +7,7 @@ second partition, the **unbounded** Voronoi **cell**, so every prediction
 carries `(pred_dist_to_tg_grid, cell_label)`. One resolution: nside 128.
 
 Scope: the answer space, classify, the answer-space map, the outcome bars,
-the error-distance CDF and the VP-proximity violins.
+the error-distance CDF, the VP-proximity violins and the MTL case viewer.
 
 ## Glossary
 
@@ -84,6 +84,8 @@ outputs/analysis/v5/<run>/classify/healpix-128/accuracy.csv, <method>_tgs.parque
 outputs/analysis/v5/<run>/classify/error_cdf[.sentinel].{png,csv,manifest.json}
 outputs/analysis/v5/_cross/classify/<datasets>@<arm>/outcome_bars.*, error_cdf.pooled[.sentinel].*
 outputs/analysis/v5/_cross/vp-proximity/<datasets>@<arm>/vp_proximity.<cohort>.{png,csv,manifest.json}
+outputs/analysis/v5/<run>/mtl-map/healpix-128/mtl_map.<method>.html
+outputs/analysis/v5/<run>/mtl-map/regions/<method>/<tg>.json          # replay cache, rung-free
 ```
 
 `accuracy.csv` contains:
@@ -170,6 +172,53 @@ distance. These artifacts take a `.sentinel.` infix and carry
 `unanswered_policy`/`sentinel_km` columns, because **only the default files
 join to `accuracy.csv`**.
 
+**`plot-mtl-map`** (ported from v4) is the **case viewer**: one self-contained
+interactive HTML per method, Plotly from a CDN with the payload inlined, so it
+opens over `file://` with no web server. Every other v5 figure shows a
+distribution; this shows one TG.
+
+It draws both partitions, because in v5 neither is a verdict alone:
+
+- the **grid axis** — the TG's grid and its ring-1/ring-2 neighbours, plus the
+  grid the prediction landed in;
+- the **cell axis** — the Voronoi cell of every seed, with the TG's own cell
+  filled and the cell the prediction fell in outlined when they differ. This is
+  what v4 drew as decoration and labelled "context, not the verdict"; here it
+  *is* `cell_label`, so it is keyed by `seed_id` and graded.
+
+Plus each VP's LTD constraint (disks, or annuli when the LTD emits a lower
+bound), the MTL feasible region they intersect to, and the error.
+
+The status filter and the cell filter are **independent**, which is the point of
+having two axes: "right serving region but 14 grids out" is a different failure
+from "wrong serving region, 1 grid out", and neither axis alone separates them.
+On as01/`octant_cbg_hull`, 70 of 399 TGs are `beyond` yet `correct`.
+
+The grid axis reads **`pred_dist_to_tg_grid`**, not a banded column, and bands it
+into the same five statuses `summarize` counts. The popup and the meta strip
+print the **exact offset** — `beyond` spans 3 to 68 grids out on these runs, and
+a case viewer should say which. The *drawn* neighbourhood still stops at
+`MAX_RING`: the disk at offset 68 is ~15,000 grids, undrawable and meaningless
+as a shaded region.
+
+The cells are built once per run and shared by every method's page — they belong
+to the answer space, not the method. They are cut to `CELL_FRAME`
+`(-136, -56, 14, 66)`, which contains every prediction in every run on disk;
+`US_MAINLAND_EXTENT` clips Spotter's 64.57°N one. That frame is a **rendering
+bound**, drawn on the page as a dotted rectangle and labelled as one, because
+the viewer pans and offers an orthographic projection — without it a reader sees
+the cells stop mid-Atlantic and reads the stop as a cell edge. Rings are
+simplified at 0.02° (a 27× byte reduction for ~2.2 km of deviation against a
+50.9 km grid); the page prints the resulting agreement with the great-circle
+rule `classify` scores, ~98.9%.
+
+Cost: the MTL feasible region is never serialized by the benchmark, so each is a
+full replay of the planar intersection — ~7 s/TG on the Octant family. Hence
+`--no-regions`, `-j`, and an on-disk cache under `mtl-map/regions/`, which is
+**rung-free**: no nside enters the replay, so a second rung reuses it (measured:
+1.4 s). Driven by its own sweep script, `create_mtl_map.sh`, because every other
+v5 command costs seconds.
+
 **`plot-vp-proximity`** (ported from v4) pools the given runs and draws two
 violins per method on a log x axis: the distance from the TG to its
 **geographically closest** VP (`geo_vp_dist_to_tg_km`, blue) and to its
@@ -196,6 +245,14 @@ cell (`test_figure_vp_proximity.TestRealRuns`).
   gap. An unbounded partition leaves nothing unassigned — the one
   simplification the landmass removal buys (`test_real_runs`).
 - Seeds never outnumber sites. They're cuts of one complete-linkage tree.
+- The case viewer's two verdicts match `accuracy.csv` bucket for bucket, on
+  both axes and on the offset percentiles, for every method
+  (`test_map_mtl.TestOnRealRuns`). The cell label is masked by `solved_mask`
+  the way `summarize` masks it — without that a FALLBACK row's baseline
+  coordinate is credited to the method, worth 107 rows on as01/`vanilla_cbg`.
+- The viewer JS is executed under `node` against a stubbed DOM and Plotly
+  (`test_map_mtl_viewer.js`), which is the only way to catch a `draw()` typo:
+  a blank page still passes every payload assertion.
 
 v5 runs **one resolution**, so the cross-rung guarantees v4 asserted —
 `accuracy_ring0` monotone as grids grow, seeds only merging — have no ladder
@@ -226,5 +283,8 @@ python -m scripts.analysis.v5.cli plot-vp-proximity -c p5 -c p25 -c all \
     --run-id as01-260728-260802-mesh \
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh
+python -m scripts.analysis.v5.cli plot-mtl-map --run-id as01-260728-260802-mesh \
+    -m octant_cbg_hull --no-regions
+./scripts/analysis/v5/create_mtl_map.sh          # every method, every mesh run
 python -m pytest scripts/analysis/v5/tests -q
 ```
