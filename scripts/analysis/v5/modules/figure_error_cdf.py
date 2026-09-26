@@ -110,12 +110,28 @@ READ_COLUMNS: tuple[str, ...] = ("tg_id", "status", DIST_COLUMN)
 #: and 90 is the rank cascade's tail term.
 PERCENTILES: tuple[int, ...] = (5, 25, 50, 75, 90, 95)
 
-#: The subset the box prints -- five columns is what fits under the legend.
-#: p75 rather than p90 because p90 is the first one the sentinel policy
-#: censors: VAN answers 78% of the pooled roster, so its p90 is the sentinel
-#: and says nothing about how far off it was, while its p75 is still a
-#: measurement. The CSV keeps both.
-BOX_PERCENTILES: tuple[int, ...] = (5, 25, 50, 75, 95)
+#: Axis text sizes (pt) for `PAPER_FIGSIZE`. Set for the printed page rather
+#: than scaled from the canvas: at 4 inches wide a proportional scale would put
+#: the tick labels under 5pt.
+_TITLE_PT = 9.0
+_SUBTITLE_PT = 6.0
+_LABEL_PT = 8.0
+_TICK_PT = 7.0
+_LEGEND_PT = 6.5
+_GUIDE_PT = 5.5
+
+#: Panel size (inches): a single paper column. Everything else on the figure is
+#: sized for it.
+PAPER_FIGSIZE: tuple[float, float] = (4.0, 3.0)
+
+#: y at a quarter each, so the gridlines are the quartiles and the reader takes
+#: p25/p50/p75 off the panel without a table.
+Y_TICKS: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
+
+#: Axis names. Short: the column name, the row policy and the units convention
+#: live in the manifest, which is where the numbers are read from anyway.
+X_LABEL = "Distance (km)"
+Y_LABEL = "CDF"
 
 #: Reference verticals (km). Neutral ink, **not** green/red: green is the
 #: Octant family and red is SPO, so coloured guides would read as series.
@@ -182,35 +198,12 @@ COUNT_KEYS: tuple[str, ...] = ("n_tgs", "n_solved", "n_failed", "n_no_distance")
 REMEDY_COMMON = "--layout per-run to keep each dataset on its own figure."
 REMEDY_DISJOINT = "Use --layout per-run, which keeps each dataset on its own figure."
 
-_NO_VALUE = "—"
-
 _SURFACE = "#ffffff"
 _INK = "#0b0b0b"
 _INK_2 = "#52514e"
 _MUTED = "#898781"
 _GRID = "#e1e0d9"
 _AXIS = "#c3c2b7"
-
-#: The row and distance policies, printed under every layout's axes.
-FOOTNOTE = (
-    "Unanswered rows excluded: a FALLBACK coordinate is the shortest-ping VP's, "
-    "so its error is the baseline's wearing a method's name.\nThose are the "
-    "outcome bars' “no answer” segment — the n above is that figure's "
-    "answered stack. Distance is prediction to the raw\nTG; neither grid nor "
-    "seed enters it, which is why this figure is the same at every rung."
-)
-
-#: Its `--unanswered sentinel` replacement. The denominator claim is the whole
-#: point of the policy, so it leads.
-SENTINEL_FOOTNOTE = (
-    "Unanswered rows are parked at the {km:,.0f} km sentinel rather than dropped, so every "
-    "curve rests on the same denominator — the\nfull TG roster. Where a curve meets the "
-    "sentinel line is the fraction that method answered; the rest of its rise is "
-    "the\noutcome bars' “no answer” segment. Percentiles at the sentinel are censored "
-    "at 10,000, not measured, and do not join to accuracy.csv.\nDistance is prediction to the "
-    "raw TG; neither grid nor seed enters it."
-)
-
 
 # ---- loading ----------------------------------------------------------------
 
@@ -448,17 +441,20 @@ def _cdf(values: np.ndarray, min_x_km: float = X_MIN_KM):
 
 
 def _draw_guides(ax, min_x_km: float, max_x_km: float) -> None:
-    """The 100/500/1,000 km verticals and the median line, under everything."""
+    """The 100/500/1,000 km verticals, under everything.
+
+    No median rule any more: `Y_TICKS` puts a gridline on 0.5, which is the
+    same line drawn twice.
+    """
     for km in THRESHOLDS_KM:
         if min_x_km < km < max_x_km:
             ax.axvline(km, color=_GRID, linestyle=":", linewidth=1.2, zorder=1)
             # Rotated under the top spine: on a log axis 500 and 1,000 km are a
             # third of a decade apart, so horizontal labels collide.
             ax.annotate(
-                f"{km}", xy=(km, 0.995), xytext=(-3, 0), textcoords="offset points",
-                fontsize=7.5, color=_MUTED, ha="right", va="top", rotation=90, zorder=1,
+                f"{km}", xy=(km, 0.995), xytext=(-2, 0), textcoords="offset points",
+                fontsize=_GUIDE_PT, color=_MUTED, ha="right", va="top", rotation=90, zorder=1,
             )
-    ax.axhline(0.5, color=_GRID, linestyle="--", linewidth=1.2, zorder=1)
 
 
 def _draw_sentinel(ax, sentinel_km: float, max_x_km: float) -> None:
@@ -476,7 +472,7 @@ def _draw_sentinel(ax, sentinel_km: float, max_x_km: float) -> None:
     ax.axvline(sentinel_km, color=_INK_2, linestyle="-.", linewidth=1.2, alpha=0.8, zorder=1)
     ax.annotate(
         f"unanswered → {sentinel_km:,.0f} km", xy=(sentinel_km, 0.995),
-        xytext=(-4, 0), textcoords="offset points", fontsize=7.5, color=_INK_2,
+        xytext=(-3, 0), textcoords="offset points", fontsize=_GUIDE_PT, color=_INK_2,
         ha="right", va="top", rotation=90, zorder=1,
     )
 
@@ -484,7 +480,7 @@ def _draw_sentinel(ax, sentinel_km: float, max_x_km: float) -> None:
 def _style_axes(
     ax, min_x_km: float, max_x_km: float, *, sentinel_km: float | None = None
 ) -> None:
-    """Log x on the fixed range, 0-1 y, and the package's quiet spines."""
+    """Log x on the fixed range, `Y_TICKS` on y, and the quiet spines."""
     from matplotlib.ticker import FuncFormatter
 
     ax.set_xscale("log")
@@ -492,71 +488,27 @@ def _style_axes(
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
     ax.set_xlim(min_x_km, max_x_km)
     ax.set_ylim(0, 1)
-    ax.set_xlabel("pred_dist_to_tg (km)", fontsize=10.5, color=_INK_2)
-    # Under `sentinel` the denominator is the roster, so "answered" would be
-    # a lie about the axis: the curve's top decade is the unanswered rows.
-    ax.set_ylabel(
-        "Fraction of TGs" if sentinel_km else "Fraction of TGs answered",
-        fontsize=10.5, color=_INK_2,
-    )
-    ax.grid(True, which="both", color=_GRID, linewidth=0.7, alpha=0.9, zorder=0)
+    ax.set_yticks(list(Y_TICKS))
+    ax.set_yticklabels([f"{y:g}" for y in Y_TICKS])
+    # Plain axis names. What the distance *is*, and which rows are behind the
+    # curve, are the manifest's job now that the figure carries no footnote.
+    ax.set_xlabel(X_LABEL, fontsize=_LABEL_PT, color=_INK_2)
+    ax.set_ylabel(Y_LABEL, fontsize=_LABEL_PT, color=_INK_2)
+    ax.grid(True, which="both", color=_GRID, linewidth=0.5, alpha=0.9, zorder=0)
     ax.set_axisbelow(True)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     for side in ("left", "bottom"):
         ax.spines[side].set_color(_AXIS)
-    ax.tick_params(colors=_MUTED, labelsize=9)
+    ax.tick_params(colors=_MUTED, labelsize=_TICK_PT)
 
 
 def _curve_style(method: str, colors: dict[str, str]) -> dict:
     """Colour is the method; the baseline is recessive grey and dashed."""
     if method == SHORTEST_PING:
         # _INK_2, not _MUTED: _MUTED is byte-for-byte `methods.OTHER_HUE`.
-        return {"color": _INK_2, "linestyle": "--", "linewidth": 2.2, "zorder": 3}
-    return {"color": colors[method], "linestyle": "-", "linewidth": 2.0, "zorder": 2}
-
-
-#: Percentile column width, wide enough for the sentinel's "10,000".
-_CELL_W = 7
-
-
-def _percentile_cell(value: float, sentinel_km: float | None) -> str:
-    """One right-aligned cell; a censored percentile reads as the sentinel.
-
-    At or past the sentinel the quantile is not a distance -- it is the
-    statement that the method had not answered that share of its TGs. The cell
-    prints the sentinel plainly, with the thousands comma the only thing
-    setting it apart from a measurement; the footnote and the labelled
-    sentinel line on the axis carry the reading.
-    """
-    if not np.isfinite(value):
-        return f"{_NO_VALUE:>{_CELL_W}}"
-    if sentinel_km is not None and value >= sentinel_km:
-        return f"{format(sentinel_km, ',.0f'):>{_CELL_W}}"
-    return f"{value:>{_CELL_W}.0f}"
-
-
-def _percentile_box(ax, table: pd.DataFrame, legend, *, sentinel_km: float | None = None) -> None:
-    """The monospace percentile table, hung under `legend`, in legend order.
-
-    Prints `BOX_PERCENTILES`, a subset of the CSV's columns. Needs a drawn
-    canvas, so the legend's extent is real.
-    """
-    box = legend.get_window_extent().transformed(ax.transAxes.inverted())
-    header = f"{'':<8}{'plotted':>11}" + "".join(
-        f"{'p' + str(p):>{_CELL_W}}" for p in BOX_PERCENTILES
-    )
-    lines = [header]
-    # Legend order, not the table's ranking, so the two read as one block.
-    for row in table.set_index("method").loc[curve_order(table)].reset_index().to_dict("records"):
-        counts = f"{int(row['n_plotted'])}/{int(row['n_tgs'])}"
-        cells = "".join(_percentile_cell(row[pcol(p)], sentinel_km) for p in BOX_PERCENTILES)
-        lines.append(f"{row['method_label'][:8]:<8}{counts:>11}{cells}")
-    ax.text(
-        0.02, box.ymin - 0.03, "\n".join(lines), transform=ax.transAxes,
-        fontsize=7, va="top", ha="left", color=_INK_2, family="monospace",
-        bbox=dict(boxstyle="round", facecolor=_SURFACE, edgecolor=_GRID, alpha=0.95),
-    )
+        return {"color": _INK_2, "linestyle": "--", "linewidth": 1.3, "zorder": 3}
+    return {"color": colors[method], "linestyle": "-", "linewidth": 1.2, "zorder": 2}
 
 
 def plot_cdf(
@@ -569,15 +521,18 @@ def plot_cdf(
     min_x_km: float = X_MIN_KM,
     max_x_km: float = DEFAULT_X_MAX_KM,
     sentinel_km: float | None = None,
-    figsize: tuple[float, float] = (8.6, 6.6),
-    dpi: int = 200,
+    figsize: tuple[float, float] = PAPER_FIGSIZE,
+    dpi: int = 300,
 ) -> Path:
     """One panel, one curve per method, log x. Both layouts draw through here.
 
     Honest limit: CDF curves **cross**, so no single ranking holds across the
-    axis. The legend does not claim one -- it is `methods.TERM_ORDER`, fixed --
-    and the percentile box beneath it gives p5..p95 in that same order, so the
-    reader ranks on the column they care about rather than on the key.
+    axis. The legend does not claim one -- it is `methods.TERM_ORDER`, fixed.
+
+    Sized for a paper column, so the panel carries curves, a key and two axis
+    names and nothing else. Every number that used to sit under it -- the
+    percentiles, the row policy, the term glossary -- is in the CSV and the
+    manifest written beside it.
 
     `sentinel_km` is the censoring mark, set when `loaded` came through
     `censor(policy=SENTINEL)`. It only draws and labels -- the sentinel values
@@ -615,27 +570,18 @@ def plot_cdf(
         )
         for m in order
     ]
-    legend = ax.legend(handles=handles, loc="upper left", fontsize=8.5, frameon=False)
+    legend = ax.legend(
+        handles=handles, loc="upper left", fontsize=_LEGEND_PT, frameon=False,
+        handlelength=1.6, handletextpad=0.5, labelspacing=0.3, borderpad=0.2,
+    )
     for text in legend.get_texts():
         text.set_color(_INK_2)
 
-    ax.set_title(title, fontsize=13, fontweight="bold", color=_INK, pad=16)
+    ax.set_title(title, fontsize=_TITLE_PT, fontweight="bold", color=_INK, pad=9)
     ax.annotate(
         subtitle, xy=(0.5, 1.005), xycoords="axes fraction",
-        ha="center", va="bottom", fontsize=9.5, color=_INK_2,
+        ha="center", va="bottom", fontsize=_SUBTITLE_PT, color=_INK_2,
     )
-    # The term lookup, so the figure reads without the paper beside it.
-    entries = [f"{t}: {name}" for t, name in method_term_table(order).items()]
-    half = (len(entries) + 1) // 2
-    terms = "\n".join("   ·   ".join(r) for r in (entries[:half], entries[half:]) if r)
-    footnote = FOOTNOTE if sentinel_km is None else SENTINEL_FOOTNOTE.format(km=sentinel_km)
-    ax.annotate(
-        f"{terms}\n\n{footnote}", xy=(0.5, -0.135), xycoords="axes fraction",
-        ha="center", va="top", fontsize=7.5, color=_MUTED,
-    )
-
-    fig.canvas.draw()
-    _percentile_box(ax, table, legend, sentinel_km=sentinel_km)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight", facecolor=_SURFACE)
@@ -694,7 +640,6 @@ def _manifest(
         "baseline": SHORTEST_PING,
         "dist_column": DIST_COLUMN,
         "percentiles": list(PERCENTILES),
-        "box_percentiles": list(BOX_PERCENTILES),
         "source_rung": {
             "nside": int(nside),
             "slug": grid_slug(nside),
@@ -759,6 +704,17 @@ def _manifest(
             "axis and the legend does not assert one; the CSV rows are still "
             "written best-first (p50, then p90, then n_solved, then method id)."
         ),
+        "panel": {
+            "figsize_in": list(PAPER_FIGSIZE),
+            "x_label": X_LABEL,
+            "y_label": Y_LABEL,
+            "y_ticks": list(Y_TICKS),
+            "note": (
+                "sized for a paper column: curves, key and axis names only. The "
+                "percentiles, the row policy and the method glossary are in this "
+                "file and the CSV rather than printed under the axes."
+            ),
+        },
         "baseline_encoding": (
             "dark grey (_INK_2) and dashed; deliberately not methods.OTHER_HUE, "
             "which any unpublished method takes."

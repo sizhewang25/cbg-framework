@@ -147,9 +147,10 @@ dark-grey dashed baseline. There are two layouts: `per-run`, written to
 `classify/error_cdf.*`, and `pooled`, written to `_cross/.../error_cdf.pooled.*`.
 The pooled layout concatenates the runs' rows and recomputes the percentiles
 rather than averaging them. Unanswered rows are excluded (`solved_mask`), so
-each curve covers the outcome bars' answered stack. A percentile box under the
-legend gives p5/25/50/75/95 and `plotted/total` (the CSV keeps p90 too, the
-number `accuracy.csv` publishes). Legend and box are in `methods.TERM_ORDER` —
+each curve covers the outcome bars' answered stack. The panel is a 4×3in paper
+column and carries curves, a key and two axis names — nothing else. The
+percentiles (p5/25/50/75/90/95), the row policy and the method glossary are in
+the CSV and manifest written beside it. The legend is in `methods.TERM_ORDER` —
 S-P, SOI, VAN, OCT-H, OCT-S, SPO — fixed rather than ranked, so a method holds
 the same row in every figure; the CSV rows are still written best-first. The
 distance is to the raw TG, never to the seed, so it's the same at every rung. That's why the
@@ -163,9 +164,8 @@ and each one's height at the sentinel line is its answer rate — on as01-03,
 VAN plateaus at 0.78 and only reaches 1 at the sentinel. The right edge widens
 to 20,015 km (the antipodal maximum) so the sentinel is not drawn on the
 spine. The price is censored percentiles: VAN's p50 moves 199 → 285 km and its
-p95 prints as `10,000`, which is a statement about its answer rate, not a
-distance — p75 is in the box precisely because it is the last one VAN still
-answers. These artifacts take a `.sentinel.` infix and carry
+p95 is `10,000` in the CSV, which is a statement about its answer rate, not a
+distance. These artifacts take a `.sentinel.` infix and carry
 `unanswered_policy`/`sentinel_km` columns, because **only the default files
 join to `accuracy.csv`**.
 

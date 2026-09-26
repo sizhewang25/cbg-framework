@@ -286,15 +286,14 @@ class TestSentinel:
         assert table.iloc[0]["n_plotted"] == 5
         assert table.iloc[0][E.pcol(50)] == E.SENTINEL_KM
 
-    def test_a_censored_percentile_prints_as_the_bare_sentinel(self):
-        assert E._percentile_cell(E.SENTINEL_KM, E.SENTINEL_KM).strip() == "10,000"
-        assert E._percentile_cell(412.0, E.SENTINEL_KM).strip() == "412"
-        assert E._percentile_cell(412.0, None).strip() == "412"
-
-    def test_a_censored_cell_still_fits_its_column(self):
-        """Six characters plus a space; seven would collide with p50's."""
-        assert len(E._percentile_cell(E.SENTINEL_KM, E.SENTINEL_KM)) == E._CELL_W
-        assert E._percentile_cell(E.SENTINEL_KM, E.SENTINEL_KM).startswith(" ")
+    def test_a_censored_percentile_is_the_sentinel_in_the_csv(self, tmp_path):
+        """The panel prints no percentiles; this is where they are read."""
+        run = _write_run(tmp_path, "as01", {"m": _tgs(solved=3, failed=7)})
+        E.build_for_runs([run], analysis_root=tmp_path, unanswered=E.SENTINEL)
+        out = run.analysis_dir(CLASSIFY_KIND, root=tmp_path)
+        csv = pd.read_csv(out / E.artifact_names(E.PER_RUN, E.SENTINEL)[1])
+        assert csv.loc[0, E.pcol(50)] == E.SENTINEL_KM  # answered 3 of 10
+        assert csv.loc[0, E.pcol(5)] < E.SENTINEL_KM
 
     def test_pooling_happens_before_censoring(self, tmp_path):
         """`pool` sums the counts `censor` divides by; the other order double-counts."""
@@ -355,6 +354,47 @@ class TestSentinel:
         run = _write_run(tmp_path, "as01", {"m": _tgs(solved=2)})
         with pytest.raises(ValueError, match="unknown unanswered policy"):
             E.build_for_runs([run], analysis_root=tmp_path, unanswered="drop")
+
+
+class TestPanel:
+    """Paper-column panel: curves, key, two axis names, nothing under them."""
+
+    def test_it_is_a_single_paper_column(self):
+        assert E.PAPER_FIGSIZE == (4.0, 3.0)
+
+    def test_the_axes_are_named_plainly(self):
+        assert (E.X_LABEL, E.Y_LABEL) == ("Distance (km)", "CDF")
+
+    def test_y_is_quartered(self):
+        assert E.Y_TICKS == (0.0, 0.25, 0.5, 0.75, 1.0)
+
+    def test_the_saved_png_keeps_the_panels_shape(self, tmp_path):
+        """`bbox_inches="tight"` grows the file around anything hung below the
+        axes, so the saved aspect is the check that nothing is: a footnote
+        block used to take an 8.6x6.6 panel (0.77) out to 0.96.
+        """
+        from PIL import Image
+
+        run = _write_run(tmp_path, "as01", {"m": _tgs(solved=4)})
+        loaded = E.load_errors(run, analysis_root=tmp_path)
+        E.plot_cdf(
+            loaded, E.percentile_table(loaded), tmp_path / "p.png",
+            title="Error distance to the TG", subtitle="as01 · n=4 TGs",
+        )
+        w, h = Image.open(tmp_path / "p.png").size
+        want = E.PAPER_FIGSIZE[1] / E.PAPER_FIGSIZE[0]
+        assert h / w == pytest.approx(want, abs=0.06), f"{w}x{h}"
+
+    def test_the_manifest_carries_what_the_panel_dropped(self, tmp_path):
+        run = _write_run(tmp_path, "as01", {"octant_cbg_hull": _tgs(solved=4)})
+        E.build_for_runs([run], analysis_root=tmp_path)
+        body = json.loads(
+            (run.analysis_dir(CLASSIFY_KIND, root=tmp_path) / E.NAMES[E.PER_RUN][2]).read_text()
+        )
+        assert body["panel"]["figsize_in"] == list(E.PAPER_FIGSIZE)
+        assert body["panel"]["y_ticks"] == list(E.Y_TICKS)
+        assert body["method_terms"]["OCT-H"] == "Octant-Hull CBG"
+        assert body["percentiles"] == list(E.PERCENTILES)
 
 
 class TestBaselineEncoding:
