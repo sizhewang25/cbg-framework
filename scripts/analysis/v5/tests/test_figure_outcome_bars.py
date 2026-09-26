@@ -118,6 +118,59 @@ def test_each_panel_ranks_by_serving_region_first(table):
     assert F.panel_order(table, "syn") == ["regional", "tight"]
 
 
+def _tied_pair(sp_ring0, soi_ring0):
+    """One dataset, S-P and SOI on the same correct-cell share, differing only
+    in how tight their correct predictions are."""
+    rows = []
+    for method, ring0 in (("shortest_ping", sp_ring0), ("million_scale_cbg", soi_ring0)):
+        rows.append({
+            "dataset": "syn", "method": method, "n_tgs": 100,
+            "n_cell_correct": 42, "n_cell_wrong": 58, "n_cell_unanswered": 0,
+            "n_ring0_cell_correct": ring0, "n_ring1_cell_correct": 0,
+            "n_ring2_cell_correct": 0, "n_beyond_cell_correct": 42 - ring0,
+            "n_ring0_cell_wrong": 0, "n_ring1_cell_wrong": 0,
+            "n_ring2_cell_wrong": 0, "n_beyond_cell_wrong": 58,
+        })
+    return pd.DataFrame(rows)
+
+
+def test_soi_is_seated_above_shortest_ping_on_a_tie():
+    # S-P is the tighter of the two, so the ring keys would seat it first --
+    # but the drawn share is 42% for both, so the tie reads SOI first.
+    order = F.panel_order(_tied_pair(sp_ring0=18, soi_ring0=15), "syn")
+    assert [F.method_label(m) for m in order] == ["SOI", "S-P"]
+
+
+def test_a_real_gap_still_seats_shortest_ping_above_soi():
+    frame = _tied_pair(sp_ring0=18, soi_ring0=15)
+    frame.loc[frame["method"] == "shortest_ping", ["n_cell_correct", "n_cell_wrong"]] = [50, 50]
+    assert [F.method_label(m) for m in F.panel_order(frame, "syn")] == ["S-P", "SOI"]
+
+
+def test_panel_tags_are_drawn_only_when_there_is_more_than_one_panel(table, tmp_path):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    titles = {}
+    real = plt.Figure.savefig
+
+    def capture(self, *args, **kwargs):
+        titles[len(self.axes)] = [ax.get_title() for ax in self.axes]
+        return real(self, *args, **kwargs)
+
+    plt.Figure.savefig = capture
+    try:
+        F.render(table, 64, tmp_path, png_name="one.png")
+        two = pd.concat([table, table.assign(dataset="syn2")], ignore_index=True)
+        F.render(two, 64, tmp_path, png_name="two.png")
+    finally:
+        plt.Figure.savefig = real
+    assert not titles[1][0].startswith("(")
+    assert [t[:4] for t in titles[2]] == ["(a) ", "(b) "]
+
+
 def test_render_borders_wrap_cell_groups_and_rails_carry_stripes(table, tmp_path, monkeypatch):
     import matplotlib
 

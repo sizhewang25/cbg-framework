@@ -54,6 +54,22 @@ values: most TGs in their serving region first, and among equals, the one
 whose correct-region predictions are tighter. The pooled cross-dataset order
 breaks remaining ties.
 
+One exception, `_TIE_FIRST`: S-P and SOI on the same correct-region share
+always read SOI first. The ring keys separate them per dataset, which on the
+`unbounded` figure -- the cell axis alone -- shows up as a rank flip between
+two bars both labelled 42%.
+
+In `compare` each panel is tagged `(a)`, `(b)`, ... left of its dataset, so
+the prose can cite one. A lone panel takes no tag, and a panel that pools
+several datasets is not headed at all -- `pooled` draws one panel, so the
+joined slug over it only repeats the caption.
+
+## What the figure does not draw
+
+No figure title and no method-term caption. Both go in the paper's caption and
+prose, and on a figure this short redrawing them cost a third of the height.
+The manifest beside the PNG still carries `subject` and `method_terms`.
+
 ## Layouts and pooling
 
 As v4. `compare` is one panel per dataset; `pooled` is one panel over every
@@ -156,7 +172,17 @@ _AXIS = "#c3c2b7"
 #: Bar thickness as a share of the slot. Narrower than v4's 0.62 to leave room
 #: on the right of each bar for its rail and the group totals beside it.
 _BAR_FRAC = 0.50
-_PANEL_W = 5.0
+_PANEL_W = 4.0
+
+#: Figure height, in inches. Sized for a paper's full-width band rather than a
+#: slide: the six bars are short terms and the stack is only three deep, so the
+#: extra height was white space above and below the panels.
+_FIG_H = 4.0
+
+#: Panel tags for the per-dataset layout, so the prose can cite "(a)". Drawn
+#: only when there is more than one panel -- a lone panel has nothing to cite
+#: against.
+_PANEL_TAGS = "abcdefghijklmnopqrstuvwxyz"
 
 #: The rail: a narrow strip to the right of each bar, one segment per
 #: cell-label group spanning that group's height, with the group's total
@@ -175,14 +201,29 @@ _RAIL_SEG_GAP = 0.006
 #: adjacent groups are nudged apart (never reordered) until they clear it.
 _RAIL_LABEL_GAP = 0.085
 
-#: Figure-width floor, for the figure-level title and legends on a single
-#: panel. Measured against the subjects in `_SUBJECTS`; lengthening one can
-#: clip the pooled title at both ends.
+#: Figure-width floor, so the legend rows fit beside a single panel: the
+#: `bounded` tier row is five entries wide, more than a `_PANEL_W` panel.
 _MIN_FIG_W = 8.0
 
-#: Figure width, in inches, below which the method-term caption wraps onto
-#: two lines.
-_TERMS_ONE_LINE_W = 11.0
+#: A lone panel is centred in the widened figure, so its bars keep the width
+#: they have beside other panels. Capped, because the uncapped inset leaves a
+#: `_PANEL_W`-wide panel on half of an `_MIN_FIG_W` canvas.
+_MAX_INSET = 0.12
+
+#: The vertical furniture around the panels, **in inches**: the legend's gap
+#: from the top edge, one legend row, the air between the bottom legend row
+#: and the panel titles, and the gap under the method labels. Inches rather
+#: than figure fractions because a fraction tuned on a tall figure scales up
+#: on a short one, and the legend drifts down into the panels.
+#:
+#: The figure carries no title of its own and no method-term caption: it goes
+#: into a paper that names it in the caption and spells the terms out in the
+#: prose, so drawing either again was height spent twice. `_SUBJECTS` and
+#: `method_terms` are still written to the manifest beside the PNG.
+_LEGEND_TOP_IN = 0.10
+_LEGEND_ROW_IN = 0.21
+_LEGEND_GAP_IN = 0.05
+_BOTTOM_IN = 0.06
 
 #: The rail's stripe ink on its white fill.
 _RAIL_HATCH_INK = _INK_2
@@ -403,11 +444,39 @@ def _with_rank_keys(table: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+#: S-P and SOI land on the same correct-region share often enough that the
+#: ring-tier tiebreakers decide between them, and they decide differently per
+#: dataset: as02 seats S-P above SOI on 18% vs 15% ring0 while every other
+#: panel seats SOI above. On the `unbounded` figure, which draws the cell axis
+#: alone, that reads as a rank flip between two bars labelled 42% and 42%. So a
+#: tie on the **drawn** share always reads SOI first, in every panel and in the
+#: pooled order; the ring keys still separate them when the shares differ.
+_TIE_FIRST: tuple[str, str] = ("SOI", "S-P")
+_TIE_KEY = "cell_correct"
+
+
+def _prefer_on_tie(frame: pd.DataFrame, ranked: list[str]) -> list[str]:
+    """Seat `_TIE_FIRST[0]` above `_TIE_FIRST[1]` when they tie on `_TIE_KEY`."""
+    ahead, behind = (
+        next((m for m in ranked if method_label(m) == term), None) for term in _TIE_FIRST
+    )
+    if ahead is None or behind is None or ranked.index(ahead) < ranked.index(behind):
+        return ranked
+    keys = frame.set_index("method")[_TIE_KEY]
+    if not np.isclose(float(keys.loc[ahead]), float(keys.loc[behind])):
+        return ranked
+    out = list(ranked)
+    i, j = out.index(ahead), out.index(behind)
+    out[i], out[j] = out[j], out[i]
+    return out
+
+
 def _sorted_methods(frame: pd.DataFrame, tiebreak: dict[str, int]) -> list[str]:
     f = frame.assign(_tie=frame["method"].map(tiebreak).fillna(len(tiebreak)))
-    return f.sort_values([*_RANK_KEYS, "_tie"], ascending=[False] * len(_RANK_KEYS) + [True])[
+    ranked = f.sort_values([*_RANK_KEYS, "_tie"], ascending=[False] * len(_RANK_KEYS) + [True])[
         "method"
     ].tolist()
+    return _prefer_on_tie(frame, ranked)
 
 
 def method_order(table: pd.DataFrame) -> list[str]:
@@ -421,6 +490,17 @@ def panel_order(table: pd.DataFrame, dataset: str) -> list[str]:
     pooled = {m: i for i, m in enumerate(method_order(table))}
     keyed = _with_rank_keys(table)
     return _sorted_methods(keyed[keyed["dataset"] == dataset], pooled)
+
+
+def panel_name(dataset: str) -> str | None:
+    """A panel's heading: its dataset, or None when the panel pools several.
+
+    `cross.dataset_slug` joins the pooled slugs (`as01+as02+as03`), which names
+    the *directory* well and reads as noise over a bar chart. A pooled figure
+    has only the one panel, so a heading over it says nothing the paper's
+    caption does not; the TG count stays in the CSV twin and the manifest.
+    """
+    return None if "+" in dataset else dataset.upper()
 
 
 def _contrast_ink(face: str) -> str:
@@ -580,7 +660,6 @@ def render(
     *,
     order: list[str] | None = None,
     decimals: int | None = None,
-    subject: str = _SUBJECTS[(COMPARE, BOUNDED)],
     png_name: str | None = None,
     mode: str = BOUNDED,
     dpi: int = 150,
@@ -597,10 +676,12 @@ def render(
     fig_w = max(panels_w, _MIN_FIG_W)
 
     with plt.rc_context({"hatch.linewidth": _HATCH_PT}):
-        fig, axes = plt.subplots(1, len(datasets), figsize=(fig_w, 5.8), sharey=True, squeeze=False)
+        fig, axes = plt.subplots(
+            1, len(datasets), figsize=(fig_w, _FIG_H), sharey=True, squeeze=False
+        )
         axes = axes[0]
         fig.patch.set_facecolor(_SURFACE)
-        for ax, ds in zip(axes, datasets):
+        for i, (ax, ds) in enumerate(zip(axes, datasets)):
             ranked = list(order) if order else panel_order(table, ds)
             sub = table[table["dataset"] == ds].set_index("method")
             ranked = [m for m in ranked if m in sub.index]
@@ -610,7 +691,11 @@ def render(
                 _draw_bar(ax, x, sub.loc[m], nd, mode)
 
             n = int(sub["n_tgs"].iloc[0]) if len(sub) else 0
-            ax.set_title(f"{ds.upper()}  ·  n={n}", fontsize=11, color=_INK, pad=10)
+            name = panel_name(ds)
+            tag = f"({_PANEL_TAGS[i]}) " if len(datasets) > 1 else ""
+            ax.set_title(
+                f"{tag}{name}  ·  n={n}" if name else "", fontsize=11, color=_INK, pad=6
+            )
             ax.set_xticks(xs)
             # Short terms (see `methods.METHOD_TERMS`), so no rotation.
             ax.set_xticklabels([method_label(m) for m in ranked], fontsize=9, color=_INK_2)
@@ -635,38 +720,45 @@ def render(
                 ax.tick_params(axis="y", length=0)
         axes[0].set_ylabel("Share of TGs", fontsize=11, color=_INK_2)
 
+        # The only furniture above the panels, measured down from the top edge
+        # in inches: one row per legend row, each anchored by its top, so the
+        # rows keep their spacing whatever the panels below them do.
         tiers, cells = _legend_handles(mode)
-        fig.legend(
-            handles=tiers, loc="upper center", ncol=len(tiers), frameon=False, fontsize=9,
-            bbox_to_anchor=(0.5, 0.955), labelcolor=_INK_2,
-        )
-        if cells:
+        legends = [
             fig.legend(
-                handles=cells, loc="upper center", ncol=len(cells), frameon=False, fontsize=9,
-                bbox_to_anchor=(0.5, 0.915), labelcolor=_INK_2, handleheight=1.2,
+                handles=h, loc="upper center", ncol=len(h), frameon=False, fontsize=9,
+                bbox_to_anchor=(0.5, 1 - (_LEGEND_TOP_IN + k * _LEGEND_ROW_IN) / _FIG_H),
+                labelcolor=_INK_2, **({"handleheight": 1.2} if h is cells else {}),
             )
-        fig.suptitle(
-            f"{subject}  ·  HEALPix nside={nside} (grid_km {G.grid_km(nside):.0f})",
-            fontsize=13, color=_INK, y=0.995,
-        )
-        # The term lookup under the panels, so the figure reads without the
-        # paper beside it. Only the terms this figure draws.
-        # One line needs ~11 in (measured on the six published terms); a
-        # narrower figure -- the single pooled panel -- wraps it in two.
-        entries = [f"{t}: {name}" for t, name in methods.method_term_table(
-            table["method"].unique()).items()]
-        rows = [entries] if fig_w >= _TERMS_ONE_LINE_W else [
-            entries[: (len(entries) + 1) // 2], entries[(len(entries) + 1) // 2:]
+            for k, h in enumerate(h for h in (tiers, cells) if h)
         ]
-        fig.text(
-            0.5, 0.012, "\n".join("   ·   ".join(r) for r in rows),
-            ha="center", va="bottom", fontsize=8, color=_MUTED, linespacing=1.5,
-        )
-        inset = (fig_w - panels_w) / 2 / fig_w
-        # `unbounded` draws one legend row rather than two, so the panels may
-        # climb into the space the second row would have taken.
-        top = 0.885 if mode == BOUNDED else 0.925
-        fig.tight_layout(rect=(inset, 0.04 * len(rows), 1 - inset, top))
+        def _measure() -> tuple[float, float]:
+            """`(lowest legend bottom, highest panel-title top)` as figure
+            fractions -- drawn extents, not the nominal row pitch. A legend row
+            sets taller than `_LEGEND_ROW_IN`, so a `top` computed from the
+            pitch seats the titles inside the legend's box."""
+            fig.canvas.draw()
+            r = fig.canvas.get_renderer()
+            span = fig.get_figheight() * fig.dpi
+            return (
+                min(lg.get_window_extent(renderer=r).y0 for lg in legends) / span,
+                max(ax.title.get_window_extent(renderer=r).y1 for ax in axes) / span,
+            )
+
+        inset = min((fig_w - panels_w) / 2 / fig_w, _MAX_INSET)
+        bottom = _BOTTOM_IN / _FIG_H
+        # The panel titles belong `_LEGEND_GAP_IN` under the bottom legend row
+        # -- which is the second row in `bounded` and the only one in
+        # `unbounded`, so its panels climb into the space the second row would
+        # have taken. `tight_layout` will not put them there: it adds its own
+        # pad on top of the `rect`, a visible band of white on a figure this
+        # short. So lay out once, measure the miss, and give exactly that back.
+        # Measuring beats modelling: the pad depends on matplotlib's version.
+        top = _measure()[0] - _LEGEND_GAP_IN / _FIG_H
+        fig.tight_layout(rect=(inset, bottom, 1 - inset, top))
+        shift = top - _measure()[1]
+        if abs(shift) > 0.002:
+            fig.tight_layout(rect=(inset, bottom, 1 - inset, min(top + shift, 1.0)))
 
         out_dir.mkdir(parents=True, exist_ok=True)
         png = out_dir / (
@@ -718,6 +810,10 @@ def _manifest(layout, table, nside, png_name, csv_name, *, run_ids, mode=BOUNDED
             "alone, the plain nearest-seed verdict with nothing bounding how "
             "far a correct may be. Same predictions, same denominator."
         ),
+        "subject": _SUBJECTS[(layout, mode)],
+        "subject_note": (
+            "the figure draws no title of its own -- the paper's caption names it"
+        ),
         "grid": G.describe(nside),
         "runs": run_ids,
         "arm": cross.arm(run_ids),
@@ -747,7 +843,9 @@ def _manifest(layout, table, nside, png_name, csv_name, *, run_ids, mode=BOUNDED
         ),
         "order_note": (
             "each panel ranked by its own cumulative (true, true & ring0, true & <=ring1, "
-            "true & <=ring2) shares at whole percent, descending; `methods` is the pooled order"
+            "true & <=ring2) shares at whole percent, descending; `methods` is the pooled order. "
+            f"Exception: {_TIE_FIRST[0]} is seated above {_TIE_FIRST[1]} whenever the two share "
+            f"a `{_TIE_KEY}`, so the two do not flip rank between panels."
         ),
     }
     if layout == POOLED:
@@ -796,10 +894,7 @@ def build_for_runs(
                 table[[c for c in csv_columns(mode) if c in table.columns]].to_csv(
                     out_dir / names["csv"], index=False
                 )
-                png = render(
-                    table, nside, out_dir, subject=_SUBJECTS[(layout, mode)],
-                    png_name=names["png"], mode=mode,
-                )
+                png = render(table, nside, out_dir, png_name=names["png"], mode=mode)
                 per_run = (
                     _tgs_per_run(runs, nside, analysis_root=analysis_root)
                     if layout == POOLED else None
