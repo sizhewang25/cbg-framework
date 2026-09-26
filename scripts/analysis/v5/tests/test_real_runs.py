@@ -6,6 +6,7 @@ The v4 comparison rebuilds v4 in a temp root, so it never reads a stale tree.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -72,7 +73,12 @@ def test_both_guards_hold(scored):
 
 @pytest.mark.parametrize("nside", G.NSIDE_LADDER)
 def test_the_grid_axis_matches_v4_row_for_row(scored, nside, tmp_path):
-    """`ring` and `pred_dist_to_tg_km` are v4's `ring` and `error_km`, ported."""
+    """v5's grid axis and error distance are v4's `ring` and `error_km`, ported.
+
+    v5 dropped the `ring` column for the exact `pred_dist_to_tg_grid`, so the
+    comparison caps it back. That the cap reconstructs v4 row for row is the
+    proof the retired column carried no information the exact one lacks.
+    """
     from scripts.analysis.v4.modules import answer_space as A4
     from scripts.analysis.v4.modules import classify as C4
     from scripts.analysis.v4.modules.paths import resolve_run as resolve_v4
@@ -88,7 +94,9 @@ def test_the_grid_axis_matches_v4_row_for_row(scored, nside, tmp_path):
         a = pd.read_parquet(p5).set_index("tg_id").sort_index()
         b = pd.read_parquet(v4_dir / f"{method}_cells.parquet").set_index("target_id").sort_index()
         assert a.index.equals(b.index), method
-        assert (a["ring"].to_numpy() == b["ring"].to_numpy()).all(), method
+        offset = a[C.GRID_OFFSET].to_numpy()
+        capped = np.where(offset <= C.MAX_RING, offset, -1)
+        assert (capped == b["ring"].to_numpy()).all(), method
         pd.testing.assert_series_equal(
             a["pred_dist_to_tg_km"], b["error_km"], check_names=False, check_index=False
         )

@@ -62,7 +62,7 @@ class TestCellLabel:
         s = _space()
         out = C.score_method(_frame(s, [_offset(SEATTLE, north_km=2)]), s)
         assert out["cell_label"].iloc[0] == "correct"
-        assert out["ring"].iloc[0] == 0
+        assert out[C.GRID_OFFSET].iloc[0] == 0
 
     def test_in_another_serving_region_is_wrong(self):
         s = _space()
@@ -78,8 +78,8 @@ class TestCellLabel:
         s = _space()
         out = C.score_method(_frame(s, [None]), s)
         assert out["cell_label"].iloc[0] == C.UNANSWERED
-        assert out["ring"].iloc[0] == -1 and out["pred_seed_id"].iloc[0] == -1
-        # The one case where the uncapped column also says -1.
+        assert out["pred_seed_id"].iloc[0] == -1
+        # The only thing -1 means on the grid axis now.
         assert out[C.GRID_OFFSET].iloc[0] == -1
 
     def test_far_but_in_the_right_serving_region(self):
@@ -88,8 +88,7 @@ class TestCellLabel:
         cross-tab exists to show."""
         s = _space()
         out = C.score_method(_frame(s, [_offset(SEATTLE, east_km=400)]), s)
-        assert out["ring"].iloc[0] == -1
-        assert out[C.GRID_OFFSET].iloc[0] > G.MAX_RING
+        assert out[C.GRID_OFFSET].iloc[0] > C.MAX_RING
         assert out["cell_label"].iloc[0] == "correct"
 
     def test_distances_to_tg_and_to_seed(self):
@@ -109,31 +108,33 @@ class TestTheArcticCase:
         s = _space()
         out = C.score_method(_frame(s, [ARCTIC]), s)
         assert out["cell_label"].iloc[0] == "correct"
-        assert out["ring"].iloc[0] == -1
         assert out["pred_dist_to_tg_km"].iloc[0] > 2000
-        # What the `-1` was hiding: tens of grids out, not merely "further".
+        # What v4's `-1` was hiding: tens of grids out, not merely "further".
         assert out[C.GRID_OFFSET].iloc[0] > 20
 
 
 class TestUncappedGridAxis:
-    """`pred_dist_to_tg_grid` grades what `ring` pools into one `-1` bucket."""
+    """The offset is exact; `_tier` is the only thing that bands it."""
 
-    def test_it_agrees_with_ring_wherever_ring_answers(self):
-        s = _space()
-        preds = [_offset(SEATTLE, north_km=2), _offset(SEATTLE, north_km=60), OMAHA, ARCTIC]
-        out = C.score_method(_frame(s, preds), s)
-        answered = out["ring"] >= 0
-        assert answered.any()
-        assert (out.loc[answered, C.GRID_OFFSET] == out.loc[answered, "ring"]).all()
+    def test_the_tier_bands_follow_the_offset(self):
+        assert list(C._tier(np.array([0, 1, 2]))) == ["ring0", "ring1", "ring2"]
 
-    def test_rows_ring_pools_into_beyond_are_told_apart(self):
-        """The point of the column: Omaha and the Arctic are both `-1` to
-        `ring`, and nowhere near each other in grids."""
+    def test_anything_past_the_cap_is_beyond(self):
+        past = np.array([C.MAX_RING + 1, 17, 68])
+        assert (C._tier(past) == "beyond").all()
+
+    def test_a_row_with_no_prediction_also_lands_in_beyond(self):
+        """It is excluded by `answered` before any count, so the tier it would
+        have taken never matters -- but it must not crash or take a real one."""
+        assert C._tier(np.array([-1]))[0] == "beyond"
+
+    def test_rows_the_old_cap_pooled_are_told_apart(self):
+        """The point of the column: Omaha and the Arctic were both `-1` under
+        the retired `ring`, and are nowhere near each other in grids."""
         s = _space()
         out = C.score_method(_frame(s, [OMAHA, ARCTIC]), s)
-        assert (out["ring"] == -1).all()
         omaha, arctic = out[C.GRID_OFFSET].tolist()
-        assert omaha > G.MAX_RING and arctic > G.MAX_RING
+        assert omaha > C.MAX_RING and arctic > C.MAX_RING
         assert omaha != arctic
 
 
@@ -183,7 +184,7 @@ class TestSummary:
         # Two answered rows, at 0 and tens of grids out. Were the unanswered
         # row's -1 included, it would sort first and pull p50 down to 0.
         biggest = row[f"{C.GRID_OFFSET}_max"]
-        assert biggest > G.MAX_RING
+        assert biggest > C.MAX_RING
         assert row[f"{C.GRID_OFFSET}_p50"] == pytest.approx(biggest / 2)
 
     def test_percentiles_are_none_when_nothing_was_answered(self):

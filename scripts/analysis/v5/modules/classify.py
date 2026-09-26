@@ -1,17 +1,25 @@
-"""Two labels per prediction: `ring` (grid) and `cell_label` (cell).
+"""Two labels per prediction: `pred_dist_to_tg_grid` (grid) and `cell_label`.
 
-## `ring` -- distance, bounded
+## `pred_dist_to_tg_grid` -- distance, exact
 
-Ported unchanged from v4. `ring == 0` is the TG's own grid, 1 and 2 the first
-and second neighbour rings, `-1` beyond. Local by construction, and `ring <= k`
-would be monotone non-increasing as grids grew, because HEALPix nests exactly
--- v5 runs one resolution, so nothing exercises that any more.
+Grid steps from the TG's grid to the prediction's: 0 is the TG's own grid, 1
+the first neighbour ring, and so on without a ceiling. `-1` means there was no
+prediction, and nothing else -- the neighbour graph is connected, so every real
+pair resolves.
 
-`pred_dist_to_tg_grid` is the same measure uncapped, and the two agree exactly
-wherever `ring` answers at all. The cap is what the tiers and the figures are
-built on and it stays; the uncapped column exists because `-1` is over half of
-the rows on the current runs, spanning 3 to 68 grids out, and one flat "further
-out" bucket hides all of that. Read `ring` for the verdict, this for the shape.
+Grading is a separate step. `summarize` bands the offset into `RING_TIERS` --
+`ring0`, `ring1`, `ring2`, then `beyond` -- and reports `accuracy_ring{k}`
+cumulatively, so a reader comparing two methods gets "within one ring" rather
+than "in exactly the first ring". The band edges live in `MAX_RING` here, not
+in the grid module: where to stop grading is a property of the metric, not of
+HEALPix.
+
+v4 and v5 up to this point stored the *banded* value in a `ring` column and
+spent `-1` on two meanings, beyond-the-cap and no-prediction. That column is
+gone. It cost the whole distribution past the second ring -- over half the rows
+on the current runs, spanning 3 to 68 grids out -- to save a subtraction, and
+`min(offset, MAX_RING)` reconstructs it exactly, which `test_real_runs` uses to
+keep pinning v5 against v4.
 
 ## `cell_label` -- direction, unbounded
 
@@ -84,6 +92,11 @@ GRID_OFFSET = "pred_dist_to_tg_grid"
 #: The ring tiers, exclusive, finest first.
 RING_TIERS: tuple[str, ...] = ("ring0", "ring1", "ring2", "beyond")
 
+#: The last graded ring. `beyond` is the overflow tier, so this follows
+#: `RING_TIERS` by construction rather than restating it -- the two used to be
+#: separate constants that had to be edited in lockstep.
+MAX_RING = len(RING_TIERS) - 2
+
 #: Exclusive outcome counts partitioning `n_tgs`: the four tiers, then failed.
 OUTCOME_COUNTS: tuple[str, ...] = ("n_ring0", "n_ring1", "n_ring2", "n_beyond", "n_failed")
 
@@ -133,9 +146,7 @@ def load_shortest_ping_frame(run: RunPaths, roster: pd.DataFrame) -> pd.DataFram
     return out
 
 
-def score_method(
-    frame: pd.DataFrame, space: AnswerSpace, *, max_ring: int = G.MAX_RING
-) -> pd.DataFrame:
+def score_method(frame: pd.DataFrame, space: AnswerSpace) -> pd.DataFrame:
     """Per-TG grid and cell labels, and both distances.
 
     Every TG in `frame` must be in the answer space. One it does not know is
@@ -163,24 +174,17 @@ def score_method(
     plon = out["pred_lon"].to_numpy(dtype=float)[idx]
 
     # -- grid axis ----------------------------------------------------------
+    # The exact offset, ungraded. `summarize` bands it into the ring tiers;
+    # nothing here knows about `MAX_RING`. Note the two distance-to-TG columns
+    # mark "no answer" differently: `-1` here because the column is integral,
+    # NaN for the kilometre one below.
     pred_grid = np.full(len(out), -1, dtype=np.int64)
-    ring = np.full(len(out), -1, dtype=np.int64)
-    if idx.size:
-        pred_grid[idx] = G.ang2pix(plat, plon, nside)
-        ring[idx] = G.ring_distance(
-            out["tg_grid_id"].to_numpy()[idx], pred_grid[idx], nside, max_ring=max_ring
-        )
-    out["pred_grid_id"] = pred_grid
-    out["ring"] = ring
-
-    # The same measure as `ring` without the cap, so the spread `ring` pools
-    # into `-1` stays readable. Note the two distance-to-TG columns mark "no
-    # answer" differently: `-1` here because the column is integral, NaN for
-    # the kilometre one below.
     offset = np.full(len(out), -1, dtype=np.int64)
     if idx.size:
+        pred_grid[idx] = G.ang2pix(plat, plon, nside)
         offset[idx] = G.grid_offset(out["tg_grid_id"].to_numpy()[idx], pred_grid[idx], nside)
-    out["pred_dist_to_tg_grid"] = offset
+    out["pred_grid_id"] = pred_grid
+    out[GRID_OFFSET] = offset
 
     dist_tg = np.full(len(out), np.nan)
     if idx.size:
@@ -217,10 +221,15 @@ def score_method(
     return out
 
 
-def _tier(ring: np.ndarray) -> np.ndarray:
-    """Exclusive ring tier per row, as a `RING_TIERS` name."""
-    placed = (ring >= 0) & (ring <= G.MAX_RING)
-    return np.array(RING_TIERS, dtype=object)[np.where(placed, ring, len(RING_TIERS) - 1)]
+def _tier(offset: np.ndarray) -> np.ndarray:
+    """Exclusive ring tier per row, as a `RING_TIERS` name.
+
+    Everything outside `0..MAX_RING` folds into `beyond`, which covers both a
+    real offset past the cap and the `-1` of a row with no prediction. The
+    second case never reaches a count: every caller ANDs with `answered`.
+    """
+    placed = (offset >= 0) & (offset <= MAX_RING)
+    return np.array(RING_TIERS, dtype=object)[np.where(placed, offset, len(RING_TIERS) - 1)]
 
 
 def summarize(scored: dict[str, pd.DataFrame], nside: int) -> pd.DataFrame:
@@ -235,9 +244,9 @@ def summarize(scored: dict[str, pd.DataFrame], nside: int) -> pd.DataFrame:
     for method, df in scored.items():
         n = len(df)
         answered = solved_mask(df).to_numpy() & df["pred_lat"].notna().to_numpy()
-        ring = df["ring"].to_numpy()
+        offset = df[GRID_OFFSET].to_numpy()
         label = df["cell_label"].to_numpy()
-        tier = _tier(ring)
+        tier = _tier(offset)
         status = df["status"].astype(str)
         row = {
             "method": method,
@@ -250,9 +259,9 @@ def summarize(scored: dict[str, pd.DataFrame], nside: int) -> pd.DataFrame:
         }
         # Grid axis. Cumulative: a reader comparing two methods wants "within
         # one ring", not "in exactly the first ring".
-        for k in range(G.MAX_RING + 1):
+        for k in range(MAX_RING + 1):
             row[f"accuracy_ring{k}"] = round(
-                float((answered & (ring >= 0) & (ring <= k)).mean()), 4
+                float((answered & (offset >= 0) & (offset <= k)).mean()), 4
             )
         for name in RING_TIERS:
             row[f"n_{name}"] = int((answered & (tier == name)).sum())
@@ -382,11 +391,12 @@ def score_rung(
                 "n_sites": space.meta["n_sites"],
                 "n_seeds": space.meta["n_seeds"],
                 "methods": sorted(scored),
-                "max_ring": G.MAX_RING,
-                "ring": "grid steps from the TG's grid; ringK cumulative; -1 beyond",
+                "max_ring": MAX_RING,
+                "max_ring_note": "the last graded tier; past it rows are `beyond`",
                 GRID_OFFSET: (
-                    "the same grid steps uncapped, so the spread ring pools into "
-                    "-1 stays readable; -1 only when there is no prediction"
+                    "exact grid steps from the TG's grid, ungraded; the ring tiers "
+                    "band it and ringK is cumulative; -1 only when there is no "
+                    "prediction"
                 ),
                 "cell_label": (
                     "correct / wrong = the prediction's nearest seed is / is not "

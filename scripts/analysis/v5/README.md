@@ -1,10 +1,10 @@
 # analysis/v5: two partitions, two labels
 
-v4 graded a prediction on one axis, **distance**: the HEALPix `ring`. That axis
-is bounded, but it has no direction. A miss one ring out can land inside the
-TG's own serving region or inside a neighbour's, and an operator needs to know
-which. v5 adds a second partition, the **unbounded** Voronoi **cell**, so
-every prediction carries `(ring, cell_label)`. One resolution: nside 128.
+v4 graded a prediction on one axis, **distance**: HEALPix grid steps. That axis
+has no direction. A miss one ring out can land inside the TG's own serving
+region or inside a neighbour's, and an operator needs to know which. v5 adds a
+second partition, the **unbounded** Voronoi **cell**, so every prediction
+carries `(pred_dist_to_tg_grid, cell_label)`. One resolution: nside 128.
 
 Scope: the answer space, classify, the answer-space map, the outcome bars,
 the error-distance CDF and the VP-proximity violins.
@@ -19,7 +19,8 @@ every `meta.json` and manifest.
 | target (TG) | one target server behind an IP | `tg_*` |
 | grid | one HEALPix pixel at nside 128, NESTED | `grid_*` |
 | grid_km | nominal grid distance, √(grid area): 50.9 km | `grid_km` |
-| ring | grid steps from the TG's grid to the prediction's grid (0, 1, 2; −1 = beyond) | `ring` |
+| grid offset | grid steps from the TG's grid to the prediction's grid, exact (−1 = no prediction) | `pred_dist_to_tg_grid` |
+| ring tier | the bands `summarize` groups that offset into | `ring0` · `ring1` · `ring2` · `beyond` |
 | site | a unique location of TGs, keyed `(run_id, tg_lat, tg_lon)` | `site_*` |
 | seed | spherical centroid of sites grouped by complete linkage, diameter ≤ `grid_km` | `seed_*` |
 | cell | Voronoi cell of a seed, unbounded, i.e. the serving region | `cell_*` |
@@ -51,7 +52,7 @@ manifest records them.
 
 | label | values | bounded by |
 |---|---|---|
-| `ring` | 0 · 1 · 2 · −1 (beyond) | grid adjacency, local by construction |
+| `pred_dist_to_tg_grid` | 0 · 1 · 2 · 3 … (−1 = no prediction) | nothing — it is exact; the tiers are what bound it |
 | `cell_label` | `correct` · `wrong` · `unanswered` | nothing — it is unbounded |
 
 Every prediction falls in its nearest seed's cell: `correct` when that seed is
@@ -62,7 +63,7 @@ The cell label **is** v4's retired nearest-seed rule, deliberately. v4 retired
 it because it credited Seattle with a prediction in the Canadian Arctic
 2,360 km away, and fixed that with a landmass polygon and a fourth label,
 `outland`. v5 removes both: that prediction is `correct` on the cell axis and
-`ring == −1` on the grid axis (`test_classify.TestTheArcticCase`), and the two
+68 grids out on the grid axis (`test_classify.TestTheArcticCase`), and the two
 read together are the point. A `cell_label` on its own is not a verdict.
 
 ## One tolerance, two uses
@@ -185,8 +186,9 @@ cell (`test_figure_vp_proximity.TestRealRuns`).
 
 ## Guarantees
 
-- `ring` and `pred_dist_to_tg_km` match v4's `ring` and `error_km` row for row
-  on all three meshes (`test_real_runs`).
+- `pred_dist_to_tg_km` matches v4's `error_km` row for row on all three meshes,
+  and `min(pred_dist_to_tg_grid, 2)` reconstructs v4's `ring` exactly — the
+  proof that dropping the capped column lost nothing (`test_real_runs`).
 - The grid axis is untouched by the cell axis: `accuracy_ring{0,1,2}` is never
   conditioned on `cell_label`, so removing the landmass moved none of them.
   Verified bit-for-bit against the pre-removal artifacts at nside 128.

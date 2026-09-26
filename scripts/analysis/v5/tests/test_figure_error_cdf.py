@@ -42,9 +42,8 @@ def _tgs(*, solved: int = 0, failed: int = 0, errors=None, first_id: int = 0) ->
             "status": ["SUCCESS"] * solved + ["FALLBACK"] * failed,
             "pred_lat": [40.0] * n,
             "pred_lon": [-100.0] * n,
-            "ring": [0] * solved + [-1] * failed,
-            # The uncapped twin never says -1 for a row that has coordinates,
-            # and these FALLBACK rows do, so they get a real offset.
+            # -1 would mean "no prediction", and these FALLBACK rows have
+            # coordinates, so they get a real offset.
             C.GRID_OFFSET: [0] * solved + [2] * failed,
             "cell_label": ["correct"] * solved + [C.UNANSWERED] * failed,
             "pred_dist_to_tg_km": [*dist, *([123.0] * failed)],

@@ -7,7 +7,7 @@ the Voronoi cell of the seeds, so nothing in this module says cell.
 Why HEALPix and not H3: exactly equal-area, so a grid count converts to an
 area and the quantisation floor is the same everywhere; aperture-4 with exact
 nesting, so in NESTED ordering the parent of `pix` is `pix >> 2`. The nesting
-property is what made `ring == 0` monotone across resolutions where H3
+property is what made `ring0` monotone across resolutions where H3
 produced 705 violations on this repo's data. **v5 now runs one resolution**,
 so that monotonicity is no longer exercised here -- the equal-area argument is
 what still carries weight.
@@ -36,10 +36,6 @@ NSIDE_LADDER: tuple[int, ...] = (128,)
 #: Fixed, not a parameter: NESTED is what makes a parent a bit shift away, and
 #: `ang2pix`/`neighbours` are written against it.
 _ORDER = "nested"
-
-#: How many rings out `ring_distance` grades before answering -1 (beyond).
-MAX_RING = 2
-
 
 def _healpix(nside: int):
     # Lazy: astropy is a heavy import and the areas are closed-form.
@@ -114,50 +110,6 @@ def neighbours(pix, nside: int) -> np.ndarray:
     return np.asarray(out, dtype=np.int64).T
 
 
-def ring_distance(a, b, nside: int, max_ring: int = MAX_RING) -> np.ndarray:
-    """Grid steps separating each `(a, b)` pair, or `-1` past `max_ring`.
-
-    0 is the same grid, 1 one of `a`'s 8 neighbours. `-1` is "beyond",
-    deliberately not a large number: once a prediction has left the
-    neighbourhood, how far is `pred_dist_to_tg_km`'s question.
-
-    Local by construction, which is the bound an unclipped Voronoi partition
-    lacks. Grown breadth-first one ring at a time; unchanged from v4.
-    """
-    a = np.asarray(a, dtype=np.int64).ravel()
-    b = np.asarray(b, dtype=np.int64).ravel()
-    if a.shape != b.shape:
-        raise ValueError(f"a and b must be the same length, got {a.shape} vs {b.shape}")
-    nside = validate_nside(nside)
-
-    out = np.full(a.shape, -1, dtype=np.int64)
-    out[a == b] = 0
-    if max_ring < 1:
-        return out
-
-    # `frontier` is everything reached, `shell` the grids whose neighbours are
-    # still unexplored -- tracking both keeps the interior from re-expanding.
-    frontier = [{int(x)} for x in a]
-    shell = [{int(x)} for x in a]
-    for k in range(1, max_ring + 1):
-        pending = [i for i in range(a.size) if out[i] == -1 and shell[i]]
-        if not pending:
-            break
-        flat = np.fromiter((c for i in pending for c in shell[i]), dtype=np.int64)
-        counts = [len(shell[i]) for i in pending]
-        nbrs = neighbours(flat, nside)
-        pos = 0
-        for i, n in zip(pending, counts):
-            block = nbrs[pos : pos + n].ravel()
-            pos += n
-            new = {int(c) for c in block if c >= 0} - frontier[i]
-            if int(b[i]) in new:
-                out[i] = k
-            frontier[i] |= new
-            shell[i] = new
-    return out
-
-
 #: Neighbour tables, one per nside, built on first use. The table is
 #: `n_grids(nside)` by 8 int32 -- 6.3 MB at nside 128 -- and every
 #: `grid_offset` call reuses it, which is the only thing here worth keeping.
@@ -176,20 +128,20 @@ def _neighbour_table(nside: int) -> np.ndarray:
 def grid_offset(a, b, nside: int) -> np.ndarray:
     """Exact grid steps separating each `(a, b)` pair. Never gives up.
 
-    The uncapped twin of `ring_distance`, and the same measure: `grid_offset
-    == k` reads exactly as `ring == k` does, k grids out, and the two agree
-    wherever `ring_distance` answers at all. What `ring` reports as `-1` this
-    reports as a number, so the spread past the second ring stays visible
-    instead of pooling into one bucket.
+    `grid_offset == k` means k grids out, for any k: the whole grid axis, at
+    the resolution the grid itself provides. `classify` is what decides where
+    to stop grading, banding this into `ring0` / `ring1` / `ring2` / `beyond`;
+    that cap belongs to the metric, not here.
 
     `-1` is unreachable for a real pair: the neighbour graph is connected --
-    at nside 128 its diameter is 315 -- so every pair resolves.
+    at nside 128 its diameter is 315 -- so every pair resolves. A caller that
+    sees `-1` passed something that was never a grid id.
 
-    Breadth-first like `ring_distance`, but grown over one shared neighbour
-    table per **distinct `a`** rather than per pair. Without a cap the disk a
-    deep pair sweeps is far too large to rebuild row by row: at offset 68 it
-    is some 15,000 grids. Each source stops as soon as it has reached every
-    `b` asked of it.
+    Breadth-first, grown over one shared neighbour table per **distinct `a`**
+    rather than per pair. Per pair is what an earlier capped version did, and
+    it does not survive the cap coming off: at offset 68 the disk a pair
+    sweeps is some 15,000 grids. Each source stops as soon as it has reached
+    every `b` asked of it.
     """
     a = np.asarray(a, dtype=np.int64).ravel()
     b = np.asarray(b, dtype=np.int64).ravel()
@@ -220,6 +172,50 @@ def grid_offset(a, b, nside: int) -> np.ndarray:
         out[rows] = dist[wanted]
     return out
 
+
+def ring_grids(pix: int, nside: int, max_ring: int = MAX_RING) -> list[list[int]]:
+    """The neighbourhood of one grid, split by ring: `[[pix], ring 1, ring 2]`.
+
+    The **set** form of `ring_distance`: that answers "how far is b from a",
+    this answers "which grids are k steps out from a". Same breadth-first
+    growth, same treatment of the absent neighbours `neighbours` reports as
+    `-1`, and the same guarantee that the rings are disjoint -- a grid already
+    reached at ring `k-1` is not re-listed at ring `k`.
+
+    Deliberately **not** a refactor target for `ring_distance` or
+    `grid_offset`. Those are vectorised over pairs and carry their own
+    frontier bookkeeping; this one is scalar and runs once per distinct
+    occupied grid (~18 per run). `test_grid` cross-checks them instead: every
+    grid this returns at ring `k` must make `ring_distance` answer `k`.
+
+    **Only ever called with a small `max_ring`.** It grows a disk, so the cost
+    is quadratic in the radius: at offset 68 -- a real `grid_offset` value on
+    these runs -- the disk is some 15,000 grids. `map_mtl` draws the
+    neighbourhood at `MAX_RING` and reports anything further as a number
+    rather than a region, which is why that is not a problem in practice.
+
+    Ring 1 holds **7** rather than 8 grids at the 24 base-face corner grids of
+    every nside, and ring 2 is correspondingly short. Callers must read the
+    lengths rather than assume 8 and 16.
+    """
+    n = validate_nside(nside)
+    seed = int(pix)
+    rings: list[list[int]] = [[seed]]
+    if max_ring < 1:
+        return rings
+
+    reached = {seed}
+    shell = {seed}
+    for _ in range(1, int(max_ring) + 1):
+        if not shell:
+            rings.append([])
+            continue
+        block = neighbours(np.fromiter(shell, dtype=np.int64), n).ravel()
+        new = {int(c) for c in block if c >= 0} - reached
+        reached |= new
+        shell = new
+        rings.append(sorted(new))
+    return rings
 
 def grid_rings(pix, nside: int, *, step: int = 8) -> list[np.ndarray]:
     """One `(V, 2)` `(lon, lat)`-degree boundary ring per grid, for drawing.

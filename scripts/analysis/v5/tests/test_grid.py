@@ -118,80 +118,29 @@ class TestNeighbours:
                 assert grid in back, f"{grid} -> {other} was not mutual"
 
 
-class TestRingDistance:
-    def test_same_grid_is_zero(self):
-        pix = H.ang2pix(_LAT[:100], _LON[:100], 128)
-        assert np.all(H.ring_distance(pix, pix, 128) == 0)
-
-    def test_every_immediate_neighbour_is_ring_one(self):
-        a = H.ang2pix([DENVER[0]], [DENVER[1]], 128)
-        nb = H.neighbours(a, 128)[0]
-        nb = nb[nb >= 0]
-        assert nb.size == 8
-        assert np.all(H.ring_distance(np.repeat(a, nb.size), nb, 128) == 1)
-
-    def test_second_ring_is_ring_two(self):
-        a = H.ang2pix([DENVER[0]], [DENVER[1]], 128)
-        first = set(int(x) for x in H.neighbours(a, 128)[0] if x >= 0) | {int(a[0])}
-        second = set()
-        for c in first:
-            second |= {int(x) for x in H.neighbours([c], 128)[0] if x >= 0}
-        second -= first
-        assert second, "no second ring found"
-        grids = np.fromiter(second, dtype=np.int64)
-        assert np.all(H.ring_distance(np.repeat(a, grids.size), grids, 128) == 2)
-
-    def test_beyond_max_ring_is_minus_one_not_a_big_number(self):
-        """Deliberately not a distance. Once the prediction is outside the
-        neighbourhood the metric asks about, how far is `error_km`'s job."""
-        a = H.ang2pix([DENVER[0]], [DENVER[1]], 128)
-        b = H.ang2pix([SEATTLE[0]], [SEATTLE[1]], 128)
-        assert H.ring_distance(a, b, 128)[0] == -1
-
-    def test_the_arctic_regression_case(self):
-        """tg-e1a1545: truth Seattle, Spotter predicted the Canadian Arctic
-        2,360 km away, and v3's nearest-seed rule scored it CORRECT because the
-        nearest of 18 US seeds happened to be Seattle. Ring distance is local,
-        so no arrangement of far-away grids can make this adjacent."""
-        truth = H.ang2pix([SEATTLE[0]], [SEATTLE[1]], 128)
-        pred = H.ang2pix([ARCTIC[0]], [ARCTIC[1]], 128)
-        assert H.ring_distance(truth, pred, 128)[0] == -1
-
-    def test_max_ring_zero_only_reports_exact_matches(self):
-        a = H.ang2pix([DENVER[0]], [DENVER[1]], 128)
-        nb = H.neighbours(a, 128)[0][:1]
-        assert H.ring_distance(a, a, 128, max_ring=0)[0] == 0
-        assert H.ring_distance(a, nb, 128, max_ring=0)[0] == -1
-
-    def test_mismatched_lengths_are_rejected(self):
-        with pytest.raises(ValueError, match="same length"):
-            H.ring_distance([1, 2], [1], 128)
-
-
 class TestGridOffset:
-    """`grid_offset` is `ring_distance` without the cap.
+    """The grid axis, exact and ungraded.
 
-    `test_it_agrees_with_ring_distance_wherever_ring_answers` is the
-    load-bearing one: it is the whole claim the uncapped column rests on, so
-    if the two ever drift, `pred_dist_to_tg_grid == 2` and `ring == 2` stop
-    meaning the same thing and the new column is no longer readable as rings.
+    `test_the_nth_ring_built_by_hand_is_offset_n` is the load-bearing one. It
+    grows each ring from `neighbours` alone, so it checks the BFS against an
+    independent construction rather than against another BFS -- which is what
+    the retired `ring_distance` used to provide. It runs one ring past the old
+    cap, where that function could only ever have said -1.
     """
 
-    def test_it_agrees_with_ring_distance_wherever_ring_answers(self):
-        a = H.ang2pix(_LAT[:400], _LON[:400], 128)
-        b = H.ang2pix(_LAT[400:800], _LON[400:800], 128)
-        # Near pairs, so `ring_distance` has something to say beyond -1.
-        near = np.concatenate([a, np.repeat(a[:50], 8)])
-        far = np.concatenate([b, H.neighbours(a[:50], 128).ravel()])
-        keep = far >= 0
-        near, far = near[keep], far[keep]
-        ring = H.ring_distance(near, far, 128)
-        offset = H.grid_offset(near, far, 128)
-        answered = ring >= 0
-        assert answered.any()
-        assert np.array_equal(offset[answered], ring[answered])
-        # And where `ring` gave up, the offset is a real number past the cap.
-        assert np.all(offset[~answered] > H.MAX_RING)
+    def test_the_nth_ring_built_by_hand_is_offset_n(self):
+        a = H.ang2pix([DENVER[0]], [DENVER[1]], 128)
+        seen = {int(a[0])}
+        shell = set(seen)
+        for n in (1, 2, 3):
+            nxt = set()
+            for c in shell:
+                nxt |= {int(x) for x in H.neighbours([c], 128)[0] if x >= 0}
+            shell = nxt - seen
+            seen |= shell
+            assert shell, f"no ring {n} found"
+            grids = np.fromiter(shell, dtype=np.int64)
+            assert np.all(H.grid_offset(np.repeat(a, grids.size), grids, 128) == n), n
 
     def test_same_grid_is_zero(self):
         pix = H.ang2pix(_LAT[:100], _LON[:100], 128)
@@ -201,15 +150,16 @@ class TestGridOffset:
         a = H.ang2pix([DENVER[0]], [DENVER[1]], 128)
         nb = H.neighbours(a, 128)[0]
         nb = nb[nb >= 0]
+        assert nb.size == 8
         assert np.all(H.grid_offset(np.repeat(a, nb.size), nb, 128) == 1)
 
-    def test_a_far_pair_gets_a_number_not_minus_one(self):
-        """The half of the point `ring` cannot serve: Seattle and the Arctic
-        are both `-1` to `ring_distance`, and 68-odd grids apart in truth."""
+    def test_the_arctic_case_is_a_number_not_a_shrug(self):
+        """tg-e1a1545: truth Seattle, Spotter predicted the Canadian Arctic
+        2,360 km away. The retired `ring` column called this -1, the same
+        value it used for "no prediction". It is 68 grids out."""
         truth = H.ang2pix([SEATTLE[0]], [SEATTLE[1]], 128)
         pred = H.ang2pix([ARCTIC[0]], [ARCTIC[1]], 128)
-        assert H.ring_distance(truth, pred, 128)[0] == -1
-        assert H.grid_offset(truth, pred, 128)[0] > H.MAX_RING
+        assert H.grid_offset(truth, pred, 128)[0] > 20
 
     def test_antipodes_resolve_rather_than_giving_up(self):
         """The neighbour graph is connected, so no pair is unreachable."""
@@ -228,4 +178,5 @@ class TestGridOffset:
     def test_mismatched_lengths_are_rejected(self):
         with pytest.raises(ValueError, match="same length"):
             H.grid_offset([1, 2], [1], 128)
+
 
