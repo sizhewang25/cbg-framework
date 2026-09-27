@@ -42,6 +42,7 @@ from scripts.analysis.v5.modules import (
     answer_space,
     classify,
     cohort_overlap,
+    figure_contest_map,
     figure_error_cdf,
     figure_outcome_bars,
     figure_outcome_map,
@@ -301,6 +302,98 @@ def plot_outcome_map_cmd(
         raise typer.BadParameter(str(exc)) from exc
     for png in pngs:
         typer.echo(f"wrote {png}")
+
+
+@app.command("plot-contest-map")
+def plot_contest_map_cmd(
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Mesh run, one per dataset (repeatable); one column each."
+    ),
+    method_a: str = typer.Option(
+        figure_contest_map.DEFAULT_METHOD_A,
+        "--method-a",
+        help="First method; its hue marks the sites it wins.",
+    ),
+    method_b: str = typer.Option(
+        figure_contest_map.DEFAULT_METHOD_B,
+        "--method-b",
+        help="Second method; its hue marks the sites it wins.",
+    ),
+    extent: tuple[float, float, float, float] = typer.Option(
+        figure_contest_map.DEFAULT_EXTENT,
+        "--extent",
+        help=(
+            "Shared frame, as lon_min lon_max lat_min lat_max. Defaults to the "
+            "outcome maps' frame so the two can be read side by side."
+        ),
+    ),
+    ncols: int = typer.Option(
+        None,
+        "--ncols",
+        help=(
+            "Panels per row; default is one row. Use 1 to stack the meshes, "
+            "which is what keeps the per-site labels legible at paper width."
+        ),
+    ),
+    panel_width: float = typer.Option(
+        figure_contest_map._PANEL_W_IN,
+        "--panel-width",
+        help=(
+            "Width of one panel in inches. Set it to the printed width a panel "
+            "will occupy; the site labels are a fixed point size, so this is "
+            "what decides whether they can be separated at all."
+        ),
+    ),
+    labels: bool = typer.Option(
+        True,
+        "--labels/--no-labels",
+        help=(
+            "Draw the per-site `a | b | total` counts. --no-labels leaves the "
+            "markers and sends the counts to the CSV twin only, which is what "
+            "makes a three-panel row printable at textwidth."
+        ),
+    ),
+    nside: int = typer.Option(
+        figure_contest_map.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help="Which rung's answer space and *_tgs.parquet to read.",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Which of two methods wins each site on the cell axis: a map per dataset.
+
+    One marker per site, shaped and coloured by whether the two methods tied,
+    one of them won outright, or neither reached the site, with the correct
+    counts behind that verdict printed underneath as `a | b | total`.
+    Categories compare counts directly -- no majority rule -- and `solved_mask`
+    is applied, so a FALLBACK row never reaches a count.
+
+    The category counts and the exact McNemar test over the discordant sites
+    are written to the manifest and the CSV twin, not drawn on the figure.
+
+    Writes `contest_map.<A>-vs-<B>.{png,csv,manifest.json}` into
+    `_cross/contest-map/<datasets>[@<arm>]/`. Needs `build-answer-space` and
+    `classify` on every run.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id; this figure compares named datasets")
+    try:
+        png = figure_contest_map.build_for_runs(
+            [resolve_run(r, outputs_root) for r in run_id],
+            method_a=method_a,
+            method_b=method_b,
+            extent=tuple(extent),
+            ncols=ncols,
+            panel_width=panel_width,
+            labels=labels,
+            nside=nside,
+            analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"wrote {png}")
 
 
 @app.command("plot-error-cdf")

@@ -69,7 +69,10 @@ are still correct -- they are in the CSV twin -- but the drawing is locally
 ambiguous. Not fixed here. The candidates, in the order they are worth trying:
 
 1. add the markers to the repulsion as fixed obstacles, so a label is pushed
-   off a prediction the same way it is pushed off another label;
+   off a prediction the same way it is pushed off another label. `place_labels`
+   grew an `obstacles=` argument for `figure_contest_map`, which does exactly
+   this; it is not passed here, because turning it on would move every count on
+   a figure the paper already cites. Flip it deliberately, not incidentally;
 2. allocate labels by angle around the cluster centroid instead of relaxing
    them independently, which makes non-crossing leaders a guarantee rather
    than an outcome;
@@ -250,17 +253,26 @@ def place_labels(
     pad: float = FRAME_PAD_DEG,
     iters: int = RELAX_ITERS,
     spring: float = SPRING,
+    offset: tuple[float, float] = LABEL_OFFSET_DEG,
+    obstacles=None,
+    obstacle_sep: float = 0.0,
 ) -> np.ndarray:
     """Push overlapping count labels apart, keeping each near its own seed.
 
     `anchors` are `(lon, lat)` seed positions; the return is the drawn label
     position for each, in the same order and in the same units.
 
-    Each label starts at its anchor plus `LABEL_OFFSET_DEG`, is pushed out of
-    any neighbour within `min_sep`, is pulled back towards that start by
-    `spring`, and is clipped `pad` inside the frame. It repels labels from
-    labels only -- see the module docstring for what that costs and what would
-    fix it.
+    Each label starts at its anchor plus `offset`, is pushed out of any
+    neighbour within `min_sep`, is pulled back towards that start by `spring`,
+    and is clipped `pad` inside the frame.
+
+    `obstacles` is an optional `(m, 2)` array of lon/lat points labels are also
+    kept `obstacle_sep` clear of -- the drawn markers, typically, including a
+    label's own anchor. It is the fix the module docstring's known limitation
+    names; this figure does not pass it (enabling it here would move counts on
+    a figure already in the paper pipeline), and `figure_contest_map` does.
+    An obstacle does not move, so it pushes by the whole shortfall where a
+    neighbouring label pushes by half.
 
     The diagonal is masked by setting each self-distance to `min_sep` exactly,
     which is never "too close" and never divides by zero. Filling it with `inf`
@@ -272,9 +284,18 @@ def place_labels(
     a = np.asarray(anchors, dtype=float)
     if a.ndim != 2 or a.shape[1] != 2:
         raise ValueError(f"anchors must be (n, 2) lon/lat, got {a.shape}")
-    home = a + np.array(LABEL_OFFSET_DEG)
+    step = np.array(offset, dtype=float)
+    home = a + step
     pos = home.copy()
     n = len(a)
+    obs = None
+    if obstacles is not None and obstacle_sep > 0:
+        obs = np.asarray(obstacles, dtype=float)
+        if obs.ndim != 2 or obs.shape[1] != 2:
+            raise ValueError(f"obstacles must be (m, 2) lon/lat, got {obs.shape}")
+    # Where a label sits exactly on an obstacle there is no direction to leave
+    # along; it leaves along `offset`, the direction it wanted anyway.
+    away = step / (np.linalg.norm(step) or 1.0)
     # Deterministic, antisymmetric fallback direction for coincident labels.
     idx = np.arange(n)
     tie = np.zeros((n, n, 2))
@@ -291,6 +312,15 @@ def place_labels(
             unit = np.where(dist[..., None] > _COINCIDENT_EPS, d / safe, tie)
             gap = np.where(too_close, (min_sep - dist) / 2, 0.0)
             pos += (gap[..., None] * unit).sum(axis=1)
+        if obs is not None:
+            od = pos[:, None, :] - obs[None, :, :]
+            odist = np.linalg.norm(od, axis=-1)
+            near = odist < obstacle_sep
+            if near.any():
+                safe = np.where(odist > _COINCIDENT_EPS, odist, 1.0)[..., None]
+                unit = np.where(odist[..., None] > _COINCIDENT_EPS, od / safe, away)
+                gap = np.where(near, obstacle_sep - odist, 0.0)
+                pos += (gap[..., None] * unit).sum(axis=1)
         pos += spring * (home - pos)
         pos[:, 0] = np.clip(pos[:, 0], extent[0] + pad, extent[1] - pad)
         pos[:, 1] = np.clip(pos[:, 1], extent[2] + pad, extent[3] - pad)
@@ -761,9 +791,11 @@ def _manifest(
             "place_labels repels labels from labels, not from the prediction "
             "markers, so in the dense north-east cluster (NYC / Philadelphia / "
             "DC / Boston) a count can land on a marker and leader lines can "
-            "cross. The numbers are in the CSV twin. Candidate fixes, unimplemented: "
-            "treat the markers as obstacles in the repulsion; allocate labels by "
-            "angle around a cluster centroid so leaders cannot cross; or a callout "
+            "cross. The numbers are in the CSV twin. place_labels now takes an "
+            "obstacles= argument that would fix it, and this figure does not "
+            "pass it: enabling it would move counts on a figure already cited "
+            "from the paper. Still unimplemented: allocating labels by angle "
+            "around a cluster centroid so leaders cannot cross, and a callout "
             "column for the densest cluster."
         ),
     }
