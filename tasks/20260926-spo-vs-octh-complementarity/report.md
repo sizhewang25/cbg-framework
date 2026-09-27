@@ -42,6 +42,28 @@ figures live only in a session scratchpad; this task makes them reproducible.
   OCT-H closer on 86.5% of both-correct targets. The expectation was checked
   before any module was written.
 
+### Backed by a script, 2026-09-26
+
+- **C1 is built and reproduces `plan.md` exactly**, with no adjustment to any
+  number: as01 8–1 (p = 0.039), as02 5–10 (p = 0.302), as03 8–9 (p = 1.000),
+  pooled 21–20 over 65 sites and 1,269 targets. `modules/contest.py` +
+  `modules/figure_contest_map.py`, CLI `plot-contest-map`, 42 tests.
+
+### Found while building C1
+
+- **The 1x3 map cannot be printed with its per-site labels.** A label is eight
+  characters at a fixed point size; three panels at a 7 in `\textwidth` give
+  each panel 2.3 in, where one label spans 11 deg of a 65 deg frame. Not a
+  tuning problem — twenty of them do not fit. `--no-labels` (counts to the CSV)
+  and `--ncols 1 --panel-width 7` (a 7 x 14 in figure) are both rendered; the
+  choice is the paper's. C2–C4 are not maps and are not affected.
+- **The label relaxation has to run in units of a label box.** A site label is
+  four times wider than it is tall, so a single isotropic separation in degrees
+  is wrong on one axis whichever value it takes. Scaling the space first fixes
+  it, and the manifest now reports the separations each panel *achieved*
+  (`label_crowding`), not the ones it asked for — currently 0 overlapping pairs
+  on all three.
+
 ## Conclusions
 
 <Pending.>

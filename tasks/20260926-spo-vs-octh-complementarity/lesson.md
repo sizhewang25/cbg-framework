@@ -16,3 +16,20 @@
 - **A figure changed the question twice.** The per-method maps showed the
   replica structure (~20 stacked markers, counts of exactly 20) and the
   Seattle/Portland pair more clearly than any table had. Plot before theorising.
+- **Relax labels in the metric the labels are shaped in.** A spring
+  relaxation with one isotropic separation assumes round labels. These are 4:1,
+  so any single value in degrees is wrong on one axis: large enough to clear
+  two labels side by side flings them apart vertically, small enough to sit
+  right vertically leaves them overlapping horizontally. Scale the space by the
+  label box first, then one rule is correct on both axes. And measure the
+  result into the manifest — the relaxation can be handed an unsatisfiable
+  cluster, and when it is, it should say so rather than look tuned.
+- **Font size is absolute; map scale is not.** Keep a drawn label's dimensions
+  in inches and convert at draw time from the panel width actually in use.
+  Pinning them in degrees bakes in one figure size, and the first thing a paper
+  asks for is a different one.
+- **A figure the paper cites is not a place to enable an improvement in
+  passing.** `place_labels` grew the obstacle repulsion its own docstring had
+  been asking for; `figure_outcome_map` still does not pass it, because turning
+  it on would silently move every count on a committed figure. The capability
+  and the decision to use it are separate changes.
