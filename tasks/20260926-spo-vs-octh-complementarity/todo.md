@@ -61,13 +61,15 @@ paper's caption, or it keeps it as the one titled figure in the set.
 - [x] Naming: these two use `spo_vs_octh`; C1 and C2 use `SPO-vs-OCT-H`. **Worth unifying** — not done here, because it renames committed artifacts.
 - [x] `pred_dist_to_tg_grid` added to `contest.TG_COLUMNS`, and `site_contest` now returns `n_solved_*` and `offset_sd_*`. C4 needs the column too.
 
-## Phase 4: C4 — error where both succeed
-- [ ] Cohort: the **565 targets both methods place in the correct cell**, across 34 `(run, site_id)` pairs.
-- [ ] CDF of `diff = offset_SPO - offset_OCT-H`, zero at the x centre, symmetric log scale either side.
-- [ ] Sign convention `spo - octh` is fixed: the mass sits **right** of zero (OCT-H closer on 86.5%). Do not flip it to make the curve lean left.
-- [ ] Mark the three shares on the curve's own geometry (4.2% / 9.2% / 86.5%) via the CSV, not as figure annotation.
-- [ ] Emit to CSV: per-mesh shares (86.9 / 85.7 / 86.8), diff percentiles, and the per-site head-to-head (2 SPO / 3 equal / 29 OCT-H).
-- [ ] Companion stat in the manifest only: on the 21 SPO-win sites, offset p5/p50/p95 1/3/35 vs 0/4/12, OCT-H better on 11 of 21.
+## Phase 4: C4 — error where both succeed — done 2026-09-27, `modules/figure_error_diff.py`
+- [x] Cohort: the **565 targets both methods place in the correct cell**, across 34 `(run, site_id)` pairs. `contest.both_correct_targets`, solved rows only.
+- [x] CDF of `diff = offset_SPO - offset_OCT-H`, zero at the x centre, symmetric log either side (`linthresh` 1 grid, the smallest difference there is). Ticks spelled, not left to the symlog locator, which labels decades and leaves the 1–3 band where the median sits unmarked.
+- [x] Sign convention `spo - octh` fixed: the mass sits **right** of zero. The axis label carries the convention, a test asserts the minuend reads first, and the manifest says the expectation of a left lean did not move it.
+- [x] The three shares are the **curve's own geometry** — height left of zero 4.2%, jump at zero 9.2%, remainder 86.5% — and a test pins that correspondence.
+- [x] Direction is shown by two **arrows** above the curve (`SPO better ←`, `→ OCT-H better`), not by tinted half-planes: a direction is what the axis encodes, and arrows read in greyscale where two pale tints do not. They sit in a reserved band above y=1, which a CDF can never reach, so they cannot collide with the data.
+- [x] Axis labels: x `Diff. of Grid Error Distances (SPO - OCT-H)`, y `Fraction of Correct Predictions`.
+- [x] CSV twin is the cohort itself, 565 rows. Every claim re-derived from it alone: shares 86.5/4.2/9.2, median +2, p95 +8, max +19, per mesh 86.9/85.7/86.8, per site 29 OCT-H / 2 SPO / 3 level.
+- [x] Companion in the manifest only: 21 SPO-win sites, offset p5/p50/p95 **1/3/35** vs **0/4/12**, OCT-H more accurate on **11 of 21** (SPO 8, level 2). Compared on an inner join of per-site medians, so a site one method never solved is not judged — `n_sites_compared` reports it.
 
 ## Phase 5: Verification
 - [ ] Reproduce every C1–C4 number in `plan.md` from the committed CSVs, not from a notebook.

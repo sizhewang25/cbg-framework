@@ -78,6 +78,13 @@ figures live only in a session scratchpad; this task makes them reproducible.
   has a site whose twenty replicas all land in one grid **38 grids from the
   truth** — a spread of 0, perfectly stable and consistently ~1,900 km wrong.
 
+- **C4 is built** and reproduces `plan.md` exactly from the CSV twin: on the
+  **565** targets both methods place correctly, Octant-Hull is nearer on
+  **86.5%** against Spotter's **4.2%**, level on 9.2%; median difference **+2**
+  grids, p95 **+8**, max **+19**; stable across meshes at 86.9 / 85.7 / 86.8;
+  and per site Octant-Hull has the nearer median on **29 of 34**.
+  `modules/figure_error_diff.py`, CLI `plot-error-diff`, 16 tests.
+
 ### Found while building C1
 
 - **The 1x3 map cannot be printed with its per-site labels.** A label is eight

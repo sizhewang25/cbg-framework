@@ -74,3 +74,17 @@
   spread in km sits next to an error distance in km and gets read as accuracy,
   which is exactly what it is not: a site whose replicas all agree on one grid
   scores zero whether that grid is right or thirty-eight grids away.
+- **Put the reading in the curve's geometry, not in an annotation.** The three
+  shares C4 quotes are the height left of zero, the jump at zero, and what is
+  left — so the figure needs no numbers written on it, and a test can assert
+  that the geometry and the manifest agree. Direction is carried by two arrows
+  above the curve rather than by tinted half-planes -- it is what the axis
+  encodes, and an arrow survives greyscale where a pale tint does not.
+- **Reserve annotation space in data units where the data has a ceiling.** A
+  CDF stops at 1, so a band above it is empty whatever the data does. Placing
+  the arrows there beats drawing them outside the axes, which `tight_layout`
+  does not reserve room for and a fixed-canvas save then clips.
+- **Align two grouped Series before comparing them.** A per-site head-to-head
+  built from two `groupby().median()` calls compares fine until one method has
+  no rows at some site, and then pandas raises rather than silently
+  misaligning. Join explicitly and report how many pairs were comparable.
