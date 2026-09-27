@@ -45,10 +45,19 @@ C1 carries a `suptitle` (it holds the `a | b | total` label key); C2 and the
 outcome bars carry none. Either C1 loses its title and the key moves to the
 paper's caption, or it keeps it as the one titled figure in the set.
 
-## Phase 3: C3 — stability
-- [ ] (a) Violin of per-site success ratio (`k/n`) by category, x = category, y = fraction. Overlay the 93.8% / 60.0% unanimity rates in the CSV, not on the figure.
-- [ ] (b) Boxplot of the per-site **standard deviation of `pred_dist_to_tg_grid`** across replicas, one box per method.
-- [ ] Decide and document whether (b) uses all targets or solved rows only — they differ for VAN but not for SPO/OCT-H, so state the rule once.
+## Phase 3: C3 — stability — done 2026-09-26, `modules/figure_stability.py`
+- [x] **Two separate figures**, not two panels: `paired_ratio_of_success.spo_vs_octh` and `paired_std_grid_offset.spo_vs_octh`, each with its own CSV twin and manifest, so the paper can place them apart.
+- [x] Violin of per-site success ratio (`k/n`), x = method, y = fraction. Unanimity rates in the CSV and manifest, not on the figure.
+- [x] The violin is **bounded by reflection**, not by clipping the drawn body. A KDE over a share stacked at 0 and 1 spills past both, and clipping afterwards leaves a chopped shape that does not read as a violin. Mirroring the sample about each bound before the KDE is bounded by construction, keeps its mass, and comes out the right shape.
+- [x] Boxplot of the per-site **standard deviation of `pred_dist_to_tg_grid`** across replicas, one box per method, in **grid steps** (`contest.offset_spread`, ddof=1). Whiskers at **p5/p95**, no outliers — so SPO's worst site (15.8 grids) is deliberately off the page and survives only as `spread_max`.
+- [x] **Decided**, after measuring the alternative: this is the spread of the error *magnitude*, so two replicas five grids out in opposite directions read as perfect agreement. Against the spread of the prediction cloud itself (RMS grid distance to the site's prediction centroid) the two rank the 65 sites at Spearman 0.90, reach the same conclusion, and differ on 11 sites. The simpler statistic wins on those terms. `test_opposite_answers_read_as_agreement` pins the behaviour so it is not "fixed" by accident.
+- [x] Grid steps, not kilometres — a spread in km invites comparison against an error distance, and this figure is not about accuracy. A site whose replicas all sit 38 grids out scores 0; as01 has such a site.
+- [x] **65 points per box**, pooled: as01 20 + as02 22 + as03 23 sites, each over ~20 replicas, 1,269 targets behind each box. No site is dropped.
+- [x] **Solved rows only**, both panels — the same rule as `correct_mask`. SPO and OCT-H never fall back on these meshes so the two readings coincide; the rule is fixed because it will not always, and VAN is the method it bites. A site with fewer than two solved rows has no spread and is absent from (b) rather than drawn at 0.
+- [x] Reproduced from the CSV alone: SPO unanimous on 61/65 (93.8%), OCT-H on 39/65 (60.0%) with 26 splits; per-site spread p50 **0.31** grids vs **1.22**, zero spread on **21** sites vs **5**.
+- [x] The default bandwidth was wrong and is fixed: Scott's rule smeared SPO's 4 split sites into a waist as wide as OCT-H's 26, denying the claim the figure is drawn for. Narrowed to 0.12.
+- [x] Naming: these two use `spo_vs_octh`; C1 and C2 use `SPO-vs-OCT-H`. **Worth unifying** — not done here, because it renames committed artifacts.
+- [x] `pred_dist_to_tg_grid` added to `contest.TG_COLUMNS`, and `site_contest` now returns `n_solved_*` and `offset_sd_*`. C4 needs the column too.
 
 ## Phase 4: C4 — error where both succeed
 - [ ] Cohort: the **565 targets both methods place in the correct cell**, across 34 `(run, site_id)` pairs.

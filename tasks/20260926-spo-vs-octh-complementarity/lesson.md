@@ -44,3 +44,31 @@
   `bbox_inches="tight"` the overhang is simply cut, and the first version lost
   the last character of the x-label. Measure the label against the canvas in a
   test rather than picking a figure width that happens to work.
+- **A KDE is a claim, and the default bandwidth makes it for you.** A violin of
+  65 shares piled on 0 and 1 drew Spotter's four split sites as a waist the
+  width of Octant-Hull's twenty-six, and spilled density past 1 on a variable
+  that cannot exceed it.
+- **Bound a density by reflection, not by clipping the drawing.** Clipping the
+  violin body after the fact leaves a flat-topped shape that stops reading as a
+  violin, which is a reviewer's first comment. Mirroring the sample about each
+  bound before the KDE is bounded by construction, preserves the mass, and
+  looks like the plot it is.
+- **Whiskers at p5/p95 with no outliers hide exactly the observation that
+  argues the other way.** Legitimate, and it has to be said in the prose:
+  the figure then reads "strictly more stable" when the tail says otherwise.
+- **Never name a test fixture's site by its position in the source list.**
+  `sites.site_ids` numbers sites in sorted key order, so the mapping is a
+  permutation. A test that conflated the two asserted against the wrong site
+  and passed anyway, for months if a second test had not needed the same site.
+  Go through an explicit index.
+- **"Spread" of what, exactly.** The standard deviation of an *error magnitude*
+  is not the spread of the *answers*: two predictions equally far from the
+  target in opposite directions have identical magnitudes and score as perfect
+  agreement. Worth measuring the difference before choosing — here it was
+  Spearman 0.90, same conclusion, 11 sites apart, and the simpler statistic was
+  kept on those terms. When a known limitation is accepted rather than fixed,
+  pin it with a test that says so, or the next reader files it as a bug.
+- **Keep a consistency metric in the units of the grid, not kilometres.** A
+  spread in km sits next to an error distance in km and gets read as accuracy,
+  which is exactly what it is not: a site whose replicas all agree on one grid
+  scores zero whether that grid is right or thirty-eight grids away.

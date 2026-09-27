@@ -55,6 +55,29 @@ figures live only in a session scratchpad; this task makes them reproducible.
   with a median of 1,459. SPO's lower quartile is above OCT-H's median.
   `modules/figure_peripherality.py`, CLI `plot-peripherality`, 15 tests.
 
+- **C3 is built** and reproduces `plan.md` exactly from the CSV twin: Spotter
+  is all-or-nothing on **61 of 65** sites (93.8%) against Octant-Hull's **39**
+  (60.0%, 26 splits), and its per-site spread of grid error distance has median
+  **0.31** grids against **1.22**, with 21 zero-spread sites against 5. Each
+  box is 65 pooled sites (20 + 22 + 23) over 1,269 targets.
+  `modules/figure_stability.py`, CLI `plot-stability`, 11 tests.
+- **C3 cuts both ways.** Spotter is perfectly consistent on more sites *and*
+  worse on its worst: its per-site spread runs to **15.8** grids where
+  Octant-Hull's stops at **6.5**. With whiskers at p5/p95 and no outliers that
+  tail is off the page, so the prose has to carry it.
+- **The spread metric was compared against an alternative and kept.** It is the
+  standard deviation of `pred_dist_to_tg_grid` — the spread of the error
+  *magnitude*, under which two replicas five grids out in opposite directions
+  read as perfect agreement. The alternative, the spread of the prediction
+  cloud itself (RMS grid distance to the site's prediction centroid), ranks the
+  65 sites at **Spearman 0.90**, reaches the same conclusion, and differs on
+  **11 sites** that read as perfectly consistent under the simpler measure
+  while their predictions were up to two grids apart. Decision: keep the
+  simpler statistic, document the limitation, pin it with a test.
+- **Consistency is not accuracy and this figure cannot tell them apart.** as01
+  has a site whose twenty replicas all land in one grid **38 grids from the
+  truth** — a spread of 0, perfectly stable and consistently ~1,900 km wrong.
+
 ### Found while building C1
 
 - **The 1x3 map cannot be printed with its per-site labels.** A label is eight
@@ -63,6 +86,26 @@ figures live only in a session scratchpad; this task makes them reproducible.
   tuning problem — twenty of them do not fit. `--no-labels` (counts to the CSV)
   and `--ncols 1 --panel-width 7` (a 7 x 14 in figure) are both rendered; the
   choice is the paper's. C2–C4 are not maps and are not affected.
+- **A default violin misrepresented the success ratio twice over.** Over 65
+  sites piled on 0 and 1, Scott's bandwidth spread Spotter's 4 split sites into
+  a waist as wide as Octant-Hull's 26 — the figure denied the very claim it was
+  drawn for — and the KDE put density above 1.0 on a variable that is a share.
+  Fixed by narrowing the bandwidth to 0.12 and bounding the density by
+  **reflection** (mirroring the sample about each bound before estimating)
+  rather than by clipping the drawn body, which had left a chopped silhouette
+  that did not read as a violin at all.
+- **The spread figure no longer shows its tail, by request.** Whiskers are p5
+  and p95 with no outliers, so Spotter's worst site at 15.8 grids is off the
+  page. It is the half of C3 that runs against Spotter, and it now survives
+  only as `spread_max` in the twin and the manifest — worth stating in the
+  prose, because the figure alone reads as "strictly more stable" and that is
+  not what the data says.
+- **A committed C1 test was asserting against the wrong site.** `sites.site_ids`
+  numbers sites in sorted coordinate order, so `PLACES[3]` (Miami) is `site_id`
+  0; `test_the_fallback_site_is_a_win_not_a_tie` named the site by its `PLACES`
+  index, landed on Seattle, and passed for an unrelated reason. Caught by a C3
+  test that happened to need the same site. There is now a `place_to_site`
+  fixture and the constant is named `BETA_FALLBACK_PLACE`.
 - **Both ends of the peripherality distance are seeds.** It was site-to-seed-
   centroid; it is now seed-to-seed-centroid, so the measurement lives entirely
   in the answer space and sites sharing a seed share a value (61 distinct
