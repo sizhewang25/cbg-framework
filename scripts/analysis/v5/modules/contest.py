@@ -125,6 +125,24 @@ CLOSER_A = "a"
 CLOSER_B = "b"
 CLOSER_EQUAL = "equal"
 
+#: How a target splits the two methods on the cell axis. Exhaustive and
+#: disjoint, so the four shares sum to one over every evaluated target --
+#: which is what lets the both-correct and exclusive-correct figures be read
+#: as two halves of one partition rather than two unrelated cohorts.
+COHORT_BOTH = "both"
+COHORT_ONLY_A = "only_a"
+COHORT_ONLY_B = "only_b"
+COHORT_NEITHER = "neither"
+COHORTS: tuple[str, ...] = (COHORT_BOTH, COHORT_ONLY_A, COHORT_ONLY_B, COHORT_NEITHER)
+
+#: `paired_targets`' columns, in order.
+TARGET_COLUMNS: tuple[str, ...] = (
+    "run_id", "dataset", "tg_id", "site_id", "tg_seed_id",
+    "method_a", "method_b", "label_a", "label_b",
+    "a_correct", "b_correct", "cohort",
+    "offset_a", "offset_b", "diff", "closer",
+)
+
 #: Degrees of freedom. A site's replicas are a sample of the addresses at a
 #: facility, not the population of them, so the spread is estimated rather
 #: than described. It needs two of them; a site with one solved row gets NaN
@@ -361,20 +379,22 @@ def seed_cloud_centroid_km(lats, lons, seed_lats, seed_lons) -> np.ndarray:
     )
 
 
-def both_correct_targets(data: "ContestData") -> pd.DataFrame:
-    """One row per target **both** methods place in the correct cell.
+def paired_targets(data: "ContestData") -> pd.DataFrame:
+    """Every evaluated target, with both methods' verdicts side by side.
 
-    The cohort for the error comparison, and the only per-target frame here.
-    Restricting to targets both methods got right is what makes the
-    comparison fair: a method that answers fewer targets is not thereby more
-    accurate on the ones it does answer, and comparing over each method's own
-    correct set would score them on different populations.
+    One row per target: whether each method placed it in the correct cell,
+    which of the four `COHORTS` that puts it in, both grid offsets, and their
+    difference. The frame the per-target figures start from.
 
     `diff = offset_a - offset_b`, in grid steps. **The sign is fixed**:
     positive means method `a` is further from the target, so on the paper's
     pair the mass sits to the *right* of zero. An earlier expectation had it
     leaning left; the data says otherwise and the convention does not move to
     suit it.
+
+    `offset_b` is `b`'s own offset whatever `b` did, so a row's offsets are
+    only comparable inside `COHORT_BOTH`. Outside it, read the offset of the
+    method that was right -- that is what `exclusive` cohorts are for.
     """
     parts = []
     for run_id in data.run_ids:
@@ -386,26 +406,31 @@ def both_correct_targets(data: "ContestData") -> pd.DataFrame:
                 f"{data.method_a} and {data.method_b} do not score the same TGs "
                 f"in {run_id}: {len(ids_a ^ ids_b)} differ"
             )
-        a = a.set_index("tg_id").sort_index()
-        b = b.set_index("tg_id").sort_index()
-        keep = a.index[
-            correct_mask(a.reset_index()) & correct_mask(b.reset_index())
-        ]
-        offset_a = a.loc[keep, C.GRID_OFFSET].to_numpy()
-        offset_b = b.loc[keep, C.GRID_OFFSET].to_numpy()
+        a = a.sort_values("tg_id").reset_index(drop=True)
+        b = b.sort_values("tg_id").reset_index(drop=True)
+        ca, cb = correct_mask(a), correct_mask(b)
+        offset_a = a[C.GRID_OFFSET].to_numpy()
+        offset_b = b[C.GRID_OFFSET].to_numpy()
         diff = offset_a - offset_b
+        cohort = np.where(
+            ca & cb, COHORT_BOTH,
+            np.where(ca, COHORT_ONLY_A, np.where(cb, COHORT_ONLY_B, COHORT_NEITHER)),
+        )
         parts.append(
             pd.DataFrame(
                 {
                     "run_id": run_id,
                     "dataset": cross.short_dataset(run_id),
-                    "tg_id": keep,
-                    "site_id": a.loc[keep, "site_id"].to_numpy(),
-                    "tg_seed_id": a.loc[keep, "tg_seed_id"].to_numpy(),
+                    "tg_id": a["tg_id"].to_numpy(),
+                    "site_id": a["site_id"].to_numpy(),
+                    "tg_seed_id": a["tg_seed_id"].to_numpy(),
                     "method_a": data.method_a,
                     "method_b": data.method_b,
                     "label_a": method_label(data.method_a),
                     "label_b": method_label(data.method_b),
+                    "a_correct": ca,
+                    "b_correct": cb,
+                    "cohort": cohort,
                     "offset_a": offset_a,
                     "offset_b": offset_b,
                     "diff": diff,
@@ -416,7 +441,24 @@ def both_correct_targets(data: "ContestData") -> pd.DataFrame:
             )
         )
     out = pd.concat(parts, ignore_index=True)
-    return out.reindex(columns=list(PAIRED_COLUMNS))
+    return out.reindex(columns=list(TARGET_COLUMNS))
+
+
+def both_correct_targets(data: "ContestData") -> pd.DataFrame:
+    """The targets **both** methods place in the correct cell.
+
+    The cohort for the error comparison. Restricting to targets both got right
+    is what makes the comparison fair: a method that answers fewer targets is
+    not thereby more accurate on the ones it does answer, and comparing over
+    each method's own correct set would score them on different populations.
+    `paired_targets` owns the arithmetic; this is the slice.
+    """
+    out = paired_targets(data)
+    return (
+        out[out["cohort"] == COHORT_BOTH]
+        .reindex(columns=list(PAIRED_COLUMNS))
+        .reset_index(drop=True)
+    )
 
 
 @dataclass(frozen=True)

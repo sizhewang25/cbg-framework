@@ -45,6 +45,7 @@ from scripts.analysis.v5.modules import (
     figure_contest_map,
     figure_error_cdf,
     figure_error_diff,
+    figure_exclusive_error,
     figure_outcome_bars,
     figure_outcome_map,
     figure_peripherality,
@@ -545,6 +546,56 @@ def plot_error_diff_cmd(
         raise typer.BadParameter("pass at least one --run-id; this figure pools named datasets")
     try:
         png = figure_error_diff.build_for_runs(
+            [resolve_run(r, outputs_root) for r in run_id],
+            method_a=method_a,
+            method_b=method_b,
+            nside=nside,
+            analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"wrote {png}")
+
+
+@app.command("plot-exclusive-error")
+def plot_exclusive_error_cmd(
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Mesh run (repeatable). Their targets are pooled."
+    ),
+    method_a: str = typer.Option(
+        figure_exclusive_error.DEFAULT_METHOD_A, "--method-a", help="First method."
+    ),
+    method_b: str = typer.Option(
+        figure_exclusive_error.DEFAULT_METHOD_B, "--method-b", help="Second method."
+    ),
+    nside: int = typer.Option(
+        figure_exclusive_error.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help="Which rung's answer space and *_tgs.parquet to read.",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """How far out each method is on the targets only it got right.
+
+    The complement of `plot-error-diff`: that compares the two where both
+    placed the target correctly, this draws the two cohorts where exactly one
+    did. A CDF per cohort of the offset of whichever method was right, on a
+    symlog axis so an offset of zero is still drawn.
+
+    Each curve is normalised to its own cohort, so the axis compares shapes;
+    the cohort sizes and the tail shares -- of the cohort and of every
+    evaluated target both -- are in the manifest.
+
+    Writes `exclusive_error_cdf.<a>_vs_<b>.{png,csv,manifest.json}` into
+    `_cross/exclusive-error/<datasets>[@<arm>]/`. Needs `build-answer-space`
+    and `classify` on every run.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id; this figure pools named datasets")
+    try:
+        png = figure_exclusive_error.build_for_runs(
             [resolve_run(r, outputs_root) for r in run_id],
             method_a=method_a,
             method_b=method_b,
