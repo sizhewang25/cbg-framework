@@ -272,7 +272,10 @@ def seed_cloud_centroid_km(lats, lons, seed_lats, seed_lons) -> np.ndarray:
 
     Anchored on the seeds, not on the sites: the seeds are the answer space,
     and a site set that happens to cluster would otherwise move the origin it
-    is being measured against.
+    is being measured against. `contest_table` measures a *seed* against it
+    for the same reason -- both ends of the measurement are then points of the
+    answer space, and the number says where a serving region sits rather than
+    where a target happens to sit inside one.
 
     On the sphere, not in `projection.PROJECTED_CRS`. The cell partition is
     defined by great-circle nearest seed and `classify` uses no projection at
@@ -360,6 +363,11 @@ def scored_methods(
 def contest_table(data: ContestData) -> pd.DataFrame:
     """One row per `(run_id, site_id)` over every run, with `centroid_km`.
 
+    `centroid_km` is the site's **seed** against the spherical centroid of all
+    that run's seeds. Sites sharing a seed therefore share a value -- as01 has
+    18 seeds over 20 sites -- which is the point: it measures the serving
+    region, not the target inside it.
+
     The table all four figures start from. Runs appear in the order they were
     given, sites in `site_id` order within a run.
     """
@@ -373,10 +381,17 @@ def contest_table(data: ContestData) -> pd.DataFrame:
             method_b=data.method_b,
         )
         seeds = data.seeds[run_id]
+        # The site's *seed* against the centroid of all seeds, not the site
+        # itself: both ends of the measurement are then points of the answer
+        # space. Complete linkage caps a seed's group at one `grid_km`, so the
+        # two differ by at most ~51 km, but the definition should not need
+        # that bound to be coherent.
+        #
         # Per run, because each mesh has its own seed cloud and so its own
         # origin. Pooling the distances afterwards is the caller's decision.
+        mine = seeds.set_index("seed_id").loc[rows["tg_seed_id"].to_numpy()]
         rows["centroid_km"] = seed_cloud_centroid_km(
-            rows["tg_lat"], rows["tg_lon"], seeds["seed_lat"], seeds["seed_lon"]
+            mine["seed_lat"], mine["seed_lon"], seeds["seed_lat"], seeds["seed_lon"]
         )
         parts.append(rows)
     return pd.concat(parts, ignore_index=True)

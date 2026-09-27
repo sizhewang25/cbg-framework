@@ -59,22 +59,33 @@ def test_a_flat_answer_space_is_refused():
         F.normalise(table)
 
 
-def test_the_distance_is_measured_against_this_runs_seeds(data):
-    """The wiring, pinned where it is drawn. `contest.centroid_km` owns the
-    rule that the origin is the seed cloud's and not the site set's; what
-    matters here is that the column comes from *this* run's answer space.
+def test_both_ends_of_the_distance_are_seeds(data):
+    """Seed to centroid-of-seeds, not site to centroid-of-seeds.
+
+    Both ends are points of the answer space, so the number says where a
+    serving region sits rather than where a target sits inside one. Sites
+    grouped under one seed share a value by construction.
     """
     table = CT.contest_table(data)
-    seeds = data.seeds[data.run_ids[0]]
+    seeds = data.seeds[data.run_ids[0]].set_index("seed_id")
+    mine = seeds.loc[table["tg_seed_id"].to_numpy()]
     expected = CT.seed_cloud_centroid_km(
-        table["tg_lat"], table["tg_lon"], seeds["seed_lat"], seeds["seed_lon"]
+        mine["seed_lat"], mine["seed_lon"],
+        seeds["seed_lat"], seeds["seed_lon"],
     )
     assert np.allclose(table[F.DISTANCE_COL], expected)
     # A different answer space is a different origin, so a different column.
     shifted = CT.seed_cloud_centroid_km(
-        table["tg_lat"], table["tg_lon"], seeds["seed_lat"] + 5.0, seeds["seed_lon"]
+        mine["seed_lat"], mine["seed_lon"],
+        seeds["seed_lat"] + 5.0, seeds["seed_lon"],
     )
     assert not np.allclose(table[F.DISTANCE_COL], shifted)
+
+
+def test_sites_sharing_a_seed_share_a_distance(data):
+    table = CT.contest_table(data)
+    per_seed = table.groupby(["run_id", "tg_seed_id"])[F.DISTANCE_COL].nunique()
+    assert (per_seed == 1).all()
 
 
 # -- the twin -------------------------------------------------------------
@@ -198,3 +209,31 @@ def test_build_writes_the_triple(run, monkeypatch):
     assert body["normalisation"]["over_n_sites"] == 4
     assert "collinear" in body["caveat"]
     assert "caption names it" in body["subject_note"]
+
+
+def test_the_axis_label_fits_inside_the_figure(run, monkeypatch):
+    """The figure is saved at a fixed canvas and `tight_layout` fits the
+    x-label's height but not its width, so a long one runs off both sides and
+    is clipped without complaint. It happened: 4.6 in lost the final `s`."""
+    import matplotlib.pyplot as plt
+
+    captured = {}
+    real_close = plt.close
+    monkeypatch.setattr(plt, "close", lambda fig=None: captured.setdefault("fig", fig))
+    data = CT.load(
+        [run], method_a="alpha", method_b="beta", nside=NSIDE, analysis_root=run.root
+    )
+    table, _ = F.normalise(CT.contest_table(data))
+    F.render(data, table, run.root / "fit.png")
+    fig = captured["fig"]
+    fig.canvas.draw()
+    label = fig.axes[0].xaxis.get_label().get_window_extent(
+        renderer=fig.canvas.get_renderer()
+    )
+    canvas = fig.get_window_extent()
+    real_close(fig)
+
+    assert label.x0 >= canvas.x0 and label.x1 <= canvas.x1, (
+        f"the x-label spans {label.x0:.0f}..{label.x1:.0f} px on a canvas of "
+        f"{canvas.x0:.0f}..{canvas.x1:.0f}; widen _FIG_W or shorten _XLABEL"
+    )

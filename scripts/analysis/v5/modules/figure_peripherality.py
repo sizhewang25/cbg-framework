@@ -10,18 +10,23 @@ quartile sits above Octant-Hull's median. Octant-Hull wins from 98 km out and
 its box spans nearly the whole range. Two boxes make that a shape rather than
 a pair of quoted numbers.
 
-## Distance to what, and measured how
+## What is measured, from what, to what
 
-Great-circle, to the **seed cloud's** spherical centroid, per run. The origin
-is the answer space's own, not the site set's: a mesh whose sites happen to
-cluster would otherwise move the thing it is being measured against. And it
-is found by `geodesy.spherical_centroid`, which is how `seeds` places each
-seed over the sites it groups -- one notion of centre in the package.
+Great-circle, from a site's **seed** to the spherical centroid of **all** that
+run's seeds. Both ends are points of the answer space, which is what makes the
+number coherent: it says where a serving region sits, not where a target
+happens to sit inside one. Sites grouped under one seed share a value -- as01
+has 18 seeds over 20 sites.
+
+The origin is the seeds' and not the site set's: a mesh whose sites happen to
+cluster would otherwise move the thing it is being measured against. It is
+found by `geodesy.spherical_centroid`, which is how `seeds` places each seed
+over the sites it groups -- one notion of centre in the package.
 
 Not in EPSG:5070. The partition is defined by great-circle nearest seed and
 `classify` uses no projection; the plane exists only so `cells` can draw the
 partition, and peripherality is a property of the partition rather than of
-the drawing. See `contest.centroid_km` for what the difference measures out
+the drawing. See `contest.seed_cloud_centroid_km` for what the difference measures out
 at -- small enough that no claim here turns on it, which is the point.
 
 ## The axis is normalised, and the kilometres are in the twin
@@ -38,6 +43,20 @@ per-category quantiles in both units.
 `tied` and `neither` are in the twin and off the figure. They are concordant
 outcomes and carry no direction, and drawing four boxes to compare two of them
 puts the contrast this figure exists for on a third of the page.
+
+## The seed, or the cell it owns
+
+A seed's distance is not the same as its cell's. A peripheral seed can own a
+large cell reaching back in toward the centre: as01's Seattle seed is 2,349 km
+out and its cell begins at 1,241. Measured, the two rank the 65 sites only at
+Spearman 0.87 -- a real difference, not a rounding one.
+
+It is not what produces the contrast. The inward reach is the same size in
+both categories (median 404 km where Spotter wins, 333 where Octant-Hull
+does), and the claim holds under either measure: by cell reach, Spotter never
+wins a site whose region begins within 770 km of the centre, while
+Octant-Hull wins one whose region *contains* it. The seed distance is the
+simpler quantity and the one the contest map keys on, so it is the one drawn.
 
 ## What this does not separate
 
@@ -97,7 +116,13 @@ MANIFEST_NAME = "peripherality.{pair}.manifest.json"
 #: Sized for a paper column, following `figure_outcome_bars`: two boxes need
 #: no more height than this, and a taller figure is white space above and
 #: below them.
-_FIG_W = 4.6
+#:
+#: The width is set by the x-label, not by the boxes. `tight_layout` fits the
+#: label's *height* and lets a long one run off both sides, and the figure is
+#: saved at a fixed canvas, so it is silently clipped -- 4.6 in lost the last
+#: character. `test_the_axis_label_fits` measures it rather than trusting this
+#: number, so shortening or lengthening the label fails loudly.
+_FIG_W = 5.3
 _FIG_H = 1.75
 
 _SURFACE = "#ffffff"
@@ -115,7 +140,8 @@ _WHISKER_PT = 0.9
 #: errors, and on a sample of twenty they are worth seeing individually.
 _FLIER_SIZE = 3.0
 
-_XLABEL = "distance to the seed-cloud centroid (min–max normalised)"
+#: The figure's only text. The repo's axis labels are sentence case.
+_XLABEL = "normalized distance from the TG's seed to the centroid of all seeds"
 
 
 def output_dir(run_ids: list[str], *, analysis_root: Path | None = None) -> Path:
@@ -173,7 +199,8 @@ def category_stats(table: pd.DataFrame, category: str) -> dict:
     """One category's shape, in kilometres and normalised both.
 
     `min` is reported explicitly rather than left to a whisker: "no Spotter win
-    is closer in than 1,018 km" is the claim, and a whisker is a drawing.
+    is closer in than 1,020 km" is the claim, and a whisker is a drawing.
+
     """
     rows = table[table["category"] == category]
     out = {"category": category, "n_sites": int(len(rows))}
@@ -322,9 +349,11 @@ def _manifest(
         },
         "policy": {
             "origin": (
-                "geodesy.spherical_centroid over the run's *seed* positions, "
-                "not its sites: a mesh whose sites cluster would otherwise move "
-                "the origin it is measured against. Spherical, not EPSG:5070 -- "
+                "From a site's seed to geodesy.spherical_centroid over the "
+                "run's *seed* positions -- both ends are points of the answer "
+                "space, and sites sharing a seed share a value. The origin is "
+                "the seeds' and not the sites': a mesh whose sites cluster "
+                "would otherwise move it. Spherical, not EPSG:5070 -- "
                 "the cell partition is great-circle nearest seed and the plane "
                 "exists only to draw it. The planar answer differs by a median "
                 "5 km here and ranks the sites identically."
@@ -334,6 +363,16 @@ def _manifest(
                 "sites and the axis does not move when a category does. "
                 "Normalising over the drawn two alone would rescale the figure "
                 "every time a site changed hands."
+            ),
+            "seed_or_cell": (
+                "The axis is the seed's distance, not its cell's. A peripheral "
+                "seed can own a large cell reaching back toward the centre -- "
+                "as01's Seattle seed is 2,349 km out and its cell begins at "
+                "1,241 -- and the two rank the sites only at Spearman 0.87. It "
+                "does not produce the contrast: the inward reach is the same "
+                "size in both categories (median 404 km where A wins, 333 where "
+                "B does), and under cell reach A still never wins inside 770 km "
+                "while B wins a site whose cell contains the centre."
             ),
             "twin": (
                 "Every pooled site is in the CSV, `drawn` false for the tied "
