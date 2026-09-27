@@ -95,14 +95,26 @@ SITE_KEY: tuple[str, str] = ("run_id", "site_id")
 CONTEST_COLUMNS: tuple[str, ...] = (
     "run_id", "dataset", "site_id", "tg_lat", "tg_lon", "tg_seed_id",
     "method_a", "method_b", "label_a", "label_b",
-    "k_a", "n_a", "k_b", "n_b", "n_tgs", "category",
+    "k_a", "n_a", "n_solved_a", "offset_sd_a",
+    "k_b", "n_b", "n_solved_b", "offset_sd_b",
+    "n_tgs", "category",
 )
 
 #: Columns a scored `*_tgs.parquet` must carry for a contest. Read explicitly
 #: so a parquet that has drifted fails here rather than three frames later.
 TG_COLUMNS: tuple[str, ...] = (
     "tg_id", "tg_lat", "tg_lon", "site_id", "tg_seed_id", "cell_label", "status",
+    C.GRID_OFFSET,
 )
+
+#: The column `offset_spread` writes, in grid steps.
+OFFSET_SD = "offset_sd"
+
+#: Degrees of freedom. A site's replicas are a sample of the addresses at a
+#: facility, not the population of them, so the spread is estimated rather
+#: than described. It needs two of them; a site with one solved row gets NaN
+#: rather than 0, which would read as perfect agreement.
+OFFSET_SD_DDOF = 1
 
 
 def correct_mask(frame: pd.DataFrame) -> np.ndarray:
@@ -147,6 +159,7 @@ def _per_site(frame: pd.DataFrame, run_id: str, method: str) -> pd.DataFrame:
         )
     work = frame[list(TG_COLUMNS)].copy()
     work["correct"] = correct_mask(frame)
+    work["solved"] = solved_mask(frame).to_numpy()
     by_site = work.groupby("site_id", sort=True)
     out = pd.DataFrame(
         {
@@ -157,9 +170,46 @@ def _per_site(frame: pd.DataFrame, run_id: str, method: str) -> pd.DataFrame:
             "tg_seed_id": by_site["tg_seed_id"].first().astype(int),
             "k": by_site["correct"].sum().astype(int),
             "n": by_site.size().astype(int),
+            "n_solved": by_site["solved"].sum().astype(int),
         }
     )
+    out[OFFSET_SD] = offset_spread(work[work["solved"]])
     return out.rename_axis("site_id").reset_index()
+
+
+def offset_spread(solved: pd.DataFrame) -> pd.Series:
+    """Per site: the standard deviation of `pred_dist_to_tg_grid`, in grids.
+
+    How much a site's ~20 replicas disagree about *how far out* the answer is.
+    Solved rows only -- a FALLBACK row carries the shortest-ping baseline's
+    coordinate, so its offset is the baseline's. A site with fewer than two of
+    them is NaN rather than 0.
+
+    ## What it does not measure, deliberately
+
+    This is the spread of the error **magnitude**, not of the answers. Two
+    replicas five grids out in opposite directions have identical magnitudes
+    and read as perfect agreement here, though they are two different answers.
+
+    That is a known and accepted limitation, not an oversight, and it was
+    measured before it was accepted: against the spread of the prediction
+    cloud itself (RMS grid distance to the site's prediction centroid) the two
+    rank the 65 sites at Spearman 0.90 and reach the same conclusion, and they
+    disagree on 11 sites that read as perfectly consistent here while their
+    predictions were genuinely up to two grids apart. The simpler statistic
+    was chosen on those terms. `test_opposite_answers_read_as_agreement` pins
+    the behaviour so nobody quietly "fixes" it.
+
+    ## In grid steps, not kilometres
+
+    The grid is the unit the rest of the evaluation is in, and a spread quoted
+    in kilometres invites comparison against an error distance this figure is
+    deliberately not about. One grid is `grid.grid_km(nside)`.
+    """
+    if not len(solved):
+        return pd.Series(dtype=float, name=OFFSET_SD)
+    out = solved.groupby("site_id")[C.GRID_OFFSET].std(ddof=OFFSET_SD_DDOF)
+    return out.rename(OFFSET_SD)
 
 
 def site_contest(

@@ -37,14 +37,20 @@ NSIDE = CT.SOURCE_NSIDE
 #: same and the parquets are a quarter the size.
 REPLICAS = 4
 
-#: What each method gets right, by site. `alpha` sweeps Seattle and splits
-#: Omaha; `beta` loses Seattle outright and takes Omaha, they tie on Chicago,
-#: and both answer every Miami replica correctly -- but `beta`'s Miami rows are
-#: FALLBACK, so they count for nothing and Miami is a win for `alpha`. That
-#: last site is the whole `solved_mask` trap in one contest.
+#: What each method gets right, **by index into `PLACES`**. `alpha` sweeps
+#: Seattle and splits Omaha; `beta` loses Seattle outright and takes Omaha,
+#: they tie on Chicago, and both answer every Miami replica correctly -- but
+#: `beta`'s Miami rows are FALLBACK, so they count for nothing and Miami is a
+#: win for `alpha`. That last site is the whole `solved_mask` trap in one
+#: contest.
 ALPHA_CORRECT = (REPLICAS, 2, 3, REPLICAS)
 BETA_CORRECT = (0, REPLICAS, 3, REPLICAS)
-BETA_FALLBACK_SITE = 3
+
+#: Index into `PLACES`, **not a `site_id`**. `sites.site_ids` numbers sites in
+#: sorted key order, which is not the order `PLACES` lists them: Miami is
+#: `PLACES[3]` and `site_id` 0. A test that conflates the two can pass against
+#: the wrong site -- one did. Go through `place_to_site`.
+BETA_FALLBACK_PLACE = 3
 
 
 @dataclass(frozen=True)
@@ -123,10 +129,23 @@ def write_run(run: FakeRun, space) -> FakeRun:
     scored_frame(space, ALPHA_CORRECT).to_parquet(
         d / C.TGS_PARQUET.format(method="alpha"), index=False
     )
-    scored_frame(space, BETA_CORRECT, fallback_sites=(BETA_FALLBACK_SITE,)).to_parquet(
+    scored_frame(space, BETA_CORRECT, fallback_sites=(BETA_FALLBACK_PLACE,)).to_parquet(
         d / C.TGS_PARQUET.format(method="beta"), index=False
     )
     return run
+
+
+@pytest.fixture(scope="session")
+def place_to_site(contest_space):
+    """`PLACES` index -> `site_id`, the only safe way to name a fixture site.
+
+    `sites.site_ids` assigns ids in sorted key order, so the mapping is a
+    permutation and not the identity. See `BETA_FALLBACK_PLACE`.
+    """
+    return {
+        int(tg_id.split("-")[1]): int(site_id)
+        for tg_id, site_id in zip(contest_space.tgs["tg_id"], contest_space.tgs["site_id"])
+    }
 
 
 @pytest.fixture(scope="module")

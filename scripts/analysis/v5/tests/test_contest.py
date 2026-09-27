@@ -33,11 +33,19 @@ def declined(n):
     return [("correct", "FALLBACK")] * n
 
 
-def frame(sites: dict, *, seeds: dict | None = None) -> pd.DataFrame:
-    """A scored frame from `{site_id: [(cell_label, status), ...]}`."""
+def frame(
+    sites: dict, *, seeds: dict | None = None, offsets: dict | None = None
+) -> pd.DataFrame:
+    """A scored frame from `{site_id: [(cell_label, status), ...]}`.
+
+    `offsets` overrides the grid error distance per site; by default a
+    replica's is its index, which gives every site a defined, predictable
+    spread.
+    """
     rows = []
     for sid, replicas in sites.items():
         lat, lon = COORDS[sid]
+        per_site = (offsets or {}).get(sid)
         for i, (label, status) in enumerate(replicas):
             rows.append(
                 {
@@ -48,6 +56,7 @@ def frame(sites: dict, *, seeds: dict | None = None) -> pd.DataFrame:
                     "tg_seed_id": (seeds or {}).get(sid, sid),
                     "cell_label": label,
                     "status": status,
+                    "pred_dist_to_tg_grid": per_site[i] if per_site else i,
                 }
             )
     return pd.DataFrame(rows)
@@ -114,6 +123,68 @@ def test_a_fallback_row_never_reaches_a_count():
     assert row["k_b"] == 9
     assert row["n_b"] == 20, "a declined row stays in the denominator"
     assert row["category"] == CT.A_WINS
+
+
+def test_agreeing_replicas_have_no_spread():
+    row = CT.site_contest(
+        frame({0: ok(5)}, offsets={0: [3] * 5}), frame({0: ok(5)}, offsets={0: [3] * 5}),
+        run_id="as01-x-mesh", method_a="A", method_b="B",
+    ).iloc[0]
+    assert row["offset_sd_a"] == pytest.approx(0.0)
+
+
+def test_the_spread_is_a_sample_estimate():
+    """ddof=1: a site's replicas are a sample of the addresses at a facility,
+    not the population of them."""
+    row = CT.site_contest(
+        frame({0: ok(4)}, offsets={0: [0, 1, 2, 3]}),
+        frame({0: ok(4)}, offsets={0: [0, 1, 2, 3]}),
+        run_id="as01-x-mesh", method_a="A", method_b="B",
+    ).iloc[0]
+    assert row["offset_sd_a"] == pytest.approx(np.std([0, 1, 2, 3], ddof=1))
+
+
+def test_opposite_answers_read_as_agreement():
+    """The accepted limitation, pinned so it is not quietly "fixed".
+
+    This measures the spread of the error *magnitude*. Two replicas the same
+    distance out in opposite directions are two different answers and read as
+    perfect agreement here. Measured against the spread of the prediction
+    cloud itself the two rank the real sites at Spearman 0.90 and reach the
+    same conclusion, differing on 11 of 65; the simpler statistic was chosen
+    on those terms. Changing this behaviour is a decision, not a bugfix.
+    """
+    row = CT.site_contest(
+        frame({0: ok(4)}, offsets={0: [5, 5, 5, 5]}), frame({0: ok(4)}),
+        run_id="as01-x-mesh", method_a="A", method_b="B",
+    ).iloc[0]
+    assert row["offset_sd_a"] == pytest.approx(0.0)
+
+
+def test_the_spread_skips_the_rows_it_did_not_earn():
+    """Same rule as the correct count: a FALLBACK row's offset is the
+    baseline's, so it describes the baseline's consistency, not this
+    method's."""
+    wild = {0: [1, 1, 1, 50, 99, 150]}
+    row = CT.site_contest(
+        frame({0: ok(3) + [("correct", "FALLBACK")] * 3}, offsets=wild),
+        frame({0: ok(6)}, offsets=wild),
+        run_id="as01-x-mesh", method_a="A", method_b="B",
+    ).iloc[0]
+    assert row["n_solved_a"] == 3 and row["n_a"] == 6
+    assert row["offset_sd_a"] == pytest.approx(0.0), "its own three agree"
+    assert row["offset_sd_b"] > 50, "B earned all six, including the wild ones"
+
+
+def test_one_solved_row_has_no_spread_rather_than_none():
+    """Zero would read as perfect agreement. One observation has no spread to
+    report, so it reports nothing."""
+    row = CT.site_contest(
+        frame({0: ok(1) + declined(4)}), frame({0: ok(5)}),
+        run_id="as01-x-mesh", method_a="A", method_b="B",
+    ).iloc[0]
+    assert row["n_solved_a"] == 1
+    assert np.isnan(row["offset_sd_a"])
 
 
 def test_the_shortest_ping_control_is_wholly_solved():

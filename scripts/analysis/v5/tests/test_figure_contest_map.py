@@ -9,7 +9,7 @@ import pytest
 from scripts.analysis.v5.modules import contest as CT
 from scripts.analysis.v5.modules import figure_contest_map as F
 from scripts.analysis.v5.modules.paths import MissingArtifactError
-from scripts.analysis.v5.tests.conftest import NSIDE, REPLICAS
+from scripts.analysis.v5.tests.conftest import BETA_FALLBACK_PLACE, NSIDE, REPLICAS
 
 
 @pytest.fixture(scope="module")
@@ -45,11 +45,18 @@ def test_each_site_lands_in_the_category_its_counts_say(table):
     assert counts[2] == {"k_a": 3, "k_b": 3} and by_site[2] == CT.TIED
 
 
-def test_the_fallback_site_is_a_win_not_a_tie(table):
+def test_the_fallback_site_is_a_win_not_a_tie(table, place_to_site):
     """`beta` answers correctly on all four Miami replicas and is credited
-    with none of them: they are FALLBACK, so they are the baseline's."""
-    row = table[table["site_id"] == 3].iloc[0]
+    with none of them: they are FALLBACK, so they are the baseline's.
+
+    Keyed through `place_to_site`. Naming the site by its `PLACES` index made
+    this test assert against Seattle, where it passed for a different reason
+    entirely.
+    """
+    site = place_to_site[BETA_FALLBACK_PLACE]
+    row = table[table["site_id"] == site].iloc[0]
     assert (row["k_a"], row["k_b"], row["n_b"]) == (REPLICAS, 0, REPLICAS)
+    assert row["n_solved_b"] == 0, "not one of beta's rows here was its own"
     assert row["category"] == CT.A_WINS
 
 

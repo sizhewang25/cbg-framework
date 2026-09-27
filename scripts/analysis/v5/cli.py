@@ -47,6 +47,7 @@ from scripts.analysis.v5.modules import (
     figure_outcome_bars,
     figure_outcome_map,
     figure_peripherality,
+    figure_stability,
     figure_vp_dist_gap,
     figure_vp_distance_cdf,
     figure_vp_proximity,
@@ -442,6 +443,69 @@ def plot_peripherality_cmd(
     except (ValueError, MissingArtifactError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(f"wrote {png}")
+
+
+@app.command("plot-stability")
+def plot_stability_cmd(
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Mesh run (repeatable). Their sites are pooled."
+    ),
+    method_a: str = typer.Option(
+        figure_stability.DEFAULT_METHOD_A, "--method-a", help="First method."
+    ),
+    method_b: str = typer.Option(
+        figure_stability.DEFAULT_METHOD_B, "--method-b", help="Second method."
+    ),
+    figure: list[str] = typer.Option(
+        None,
+        "--figure",
+        "-f",
+        help=(
+            f"Which to draw: {figure_stability.FIGURES[0]} or "
+            f"{figure_stability.FIGURES[1]}. Repeatable; default both."
+        ),
+    ),
+    nside: int = typer.Option(
+        figure_stability.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help="Which rung's answer space and *_tgs.parquet to read.",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """How consistently each method answers the replicas of one site.
+
+    Two figures over the pooled sites, filed separately so a paper can place
+    them apart: a violin of the share of a site's targets placed in the
+    correct cell, and a boxplot of the standard deviation of the grid offset
+    across them. Both use `solved_mask`, so a FALLBACK row's baseline
+    coordinate never enters either.
+
+    The spread figure is the one number in this family that does not depend on
+    the cell metric at all. Its whiskers are p5 and p95 with no outliers, so
+    read `spread_max` from the manifest before quoting a range.
+
+    Writes `paired_ratio_of_success.<a>_vs_<b>.{png,csv,manifest.json}` and
+    `paired_std_grid_offset.<a>_vs_<b>.*` into
+    `_cross/stability/<datasets>[@<arm>]/`. Needs `build-answer-space` and
+    `classify` on every run.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id; this figure pools named datasets")
+    try:
+        pngs = figure_stability.build_for_runs(
+            [resolve_run(r, outputs_root) for r in run_id],
+            method_a=method_a,
+            method_b=method_b,
+            figures=list(figure) if figure else None,
+            nside=nside,
+            analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for png in pngs:
+        typer.echo(f"wrote {png}")
 
 
 @app.command("plot-error-cdf")
