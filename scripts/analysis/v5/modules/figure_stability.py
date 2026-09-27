@@ -1,11 +1,13 @@
 """How consistent each method is across the replicas of one site.
 
-Two figures over the same 65 pooled sites, one observation per site per
-method, written side by side so a paper can place them independently:
+Two figures over the same three pooled meshes, written side by side so a
+paper can place them independently. They do **not** share a denominator: the
+success ratio counts the 61 Voronoi cells, the spread counts the 65 sites.
+See `UNIT` for why.
 
-* `paired_ratio_of_success` -- the distribution over sites of the share of a
-  site's targets the method put in the correct cell. Spotter is all-or-nothing
-  on 61 of 65 sites; Octant-Hull on 39, splitting the other 26.
+* `paired_ratio_of_success` -- the distribution over **cells** of the share of
+  a cell's targets the method put in the correct cell. Spotter is
+  all-or-nothing on 57 of 61 cells; Octant-Hull on 35, splitting the other 26.
 * `paired_std_grid_offset` -- the standard deviation of `pred_dist_to_tg_grid`
   across a site's targets, in grid steps. Spotter's median is 0.31 grids
   against Octant-Hull's 1.22, and it is perfectly consistent on 21 sites
@@ -101,7 +103,7 @@ SOURCE_NSIDE = CT.SOURCE_NSIDE
 DEFAULT_METHOD_A = CT.DEFAULT_METHOD_A
 DEFAULT_METHOD_B = CT.DEFAULT_METHOD_B
 
-#: The long-format columns, one row per `(run_id, site_id, method)`.
+#: The quantity each figure draws, per row of its own table.
 RATIO_COL = "success_ratio"
 SPREAD_COL = CT.OFFSET_SD
 
@@ -110,6 +112,21 @@ SPREAD_COL = CT.OFFSET_SD
 RATIO = "ratio_of_success"
 SPREAD = "std_grid_offset"
 FIGURES: tuple[str, ...] = (RATIO, SPREAD)
+
+#: What each figure counts, and they differ on purpose.
+#:
+#: The success ratio is counted per **cell**, because a cell is the unit the
+#: metric grades in: `correct` means the prediction's nearest seed is the
+#: target's seed, so two sites that share a seed are one question and not
+#: two. Complete linkage merges sites within one `grid_km`, which on the
+#: as0* meshes makes 61 cells out of 65 sites.
+#:
+#: The spread is counted per **site**, because it asks whether a method
+#: answers *identical coordinates* identically. Two sites in one cell are up
+#: to ~51 km apart, so pooling them would score a legitimate difference of
+#: input as inconsistency.
+UNIT = {RATIO: "cell", SPREAD: "site"}
+UNIT_KEY = {RATIO: "tg_seed_id", SPREAD: "site_id"}
 
 PNG_NAME = "paired_{figure}.{pair}.png"
 CSV_NAME = "paired_{figure}.{pair}.csv"
@@ -151,8 +168,8 @@ _LABEL_PT = 8.5
 #: other figures -- these are the strings the section was written against.
 #: The spread is in grid steps; "Grid Error Distance" carries that implicitly,
 #: and the manifest states it outright.
-_RATIO_LABEL = "Fraction of Correct Predictions per Site"
-_RATIO_Y_LABEL = "Fraction of Sites"
+_RATIO_LABEL = "Fraction of Correct Predictions per Cell"
+_RATIO_Y_LABEL = "Fraction of Cells"
 _SPREAD_LABEL = "Std. Dev. of Grid Error Distance"
 
 
@@ -196,11 +213,45 @@ def artifact_names(figure: str, method_a: str, method_b: str) -> dict[str, str]:
 # -- the numbers ----------------------------------------------------------
 
 
-def long_table(table: pd.DataFrame, method_a: str, method_b: str) -> pd.DataFrame:
-    """`contest_table`'s two methods unstacked: one row per site per method.
+def ratio_rows(
+    targets: pd.DataFrame, method_a: str, method_b: str
+) -> pd.DataFrame:
+    """One row per `(run_id, tg_seed_id, method)`: the share it placed right.
 
-    Long rather than wide because both panels plot one series per method and
-    the CSV twin should be read the way the figure is drawn.
+    Keyed on the **cell**, not the site. `correct` means the prediction's
+    nearest seed is the target's seed, so sites sharing a seed are one
+    question; counting them separately would weight a merged facility twice
+    and measure something the metric does not grade.
+
+    Built from `contest.paired_targets` rather than from the per-site
+    contest, so the aggregation happens once, at the right key.
+    """
+    out = []
+    for suffix, method in (("a", method_a), ("b", method_b)):
+        by_cell = targets.groupby(["run_id", "dataset", "tg_seed_id"], sort=True)
+        part = pd.DataFrame(
+            {
+                "k": by_cell[f"{suffix}_correct"].sum().astype(int),
+                "n_tgs": by_cell.size().astype(int),
+                "n_sites": by_cell["site_id"].nunique().astype(int),
+            }
+        ).reset_index()
+        part["method"] = method
+        part["method_label"] = method_label(method)
+        part[RATIO_COL] = part["k"] / part["n_tgs"]
+        part["unanimous"] = (part["k"] == 0) | (part["k"] == part["n_tgs"])
+        out.append(part)
+    return pd.concat(out, ignore_index=True).reindex(columns=csv_columns(RATIO))
+
+
+def spread_rows(
+    table: pd.DataFrame, method_a: str, method_b: str
+) -> pd.DataFrame:
+    """One row per `(run_id, site_id, method)`: how far its answers scatter.
+
+    Keyed on the **site**: the question is whether a method answers identical
+    coordinates identically, and two sites sharing a cell are not identical
+    coordinates.
     """
     out = []
     for suffix, method in (("a", method_a), ("b", method_b)):
@@ -209,65 +260,63 @@ def long_table(table: pd.DataFrame, method_a: str, method_b: str) -> pd.DataFram
         ].copy()
         part["method"] = method
         part["method_label"] = method_label(method)
-        part["k"] = table[f"k_{suffix}"]
         part["n_tgs"] = table[f"n_{suffix}"]
         part["n_solved"] = table[f"n_solved_{suffix}"]
         part[SPREAD_COL] = table[f"offset_sd_{suffix}"]
-        part[RATIO_COL] = part["k"] / part["n_tgs"]
-        part["unanimous"] = (part["k"] == 0) | (part["k"] == part["n_tgs"])
         out.append(part)
-    return pd.concat(out, ignore_index=True).reindex(columns=list(LONG_COLUMNS))
-
-
-#: Every long-format column, in order. Each figure's twin is a subset.
-LONG_COLUMNS: tuple[str, ...] = (
-    "run_id", "dataset", "site_id", "tg_lat", "tg_lon", "tg_seed_id",
-    "method", "method_label", "category",
-    "k", "n_tgs", "n_solved", RATIO_COL, "unanimous", SPREAD_COL,
-)
-
-_KEY_COLUMNS = (
-    "run_id", "dataset", "site_id", "tg_lat", "tg_lon", "tg_seed_id",
-    "method", "method_label", "category",
-)
+    return pd.concat(out, ignore_index=True).reindex(columns=csv_columns(SPREAD))
 
 
 def csv_columns(figure: str = RATIO) -> list[str]:
-    """One figure's twin: the site key, then only what that figure rests on.
+    """One figure's twin: its own key, then only what that figure rests on.
 
-    Not the whole long table in both twins. A twin that carries columns its
-    figure never drew invites a number to be quoted from the wrong file.
+    The two keys differ -- see `UNIT` -- and the twins say which they are by
+    carrying it. A twin that held both keys, or columns its figure never
+    drew, invites a number to be quoted from the wrong file.
     """
     validate_figure(figure)
     if figure == RATIO:
-        return [*_KEY_COLUMNS, "k", "n_tgs", RATIO_COL, "unanimous"]
-    return [*_KEY_COLUMNS, "n_tgs", "n_solved", SPREAD_COL]
+        return [
+            "run_id", "dataset", "tg_seed_id", "method", "method_label",
+            "k", "n_tgs", "n_sites", RATIO_COL, "unanimous",
+        ]
+    return [
+        "run_id", "dataset", "site_id", "tg_lat", "tg_lon", "tg_seed_id",
+        "method", "method_label", "category", "n_tgs", "n_solved", SPREAD_COL,
+    ]
 
 
-def method_stats(long: pd.DataFrame, method: str) -> dict:
-    """One method's shape on both figures, and its unanimity rate.
+def method_stats(rows: pd.DataFrame, figure: str, method: str) -> dict:
+    """One method's shape on one figure, in that figure's own unit.
 
-    The quantiles include `SPREAD_WHIS`, so the spread figure's drawn whisker
-    ends are readable as numbers rather than only as ink -- and `spread_min`
-    and `spread_max` sit beside them, because the whiskers are not the range.
+    `n_units` rather than `n_sites`, because the two figures do not count the
+    same thing: the ratio is per cell and the spread per site. The quantiles
+    include `SPREAD_WHIS`, so the drawn whisker ends are readable as numbers
+    -- with `spread_min` and `spread_max` beside them, since the whiskers are
+    not the range.
     """
-    rows = long[long["method"] == method]
-    spread = rows[SPREAD_COL].dropna()
-    n = int(len(rows))
-    unanimous = int(rows["unanimous"].sum())
+    validate_figure(figure)
+    mine = rows[rows["method"] == method]
+    n = int(len(mine))
     out = {
         "method": method,
         "method_label": method_label(method),
-        "n_sites": n,
-        "n_unanimous": unanimous,
-        "unanimity_rate": round(unanimous / n, 4) if n else None,
-        "n_split": n - unanimous,
-        "n_sites_without_spread": int(rows[SPREAD_COL].isna().sum()),
-        "n_sites_zero_spread": int((spread == 0).sum()),
+        "unit": UNIT[figure],
+        "n_units": n,
     }
-    for col, key, src in ((RATIO_COL, "ratio", rows[RATIO_COL]), (SPREAD_COL, "spread", spread)):
-        if not len(src):
-            continue
+    if figure == RATIO:
+        unanimous = int(mine["unanimous"].sum())
+        out["n_unanimous"] = unanimous
+        out["unanimity_rate"] = round(unanimous / n, 4) if n else None
+        out["n_split"] = n - unanimous
+        out["n_cells_over_several_sites"] = int((mine["n_sites"] > 1).sum())
+        src, key = mine[RATIO_COL], "ratio"
+    else:
+        spread = mine[SPREAD_COL].dropna()
+        out["n_units_without_spread"] = int(mine[SPREAD_COL].isna().sum())
+        out["n_units_zero_spread"] = int((spread == 0).sum())
+        src, key = spread, "spread"
+    if len(src):
         out[f"{key}_min"] = round(float(src.min()), 4)
         for q in QUANTILES:
             out[f"{key}_p{int(q * 100)}"] = round(float(src.quantile(q)), 4)
@@ -278,10 +327,10 @@ def method_stats(long: pd.DataFrame, method: str) -> dict:
 # -- drawing --------------------------------------------------------------
 
 
-def _series(long: pd.DataFrame, methods_: list[str], col: str, *, dropna: bool) -> list:
+def _series(rows: pd.DataFrame, methods_: list[str], col: str, *, dropna: bool) -> list:
     out = []
     for m in methods_:
-        v = long.loc[long["method"] == m, col]
+        v = rows.loc[rows["method"] == m, col]
         out.append(v.dropna().to_numpy() if dropna else v.to_numpy())
     return out
 
@@ -362,7 +411,7 @@ def _finish(ax, labels: list[str] | None) -> None:
 
 
 def render(
-    long: pd.DataFrame,
+    rows: pd.DataFrame,
     methods_: list[str],
     figure: str,
     out_png: Path,
@@ -378,10 +427,10 @@ def render(
     fig, ax = plt.subplots(figsize=fig_size)
     fig.patch.set_facecolor(_SURFACE)
     if figure == RATIO:
-        draw_ratio(ax, _series(long, methods_, RATIO_COL, dropna=False), inks, labels)
+        draw_ratio(ax, _series(rows, methods_, RATIO_COL, dropna=False), inks, labels)
         _finish(ax, None)
     else:
-        draw_spread(ax, _series(long, methods_, SPREAD_COL, dropna=True), inks)
+        draw_spread(ax, _series(rows, methods_, SPREAD_COL, dropna=True), inks)
         _finish(ax, labels)
 
     fig.tight_layout()
@@ -395,8 +444,8 @@ def render(
 #: the figure does not.
 SUBJECTS = {
     RATIO: (
-        "The share of one site's ~20 replicas each method places in the "
-        "correct cell, over the pooled sites"
+        "The share of one cell's targets each method places in the correct "
+        "cell, over the pooled cells"
     ),
     SPREAD: (
         "The spread of each method's grid error distance across the ~20 "
@@ -407,18 +456,28 @@ SUBJECTS = {
 
 def _manifest(
     data: CT.ContestData,
-    long: pd.DataFrame,
+    rows: pd.DataFrame,
     figure: str,
     *,
     png_name: str,
     csv_name: str,
 ) -> str:
     methods_ = [data.method_a, data.method_b]
-    stats = [method_stats(long, m) for m in methods_]
+    stats = [method_stats(rows, figure, m) for m in methods_]
     body = {
         "figure": png_name,
         "csv": csv_name,
         "kind": figure,
+        "unit": UNIT[figure],
+        "unit_note": (
+            "The success ratio counts cells and the spread counts sites, and "
+            "they differ on purpose. `correct` means the prediction's nearest "
+            "seed is the target's seed, so sites sharing a seed are one "
+            "question the metric grades once. The spread asks whether a "
+            "method answers identical coordinates identically, and two sites "
+            "in one cell are up to one grid_km apart -- pooling them would "
+            "score a difference of input as inconsistency."
+        ),
         "companion": [n for n in FIGURES if n != figure],
         "subject": SUBJECTS[figure],
         "subject_note": (
@@ -484,11 +543,10 @@ def _manifest(
         ),
         "stats": stats,
         "stats_note": (
-            "Both figures' statistics, in both manifests: they are one claim "
-            "over one substrate and a reader comparing them should not have to "
-            "open two files. The CSV twin is the other way round -- it carries "
-            "only the columns this figure drew, so a number cannot be quoted "
-            "from a file that did not draw it."
+            "This figure's statistics only, in its own unit -- see `unit`. "
+            "The two figures no longer share a denominator, so reporting both "
+            "in one manifest would put 61 cells beside 65 sites with nothing "
+            "saying which was which."
         ),
         "policy": {
             "solved_mask": (
@@ -499,10 +557,10 @@ def _manifest(
                 "the rule is fixed because it will not always."
             ),
             "unanimity": (
-                "A site is unanimous when k is 0 or n -- every target went the "
-                "same way. Against the site's total, not its solved count: a "
-                "method that declined half a site did not agree with itself "
-                "about the other half."
+                "A cell is unanimous when k is 0 or n -- every target in it "
+                "went the same way. Against the cell's total, not its solved "
+                "count: a method that declined half a cell did not agree with "
+                "itself about the other half."
             ),
             "spread": (
                 f"contest.offset_spread over a site's solved targets: the "
@@ -543,18 +601,21 @@ def build_for_runs(
         runs, method_a=method_a, method_b=method_b, nside=nside,
         analysis_root=analysis_root,
     )
-    long = long_table(CT.contest_table(data), method_a, method_b)
+    wanted = list(figures or FIGURES)
+    rows = {}
+    if RATIO in wanted:
+        rows[RATIO] = ratio_rows(CT.paired_targets(data), method_a, method_b)
+    if SPREAD in wanted:
+        rows[SPREAD] = spread_rows(CT.contest_table(data), method_a, method_b)
     out_dir = output_dir(data.run_ids, analysis_root=analysis_root)
     written: list[Path] = []
-    for figure in figures or FIGURES:
+    for figure in wanted:
         names = artifact_names(figure, method_a, method_b)
-        long.reindex(columns=csv_columns(figure)).to_csv(
-            out_dir / names["csv"], index=False
-        )
-        png = render(long, [method_a, method_b], figure, out_dir / names["png"])
+        rows[figure].to_csv(out_dir / names["csv"], index=False)
+        png = render(rows[figure], [method_a, method_b], figure, out_dir / names["png"])
         (out_dir / names["man"]).write_text(
             _manifest(
-                data, long, figure, png_name=names["png"], csv_name=names["csv"]
+                data, rows[figure], figure, png_name=names["png"], csv_name=names["csv"]
             )
         )
         written.append(png)
