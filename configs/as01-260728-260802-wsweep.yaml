@@ -1,0 +1,341 @@
+# Weight-scorer sweep for the two Octant variants on as01-260728-260802.
+#
+#   ./cli.sh --configfile configs/as01-260728-260802-wsweep.yaml
+#
+# WHAT THIS MEASURES
+# `planar_annulus_weighted` scores each face of the annulus arrangement by the
+# SUM of the weights of the annuli covering it, then (with
+# `highest_weight_only: true`) returns the single heaviest face. The weight has
+# always been `exp(-rtt/50ms)`, never calibrated. On as01 that setting gives an
+# informative annulus (median width 7.8 km) only a 1.16x edge over an
+# uninformative one (median width 1,158 km) -- a 119x difference in information
+# resolved at 1.16:1 -- and it returns the same face as an UNWEIGHTED vote.
+#
+# This run sweeps the two standard distance-decay families across that axis:
+#   inverse-power (gravity)      w = rtt^-k          scale-free
+#   negative-exponential         w = exp(-rtt/tau)   carries a unit (ms)
+# plus a uniform control. Do not swap those two names; they are the contrast.
+#
+# THE tau=50 BASELINE IS NOT AN ARM HERE, AND DOES NOT NEED TO BE.
+# Fold assignment is deterministic in (k, seed, asn_bucket_top_n) -- see
+# scripts/benchmark/v2/sources/generic_csv.py -- so this run_id, reusing the
+# same csv_path / k: 5 / seed: 42 / asn_bucket_top_n: 20, produces IDENTICAL
+# folds to as01-260728-260802-mesh. That run's `octant_cbg_hull` and
+# `octant_cbg_spl` combos ARE tau=50, so the paired baseline comparison is a
+# `target_id` join across the two output trees at analysis time. If you change
+# any of those four source_kwargs, that join silently stops being paired.
+#
+# Deliberately a NEW run_id: outputs key off it, and writing into the published
+# mesh tree would change what the analysis layer globs for existing figures.
+#
+# Octant-only: no vanilla / million_scale / spotter arms, and no PNI block --
+# neither is relevant to a weight-function sweep.
+#
+# COST: 14 combos x 5 folds = 70 jobs. The octant combos run ~10-24 min per
+# combo-fold, so budget ~2 hours per ASN on 16 cores. Note that >95% of that is
+# the planar arrangement and the face-containment test, both of which are
+# weight-INDEPENDENT and recomputed identically by all 14 arms.
+
+run_id: as01-260728-260802-wsweep
+
+benchmark:
+  source: generic_csv
+  setup: anchors_to_probes
+  slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+  source_kwargs:
+    # All four MUST match configs/as01-260728-260802-mesh.yaml exactly, or the
+    # folds diverge and the tau=50 baseline join above is invalid.
+    csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.csv
+    k: 5
+    seed: 42
+    asn_bucket_top_n: 20
+
+  enable_fallback: true
+  seed: 42
+
+  # 7 scorers x 2 Octant variants. Every key outside `mtl_kwargs` is copied
+  # verbatim from the parent mesh config, so the scorer is the only moving part.
+  #
+  # `weight_tau_ms` appears ONLY on the exp arms: the MTL rejects it under the
+  # other modes rather than ignoring it, because mtl_kwargs is recorded in
+  # run.json verbatim and replayed from there, which would make an ignored key
+  # indistinguishable from an applied one.
+  combos:
+
+    # --- octant_cbg_hull -------------------------------------------------
+
+    # uniform: w = 1. The control. Face weight becomes the COUNT of annuli
+    # covering it, which is a real objective, not an absence of one.
+    - combo_id: octant_cbg_hull_unw
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: uniform
+      ctr_kwargs:
+        n_samples: 1024
+
+    # inverse-power (gravity) k=1: w = rtt^-1. Scale-free.
+    - combo_id: octant_cbg_hull_ip1
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: inv_power
+        weight_k: 1
+      ctr_kwargs:
+        n_samples: 1024
+
+    # inverse-power (gravity) k=2: w = rtt^-2. Scale-free.
+    - combo_id: octant_cbg_hull_ip2
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: inv_power
+        weight_k: 2
+      ctr_kwargs:
+        n_samples: 1024
+
+    # inverse-power (gravity) k=3: w = rtt^-3. Scale-free.
+    - combo_id: octant_cbg_hull_ip3
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: inv_power
+        weight_k: 3
+      ctr_kwargs:
+        n_samples: 1024
+
+    # negative-exponential (Boltzmann) tau=1 ms. READ AS A HARD TOP-K: at
+    # tau=1 anything >~37 ms above the nearest VP underflows to zero weight.
+    - combo_id: octant_cbg_hull_tau1
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: exp
+        weight_tau_ms: 1.0
+      ctr_kwargs:
+        n_samples: 1024
+
+    # negative-exponential (Boltzmann) tau=5 ms.
+    - combo_id: octant_cbg_hull_tau5
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: exp
+        weight_tau_ms: 5.0
+      ctr_kwargs:
+        n_samples: 1024
+
+    # negative-exponential (Boltzmann) tau=10 ms.
+    - combo_id: octant_cbg_hull_tau10
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: exp
+        weight_tau_ms: 10.0
+      ctr_kwargs:
+        n_samples: 1024
+
+    # --- octant_cbg_spl -------------------------------------------------
+
+    # uniform: w = 1. The control. Face weight becomes the COUNT of annuli
+    # covering it, which is a real objective, not an absence of one.
+    - combo_id: octant_cbg_spl_unw
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: uniform
+      ctr_kwargs:
+        n_samples: 1024
+
+    # inverse-power (gravity) k=1: w = rtt^-1. Scale-free.
+    - combo_id: octant_cbg_spl_ip1
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: inv_power
+        weight_k: 1
+      ctr_kwargs:
+        n_samples: 1024
+
+    # inverse-power (gravity) k=2: w = rtt^-2. Scale-free.
+    - combo_id: octant_cbg_spl_ip2
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: inv_power
+        weight_k: 2
+      ctr_kwargs:
+        n_samples: 1024
+
+    # inverse-power (gravity) k=3: w = rtt^-3. Scale-free.
+    - combo_id: octant_cbg_spl_ip3
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: inv_power
+        weight_k: 3
+      ctr_kwargs:
+        n_samples: 1024
+
+    # negative-exponential (Boltzmann) tau=1 ms. READ AS A HARD TOP-K: at
+    # tau=1 anything >~37 ms above the nearest VP underflows to zero weight.
+    - combo_id: octant_cbg_spl_tau1
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: exp
+        weight_tau_ms: 1.0
+      ctr_kwargs:
+        n_samples: 1024
+
+    # negative-exponential (Boltzmann) tau=5 ms.
+    - combo_id: octant_cbg_spl_tau5
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: exp
+        weight_tau_ms: 5.0
+      ctr_kwargs:
+        n_samples: 1024
+
+    # negative-exponential (Boltzmann) tau=10 ms.
+    - combo_id: octant_cbg_spl_tau10
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        highest_weight_only: true
+        weight_mode: exp
+        weight_tau_ms: 10.0
+      ctr_kwargs:
+        n_samples: 1024
+
+analysis:
+  common:
+    grid: h3
+    resolution: [4]

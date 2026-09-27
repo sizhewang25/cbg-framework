@@ -52,6 +52,28 @@ METHOD_LABELS: dict[str, str] = {
     # readable when present on disk, without being given a published term.
     "spotter_hybrid_cbg": "SPO-hybrid",
     "spotter_h3_cbg": "SPO (H3)",
+    # Weight-scorer sweep arms (configs/as0*-260728-260802-wsweep.yaml). Same
+    # rule as the two above: named, but deliberately absent from LABEL_HUES so
+    # they fall into OTHER_HUE rather than being handed a colour out of the
+    # validated six-term palette. The sweep's own figure plots them against a
+    # steepness axis, not against the published methods.
+    #
+    # `ipK` is the inverse-power (gravity) family, w = rtt^-K; `tauN` is the
+    # negative-exponential (Boltzmann) family, w = exp(-rtt/N ms). The parent
+    # arms `octant_cbg_hull` / `octant_cbg_spl` are themselves tau=50.
+    **{
+        f"octant_cbg_{variant}_{tag}": f"{term} {suffix}"
+        for variant, term in (("hull", "OCT-H"), ("spl", "OCT-S"))
+        for tag, suffix in (
+            ("unw", "unweighted"),
+            ("ip1", "1/rtt"),
+            ("ip2", "1/rtt²"),
+            ("ip3", "1/rtt³"),
+            ("tau1", "τ=1"),
+            ("tau5", "τ=5"),
+            ("tau10", "τ=10"),
+        )
+    },
 }
 
 
