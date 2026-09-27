@@ -3,30 +3,29 @@
 Two figures over the same 65 pooled sites, one observation per site per
 method, written side by side so a paper can place them independently:
 
-* `paired_ratio_of_success` -- the share of a site's targets the method put in
-  the correct cell. Spotter is all-or-nothing on 61 of 65 sites; Octant-Hull
-  on 39, splitting the other 26.
+* `paired_ratio_of_success` -- the distribution over sites of the share of a
+  site's targets the method put in the correct cell. Spotter is all-or-nothing
+  on 61 of 65 sites; Octant-Hull on 39, splitting the other 26.
 * `paired_std_grid_offset` -- the standard deviation of `pred_dist_to_tg_grid`
   across a site's targets, in grid steps. Spotter's median is 0.31 grids
   against Octant-Hull's 1.22, and it is perfectly consistent on 21 sites
   against 5.
 
-## The violin is bounded, and that takes doing
+## The ratio figure is a CDF, after two failed violins
 
 A success ratio lives on [0, 1] and these pile up on both ends: 61 of
-Spotter's 65 sites sit at exactly 0 or exactly 1. A Gaussian KDE over that
-spills past both bounds -- density at 1.15 on a share is a drawing that cannot
-be true -- and clipping the body afterwards leaves a chopped silhouette that
-does not read as a violin.
+Spotter's 65 sites sit at exactly 0 or exactly 1. A violin over that was
+wrong twice -- Scott's bandwidth invented a waist as wide as Octant-Hull's
+where Spotter has four split sites, and bounding the KDE by clipping the drawn
+body left a shape that did not read as a violin at all.
 
-So the density is estimated by **reflection**: the sample is mirrored about 0
-and about 1 before the KDE, and evaluated only on [0, 1]. That is bounded by
-construction, keeps its mass, and comes out the shape a violin should be.
-
-The bandwidth is `_VIOLIN_BW` rather than Scott's rule, which is not a
-cosmetic choice: Scott's smears Spotter's four split sites into a waist as
-wide as Octant-Hull's twenty-six, so the default violin denies the very claim
-the figure is drawn for.
+A share of 65 sites concentrated on two values has no shape a smoother can be
+trusted with, so it is drawn as an empirical CDF: exact, no bins, no
+bandwidth, no choices. The claim is in the geometry. The jump at 0 is the
+share of sites the method missed entirely, the jump at 1 the share it swept,
+and the two together are its unanimity rate -- 93.8% against 60.0%. Between
+them Spotter's curve is flat and Octant-Hull's climbs, and that flatness *is*
+the finding rather than a stand-in for it.
 
 ## The one claim here that is about the estimator
 
@@ -116,15 +115,21 @@ PNG_NAME = "paired_{figure}.{pair}.png"
 CSV_NAME = "paired_{figure}.{pair}.csv"
 MANIFEST_NAME = "paired_{figure}.{pair}.manifest.json"
 
-#: Sized for a paper column. One figure, two categories, so it is narrow; the
-#: height is set by the y-label, which `test_the_axis_label_fits` measures.
-_FIG_W = 3.0
-_FIG_H = 3.1
+#: Sized for a paper column. `test_the_axis_labels_fit` measures the labels
+#: against this canvas: the figure is saved at a fixed size, so a label that
+#: overruns is silently clipped rather than shrinking the axes.
+_FIG_W = 4.0
+_FIG_H = 3.0
 
 #: The spread figure's whiskers. Percentiles, **not** matplotlib's default
 #: 1.5x IQR, and no outliers past them: the whisker ends are p5 and p95 and
 #: must not be read as the extremes. `spread_min`/`spread_max` carry those.
 SPREAD_WHIS = (5.0, 95.0)
+
+#: Quantiles every manifest reports. `SPREAD_WHIS` is in here on purpose: the
+#: drawn whisker ends have to be readable as numbers, or the figure states a
+#: bound nothing else does.
+QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
 
 _SURFACE = "#ffffff"
 _INK = "#0b0b0b"
@@ -132,24 +137,23 @@ _INK_2 = "#52514e"
 _GRID = "#e1e0d9"
 _AXIS = "#c3c2b7"
 
-_VIOLIN_W = 0.72
 
-#: KDE bandwidth for the ratio violin. Scott's rule, the default, spreads
-#: each of 65 points over about a fifth of the unit interval, which fills the
-#: waist with density that is not there: Spotter is split on 4 sites and the
-#: default violin draws it as though it were split on twenty.
-_VIOLIN_BW = 0.12
+#: The ratio axis. A share, so it is the unit interval and nothing else.
+RATIO_BOUNDS = (0.0, 1.0)
 
-#: Where the ratio violin's density is evaluated, and how finely.
-_VIOLIN_BOUNDS = (0.0, 1.0)
-_VIOLIN_POINTS = 201
+_CDF_PT = 1.8
 _BOX_W = 0.45
 _EDGE_PT = 0.9
 _MEDIAN_PT = 1.6
 _LABEL_PT = 8.5
 
-_RATIO_LABEL = "share of the site's targets in the correct cell"
-_SPREAD_LABEL = "std. dev. of grid error distance (grid steps)"
+#: Axis labels, in the wording the paper uses. Title case, unlike the repo's
+#: other figures -- these are the strings the section was written against.
+#: The spread is in grid steps; "Grid Error Distance" carries that implicitly,
+#: and the manifest states it outright.
+_RATIO_LABEL = "Fraction of Correct Predictions per Site"
+_RATIO_Y_LABEL = "Fraction of Sites"
+_SPREAD_LABEL = "Std. Dev. of Grid Error Distance"
 
 
 def output_dir(run_ids: list[str], *, analysis_root: Path | None = None) -> Path:
@@ -241,7 +245,12 @@ def csv_columns(figure: str = RATIO) -> list[str]:
 
 
 def method_stats(long: pd.DataFrame, method: str) -> dict:
-    """One method's shape on both panels, and the unanimity rate behind (a)."""
+    """One method's shape on both figures, and its unanimity rate.
+
+    The quantiles include `SPREAD_WHIS`, so the spread figure's drawn whisker
+    ends are readable as numbers rather than only as ink -- and `spread_min`
+    and `spread_max` sit beside them, because the whiskers are not the range.
+    """
     rows = long[long["method"] == method]
     spread = rows[SPREAD_COL].dropna()
     n = int(len(rows))
@@ -260,7 +269,7 @@ def method_stats(long: pd.DataFrame, method: str) -> dict:
         if not len(src):
             continue
         out[f"{key}_min"] = round(float(src.min()), 4)
-        for q in (0.25, 0.5, 0.75):
+        for q in QUANTILES:
             out[f"{key}_p{int(q * 100)}"] = round(float(src.quantile(q)), 4)
         out[f"{key}_max"] = round(float(src.max()), 4)
     return out
@@ -277,61 +286,42 @@ def _series(long: pd.DataFrame, methods_: list[str], col: str, *, dropna: bool) 
     return out
 
 
-def violin_stats(values: np.ndarray, *, bw: float = _VIOLIN_BW) -> dict:
-    """A bounded density for `ax.violin`, estimated by reflection.
+def ecdf(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The empirical CDF as a staircase: `(x, share of sites at or below x)`.
 
-    A success ratio lives on [0, 1] and these pile up on both ends. A Gaussian
-    KDE over that spills past both bounds, and clipping the drawn body
-    afterwards leaves a chopped shape that does not read as a violin. So the
-    sample is mirrored about each bound before the KDE and the result is
-    evaluated only inside them: bounded by construction, mass preserved (hence
-    the factor of three), and the right shape.
-
-    The summary values are the sample's own, never the density's.
+    Exact. No bins and no bandwidth -- which is the point: this figure was
+    drawn twice as a violin and misled both times, once because Scott's
+    bandwidth invented density in the middle and once because clipping a KDE
+    to the unit interval left a shape that did not read as a violin. A share
+    of 65 sites piled on two values has no shape a smoother can be trusted
+    with; a staircase has no choices in it.
     """
-    from scipy.stats import gaussian_kde
-
-    lo, hi = _VIOLIN_BOUNDS
-    mirrored = np.concatenate([values, 2 * lo - values, 2 * hi - values])
-    coords = np.linspace(lo, hi, _VIOLIN_POINTS)
-    return {
-        "coords": coords,
-        "vals": gaussian_kde(mirrored, bw_method=bw)(coords) * 3.0,
-        "mean": float(values.mean()),
-        "median": float(np.median(values)),
-        "min": float(values.min()),
-        "max": float(values.max()),
-        "quantiles": [float(np.quantile(values, q)) for q in (0.25, 0.75)],
-    }
+    lo, hi = RATIO_BOUNDS
+    x = np.sort(np.asarray(values, dtype=float))
+    y = np.arange(1, x.size + 1) / x.size
+    return (
+        np.concatenate([[lo], x, [hi]]),
+        np.concatenate([[0.0], y, [1.0]]),
+    )
 
 
-def draw_ratio(ax, series: list, inks: list[str]) -> None:
-    """A violin per method, bounded to the unit interval by reflection.
+def draw_ratio(ax, series: list, inks: list[str], labels: list[str]) -> None:
+    """One step curve per method: the share of sites at or below each ratio.
 
-    A method unanimous *and* uniform on every site has no variance at all,
-    which `gaussian_kde` cannot take -- and that is the success case for this
-    claim, so it is drawn as a bar rather than raised.
+    Everything the claim needs is in the two endpoints and the middle. The
+    jump at 0 is the share of sites a method missed entirely, the jump at 1
+    the share it swept, and the two together are its unanimity rate -- so
+    Spotter's curve is flat across the middle where Octant-Hull's climbs, and
+    that flatness *is* the finding rather than a stand-in for it.
     """
-    for pos, values, ink in zip(range(1, len(series) + 1), series, inks):
-        if np.ptp(values) == 0:
-            ax.hlines(values[0], pos - _VIOLIN_W / 2, pos + _VIOLIN_W / 2,
-                      color=ink, linewidth=3.0)
-            continue
-        part = ax.violin(
-            [violin_stats(values)], positions=[pos], widths=_VIOLIN_W,
-            showmedians=True, showextrema=False,
-        )
-        for body in part["bodies"]:
-            body.set_facecolor(ink)
-            body.set_edgecolor(_INK_2)
-            body.set_linewidth(_EDGE_PT)
-            body.set_alpha(1.0)
-        part["cmedians"].set_color(_SURFACE)
-        part["cmedians"].set_linewidth(_MEDIAN_PT)
-        part["cquantiles"].set_color(_SURFACE)
-        part["cquantiles"].set_linewidth(_EDGE_PT)
-    ax.set_ylim(_VIOLIN_BOUNDS[0] - 0.05, _VIOLIN_BOUNDS[1] + 0.05)
-    ax.set_ylabel(_RATIO_LABEL, fontsize=_LABEL_PT, color=_INK)
+    for values, ink, label in zip(series, inks, labels):
+        x, y = ecdf(values)
+        ax.step(x, y, where="post", color=ink, linewidth=_CDF_PT, label=label)
+    ax.set_xlim(RATIO_BOUNDS[0] - 0.02, RATIO_BOUNDS[1] + 0.02)
+    ax.set_ylim(-0.02, 1.02)
+    ax.set_xlabel(_RATIO_LABEL, fontsize=_LABEL_PT, color=_INK)
+    ax.set_ylabel(_RATIO_Y_LABEL, fontsize=_LABEL_PT, color=_INK)
+    ax.legend(fontsize=_LABEL_PT, frameon=False, loc="upper left")
 
 
 def draw_spread(ax, series: list, inks: list[str]) -> None:
@@ -357,10 +347,11 @@ def draw_spread(ax, series: list, inks: list[str]) -> None:
     ax.set_ylabel(_SPREAD_LABEL, fontsize=_LABEL_PT, color=_INK)
 
 
-def _finish(ax, labels: list[str]) -> None:
-    ax.set_xticks(range(1, len(labels) + 1), labels)
+def _finish(ax, labels: list[str] | None) -> None:
+    if labels is not None:
+        ax.set_xticks(range(1, len(labels) + 1), labels)
     ax.tick_params(labelsize=_LABEL_PT, colors=_INK, length=3, width=0.7)
-    ax.yaxis.grid(True, color=_GRID, linewidth=0.7)
+    ax.grid(True, color=_GRID, linewidth=0.7)
     ax.set_axisbelow(True)
     ax.set_facecolor(_SURFACE)
     for side in ("top", "right"):
@@ -387,10 +378,11 @@ def render(
     fig, ax = plt.subplots(figsize=fig_size)
     fig.patch.set_facecolor(_SURFACE)
     if figure == RATIO:
-        draw_ratio(ax, _series(long, methods_, RATIO_COL, dropna=False), inks)
+        draw_ratio(ax, _series(long, methods_, RATIO_COL, dropna=False), inks, labels)
+        _finish(ax, None)
     else:
         draw_spread(ax, _series(long, methods_, SPREAD_COL, dropna=True), inks)
-    _finish(ax, labels)
+        _finish(ax, labels)
 
     fig.tight_layout()
     out_png.parent.mkdir(parents=True, exist_ok=True)
@@ -447,15 +439,18 @@ def _manifest(
             {
                 "quantity": RATIO_COL,
                 "axis": _RATIO_LABEL,
-                "mark": "violin, one per method",
-                "density": (
-                    f"Gaussian KDE, bandwidth {_VIOLIN_BW}, bounded to "
-                    f"{list(_VIOLIN_BOUNDS)} by reflecting the sample about "
-                    f"each bound. Scott's default bandwidth smears the four "
-                    f"split Spotter sites into a waist as wide as Octant-Hull's "
-                    f"twenty-six, which denies the claim the figure is drawn for."
+                "mark": "step curve, one per method, in that method's hue",
+                "axes": (
+                    "x: the per-site success ratio. y: the share of sites at "
+                    "or below it -- an empirical CDF, exact, with no bins and "
+                    "no bandwidth."
                 ),
-                "lines": "white: median, and the quartiles",
+                "reading": (
+                    "The jump at 0 is the share of sites the method missed "
+                    "entirely and the jump at 1 the share it swept; together "
+                    "they are its unanimity rate. The curve is flat between "
+                    "them exactly to the extent the method is all-or-nothing."
+                ),
             }
             if figure == RATIO
             else {
