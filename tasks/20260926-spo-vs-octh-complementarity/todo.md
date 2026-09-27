@@ -5,7 +5,7 @@
 - [x] Key every per-site frame on `(run_id, site_id)`. `site_id` is assigned per run and collides across meshes; keying on it alone reported 20 sites where there are 34.
 - [x] `site_contest(run, method_a, method_b)`: per-site join of correct counts with `solved_mask` applied, returning `k_a, n_a, k_b, n_b, tg_seed_id, tg_lat, tg_lon`.
 - [x] Four-way category by **direct count comparison** — `neither` when both zero, else `a`/`b`/`tied`. No threshold anywhere.
-- [x] `centroid_km`: distance from each site to the run's seed-cloud centroid, in EPSG:5070 via `projection.project`.
+- [x] `centroid_km`: distance from each site to the run's seed-cloud centroid. **On the sphere**, via `geodesy.spherical_centroid` + `elementwise_km` — not EPSG:5070 as this line first said. The partition is great-circle nearest seed; the plane only draws it.
 - [x] McNemar exact (`binomtest(b, b+c, 0.5)`) plus the attainable floor `2*0.5**(b+c)`, so an underpowered mesh says so.
 - [x] Test: a 9/20 vs 20/20 site is `SPO wins`, never `tied` or `only SPO` — the Los Angeles regression.
 - [x] Test: a FALLBACK row never reaches any count.
@@ -32,10 +32,17 @@ Both ways out are one flag, and both are rendered and tested:
 - `--ncols 1 --panel-width 7` — keeps the labels, gives a 7 x 14 in figure.
   Legible, but too tall for a page.
 
-## Phase 2: C2 — peripherality boxplot
-- [ ] Two horizontal boxplots, `SPO wins` and `OCT-H wins`, coloured by each method's palette hue.
-- [ ] X = centroid distance, **min-max normalised across the pooled sites**, linear scale.
-- [ ] Record the raw km behind the normalisation in the CSV — a normalised axis alone cannot be quoted.
+## Phase 2: C2 — peripherality boxplot — done 2026-09-26, `modules/figure_peripherality.py`
+- [x] Two horizontal boxplots, `SPO wins` and `OCT-H wins`, coloured by each method's palette hue.
+- [x] X = centroid distance, **min-max normalised across the pooled sites**, linear scale. Normalised over all 65, not the 41 drawn, so both endpoints are real sites and the axis does not move when a site changes hands.
+- [x] Record the raw km behind the normalisation in the CSV — a normalised axis alone cannot be quoted. The twin carries all 65 sites with a `drawn` flag, because a twin holding only the drawn rows could not reproduce its own axis.
+- [x] Reproduced from the CSV alone: SPO-win min 1,020 km, p25 1,634, median 1,928; OCT-H from 91 km, median 1,459. SPO's lower quartile sits above OCT-H's median.
+- [x] Follows `dc29b36`'s convention, not C1's: **no figure title**, `subject` in the manifest, furniture sized for a paper column (4.6 x 1.75 in).
+
+### Convention drift to settle
+C1 carries a `suptitle` (it holds the `a | b | total` label key); C2 and the
+outcome bars carry none. Either C1 loses its title and the key moves to the
+paper's caption, or it keeps it as the one titled figure in the set.
 
 ## Phase 3: C3 — stability
 - [ ] (a) Violin of per-site success ratio (`k/n`) by category, x = category, y = fraction. Overlay the 93.8% / 60.0% unanimity rates in the CSV, not on the figure.

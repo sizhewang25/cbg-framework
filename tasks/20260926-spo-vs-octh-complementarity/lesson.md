@@ -33,3 +33,9 @@
   been asking for; `figure_outcome_map` still does not pass it, because turning
   it on would silently move every count on a committed figure. The capability
   and the decision to use it are separate changes.
+- **Pick the metric the thing is defined in, not the one it is drawn in.** The
+  cell partition is great-circle nearest seed; EPSG:5070 exists so `cells` can
+  draw it. Measuring peripherality in the plane was defended in a docstring
+  with a rationale invented after the fact ("a property of the plane the
+  partition is drawn in") — which is the tell. A projection in a number that
+  scoring never touches is a smell even when, as here, it changes nothing.

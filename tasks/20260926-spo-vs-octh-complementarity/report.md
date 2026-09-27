@@ -49,6 +49,12 @@ figures live only in a session scratchpad; this task makes them reproducible.
   pooled 21–20 over 65 sites and 1,269 targets. `modules/contest.py` +
   `modules/figure_contest_map.py`, CLI `plot-contest-map`, 42 tests.
 
+- **C2 is built**, re-derived from the CSV twin rather than a notebook: every
+  one of the 21 SPO-win sites is at least **1,020 km** from the seed-cloud
+  centroid (p25 1,634, median 1,928), while Octant-Hull wins from **91 km** out
+  with a median of 1,459. SPO's lower quartile is above OCT-H's median.
+  `modules/figure_peripherality.py`, CLI `plot-peripherality`, 15 tests.
+
 ### Found while building C1
 
 - **The 1x3 map cannot be printed with its per-site labels.** A label is eight
@@ -57,6 +63,18 @@ figures live only in a session scratchpad; this task makes them reproducible.
   tuning problem — twenty of them do not fit. `--no-labels` (counts to the CSV)
   and `--ncols 1 --panel-width 7` (a 7 x 14 in figure) are both rendered; the
   choice is the paper's. C2–C4 are not maps and are not affected.
+- **The centroid is spherical, not planar.** The plan specified EPSG:5070 and
+  that was wrong: the cell partition is defined by great-circle nearest seed
+  and `classify` uses no projection at all, so measuring peripherality in the
+  drawing plane imports a rendering concern into a number. `seeds` already
+  places every seed with `geodesy.spherical_centroid`; the centre of the seeds
+  is now found the same way. The two answers differ by a median 5 km (max 22)
+  and rank the 65 sites identically to Spearman 0.9995, so no claim moved —
+  1,018/1,627/98 became 1,020/1,634/91.
+- **The loading layer moved into `contest.py`.** `ContestData`, `load` and
+  `contest_table` are substrate, not drawing, and C2–C4 all need them.
+  `contest_table` now carries `centroid_km` per site, computed against each
+  run's own seed cloud.
 - **The label relaxation has to run in units of a label box.** A site label is
   four times wider than it is tall, so a single isotropic separation in degrees
   is wrong on one axis whichever value it takes. Scaling the space first fixes

@@ -61,8 +61,17 @@ as01 SPO 8–1 (McNemar exact **p = 0.039**, the only resolved mesh), as02 OCT-H
 10–5 (p = 0.302), as03 8–9 (p = 1.000). Pooled 21–20, flat.
 
 **C2 — Spotter's wins are exclusively peripheral; Octant-Hull's span the whole
-range.** All 21 SPO-win sites lie ≥ 1,018 km from the seed-cloud centroid, with
-p25 1,627 km — above OCT-H's median. OCT-H wins from 98 km out.
+range.** All 21 SPO-win sites lie ≥ **1,020 km** from the seed-cloud centroid,
+with p25 **1,634 km** — above OCT-H's median of 1,459. OCT-H wins from **91 km**
+out.
+
+Distance is great-circle to the seeds' **spherical** centroid
+(`geodesy.spherical_centroid`, the same routine `seeds` places a seed with),
+not planar in EPSG:5070. The plan originally said EPSG:5070; that was wrong.
+The partition is defined by great-circle nearest seed and `classify` uses no
+projection, so the plane is a drawing concern. The earlier planar figures
+(1,018 / 1,627 / 98) differ by a median 5 km and rank the 65 sites identically
+to Spearman 0.9995 — nothing here turns on it, which is why consistency wins.
 
 **C3 — Spotter is far more stable per site.** All-or-nothing on **61 of 65
 sites (93.8%)** against Octant-Hull's **39 of 65 (60.0%)**; OCT-H splits 26
