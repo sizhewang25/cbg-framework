@@ -48,13 +48,30 @@ that floor beside the p-value so an underpowered mesh says so out loud.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
+from scripts.analysis.v5.modules import classify as C
 from scripts.analysis.v5.modules import cross
+from scripts.analysis.v5.modules import grid as G
+from scripts.analysis.v5.modules.map_answer_space import load_rung
+from scripts.analysis.v5.modules.geodesy import elementwise_km, spherical_centroid
 from scripts.analysis.v5.modules.methods import method_label
-from scripts.analysis.v5.modules.projection import project
+from scripts.analysis.v5.modules.paths import MissingArtifactError, RunPaths
 from scripts.analysis.v5.modules.status import solved_mask
+
+#: Which rung's answer space and `*_tgs.parquet` the contest reads. Off the
+#: ladder rather than spelled, so a second rung cannot desync seeds from
+#: labels.
+SOURCE_NSIDE = G.NSIDE_LADDER[0]
+
+#: The pair the paper argues about. A default for the figures, not a
+#: constraint -- `load` takes any two scored methods.
+DEFAULT_METHOD_A = "spotter_cbg"
+DEFAULT_METHOD_B = "octant_cbg_hull"
 
 #: `classify.CELL_LABELS`' good outcome, named once here so the conjunction
 #: below reads as a definition rather than as a string comparison.
@@ -240,25 +257,126 @@ def contest_counts(table: pd.DataFrame, **extra) -> dict:
     }
 
 
-def centroid_km(
-    lats, lons, seed_lats, seed_lons
-) -> np.ndarray:
-    """Distance from each point to the **seed cloud's** centroid, in km.
+def seed_cloud_centre(seed_lats, seed_lons) -> tuple[float, float]:
+    """The seed cloud's centre as `(lat, lon)`, on the sphere.
 
-    Measured in `projection.PROJECTED_CRS` (CONUS Albers equal-area): the
-    centroid is the mean of the projected seed positions and the distance is
-    planar from there. Equal-area rather than great-circle because the
-    quantity being measured is *peripherality within the answer space* -- how
-    far out in the drawn partition a site sits -- and that is a property of
-    the plane the partition is drawn in.
+    `geodesy.spherical_centroid`, which is what `seeds` already uses to place
+    a seed over the sites it groups. One notion of centre in the package, so
+    the centre of the seeds is found the same way each seed was.
+    """
+    return spherical_centroid(seed_lats, seed_lons)
+
+
+def seed_cloud_centroid_km(lats, lons, seed_lats, seed_lons) -> np.ndarray:
+    """Great-circle distance from each point to the **seed cloud's** centre.
 
     Anchored on the seeds, not on the sites: the seeds are the answer space,
     and a site set that happens to cluster would otherwise move the origin it
     is being measured against.
 
+    On the sphere, not in `projection.PROJECTED_CRS`. The cell partition is
+    defined by great-circle nearest seed and `classify` uses no projection at
+    all; EPSG:5070 exists so `cells` can *draw* the partition, and measuring
+    peripherality there would import a rendering concern into a number. It
+    also costs the projection's 1-2% distance distortion for nothing: against
+    the spherical answer the planar one is off by a median 5 km and at most 22
+    over these meshes, and the two rank the 65 sites identically to Spearman
+    0.9995. The claims do not turn on it; the consistency does.
+
     Nearly collinear with "coastal" on a CONUS answer space. It does not
     separate the two and must not be quoted as if it did.
     """
-    sx, sy = project(seed_lats, seed_lons)
-    x, y = project(lats, lons)
-    return np.hypot(x - sx.mean(), y - sy.mean()) / 1000.0
+    clat, clon = seed_cloud_centre(seed_lats, seed_lons)
+    lats = np.asarray(lats, dtype=float).ravel()
+    return elementwise_km(
+        lats, lons, np.full(lats.size, clat), np.full(lats.size, clon)
+    )
+
+
+@dataclass(frozen=True)
+class ContestData:
+    """The scored frames and seeds for one method pair over several meshes."""
+
+    run_ids: list[str]
+    method_a: str
+    method_b: str
+    frames: dict[tuple[str, str], pd.DataFrame]
+    seeds: dict[str, pd.DataFrame]
+    nside: int
+
+
+def load(
+    runs: list[RunPaths],
+    *,
+    method_a: str,
+    method_b: str,
+    nside: int = SOURCE_NSIDE,
+    analysis_root: Path | None = None,
+) -> ContestData:
+    """Both methods' `*_tgs.parquet` and each run's seeds.
+
+    Both methods must be scored in every run. A mesh carrying one of them
+    would contribute a panel of half-contests, and the pooled counts the
+    manifest reports would be over a population that changes per panel.
+    """
+    if method_a == method_b:
+        raise ValueError(f"a contest needs two methods, got {method_a!r} twice")
+    frames: dict[tuple[str, str], pd.DataFrame] = {}
+    seeds: dict[str, pd.DataFrame] = {}
+    for run in runs:
+        seeds[run.run_id] = load_rung(run, nside, analysis_root=analysis_root).seeds
+        for m in (method_a, method_b):
+            path = run.classify_dir(nside, root=analysis_root) / C.TGS_PARQUET.format(method=m)
+            if not path.exists():
+                have = scored_methods(run, nside, analysis_root=analysis_root)
+                raise MissingArtifactError(
+                    f"{m} is not scored in {run.run_id} at nside={nside} "
+                    f"({path} missing; have {have}). Run "
+                    f"`classify --run-id {run.run_id}` first."
+                )
+            frames[(run.run_id, m)] = pd.read_parquet(path, columns=list(TG_COLUMNS))
+    return ContestData(
+        run_ids=[r.run_id for r in runs],
+        method_a=method_a,
+        method_b=method_b,
+        frames=frames,
+        seeds=seeds,
+        nside=int(nside),
+    )
+
+
+# -- the numbers ----------------------------------------------------------
+
+
+def scored_methods(
+    run: RunPaths, nside: int = SOURCE_NSIDE, *, analysis_root: Path | None = None
+) -> list[str]:
+    """Methods with a `*_tgs.parquet` at this rung. Read from disk, not a config."""
+    suffix = C.TGS_PARQUET.format(method="")
+    d = run.classify_dir(nside, root=analysis_root)
+    return sorted(p.name[: -len(suffix)] for p in d.glob("*" + suffix))
+
+
+def contest_table(data: ContestData) -> pd.DataFrame:
+    """One row per `(run_id, site_id)` over every run, with `centroid_km`.
+
+    The table all four figures start from. Runs appear in the order they were
+    given, sites in `site_id` order within a run.
+    """
+    parts = []
+    for run_id in data.run_ids:
+        rows = site_contest(
+            data.frames[(run_id, data.method_a)],
+            data.frames[(run_id, data.method_b)],
+            run_id=run_id,
+            method_a=data.method_a,
+            method_b=data.method_b,
+        )
+        seeds = data.seeds[run_id]
+        # Per run, because each mesh has its own seed cloud and so its own
+        # origin. Pooling the distances afterwards is the caller's decision.
+        rows["centroid_km"] = seed_cloud_centroid_km(
+            rows["tg_lat"], rows["tg_lon"], seeds["seed_lat"], seeds["seed_lon"]
+        )
+        parts.append(rows)
+    return pd.concat(parts, ignore_index=True)

@@ -3,145 +3,23 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from pathlib import Path
-
 import numpy as np
-import pandas as pd
 import pytest
 
-from scripts.analysis.v5.modules import answer_space as A
-from scripts.analysis.v5.modules import classify as C
 from scripts.analysis.v5.modules import contest as CT
 from scripts.analysis.v5.modules import figure_contest_map as F
-from scripts.analysis.v5.modules.paths import (
-    ANSWER_SPACE_KIND,
-    CLASSIFY_KIND,
-    MissingArtifactError,
-    grid_slug,
-)
-
-SEATTLE = (47.449, -122.309)
-OMAHA = (41.2565, -95.9345)
-CHICAGO = (41.8781, -87.6298)
-MIAMI = (25.7932, -80.29)
-PLACES = (SEATTLE, OMAHA, CHICAGO, MIAMI)
-
-NSIDE = F.SOURCE_NSIDE
-
-#: Replicas per site in the fixture. Four, not twenty: the counting rule is
-#: the same and the parquets are a quarter the size.
-REPLICAS = 4
-
-
-@dataclass(frozen=True)
-class _Run:
-    """The slice of `RunPaths` this figure touches."""
-
-    run_id: str
-    root: Path
-    source: str = "src"
-    setup: str = "setup"
-
-    def analysis_dir(self, kind, *, root=None):
-        d = (root or self.root) / self.run_id / kind
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
-    def answer_space_dir(self, nside, *, root=None):
-        d = self.analysis_dir(ANSWER_SPACE_KIND, root=root) / grid_slug(nside)
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
-    def classify_dir(self, nside, *, root=None):
-        d = self.analysis_dir(CLASSIFY_KIND, root=root) / grid_slug(nside)
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
-
-def _offset(point, north_km=0.0, east_km=0.0):
-    lat, lon = point
-    return (lat + north_km / 111.195, lon + east_km / (111.195 * np.cos(np.radians(lat))))
+from scripts.analysis.v5.modules.paths import MissingArtifactError
+from scripts.analysis.v5.tests.conftest import NSIDE, REPLICAS
 
 
 @pytest.fixture(scope="module")
-def space():
-    """Four sites, far enough apart that each keeps its own seed and cell."""
-    t = pd.DataFrame(
-        {
-            "tg_id": [f"tg-{i}-{k}" for i in range(4) for k in range(REPLICAS)],
-            "tg_lat": [p[0] for p in PLACES for _ in range(REPLICAS)],
-            "tg_lon": [p[1] for p in PLACES for _ in range(REPLICAS)],
-        }
-    )
-    return A.build_answer_space(t, nside=NSIDE, run_id="syn")
-
-
-def _scored(space, correct_per_site, statuses_per_site=None):
-    """A scored frame where site `i` gets `correct_per_site[i]` right.
-
-    A correct row answers 3 km from its own site; a wrong one answers at
-    Miami, which is another cell for every site but Miami itself -- so site 3
-    is given Seattle instead.
-    """
-    rows = []
-    for i, place in enumerate(PLACES):
-        k = correct_per_site[i]
-        statuses = (statuses_per_site or {}).get(i, ["SUCCESS"] * REPLICAS)
-        elsewhere = SEATTLE if place == MIAMI else MIAMI
-        for r in range(REPLICAS):
-            pred = _offset(place if r < k else elsewhere, north_km=3)
-            rows.append(
-                {
-                    "tg_id": f"tg-{i}-{r}",
-                    "tg_lat": place[0],
-                    "tg_lon": place[1],
-                    "pred_lat": pred[0],
-                    "pred_lon": pred[1],
-                    "status": statuses[r],
-                }
-            )
-    return C.score_method(pd.DataFrame(rows), space)
+def run(contest_run):
+    return contest_run
 
 
 @pytest.fixture(scope="module")
-def run(tmp_path_factory, space):
-    """One run, two methods.
-
-    `alpha` sweeps Seattle and splits Omaha; `beta` loses Seattle outright,
-    takes Omaha, ties Chicago and matches on Miami -- but its Miami rows are
-    FALLBACK, so they count for nothing and Miami is a win for `alpha`.
-    That last site is the whole `solved_mask` trap in one contest.
-    """
-    root = tmp_path_factory.mktemp("v5-contest-map")
-    r = _Run("syn1-000000-000000-mesh", root)
-    space.write(r.answer_space_dir(NSIDE))
-    alpha = _scored(space, [REPLICAS, 2, 3, REPLICAS])
-    beta = _scored(
-        space,
-        [0, REPLICAS, 3, REPLICAS],
-        statuses_per_site={3: ["FALLBACK"] * REPLICAS},
-    )
-    d = r.classify_dir(NSIDE)
-    alpha.to_parquet(d / C.TGS_PARQUET.format(method="alpha"), index=False)
-    beta.to_parquet(d / C.TGS_PARQUET.format(method="beta"), index=False)
-    return r
-
-
-@pytest.fixture(scope="module")
-def two_runs(run, space):
-    """The same mesh twice under two run ids, so the layout has a grid to lay.
-
-    Deliberately identical: `ncols` is a layout concern and must not depend on
-    what the panels hold.
-    """
-    second = _Run("syn2-000000-000000-mesh", run.root)
-    space.write(second.answer_space_dir(NSIDE))
-    src, dst = run.classify_dir(NSIDE), second.classify_dir(NSIDE)
-    for m in ("alpha", "beta"):
-        name = C.TGS_PARQUET.format(method=m)
-        (dst / name).write_bytes((src / name).read_bytes())
-    return [run, second]
+def two_runs(contest_two_runs):
+    return contest_two_runs
 
 
 @pytest.fixture(scope="module")

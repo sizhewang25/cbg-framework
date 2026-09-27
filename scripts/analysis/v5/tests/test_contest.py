@@ -237,20 +237,48 @@ def test_centroid_km_is_measured_from_the_seed_cloud_not_the_sites():
     lons = [c[1] for c in (SEATTLE, MIAMI)]
     seeds_lat = [c[0] for c in COORDS.values()]
     seeds_lon = [c[1] for c in COORDS.values()]
-    far = CT.centroid_km(lats, lons, seeds_lat, seeds_lon)
-    near = CT.centroid_km([OMAHA[0]], [OMAHA[1]], seeds_lat, seeds_lon)
+    far = CT.seed_cloud_centroid_km(lats, lons, seeds_lat, seeds_lon)
+    near = CT.seed_cloud_centroid_km([OMAHA[0]], [OMAHA[1]], seeds_lat, seeds_lon)
     assert near[0] < far.min(), "Omaha sits inside the cloud; the coasts do not"
     # Moving the *sites* leaves the distances of the ones that stayed alone.
-    again = CT.centroid_km(lats + [OMAHA[0]], lons + [OMAHA[1]], seeds_lat, seeds_lon)
+    again = CT.seed_cloud_centroid_km(lats + [OMAHA[0]], lons + [OMAHA[1]], seeds_lat, seeds_lon)
     assert np.allclose(again[:2], far)
 
 
-def test_a_point_on_the_centroid_reads_zero():
-    from scripts.analysis.v5.modules.projection import project, to_lonlat
-    import shapely
+def test_a_point_on_the_centre_reads_zero():
+    """To a millimetre.
+
+    `elementwise_km` is an arccos of a dot product, which loses precision as
+    the separation goes to zero (see `geodesy.haversine_km`'s docstring); the
+    residual here is 0.13 mm. It is not worth `haversine_km` for a column
+    whose smallest real value on these meshes is 91 km, and `classify`
+    measures at this scale the same way.
+    """
+    lat = [c[0] for c in COORDS.values()]
+    lon = [c[1] for c in COORDS.values()]
+    clat, clon = CT.seed_cloud_centre(lat, lon)
+    assert CT.seed_cloud_centroid_km([clat], [clon], lat, lon)[0] == pytest.approx(0.0, abs=1e-3)
+
+
+def test_the_centre_is_the_packages_one_notion_of_centre():
+    """`seeds` places a seed over its sites with `spherical_centroid`; the
+    centre of the seeds is found the same way, not in a projection."""
+    from scripts.analysis.v5.modules.geodesy import spherical_centroid
 
     lat = [c[0] for c in COORDS.values()]
     lon = [c[1] for c in COORDS.values()]
-    x, y = project(lat, lon)
-    mid = to_lonlat(shapely.Point(x.mean(), y.mean()))
-    assert CT.centroid_km([mid.y], [mid.x], lat, lon)[0] == pytest.approx(0.0, abs=1e-6)
+    assert CT.seed_cloud_centre(lat, lon) == spherical_centroid(lat, lon)
+
+
+def test_the_distance_is_great_circle():
+    """Not planar: a projection is for drawing cells, not for measuring how
+    far out in the partition a site sits."""
+    from scripts.analysis.v5.modules.geodesy import elementwise_km
+
+    lat = [c[0] for c in COORDS.values()]
+    lon = [c[1] for c in COORDS.values()]
+    clat, clon = CT.seed_cloud_centre(lat, lon)
+    got = CT.seed_cloud_centroid_km([SEATTLE[0]], [SEATTLE[1]], lat, lon)
+    assert got[0] == pytest.approx(
+        elementwise_km([SEATTLE[0]], [SEATTLE[1]], [clat], [clon])[0]
+    )

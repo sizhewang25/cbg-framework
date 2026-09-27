@@ -46,6 +46,7 @@ from scripts.analysis.v5.modules import (
     figure_error_cdf,
     figure_outcome_bars,
     figure_outcome_map,
+    figure_peripherality,
     figure_vp_dist_gap,
     figure_vp_distance_cdf,
     figure_vp_proximity,
@@ -388,6 +389,53 @@ def plot_contest_map_cmd(
             ncols=ncols,
             panel_width=panel_width,
             labels=labels,
+            nside=nside,
+            analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"wrote {png}")
+
+
+@app.command("plot-peripherality")
+def plot_peripherality_cmd(
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Mesh run (repeatable). Their sites are pooled."
+    ),
+    method_a: str = typer.Option(
+        figure_peripherality.DEFAULT_METHOD_A, "--method-a", help="First method."
+    ),
+    method_b: str = typer.Option(
+        figure_peripherality.DEFAULT_METHOD_B, "--method-b", help="Second method."
+    ),
+    nside: int = typer.Option(
+        figure_peripherality.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help="Which rung's answer space and *_tgs.parquet to read.",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """How far out the sites each method wins sit: two boxes on one axis.
+
+    Distance is to the run's seed-cloud centroid in EPSG:5070, min-max
+    normalised over every pooled site so the axis reads as position within the
+    range of peripherality the answer space has. The raw kilometres are in the
+    CSV twin, one row per site including the tied and neither ones the figure
+    does not draw.
+
+    Writes `peripherality.<A>-vs-<B>.{png,csv,manifest.json}` into
+    `_cross/peripherality/<datasets>[@<arm>]/`. Needs `build-answer-space` and
+    `classify` on every run.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id; this figure pools named datasets")
+    try:
+        png = figure_peripherality.build_for_runs(
+            [resolve_run(r, outputs_root) for r in run_id],
+            method_a=method_a,
+            method_b=method_b,
             nside=nside,
             analysis_root=analysis_root,
         )

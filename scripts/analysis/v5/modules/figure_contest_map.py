@@ -51,7 +51,6 @@ every run. Writes `_cross/contest-map/<datasets>[@<arm>]/`.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib
@@ -65,31 +64,29 @@ import pandas as pd  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 
 from scripts.analysis.v5.modules import cells as CL  # noqa: E402
-from scripts.analysis.v5.modules import classify as C  # noqa: E402
 from scripts.analysis.v5.modules import contest as CT  # noqa: E402
 from scripts.analysis.v5.modules import cross  # noqa: E402
 from scripts.analysis.v5.modules import figure_outcome_map as FOM  # noqa: E402
 from scripts.analysis.v5.modules import grid as G  # noqa: E402
 from scripts.analysis.v5.modules import mapping as M  # noqa: E402
-from scripts.analysis.v5.modules.map_answer_space import load_rung  # noqa: E402
 from scripts.analysis.v5.modules.methods import (  # noqa: E402
     method_colors,
     method_label,
     method_term_table,
 )
-from scripts.analysis.v5.modules.paths import MissingArtifactError, RunPaths  # noqa: E402
+from scripts.analysis.v5.modules.paths import RunPaths  # noqa: E402
 
 #: `_cross/<KIND>/<datasets>[@<arm>]/`.
 KIND = "contest-map"
 
-#: Which rung's answer space and `*_tgs.parquet` are read. Off the ladder
-#: rather than spelled, so a second rung cannot desync seeds from labels.
-SOURCE_NSIDE = G.NSIDE_LADDER[0]
-
-#: The pair the paper argues about. A default, not a constraint -- the module
-#: takes any two scored methods.
-DEFAULT_METHOD_A = "spotter_cbg"
-DEFAULT_METHOD_B = "octant_cbg_hull"
+#: Re-exported from `contest`, which owns the loading layer all four figures
+#: share. Named here so the CLI and the tests read one module.
+SOURCE_NSIDE = CT.SOURCE_NSIDE
+DEFAULT_METHOD_A = CT.DEFAULT_METHOD_A
+DEFAULT_METHOD_B = CT.DEFAULT_METHOD_B
+ContestData = CT.ContestData
+load = CT.load
+contest_table = CT.contest_table
 
 #: The same frame as the outcome maps, so the two can be laid side by side and
 #: a site found in both. Every site on these meshes is well inside it; the
@@ -199,79 +196,6 @@ def category_names(method_a: str, method_b: str) -> dict[str, str]:
         CT.B_WINS: f"{method_label(method_b)} wins",
         CT.NEITHER: "Neither",
     }
-
-
-# -- loading --------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ContestData:
-    """The scored frames and seeds for one method pair over several meshes."""
-
-    run_ids: list[str]
-    method_a: str
-    method_b: str
-    frames: dict[tuple[str, str], pd.DataFrame]
-    seeds: dict[str, pd.DataFrame]
-    nside: int
-
-
-def load(
-    runs: list[RunPaths],
-    *,
-    method_a: str = DEFAULT_METHOD_A,
-    method_b: str = DEFAULT_METHOD_B,
-    nside: int = SOURCE_NSIDE,
-    analysis_root: Path | None = None,
-) -> ContestData:
-    """Both methods' `*_tgs.parquet` and each run's seeds.
-
-    Both methods must be scored in every run. A mesh carrying one of them
-    would contribute a panel of half-contests, and the pooled counts the
-    manifest reports would be over a population that changes per panel.
-    """
-    if method_a == method_b:
-        raise ValueError(f"a contest needs two methods, got {method_a!r} twice")
-    frames: dict[tuple[str, str], pd.DataFrame] = {}
-    seeds: dict[str, pd.DataFrame] = {}
-    for run in runs:
-        seeds[run.run_id] = load_rung(run, nside, analysis_root=analysis_root).seeds
-        for m in (method_a, method_b):
-            path = run.classify_dir(nside, root=analysis_root) / C.TGS_PARQUET.format(method=m)
-            if not path.exists():
-                have = FOM.scored_methods(run, nside, analysis_root=analysis_root)
-                raise MissingArtifactError(
-                    f"{m} is not scored in {run.run_id} at nside={nside} "
-                    f"({path} missing; have {have}). Run "
-                    f"`classify --run-id {run.run_id}` first."
-                )
-            frames[(run.run_id, m)] = pd.read_parquet(path, columns=list(CT.TG_COLUMNS))
-    return ContestData(
-        run_ids=[r.run_id for r in runs],
-        method_a=method_a,
-        method_b=method_b,
-        frames=frames,
-        seeds=seeds,
-        nside=int(nside),
-    )
-
-
-# -- the numbers ----------------------------------------------------------
-
-
-def contest_table(data: ContestData) -> pd.DataFrame:
-    """One row per `(run_id, site_id)`, in panel order. The whole figure."""
-    parts = [
-        CT.site_contest(
-            data.frames[(run_id, data.method_a)],
-            data.frames[(run_id, data.method_b)],
-            run_id=run_id,
-            method_a=data.method_a,
-            method_b=data.method_b,
-        )
-        for run_id in data.run_ids
-    ]
-    return pd.concat(parts, ignore_index=True)
 
 
 def panel_counts(table: pd.DataFrame, data: ContestData) -> list[dict]:
