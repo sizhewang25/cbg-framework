@@ -1125,6 +1125,26 @@ def _octant_runs(run_id: list[str], all_runs: bool, outputs_root: Path):
     return runs
 
 
+def _octant_layouts(layout, all_runs, runs):
+    """Validate --layout and refuse the combinations that are not answerable."""
+    layouts = tuple(dict.fromkeys(layout or ())) or (octant_finetuning.PER_RUN,)
+    unknown = [x for x in layouts if x not in octant_finetuning.LAYOUTS]
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown --layout {unknown}; pick from "
+            f"{list(octant_finetuning.LAYOUTS)}")
+    if octant_finetuning.POOLED in layouts:
+        if all_runs:
+            raise typer.BadParameter(
+                f"--layout {octant_finetuning.POOLED} needs explicit --run-id: "
+                "which datasets form one population is the caller's call")
+        if len(runs) < 2:
+            raise typer.BadParameter(
+                f"--layout {octant_finetuning.POOLED} needs two or more "
+                "--run-id; pooling one run is per-run under another name")
+    return layouts
+
+
 @app.command("plot-octant-cdf")
 def plot_octant_cdf_cmd(
     run_id: list[str] = typer.Option(None, "--run-id", help="Sweep run (repeatable)."),
@@ -1133,6 +1153,16 @@ def plot_octant_cdf_cmd(
     ),
     variant: list[str] = typer.Option(
         None, "--variant", help="octant_cbg_hull and/or octant_cbg_spl; default both."
+    ),
+    layout: list[str] = typer.Option(
+        None,
+        "--layout",
+        help=(
+            f"{octant_finetuning.PER_RUN} (one artifact set per run) or "
+            f"{octant_finetuning.POOLED} (every run's targets as one "
+            f"population, into _cross/). Repeatable; default: "
+            f"{octant_finetuning.PER_RUN}."
+        ),
     ),
     dpi: int = typer.Option(300, "--dpi"),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
@@ -1154,16 +1184,21 @@ def plot_octant_cdf_cmd(
     coincide. Use `report-octant-finetuning` for that.
     """
     runs = _octant_runs(run_id, all_runs, outputs_root)
+    layouts = _octant_layouts(layout, all_runs, runs)
     variants = variant or [v for v, _ in octant_finetuning.VARIANTS]
-    for run in runs:
-        for v in variants:
-            try:
-                path = octant_finetuning.write_cdf(
-                    run, v, analysis_root=analysis_root, dpi=dpi)
-            except MissingArtifactError as exc:
-                typer.echo(f"{run.run_id} {v} · skipped: {exc}")
-                continue
-            typer.echo(f"{run.run_id} {v} · wrote {path}")
+    for lay in layouts:
+        groups = [[r] for r in runs] if lay == octant_finetuning.PER_RUN else [runs]
+        for group in groups:
+            for v in variants:
+                try:
+                    path = octant_finetuning.write_cdf(
+                        group, v, analysis_root=analysis_root, dpi=dpi)
+                except (MissingArtifactError, ValueError) as exc:
+                    typer.echo(f"{'+'.join(r.run_id for r in group)} {v} "
+                               f"[{lay}] · skipped: {exc}")
+                    continue
+                typer.echo(f"{'+'.join(r.run_id for r in group)} {v} "
+                           f"[{lay}] · wrote {path}")
 
 
 @app.command("report-octant-finetuning")
@@ -1174,6 +1209,16 @@ def report_octant_finetuning_cmd(
     ),
     variant: list[str] = typer.Option(
         None, "--variant", help="octant_cbg_hull and/or octant_cbg_spl; default both."
+    ),
+    layout: list[str] = typer.Option(
+        None,
+        "--layout",
+        help=(
+            f"{octant_finetuning.PER_RUN} (one artifact set per run) or "
+            f"{octant_finetuning.POOLED} (every run's targets as one "
+            f"population, into _cross/). Repeatable; default: "
+            f"{octant_finetuning.PER_RUN}."
+        ),
     ),
     baseline: list[str] = typer.Option(
         None,
@@ -1206,17 +1251,21 @@ def report_octant_finetuning_cmd(
             f"unknown --baseline {unknown}; pick from "
             f"{list(octant_finetuning.BASELINES)}")
     runs = _octant_runs(run_id, all_runs, outputs_root)
+    layouts = _octant_layouts(layout, all_runs, runs)
     variants = variant or [v for v, _ in octant_finetuning.VARIANTS]
-    for run in runs:
-        for v in variants:
-            for b in bases:
-                try:
-                    path = octant_finetuning.write_table(
-                        run, v, baseline=b, analysis_root=analysis_root)
-                except (MissingArtifactError, ValueError) as exc:
-                    typer.echo(f"{run.run_id} {v} vs {b} · skipped: {exc}")
-                    continue
-                typer.echo(f"{run.run_id} {v} vs {b} · wrote {path}")
+    for lay in layouts:
+        groups = [[r] for r in runs] if lay == octant_finetuning.PER_RUN else [runs]
+        for group in groups:
+            label = "+".join(r.run_id for r in group)
+            for v in variants:
+                for b in bases:
+                    try:
+                        path = octant_finetuning.write_table(
+                            group, v, baseline=b, analysis_root=analysis_root)
+                    except (MissingArtifactError, ValueError) as exc:
+                        typer.echo(f"{label} {v} vs {b} [{lay}] · skipped: {exc}")
+                        continue
+                    typer.echo(f"{label} {v} vs {b} [{lay}] · wrote {path}")
 
 
 if __name__ == "__main__":

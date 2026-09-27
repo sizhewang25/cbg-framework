@@ -102,8 +102,10 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 
+from scripts.analysis.v5.modules import cross
 from scripts.analysis.v5.modules.paths import (
     DEFAULT_OUTPUTS_ROOT,
+    OCTANT_FINETUNING_KIND,
     MissingArtifactError,
     RunPaths,
 )
@@ -228,6 +230,55 @@ Y_LABEL = "fraction of targets"
 
 #: Percentiles the CSV publishes per arm.
 PERCENTILES: tuple[int, ...] = (5, 25, 50, 75, 90, 95)
+
+
+#: Layouts. `per-run` writes into each run's own `octant-finetuning/`;
+#: `pooled` micro-pools every run's targets into one population and writes to
+#: `_cross/octant-finetuning/<datasets>@<arm>/`.
+PER_RUN = "per-run"
+POOLED = "pooled"
+LAYOUTS: tuple[str, ...] = (PER_RUN, POOLED)
+
+
+def assemble_pooled(runs: list[RunPaths], variant: str
+                    ) -> tuple[pd.DataFrame, list[str]]:
+    """Micro-pool: every run's per-target rows concatenated into one frame.
+
+    Micro, not macro -- rows are concatenated, so a dataset weighs by its
+    target count (as01 399, as02 412, as03 458). Averaging the runs' published
+    percentiles is a different quantity and would give a 458-target dataset the
+    same say as a 399-target one.
+
+    Two guards, both strict, both borrowed from `cross`. Every run must score
+    the same arms, or a pooled column would rest on a different denominator
+    from its neighbours. And no target id may appear in two runs, or it lands
+    in the denominator twice.
+
+    Pooling is lossy in a way worth stating: the weighted-over-unweighted gain
+    runs 14.6x on as01 and 1.8x on as03, and one pooled number reports neither.
+    `--layout per-run` is what shows that spread; the manifest records the
+    per-run p50s so a reader of the pooled artifact can still see it.
+    """
+    frames, scored, tg_ids = {}, {}, {}
+    for run in runs:
+        wide, present = assemble(run, variant)
+        wide = wide.assign(run_id=run.run_id, dataset=cross.short_dataset(run.run_id))
+        # Site ids are only unique within a dataset; two runs can both hold a
+        # site at the same rounded coordinate without it being one site.
+        wide["site"] = wide.dataset + ":" + wide.site
+        frames[run.run_id], scored[run.run_id] = wide, set(present)
+        tg_ids[run.run_id] = set(wide.target_id)
+
+    common = cross.guard_common_methods(
+        scored, remedy="--layout per-run to keep each dataset on its own figure.")
+    cross.guard_disjoint_tgs(
+        tg_ids,
+        remedy="Use --layout per-run, which keeps each dataset on its own figure.")
+
+    keep = [t for t in ARM_TAGS if t in common]
+    cols = ["target_id", "site", "fold", "run_id", "dataset"] + keep
+    pooled = pd.concat([f[cols] for f in frames.values()], ignore_index=True)
+    return pooled, keep
 
 
 def artifact_names(variant: str, baseline: str, kind: str) -> tuple[str, ...]:
@@ -517,12 +568,15 @@ def to_latex(t: pd.DataFrame, term: str, run_id: str, baseline_label: str,
 # ---- manifests ---------------------------------------------------------------
 
 
-def _common_manifest(run: RunPaths, variant: str, term: str,
+def _common_manifest(runs: list[RunPaths], variant: str, term: str,
                      wide: pd.DataFrame, present: list[str]) -> dict:
-    coverage = fold_coverage(run, variant)
+    pooled = len(runs) > 1
+    coverage = fold_coverage(runs[0], variant) if not pooled else {
+        t: min(fold_coverage(r, variant)[t] for r in runs) for t in present}
     complete = len(set(coverage[t] for t in present)) == 1
-    return {
-        "run_id": run.run_id,
+    body = {
+        "layout": POOLED if pooled else PER_RUN,
+        "run_id": "+".join(r.run_id for r in runs) if pooled else runs[0].run_id,
         "variant": variant,
         "term": term,
         "n_targets": int(len(wide)),
@@ -560,15 +614,36 @@ def _common_manifest(run: RunPaths, variant: str, term: str,
         ),
         "site_note": (
             f"{int(wide.site.nunique())} distinct coordinates behind "
-            f"{len(wide)} targets -- the dataset holds ~20 IP replicas per "
+            f"{len(wide)} targets -- the datasets hold ~20 IP replicas per "
             f"site, so any interval computed by resampling TARGETS rather than "
             f"sites is overstated by roughly sqrt(20)."
         ),
     }
+    if pooled:
+        per_run = {
+            d: {t: float(g[t].median()) for t in present}
+            for d, g in wide.groupby("dataset")
+        }
+        body["pooling"] = {
+            "rule": (
+                "micro-pool: each run's rows concatenated into one population, "
+                "so a dataset weighs by its target count. Percentiles are "
+                "recomputed over the concatenation, never averaged across runs."
+            ),
+            "n_per_dataset": {d: int(len(g)) for d, g in wide.groupby("dataset")},
+            "p50_km_per_dataset": per_run,
+            "lossy_note": (
+                "one pooled number hides a real spread: the "
+                "weighted-over-unweighted p50 gain runs 14.6x on as01 and 1.8x "
+                "on as03. Read p50_km_per_dataset, or use --layout per-run, "
+                "before quoting the pooled figure as the result."
+            ),
+        }
+    return body
 
 
-def cdf_manifest(run, variant, term, wide, present, table) -> dict:
-    body = _common_manifest(run, variant, term, wide, present)
+def cdf_manifest(runs, variant, term, wide, present, table) -> dict:
+    body = _common_manifest(runs, variant, term, wide, present)
     steep = [t for t in present if t != "unw"]
     spread = {
         f"p{p}": float(max(wide[t].quantile(p / 100) for t in steep)
@@ -613,8 +688,8 @@ def cdf_manifest(run, variant, term, wide, present, table) -> dict:
     return body
 
 
-def table_manifest(run, variant, term, wide, present, baseline, table) -> dict:
-    body = _common_manifest(run, variant, term, wide, present)
+def table_manifest(runs, variant, term, wide, present, baseline, table) -> dict:
+    body = _common_manifest(runs, variant, term, wide, present)
     body.update({
         "artifact": "paired per-target table",
         "baseline": ARM_LABEL[baseline],
@@ -646,32 +721,52 @@ def table_manifest(run, variant, term, wide, present, baseline, table) -> dict:
 # ---- orchestration -----------------------------------------------------------
 
 
-def write_cdf(run: RunPaths, variant: str, *, analysis_root: Path | None = None,
-              dpi: int = 300) -> Path:
+def _out_dir(runs: list[RunPaths], analysis_root: Path | None) -> Path:
+    """Per-run artifacts land in the run's own kind directory; pooled ones in
+    `_cross/octant-finetuning/<datasets>@<arm>/`, keyed by the dataset set and
+    the shared arm so a two-run pool cannot overwrite a three-run one."""
+    if len(runs) == 1:
+        return runs[0].octant_finetuning_dir(root=analysis_root)
+    return cross.cross_dir([r.run_id for r in runs], analysis_root=analysis_root,
+                           kind=OCTANT_FINETUNING_KIND)
+
+
+def _label(runs: list[RunPaths]) -> str:
+    return (runs[0].run_id if len(runs) == 1
+            else cross.dataset_slug([r.run_id for r in runs]))
+
+
+def write_cdf(runs: RunPaths | list[RunPaths], variant: str, *,
+              analysis_root: Path | None = None, dpi: int = 300) -> Path:
+    runs = [runs] if isinstance(runs, RunPaths) else list(runs)
     term = dict(VARIANTS)[variant]
-    wide, present = assemble(run, variant)
+    wide, present = (assemble(runs[0], variant) if len(runs) == 1
+                     else assemble_pooled(runs, variant))
     table = cdf_table(wide, present)
 
     png_name, csv_name, man_name = artifact_names(variant, BASELINE_TAG, "cdf")
-    out = run.octant_finetuning_dir(root=analysis_root)
-    plot_cdf(wide, present, term, run.run_id, out / png_name, dpi=dpi)
+    out = _out_dir(runs, analysis_root)
+    plot_cdf(wide, present, term, _label(runs), out / png_name, dpi=dpi)
     table.to_csv(out / csv_name, index=False)
     (out / man_name).write_text(json.dumps(
-        cdf_manifest(run, variant, term, wide, present, table), indent=2))
+        cdf_manifest(runs, variant, term, wide, present, table), indent=2))
     return out / png_name
 
 
-def write_table(run: RunPaths, variant: str, *, baseline: str = BASELINE_TAG,
+def write_table(runs: RunPaths | list[RunPaths], variant: str, *,
+                baseline: str = BASELINE_TAG,
                 analysis_root: Path | None = None) -> Path:
+    runs = [runs] if isinstance(runs, RunPaths) else list(runs)
     term = dict(VARIANTS)[variant]
-    wide, present = assemble(run, variant)
+    wide, present = (assemble(runs[0], variant) if len(runs) == 1
+                     else assemble_pooled(runs, variant))
     t = build_table(wide, present, baseline=baseline)
 
     csv_name, tex_name, man_name = artifact_names(variant, baseline, "table")
-    out = run.octant_finetuning_dir(root=analysis_root)
+    out = _out_dir(runs, analysis_root)
     t.to_csv(out / csv_name, index=False)
     (out / tex_name).write_text(
-        to_latex(t, term, run.run_id, ARM_LABEL[baseline], len(wide)))
+        to_latex(t, term, _label(runs), ARM_LABEL[baseline], len(wide)))
     (out / man_name).write_text(json.dumps(
-        table_manifest(run, variant, term, wide, present, baseline, t), indent=2))
+        table_manifest(runs, variant, term, wide, present, baseline, t), indent=2))
     return out / csv_name

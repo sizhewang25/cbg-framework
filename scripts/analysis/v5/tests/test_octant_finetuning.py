@@ -21,8 +21,13 @@ from scripts.analysis.v5.modules.paths import MissingArtifactError, RunPaths
 
 
 def _combo(tmp_path, run_id, variant, tag, errors, *, folds=("fold_0",),
-           lat_step=0.0, finished=True):
-    """Write a combo's per-fold targets.parquet (+ run.json when finished)."""
+           lat_step=0.0, finished=True, first_id=0):
+    """Write a combo's per-fold targets.parquet (+ run.json when finished).
+
+    `first_id` offsets the target ids so two runs can be given disjoint
+    rosters -- pooling refuses overlapping ones, and the guard needs both
+    cases exercised.
+    """
     combo = f"{variant}_{tag}" if tag else variant
     per = len(errors) // len(folds)
     for i, fold in enumerate(folds):
@@ -30,7 +35,7 @@ def _combo(tmp_path, run_id, variant, tag, errors, *, folds=("fold_0",),
         d.mkdir(parents=True, exist_ok=True)
         chunk = errors[i * per:(i + 1) * per]
         pd.DataFrame({
-            "target_id": [f"tg-{i * per + j}" for j in range(len(chunk))],
+            "target_id": [f"tg-{first_id + i * per + j}" for j in range(len(chunk))],
             "target_lat": [40.0 + lat_step * j for j in range(len(chunk))],
             "target_lon": [-70.0] * len(chunk),
             "error_km": chunk,
@@ -85,7 +90,7 @@ class TestPartialRuns:
         _combo(tmp_path, "p-wsweep", "octant_cbg_hull", "ip1", [1.0])  # fold_0 only
         run = RunPaths("p-wsweep", tmp_path, "generic_csv", "anchors_to_probes")
         wide, present = O.assemble(run, "octant_cbg_hull")
-        m = O._common_manifest(run, "octant_cbg_hull", "OCT-H", wide, present)
+        m = O._common_manifest([run], "octant_cbg_hull", "OCT-H", wide, present)
         assert m["complete"] is False
         assert "INNER JOIN" in m["partial_note"]
         assert m["fold_coverage"] == {"unw": 2, "ip1": 1}
@@ -245,3 +250,75 @@ class TestArmMetadata:
     def test_every_arm_can_serve_as_a_baseline(self):
         assert O.BASELINE_TAG == "unw"
         assert set(O.BASELINES) == set(O.ARM_TAGS)
+
+
+class TestPooling:
+    """Micro-pooling across runs, and the two guards that make it legal."""
+
+    def _two_runs(self, tmp_path, *, share_ids=False, drop_arm=False):
+        for i, run in enumerate(("r1-wsweep", "r2-wsweep")):
+            first = 0 if share_ids else i * 100
+            _combo(tmp_path, run, "octant_cbg_hull", "unw",
+                   [100.0, 200.0], first_id=first)
+            if not (drop_arm and i == 1):
+                _combo(tmp_path, run, "octant_cbg_hull", "ip1",
+                       [10.0, 300.0], first_id=first)
+        return [RunPaths(r, tmp_path, "generic_csv", "anchors_to_probes")
+                for r in ("r1-wsweep", "r2-wsweep")]
+
+    def test_rows_are_concatenated_not_averaged(self, tmp_path):
+        """Micro-pool: a dataset weighs by its target count, so the pooled
+        frame is the sum of the inputs' rows."""
+        runs = self._two_runs(tmp_path)
+        wide, present = O.assemble_pooled(runs, "octant_cbg_hull")
+        assert len(wide) == 4
+        assert present == ["unw", "ip1"]
+        assert set(wide.dataset) == {"r1", "r2"}
+
+    def test_shared_target_ids_are_refused(self, tmp_path):
+        """A shared id lands in the pooled denominator twice."""
+        runs = self._two_runs(tmp_path, share_ids=True)
+        with pytest.raises(ValueError, match="share"):
+            O.assemble_pooled(runs, "octant_cbg_hull")
+
+    def test_an_arm_missing_from_one_run_is_refused(self, tmp_path):
+        """Pooling it would rest that column on a different denominator."""
+        runs = self._two_runs(tmp_path, drop_arm=True)
+        with pytest.raises(ValueError, match="not scored in every run"):
+            O.assemble_pooled(runs, "octant_cbg_hull")
+
+    def test_sites_are_namespaced_per_dataset(self, tmp_path):
+        """A rounded coordinate is only unique within one dataset; without the
+        prefix two runs' sites would merge and the clustered bootstrap would
+        resample a site that does not exist."""
+        runs = self._two_runs(tmp_path)
+        wide, _ = O.assemble_pooled(runs, "octant_cbg_hull")
+        assert wide.site.nunique() == 2
+        assert all(s.split(":")[0] in {"r1", "r2"} for s in wide.site)
+
+    def test_pooled_manifest_carries_the_per_dataset_spread(self, tmp_path):
+        """One pooled number hides a real spread, so the per-dataset p50s ride
+        along in the manifest rather than only in the per-run artifacts."""
+        runs = self._two_runs(tmp_path)
+        wide, present = O.assemble_pooled(runs, "octant_cbg_hull")
+        m = O._common_manifest(runs, "octant_cbg_hull", "OCT-H", wide, present)
+        assert m["layout"] == O.POOLED
+        assert m["pooling"]["n_per_dataset"] == {"r1": 2, "r2": 2}
+        assert set(m["pooling"]["p50_km_per_dataset"]) == {"r1", "r2"}
+        assert "lossy_note" in m["pooling"]
+
+    def test_per_run_manifest_has_no_pooling_block(self, tree):
+        run = _run(tree)
+        wide, present = O.assemble(run, "octant_cbg_hull")
+        m = O._common_manifest([run], "octant_cbg_hull", "OCT-H", wide, present)
+        assert m["layout"] == O.PER_RUN
+        assert "pooling" not in m
+
+    def test_pooled_artifacts_land_under_cross(self, tmp_path):
+        runs = self._two_runs(tmp_path)
+        out = tmp_path / "analysis"
+        O.write_cdf(runs, "octant_cbg_hull", analysis_root=out, dpi=60)
+        O.write_table(runs, "octant_cbg_hull", analysis_root=out)
+        d = out / "_cross" / "octant-finetuning" / "r1+r2@wsweep"
+        assert (d / "error_cdf.octant_cbg_hull.png").exists()
+        assert (d / "paired.octant_cbg_hull.vs-unw.csv").exists()
