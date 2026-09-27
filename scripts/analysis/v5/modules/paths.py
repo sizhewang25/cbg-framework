@@ -30,6 +30,7 @@ _NON_SOURCE_DIRS = frozenset({"eval_source", "eval_dataset", "bench_eval"})
 ANSWER_SPACE_KIND = "answer-space"
 CLASSIFY_KIND = "classify"
 MTL_MAP_KIND = "mtl-map"
+OCTANT_FINETUNING_KIND = "octant-finetuning"
 
 
 class MissingArtifactError(FileNotFoundError):
@@ -166,6 +167,18 @@ class RunPaths:
         out = self.analysis_dir(MTL_MAP_KIND, root=root) / "regions"
         out.mkdir(parents=True, exist_ok=True)
         return out
+
+
+    def octant_finetuning_dir(self, *, root: Path | None = None) -> Path:
+        """`<root>/<run_id>/octant-finetuning/` -- rung-free, like the region
+        cache.
+
+        The weight-scorer sweep compares arms on `error_km`, the distance from
+        the prediction to the raw TG coordinate. No answer space and no nside
+        enter that, so slugging this under `healpix-<n>/` would write one
+        byte-identical set of artifacts per rung.
+        """
+        return self.analysis_dir(OCTANT_FINETUNING_KIND, root=root)
 
 
 def discover_runs(root: Path | str = DEFAULT_OUTPUTS_ROOT) -> list[RunPaths]:

@@ -56,6 +56,7 @@ from scripts.analysis.v5.modules import (
     map_answer_space,
     map_mtl,
     mapping,
+    octant_finetuning,
 )
 from scripts.analysis.v5.modules import grid as G
 from scripts.analysis.v5.modules.paths import (
@@ -1099,6 +1100,123 @@ def plot_mtl_map_cmd(
             f"frame {tuple(round(v, 1) for v in extent)}"
         )
         typer.echo(f"wrote {path}")
+
+
+def _octant_runs(run_id: list[str], all_runs: bool, outputs_root: Path):
+    """Runs holding at least one scored weight-sweep arm.
+
+    `--all-runs` filters rather than taking everything: a mesh or weighted run
+    carries no `octant_cbg_*_ip1` combos, and asking for one would raise on a
+    run the caller never meant to include.
+    """
+    if all_runs and run_id:
+        raise typer.BadParameter("pass --run-id or --all-runs, not both")
+    if run_id:
+        return [resolve_run(r, outputs_root) for r in run_id]
+    runs = [
+        r for r in discover_runs(outputs_root)
+        if any(c.startswith(f"{v}_") and c.split("_")[-1] in octant_finetuning.ARM_TAGS
+               for v, _ in octant_finetuning.VARIANTS for c in r.combo_ids)
+    ]
+    if not runs:
+        raise typer.BadParameter(
+            f"no run under {outputs_root} holds weight-sweep arms; run "
+            f"./cli.sh --configfile configs/<asN>-...-wsweep.yaml first")
+    return runs
+
+
+@app.command("plot-octant-cdf")
+def plot_octant_cdf_cmd(
+    run_id: list[str] = typer.Option(None, "--run-id", help="Sweep run (repeatable)."),
+    all_runs: bool = typer.Option(
+        False, "--all-runs", help="Every run under --outputs-root holding sweep arms."
+    ),
+    variant: list[str] = typer.Option(
+        None, "--variant", help="octant_cbg_hull and/or octant_cbg_spl; default both."
+    ),
+    dpi: int = typer.Option(300, "--dpi"),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Error-distance CDF across the Octant weight scorers, log x.
+
+    Writes `error_cdf.<variant>.{png,csv,manifest.json}` into
+    `octant-finetuning/` -- rung-free, because no answer space enters a
+    comparison of weight functions on distance to the raw TG coordinate.
+
+    Every arm the sweep config declares is drawn, hue by decay family and dash
+    by steepness rank within it. Only arms from this run appear: the shipped
+    `exp(-rtt/50)` lives in the parent mesh run and is deliberately absent, so
+    the figure shows what the weight function buys over not weighting at all.
+
+    Being unpaired, it cannot show what an arm costs on the targets it makes
+    worse -- the steep arms differ sharply there while their curves nearly
+    coincide. Use `report-octant-finetuning` for that.
+    """
+    runs = _octant_runs(run_id, all_runs, outputs_root)
+    variants = variant or [v for v, _ in octant_finetuning.VARIANTS]
+    for run in runs:
+        for v in variants:
+            try:
+                path = octant_finetuning.write_cdf(
+                    run, v, analysis_root=analysis_root, dpi=dpi)
+            except MissingArtifactError as exc:
+                typer.echo(f"{run.run_id} {v} · skipped: {exc}")
+                continue
+            typer.echo(f"{run.run_id} {v} · wrote {path}")
+
+
+@app.command("report-octant-finetuning")
+def report_octant_finetuning_cmd(
+    run_id: list[str] = typer.Option(None, "--run-id", help="Sweep run (repeatable)."),
+    all_runs: bool = typer.Option(
+        False, "--all-runs", help="Every run under --outputs-root holding sweep arms."
+    ),
+    variant: list[str] = typer.Option(
+        None, "--variant", help="octant_cbg_hull and/or octant_cbg_spl; default both."
+    ),
+    baseline: list[str] = typer.Option(
+        None,
+        "--baseline",
+        help=(
+            "Sweep arm to pair against, repeatable. Default: unw, the sweep's "
+            "own control. Named in every filename, so two baselines cannot "
+            "overwrite each other or be quoted for one another."
+        ),
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Paired per-target table for the Octant weight scorers.
+
+    Writes `paired.<variant>.vs-<baseline>.{csv,tex,manifest.json}` into
+    `octant-finetuning/`. This is the paired half of the pair: better / worse /
+    tie shares against the unweighted control, and the magnitude of each
+    conditional on a target moving that way. Ties are around half the roster --
+    the arrangement's top face simply does not move -- so the statistic worth
+    quoting is the win:loss ratio among targets that did.
+
+    Regressions report n, median and max rather than a high percentile: those
+    cohorts hold 4-34 targets, where a p99 is the maximum under another name.
+    """
+    bases = baseline or [octant_finetuning.BASELINE_TAG]
+    unknown = [b for b in bases if b not in octant_finetuning.BASELINES]
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown --baseline {unknown}; pick from "
+            f"{list(octant_finetuning.BASELINES)}")
+    runs = _octant_runs(run_id, all_runs, outputs_root)
+    variants = variant or [v for v, _ in octant_finetuning.VARIANTS]
+    for run in runs:
+        for v in variants:
+            for b in bases:
+                try:
+                    path = octant_finetuning.write_table(
+                        run, v, baseline=b, analysis_root=analysis_root)
+                except (MissingArtifactError, ValueError) as exc:
+                    typer.echo(f"{run.run_id} {v} vs {b} · skipped: {exc}")
+                    continue
+                typer.echo(f"{run.run_id} {v} vs {b} · wrote {path}")
 
 
 if __name__ == "__main__":
