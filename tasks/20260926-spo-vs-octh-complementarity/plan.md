@@ -77,10 +77,17 @@ projection, so the plane is a drawing concern. The earlier planar figures
 (1,018 / 1,627 / 98) differ by a median 5 km and rank the 65 sites identically
 to Spearman 0.9995 — nothing here turns on it, which is why consistency wins.
 
-**C3 — Spotter is far more stable per site.** All-or-nothing on **61 of 65
-sites (93.8%)** against Octant-Hull's **39 of 65 (60.0%)**; OCT-H splits 26
-sites. This is the one finding that is a property of the *estimator* rather
-than of the metric.
+**C3 — Spotter is far more stable.** Counted per **Voronoi cell**, which is
+the unit the metric grades in: all-or-nothing on **57 of 61 cells (93.4%)**
+against Octant-Hull's **35 of 61 (57.4%)**; OCT-H splits 26. Per site it reads
+61/65 (93.8%) against 39/65 (60.0%) — the cell is the right denominator
+because `correct` means "nearest seed is the target's seed", so two sites
+sharing a seed are one question.
+
+The companion spread figure stays per **site**: it asks whether a method
+answers identical coordinates identically, and two sites in one cell are up to
+one `grid_km` apart. This is the one finding that is a property of the
+*estimator* rather than of the metric.
 
 **C4 — Spotter never outperforms on error.** Measured on the **565 targets
 both methods place in the correct cell** (34 `(run, site_id)` pairs):

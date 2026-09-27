@@ -56,7 +56,10 @@ paper's caption, or it keeps it as the one titled figure in the set.
 - [x] Axis labels in the paper's wording, title case: ratio `Fraction of Correct Predictions per Site` / `Fraction of Sites`, spread `Std. Dev. of Grid Error Distance`. Note `figure_peripherality` is still sentence case — **worth unifying**.
 - [x] **65 points per box**, pooled: as01 20 + as02 22 + as03 23 sites, each over ~20 replicas, 1,269 targets behind each box. No site is dropped.
 - [x] **Solved rows only**, both panels — the same rule as `correct_mask`. SPO and OCT-H never fall back on these meshes so the two readings coincide; the rule is fixed because it will not always, and VAN is the method it bites. A site with fewer than two solved rows has no spread and is absent from (b) rather than drawn at 0.
-- [x] Reproduced from the CSV alone: SPO unanimous on 61/65 (93.8%), OCT-H on 39/65 (60.0%) with 26 splits; per-site spread p50 **0.31** grids vs **1.22**, zero spread on **21** sites vs **5**.
+- [x] **Counted per Voronoi cell**, not per site: `correct` means the prediction's nearest seed is the target's seed, so two sites sharing a seed are one question the metric grades once. 61 cells from 65 sites; 4 cells hold two sites each.
+- [x] Reproduced from the CSV alone: SPO unanimous on **57/61 cells (93.4%)**, OCT-H on **35/61 (57.4%)** with 26 splits. Per site it was 61/65 and 39/65.
+- [x] The **spread figure stays per site** — it asks whether a method answers *identical coordinates* identically, and two sites in one cell are up to one `grid_km` apart, so pooling them would score a difference of input as inconsistency. The two figures now carry different keys in their twins and say so in `unit`.
+- [x] Per-site spread unchanged: p50 **0.31** grids vs **1.22**, zero spread on **21** sites vs **5**.
 - [x] `QUANTILES` now carries p5 and p95, so the spread figure's **drawn whisker ends are readable as numbers** (SPO p95 2.29 grids, OCT-H 5.52) instead of being a bound only the ink states. `spread_min`/`spread_max` sit beside them.
 - [x] Naming: these two use `spo_vs_octh`; C1 and C2 use `SPO-vs-OCT-H`. **Worth unifying** — not done here, because it renames committed artifacts.
 - [x] `pred_dist_to_tg_grid` added to `contest.TG_COLUMNS`, and `site_contest` now returns `n_solved_*` and `offset_sd_*`. C4 needs the column too.

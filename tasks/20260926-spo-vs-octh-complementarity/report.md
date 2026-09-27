@@ -57,10 +57,19 @@ figures live only in a session scratchpad; this task makes them reproducible.
 
 - **C3 is built** and reproduces `plan.md` exactly from the CSV twin: Spotter
   is all-or-nothing on **61 of 65** sites (93.8%) against Octant-Hull's **39**
-  (60.0%, 26 splits), and its per-site spread of grid error distance has median
-  **0.31** grids against **1.22**, with 21 zero-spread sites against 5. Each
-  box is 65 pooled sites (20 + 22 + 23) over 1,269 targets.
+  (57.4%, 26 splits) — counted per **Voronoi cell**, 61 of them over 65 sites,
+  because `correct` is a cell verdict and two sites sharing a seed are one
+  question. The companion spread figure stays per site (65) and has median
+  **0.31** grids against **1.22**, with 21 zero-spread sites against 5.
   `modules/figure_stability.py`, CLI `plot-stability`, 11 tests.
+- **The success ratio counts cells; the spread counts sites.** They looked
+  like one claim over one denominator and are not. Correctness is defined by
+  cell membership, so the ratio's unit is the cell — counting per site weights
+  a merged facility twice and grades something the metric never asks. The
+  spread asks whether identical coordinates get identical answers, which two
+  sites in one cell are not. Moving the ratio to cells shifts SPO 93.8% → 93.4%
+  and OCT-H 60.0% → 57.4%; the conclusion is unchanged and the denominator is
+  now defensible.
 - **C3 cuts both ways.** Spotter is perfectly consistent on more sites *and*
   worse on its worst: its per-site spread runs to **15.8** grids where
   Octant-Hull's stops at **6.5**. With whiskers at p5/p95 and no outliers that

@@ -96,3 +96,10 @@
   signed data: a non-negative offset that is genuinely 0 on 13% of a cohort
   cannot go on a log axis, and dropping those rows to make the axis work is
   hiding data to suit the drawing.
+- **Count in the unit the metric grades in.** `cell_label` is a verdict about a
+  Voronoi cell, so a per-site success ratio quietly weights a facility that
+  shares a seed with another twice and reports a denominator the metric never
+  uses. Two figures in one module can legitimately count different things —
+  the spread is about identical inputs, which is a site property — but then
+  the unit has to be named in the manifest and carried in the twin's key, or
+  61 and 65 sit side by side with nothing saying which is which.
