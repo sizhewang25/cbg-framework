@@ -353,3 +353,69 @@ def test_the_distance_is_great_circle():
     assert got[0] == pytest.approx(
         elementwise_km([SEATTLE[0]], [SEATTLE[1]], [clat], [clon])[0]
     )
+
+
+# -- the paired cohort ----------------------------------------------------
+
+
+def _data(a_rows, b_rows, run_id="as01-x-mesh"):
+    """A `ContestData` over one run, from two prebuilt frames."""
+    return CT.ContestData(
+        run_ids=[run_id], method_a="A", method_b="B",
+        frames={(run_id, "A"): a_rows, (run_id, "B"): b_rows},
+        seeds={run_id: pd.DataFrame(
+            {"seed_id": [0], "seed_lat": [SEATTLE[0]], "seed_lon": [SEATTLE[1]]}
+        )},
+        nside=CT.SOURCE_NSIDE,
+    )
+
+
+def test_only_targets_both_methods_got_right_are_paired():
+    """Comparing each method over its own correct set would score them on
+    different populations, which is the whole reason for this cohort."""
+    got = CT.both_correct_targets(
+        _data(frame({0: ok(2) + bad(2)}), frame({0: ok(3) + bad(1)}))
+    )
+    assert len(got) == 2
+    assert set(got["tg_id"]) == {"tg-0-0", "tg-0-1"}
+
+
+def test_a_declined_row_never_enters_the_cohort():
+    """`classify` labels a FALLBACK row on the baseline's coordinate, so it
+    can read `correct` while the method answered nothing."""
+    got = CT.both_correct_targets(
+        _data(frame({0: ok(3)}), frame({0: [("correct", "FALLBACK")] * 3}))
+    )
+    assert got.empty
+
+
+def test_the_difference_is_a_minus_b():
+    """Fixed: positive means `a` is further out. An earlier expectation had
+    the mass on the other side and the convention did not move to suit it."""
+    got = CT.both_correct_targets(
+        _data(frame({0: ok(2)}, offsets={0: [7, 1]}),
+              frame({0: ok(2)}, offsets={0: [2, 6]}))
+    ).set_index("tg_id")
+    assert got.loc["tg-0-0", "diff"] == 5 and got.loc["tg-0-0", "closer"] == CT.CLOSER_B
+    assert got.loc["tg-0-1", "diff"] == -5 and got.loc["tg-0-1", "closer"] == CT.CLOSER_A
+
+
+def test_level_is_its_own_answer():
+    """Folding ties into a winner would invent a direction on 9.2% of the real
+    cohort."""
+    got = CT.both_correct_targets(
+        _data(frame({0: ok(2)}, offsets={0: [4, 4]}),
+              frame({0: ok(2)}, offsets={0: [4, 4]}))
+    )
+    assert set(got["closer"]) == {CT.CLOSER_EQUAL}
+    assert (got["diff"] == 0).all()
+
+
+def test_the_paired_columns_are_all_emitted():
+    got = CT.both_correct_targets(_data(frame({0: ok(2)}), frame({0: ok(2)})))
+    assert list(got.columns) == list(CT.PAIRED_COLUMNS)
+
+
+def test_a_roster_mismatch_is_refused_in_the_cohort_too():
+    with pytest.raises(ValueError, match="do not score the same TGs"):
+        CT.both_correct_targets(_data(frame({0: ok(3)}), frame({0: ok(2)})))

@@ -110,6 +110,21 @@ TG_COLUMNS: tuple[str, ...] = (
 #: The column `offset_spread` writes, in grid steps.
 OFFSET_SD = "offset_sd"
 
+#: `both_correct_targets`' columns, in order. Per target, not per site: this
+#: is the one frame in the module that is not a site summary.
+PAIRED_COLUMNS: tuple[str, ...] = (
+    "run_id", "dataset", "tg_id", "site_id", "tg_seed_id",
+    "method_a", "method_b", "label_a", "label_b",
+    "offset_a", "offset_b", "diff", "closer",
+)
+
+#: Who was nearer on a target. `equal` is its own answer, not a rounding of
+#: either: on 9.2% of the both-correct cohort the two land the same distance
+#: out, and folding those into a winner would invent a direction.
+CLOSER_A = "a"
+CLOSER_B = "b"
+CLOSER_EQUAL = "equal"
+
 #: Degrees of freedom. A site's replicas are a sample of the addresses at a
 #: facility, not the population of them, so the spread is estimated rather
 #: than described. It needs two of them; a site with one solved row gets NaN
@@ -344,6 +359,64 @@ def seed_cloud_centroid_km(lats, lons, seed_lats, seed_lons) -> np.ndarray:
     return elementwise_km(
         lats, lons, np.full(lats.size, clat), np.full(lats.size, clon)
     )
+
+
+def both_correct_targets(data: "ContestData") -> pd.DataFrame:
+    """One row per target **both** methods place in the correct cell.
+
+    The cohort for the error comparison, and the only per-target frame here.
+    Restricting to targets both methods got right is what makes the
+    comparison fair: a method that answers fewer targets is not thereby more
+    accurate on the ones it does answer, and comparing over each method's own
+    correct set would score them on different populations.
+
+    `diff = offset_a - offset_b`, in grid steps. **The sign is fixed**:
+    positive means method `a` is further from the target, so on the paper's
+    pair the mass sits to the *right* of zero. An earlier expectation had it
+    leaning left; the data says otherwise and the convention does not move to
+    suit it.
+    """
+    parts = []
+    for run_id in data.run_ids:
+        a = data.frames[(run_id, data.method_a)]
+        b = data.frames[(run_id, data.method_b)]
+        ids_a, ids_b = set(a["tg_id"]), set(b["tg_id"])
+        if ids_a != ids_b:
+            raise ValueError(
+                f"{data.method_a} and {data.method_b} do not score the same TGs "
+                f"in {run_id}: {len(ids_a ^ ids_b)} differ"
+            )
+        a = a.set_index("tg_id").sort_index()
+        b = b.set_index("tg_id").sort_index()
+        keep = a.index[
+            correct_mask(a.reset_index()) & correct_mask(b.reset_index())
+        ]
+        offset_a = a.loc[keep, C.GRID_OFFSET].to_numpy()
+        offset_b = b.loc[keep, C.GRID_OFFSET].to_numpy()
+        diff = offset_a - offset_b
+        parts.append(
+            pd.DataFrame(
+                {
+                    "run_id": run_id,
+                    "dataset": cross.short_dataset(run_id),
+                    "tg_id": keep,
+                    "site_id": a.loc[keep, "site_id"].to_numpy(),
+                    "tg_seed_id": a.loc[keep, "tg_seed_id"].to_numpy(),
+                    "method_a": data.method_a,
+                    "method_b": data.method_b,
+                    "label_a": method_label(data.method_a),
+                    "label_b": method_label(data.method_b),
+                    "offset_a": offset_a,
+                    "offset_b": offset_b,
+                    "diff": diff,
+                    "closer": np.where(
+                        diff < 0, CLOSER_A, np.where(diff > 0, CLOSER_B, CLOSER_EQUAL)
+                    ),
+                }
+            )
+        )
+    out = pd.concat(parts, ignore_index=True)
+    return out.reindex(columns=list(PAIRED_COLUMNS))
 
 
 @dataclass(frozen=True)
