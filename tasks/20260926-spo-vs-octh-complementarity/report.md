@@ -85,6 +85,14 @@ figures live only in a session scratchpad; this task makes them reproducible.
   and per site Octant-Hull has the nearer median on **29 of 34**.
   `modules/figure_error_diff.py`, CLI `plot-error-diff`, 16 tests.
 
+- **C5 is built**, backing "Spotter can win with very large errors at the
+  periphery, but that is a small portion". On the 243 targets only Spotter
+  places correctly its offset runs to **35 grids** (~1,780 km) with p90 **11**;
+  on Octant-Hull's 236 it stops at **8**, with 31 landing in the target's own
+  grid where Spotter has none. The far tail is **13.6%** of Spotter's cohort
+  and **2.6%** of all targets. `modules/figure_exclusive_error.py`, CLI
+  `plot-exclusive-error`, 14 tests.
+
 ### Found while building C1
 
 - **The 1x3 map cannot be printed with its per-site labels.** A label is eight

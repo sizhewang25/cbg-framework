@@ -71,8 +71,19 @@ paper's caption, or it keeps it as the one titled figure in the set.
 - [x] CSV twin is the cohort itself, 565 rows. Every claim re-derived from it alone: shares 86.5/4.2/9.2, median +2, p95 +8, max +19, per mesh 86.9/85.7/86.8, per site 29 OCT-H / 2 SPO / 3 level.
 - [x] Companion in the manifest only: 21 SPO-win sites, offset p5/p50/p95 **1/3/35** vs **0/4/12**, OCT-H more accurate on **11 of 21** (SPO 8, level 2). Compared on an inner join of per-site medians, so a site one method never solved is not judged — `n_sites_compared` reports it.
 
+## Phase 5b: C5 — error on the exclusive cohorts — done 2026-09-27, `modules/figure_exclusive_error.py`
+- [x] CDF per cohort of the offset of **whichever method was right**; reading the other one's offset there would measure nothing, since it never reached the cell.
+- [x] x on **symlog**, not log: Octant-Hull lands 31 of its exclusive targets in the target's own grid, an offset of exactly 0, which a log axis cannot draw and dropping would be hiding data. Spotter has none.
+- [x] Each curve normalised to **its own cohort**, so the axis compares shapes. A common denominator would compress the tail the figure exists to show, and the cohorts are nearly the same size (19.1% vs 18.6%) anyway.
+- [x] Tail reported against **both denominators** — 13.6% of SPO's cohort beyond 10 grids, 2.6% of all targets — because "a small portion" means nothing without a stated one and the two differ fivefold.
+- [x] The x axis says `(symlog)` — an axis that looks logarithmic but shows zero has to say why it can.
+- [x] Each curve is marked where it **ends**: a dashed rule in the cohort's hue at its longest offset, labelled with that number (8 and 35). The ceilings are the claim, and a last riser carrying one target is easy to miss. The labels sit above y=1, which a CDF cannot reach.
+- [x] Legend upper-left, where both curves leave the most room.
+- [x] Twin is **every evaluated target** with its cohort, so the four-way partition (565 / 243 / 236 / 225 of 1,269) is checkable from the CSV alone.
+- [x] `contest.paired_targets` now owns the per-target arithmetic and `both_correct_targets` is a slice of it, so C4 and C5 cannot drift apart on what "correct" means.
+
 ## Phase 5: Verification
 - [ ] Reproduce every C1–C4 number in `plan.md` from the committed CSVs, not from a notebook.
-- [ ] Full v5 suite green. Baseline is **373**, not the 370 first recorded; C1 takes it to 415 (+20 `test_contest.py`, +22 `test_figure_contest_map.py`).
+- [ ] Full v5 suite green — **499** at C5. Baseline is **373**, not the 370 first recorded; C1 takes it to 415 (+20 `test_contest.py`, +22 `test_figure_contest_map.py`).
 - [ ] Render at paper column width and check nothing is clipped at final size.
 - [ ] Confirm each figure carries title + figure only.

@@ -88,3 +88,11 @@
   built from two `groupby().median()` calls compares fine until one method has
   no rows at some site, and then pandas raises rather than silently
   misaligning. Join explicitly and report how many pairs were comparable.
+- **"A small portion" needs its denominator stated, and often two.** The same
+  tail is 13.6% of Spotter's exclusive cohort and 2.6% of all evaluated
+  targets — a factor of five apart, and each is the honest answer to a
+  different question. Report both or the sentence is unfalsifiable.
+- **Reach for symlog whenever zero is a real value.** It is not only for
+  signed data: a non-negative offset that is genuinely 0 on 13% of a cohort
+  cannot go on a log axis, and dropping those rows to make the axis work is
+  hiding data to suit the drawing.

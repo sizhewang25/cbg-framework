@@ -96,6 +96,20 @@ Companion statistic, on the 21 sites Spotter wins: offset p5/p50/p95 of
 — 565 observations, consistent across meshes — and the 21-site figure is the
 per-site companion.
 
+**C5 — Spotter's exclusive wins are bought at distances Octant-Hull never
+reaches, and the far tail is a small part of the picture.** On the **243
+targets only Spotter places correctly** (19.1% of all 1,269), its offset has
+median 4 grids, p90 **11**, and max **35** — about 1,780 km. On the **236
+Octant-Hull alone places correctly** (18.6%), median 1.5, p90 6.5, max **8**,
+with 31 of them in the target's own grid where Spotter has none.
+
+The tail is small against either denominator, and both are needed: **13.6%**
+of Spotter's exclusive cohort lies beyond 10 grids, which is **2.6%** of all
+evaluated targets.
+
+Complement of C4 by construction: `both` 565, `only SPO` 243, `only OCT-H`
+236, `neither` 225 partition all 1,269.
+
 ## Approach
 
 **Four atomic modules**, one per claim — not one module with a `--figure`
