@@ -39,3 +39,8 @@
   with a rationale invented after the fact ("a property of the plane the
   partition is drawn in") — which is the tell. A projection in a number that
   scoring never touches is a smell even when, as here, it changes nothing.
+- **A fixed-canvas figure clips its axis label silently.** `tight_layout` fits
+  the label's height and lets a long one overrun both sides; saved without
+  `bbox_inches="tight"` the overhang is simply cut, and the first version lost
+  the last character of the x-label. Measure the label against the canvas in a
+  test rather than picking a figure width that happens to work.

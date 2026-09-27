@@ -34,6 +34,7 @@ Both ways out are one flag, and both are rendered and tested:
 
 ## Phase 2: C2 — peripherality boxplot — done 2026-09-26, `modules/figure_peripherality.py`
 - [x] Two horizontal boxplots, `SPO wins` and `OCT-H wins`, coloured by each method's palette hue.
+- [x] Distance is **seed → centroid of all seeds**, both ends in the answer space. Axis label: `normalized distance from the TG's seed to the centroid of all seeds`.
 - [x] X = centroid distance, **min-max normalised across the pooled sites**, linear scale. Normalised over all 65, not the 41 drawn, so both endpoints are real sites and the axis does not move when a site changes hands.
 - [x] Record the raw km behind the normalisation in the CSV — a normalised axis alone cannot be quoted. The twin carries all 65 sites with a `drawn` flag, because a twin holding only the drawn rows could not reproduce its own axis.
 - [x] Reproduced from the CSV alone: SPO-win min 1,020 km, p25 1,634, median 1,928; OCT-H from 91 km, median 1,459. SPO's lower quartile sits above OCT-H's median.

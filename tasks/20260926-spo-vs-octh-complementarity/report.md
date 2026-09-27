@@ -63,6 +63,21 @@ figures live only in a session scratchpad; this task makes them reproducible.
   tuning problem — twenty of them do not fit. `--no-labels` (counts to the CSV)
   and `--ncols 1 --panel-width 7` (a 7 x 14 in figure) are both rendered; the
   choice is the paper's. C2–C4 are not maps and are not affected.
+- **Both ends of the peripherality distance are seeds.** It was site-to-seed-
+  centroid; it is now seed-to-seed-centroid, so the measurement lives entirely
+  in the answer space and sites sharing a seed share a value (61 distinct
+  distances over 65 sites). It moved 8 sites by at most 12 km and changed no
+  quantile — the point is coherence, not the numbers.
+- **The seed's distance is not its cell's, and it does not matter here.**
+  Checked because a peripheral seed can own a large cell reaching back toward
+  the centre: as01's Seattle seed is 2,349 km out and its cell begins at 1,241.
+  The two rank the 65 sites at Spearman 0.87, so it is a real difference. But
+  the inward reach is the same size in both categories (median 404 km where
+  SPO wins, 333 where OCT-H does), and the claim holds under either — by cell
+  reach, SPO never wins inside 770 km while OCT-H wins a site whose cell
+  *contains* the centre. Measured with a projection-free ray scan in
+  `classify`'s own nearest-seed rule (agrees with the planar Voronoi to a
+  median 7 km); the code was not kept, since the axis stays on the seed.
 - **The centroid is spherical, not planar.** The plan specified EPSG:5070 and
   that was wrong: the cell partition is defined by great-circle nearest seed
   and `classify` uses no projection at all, so measuring peripherality in the

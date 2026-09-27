@@ -65,9 +65,13 @@ range.** All 21 SPO-win sites lie ≥ **1,020 km** from the seed-cloud centroid,
 with p25 **1,634 km** — above OCT-H's median of 1,459. OCT-H wins from **91 km**
 out.
 
-Distance is great-circle to the seeds' **spherical** centroid
-(`geodesy.spherical_centroid`, the same routine `seeds` places a seed with),
-not planar in EPSG:5070. The plan originally said EPSG:5070; that was wrong.
+Distance is great-circle from a site's **seed** to the spherical centroid of
+**all** that run's seeds (`geodesy.spherical_centroid`, the same routine
+`seeds` places a seed with) — both ends are points of the answer space, so the
+number says where a serving region sits rather than where a target sits inside
+one. Sites sharing a seed share a value: 61 distinct distances over 65 sites.
+Measuring from the site instead moved 8 of the 65 by at most 12 km and changed
+no quantile. Not planar in EPSG:5070. The plan originally said EPSG:5070; that was wrong.
 The partition is defined by great-circle nearest seed and `classify` uses no
 projection, so the plane is a drawing concern. The earlier planar figures
 (1,018 / 1,627 / 98) differ by a median 5 km and rank the 65 sites identically
