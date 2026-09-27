@@ -47,12 +47,14 @@
 - **A KDE is a claim, and the default bandwidth makes it for you.** A violin of
   65 shares piled on 0 and 1 drew Spotter's four split sites as a waist the
   width of Octant-Hull's twenty-six, and spilled density past 1 on a variable
-  that cannot exceed it.
-- **Bound a density by reflection, not by clipping the drawing.** Clipping the
-  violin body after the fact leaves a flat-topped shape that stops reading as a
-  violin, which is a reviewer's first comment. Mirroring the sample about each
-  bound before the KDE is bounded by construction, preserves the mass, and
-  looks like the plot it is.
+  that cannot exceed it. Reflection fixed the arithmetic and the shape still
+  read wrong — after two attempts the answer was that a bounded variable
+  concentrated on its endpoints should not be smoothed at all. An empirical CDF
+  has no bins, no bandwidth and no choices, and the claim sits in its geometry:
+  the jump at each end is the share at that end.
+- **Report the percentiles the figure draws.** Whiskers at p5/p95 state a bound
+  that nothing else in the artifact does, so the quantile list has to include
+  them or the ink is unquotable.
 - **Whiskers at p5/p95 with no outliers hide exactly the observation that
   argues the other way.** Legitimate, and it has to be said in the prose:
   the figure then reads "strictly more stable" when the tail says otherwise.

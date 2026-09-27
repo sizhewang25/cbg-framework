@@ -86,14 +86,17 @@ figures live only in a session scratchpad; this task makes them reproducible.
   tuning problem — twenty of them do not fit. `--no-labels` (counts to the CSV)
   and `--ncols 1 --panel-width 7` (a 7 x 14 in figure) are both rendered; the
   choice is the paper's. C2–C4 are not maps and are not affected.
-- **A default violin misrepresented the success ratio twice over.** Over 65
+- **The success-ratio figure was a violin twice and is now a CDF.** Over 65
   sites piled on 0 and 1, Scott's bandwidth spread Spotter's 4 split sites into
   a waist as wide as Octant-Hull's 26 — the figure denied the very claim it was
   drawn for — and the KDE put density above 1.0 on a variable that is a share.
-  Fixed by narrowing the bandwidth to 0.12 and bounding the density by
-  **reflection** (mirroring the sample about each bound before estimating)
-  rather than by clipping the drawn body, which had left a chopped silhouette
-  that did not read as a violin at all.
+  Narrowing the bandwidth and bounding by reflection fixed the arithmetic but
+  left a shape that still did not read as a violin. A share of 65 sites
+  concentrated on two values has no shape a smoother can be trusted with, so it
+  is now an **empirical CDF**: exact, no bins, no bandwidth. The claim reads off
+  the geometry — the jump at 0 plus the jump at 1 *is* the unanimity rate
+  (0.354 + 0.585 = 0.938 for SPO, 0.185 + 0.415 = 0.600 for OCT-H), and between
+  them SPO is flat where OCT-H climbs.
 - **The spread figure no longer shows its tail, by request.** Whiskers are p5
   and p95 with no outliers, so Spotter's worst site at 15.8 grids is off the
   page. It is the half of C3 that runs against Spotter, and it now survives
