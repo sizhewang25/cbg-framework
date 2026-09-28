@@ -47,10 +47,9 @@
 # past 91%", which is the intended semantics and is kept unchanged.
 #
 # But since the baseline IS the hull, every fallback converts a spline arm's VP
-# into a baseline VP. Fallback counts on as01 fold_0, of 134 VPs (as01 is the
-# only dataset refit offline -- recompute these for this one from its own
-# fit_checkpoint.pkl before publishing the table):
-#   cov95 -> 17    cov90 -> 28    cov75 -> 25    cov50 -> 39
+# into a baseline VP. MEASURED on this dataset, over all 5 folds (670 VP-folds
+# with a fitted spline), as the share whose band was discarded:
+#   cov95 -> 4.5%   cov90 -> 14.0%   cov75 -> 11.0%   cov50 -> 13.4%
 # Each arm is therefore a blend of "spline at coverage c" and "hull", in a
 # proportion that varies for reasons unrelated to c. Root cause is the replica
 # structure: 23 distinct probe coordinates on as03 make coverage(delta) a
