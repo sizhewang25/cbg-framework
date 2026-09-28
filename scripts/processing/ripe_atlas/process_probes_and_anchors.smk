@@ -34,6 +34,11 @@ eval set produced by `select_corpora`.
 Requires CLICKHOUSE_HOST / CLICKHOUSE_PASSWORD in .env. ClickHouse can serve
 the queries in parallel, so `-j 2` lets the two sanitize rules run together.
 
+Downstream: `export_ripe_mesh_csv.smk` in this directory turns the corpora
+produced here into a flat canonical measurement CSV under `datasets/raw/`,
+which then feeds `scripts/processing/source/preprocess_cbg_raw_data.smk`
+(mainland filter → SOI sanitization → `datasets/final/`).
+
 Companion to the city-geocoding pipeline at `add_city_to_probes_anchors.smk`
 in this directory (Nominatim / reverse_geocoder lookups), which consumes the
 outputs of this pipeline. The two are intentionally separate: this one is

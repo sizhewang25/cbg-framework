@@ -6,15 +6,30 @@
 # WHY "asmix"
 # The as0X datasets are one operator: every target belongs to a single peer, so
 # a method that learns that peer's footprint does well on all of them. This one
-# is the opposite shape. The VPs are 53 RIPE probes inside AS7018, but the 78
-# targets span 58 DISTINCT ASNs -- roughly one target per AS. Nothing about a
-# target's network generalises to the next one, so it is the dataset that asks
-# whether a result carries beyond a single operator's topology.
+# is the opposite shape. The VPs are 122 RIPE probes inside AS7018, but the 95
+# targets span 68 DISTINCT ASNs -- close to one target per AS, the largest AS
+# holding only 7. Nothing about a target's network generalises to the next one,
+# so it is the dataset that asks whether a result carries beyond a single
+# operator's topology.
 #
-# Same CSV as configs/as7018-ripe-mesh.yaml, and the same
-# `setup: probes_to_anchors` it needs: the probes are the vantage points and the
-# anchors are the targets, which is the reverse of the as0X runs' roles. A NEW
-# run_id, so neither that run's tree nor the as0X trees are written to.
+# The CSV is built by the standardised source pipeline, not by hand:
+#
+#   snakemake -s scripts/processing/ripe_atlas/export_ripe_mesh_csv.smk -j 1
+#   snakemake -s scripts/processing/source/preprocess_cbg_raw_data.smk -j 1 \
+#       --config raw=datasets/raw/ripe-asmix-mesh.csv
+#
+# which exports the AS7018 probe corpus x shared anchor set out of ClickHouse
+# (85,709 pairs), then applies the same mainland-US filter and SOI sanitization
+# every as0X dataset goes through -- 11,384 rows survive, 0 SOI violations. That
+# is the reason to prefer it over the older hand-rolled
+# datasets/ripe_as7018/as7018-us-test01.csv that configs/as7018-ripe-mesh.yaml
+# still reads: same measurement, same roles, but 2.3x the VPs and a provenance
+# the as0X runs share.
+#
+# `setup: probes_to_anchors` is what those roles need: the probes are the
+# vantage points and the anchors are the targets, which is the reverse of the
+# as0X runs' roles. A NEW run_id, so neither that run's tree nor the as0X trees
+# are written to.
 #
 # WHAT IS CARRIED FROM THE PRO SERIES, AND WHAT IS NOT
 # The `combos:` block is configs/pro-as0N-mesh.yaml's verbatim. Two things in it
@@ -51,10 +66,10 @@ benchmark:
   slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
 
   source_kwargs:
-    csv_path: datasets/ripe_as7018/as7018-us-test01.csv
+    csv_path: datasets/final/ripe-asmix-mesh.mainland.sanitized.csv
     k: 5
     seed: 42
-    # 58 target ASNs over 78 targets, so this bucketing is doing more work here
+    # 68 target ASNs over 95 targets, so this bucketing is doing more work here
     # than on the as0X sets, where every target shares one ASN.
     asn_bucket_top_n: 20
 
