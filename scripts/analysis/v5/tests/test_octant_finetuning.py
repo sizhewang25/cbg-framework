@@ -322,3 +322,45 @@ class TestPooling:
         d = out / "_cross" / "octant-finetuning" / "r1+r2@wsweep"
         assert (d / "error_cdf.octant_cbg_hull.png").exists()
         assert (d / "paired.octant_cbg_hull.vs-unw.csv").exists()
+
+
+class TestTradeoff:
+    def test_baseline_is_absent_from_the_panel(self, tree):
+        """It is what both axes are measured against, so it would sit at the
+        origin and carry nothing."""
+        run = _run(tree)
+        wide, present = O.assemble(run, "octant_cbg_hull")
+        t = O.tradeoff_table(wide, present, baseline="unw")
+        assert "unw" not in set(t.arm_tag)
+
+    def test_both_axes_carry_the_same_box_statistics(self, tree):
+        run = _run(tree)
+        wide, present = O.assemble(run, "octant_cbg_hull")
+        cols = set(O.tradeoff_table(wide, present).columns)
+        for stat in ("lo", "q1", "med", "q3", "hi", "max"):
+            assert f"gain_{stat}" in cols and f"reg_{stat}" in cols, stat
+        assert {"n_gain", "n_reg"} <= cols
+
+    def test_whiskers_are_percentiles_not_the_max(self, tree):
+        """One regression reaches 5,354 km on real data; drawing to the max
+        would set the x axis for every panel."""
+        assert (O.WHISKER_LO, O.WHISKER_HI) == (5, 95)
+        run = _run(tree)
+        wide, present = O.assemble(run, "octant_cbg_hull")
+        r = O.tradeoff_table(wide, present).set_index("arm_tag").loc["ip1"]
+        assert r.gain_hi <= r.gain_max
+        assert r.gain_lo <= r.gain_med <= r.gain_hi
+
+    def test_writes_the_png_csv_manifest_triple(self, tree, tmp_path):
+        run = _run(tree)
+        out = tmp_path / "analysis"
+        O.write_tradeoff(run, "octant_cbg_hull", analysis_root=out, dpi=60)
+        d = run.octant_finetuning_dir(root=out)
+        stem = "tradeoff.octant_cbg_hull.vs-unw"
+        for ext in ("png", "csv", "manifest.json"):
+            assert (d / f"{stem}.{ext}").exists(), ext
+        m = json.loads((d / f"{stem}.manifest.json").read_text())
+        # The one reading that makes this panel different from the
+        # throughput/delay figures it resembles must stay recorded.
+        assert "axes_are_marginals" in m
+        assert "different targets" in m["axes_are_marginals"].lower()
