@@ -77,6 +77,9 @@ USER_HITLIST_FILE: Path = USER_GENERATED_PATH / "user_parsed_hitlist.json"
 ##################################################################################################
 CLICKHOUSE_CLIENT = DEFAULT_DIR / "clickhouse_files/clickhouse"
 CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "localhost")
+# Native-protocol port. Overridable because 9000 is contested on a dev box
+# (Jupyter kernels bind it too) — see CH_NATIVE_PORT in start_clickhouse.sh.
+CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", "9000"))
 CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DB", "geolocation_replication")
 CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
 CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")

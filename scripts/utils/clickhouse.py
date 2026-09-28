@@ -8,6 +8,7 @@ from clickhouse_driver import Client
 from logger import logger
 from default import (
     CLICKHOUSE_HOST,
+    CLICKHOUSE_PORT,
     CLICKHOUSE_DB,
     CLICKHOUSE_USER,
     CLICKHOUSE_PASSWORD,
@@ -19,19 +20,21 @@ class Clickhouse:
     def __init__(
         self,
         host: str = CLICKHOUSE_HOST,
+        port: int = CLICKHOUSE_PORT,
         database: str = CLICKHOUSE_DB,
         user: str = CLICKHOUSE_USER,
         password: str = CLICKHOUSE_PASSWORD,
         client_path: Path = CLICKHOUSE_CLIENT,
     ) -> None:
         self.host = host
+        self.port = port
         self.database = database
         self.user = user
         self.password = password
         self.client_path = client_path
 
         self.client: Client = Client(
-            host=self.host, user=self.user, password=self.password
+            host=self.host, port=self.port, user=self.user, password=self.password
         )
 
         self.settings = {"max_block_size": 100000}
@@ -102,10 +105,10 @@ class Clickhouse:
 
     def insert_file(self, query: str) -> None:
         """execute clickhouse insert query as not supported by clickhouse-driver"""
-        cmd = f"{str(self.client_path)} client"
+        cmd = f"{str(self.client_path)} client --host={self.host} --port={self.port}"
 
         if self.password is not None and self.password != "":
-            cmd += f"--password={self.password}"
+            cmd += f" --password={self.password}"
         cmd += f' --query="{query}"'
 
         logger.info(f"executing query: {cmd}")
