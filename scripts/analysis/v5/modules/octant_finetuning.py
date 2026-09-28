@@ -103,6 +103,7 @@ import pandas as pd
 from matplotlib.lines import Line2D
 
 from scripts.analysis.v5.modules import cross
+from scripts.analysis.v5.modules import sites as S
 from scripts.analysis.v5.modules.paths import (
     DEFAULT_OUTPUTS_ROOT,
     OCTANT_FINETUNING_KIND,
@@ -263,9 +264,10 @@ def assemble_pooled(runs: list[RunPaths], variant: str
     for run in runs:
         wide, present = assemble(run, variant)
         wide = wide.assign(run_id=run.run_id, dataset=cross.short_dataset(run.run_id))
-        # Site ids are only unique within a dataset; two runs can both hold a
-        # site at the same rounded coordinate without it being one site.
-        wide["site"] = wide.dataset + ":" + wide.site
+        # No namespacing pass here: `assemble` keys sites on the run id via
+        # `sites.site_key`, so two runs holding the same coordinate are already
+        # two sites. `dataset` is a display name and must never be the key --
+        # it is declared in a config, so two runs can legitimately share one.
         frames[run.run_id], scored[run.run_id] = wide, set(present)
         tg_ids[run.run_id] = set(wide.target_id)
 
@@ -273,6 +275,9 @@ def assemble_pooled(runs: list[RunPaths], variant: str
         scored, remedy="--layout per-run to keep each dataset on its own figure.")
     cross.guard_disjoint_tgs(
         tg_ids,
+        remedy="Use --layout per-run, which keeps each dataset on its own figure.")
+    cross.guard_distinct_labels(
+        {r.run_id: cross.short_dataset(r.run_id) for r in runs},
         remedy="Use --layout per-run, which keeps each dataset on its own figure.")
 
     keep = [t for t in ARM_TAGS if t in common]
@@ -334,8 +339,16 @@ def assemble(run: RunPaths, variant: str) -> tuple[pd.DataFrame, list[str]]:
             continue
         if wide is None:
             arm = arm.copy()
-            arm["site"] = (arm.target_lat.round(4).astype(str) + ","
-                           + arm.target_lon.round(4).astype(str))
+            # `sites.site_key`, not a local "lat,lon": it keys on the run id
+            # too, so the pooled frame needs no second namespacing pass. The
+            # hand-rolled key this replaced was unique only within a run, and
+            # the prefix `assemble_pooled` bolted on to fix that was itself
+            # derived from a parsed run id -- the collapse this module hit.
+            arm["site"] = S.site_key(
+                arm.rename(columns={"target_lat": S.SITE_COLUMNS[0],
+                                    "target_lon": S.SITE_COLUMNS[1]}),
+                run_id=run.run_id,
+            )
             wide = arm[["target_id", "site", "fold", "error_km"]].rename(
                 columns={"error_km": tag})
         else:
@@ -346,7 +359,10 @@ def assemble(run: RunPaths, variant: str) -> tuple[pd.DataFrame, list[str]]:
     if wide is None:
         raise MissingArtifactError(
             f"no sweep arms scored for {variant} under {run.run_id}; run "
-            f"./cli.sh --configfile configs/{run.run_id}.yaml first")
+            f"./cli.sh --configfile <that run's config> first. The config is "
+            f"named by {run.target_space_json}, and is not always "
+            f"configs/<run_id>.yaml -- the grafted runs record the config they "
+            f"were produced against.")
     return wide, present
 
 

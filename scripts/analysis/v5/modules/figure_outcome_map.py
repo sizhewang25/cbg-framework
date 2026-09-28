@@ -738,7 +738,6 @@ def _manifest(
         "cohort": cohort,
         "datasets": cross.dataset_slug(data.run_ids),
         "run_ids": data.run_ids,
-        "arm": cross.arm(data.run_ids),
         "grid": G.describe(data.nside),
         "source_nside": data.nside,
         "extent": dict(zip(("lon_min", "lon_max", "lat_min", "lat_max"), extent)),

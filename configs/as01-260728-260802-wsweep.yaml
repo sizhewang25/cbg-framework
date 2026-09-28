@@ -337,5 +337,10 @@ benchmark:
 
 analysis:
   common:
+    # The dataset this run belongs to. Declared rather than parsed: v5
+    # used to split the run id on its first hyphen, which breaks on any
+    # prefix. This one is load-bearing -- it is the pooled name printed
+    # in the octant-finetuning LaTeX the paper includes.
+    dataset_label: as01
     grid: h3
     resolution: [4]

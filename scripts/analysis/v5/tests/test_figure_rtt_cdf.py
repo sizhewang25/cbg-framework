@@ -67,7 +67,10 @@ def _long(per_run: dict[str, list[float]]) -> pd.DataFrame:
             rows.append(
                 {
                     "run_id": run_id,
-                    "dataset": run_id.split("-")[0],
+                    # These fakes declare no `dataset_label`, so the label is
+                    # the run id. Do not re-derive it by splitting -- that is
+                    # the assumption this module stopped making.
+                    "dataset": run_id,
                     "tg_id": f"tg-{i % 2}",
                     "vp_id": f"vp-{i}",
                     "rtt_ms": rtt,
@@ -81,8 +84,8 @@ class TestLoad:
         a = _csv(tmp_path / "a.csv", [1.0, 2.0, 3.0])
         b = _csv(tmp_path / "b.csv", [10.0, 20.0])
         long, meta = R.load(
-            [FakeRun("as01-260728-260802-mesh"), FakeRun("as02-260728-260802-mesh")],
-            source_csv={"as01-260728-260802-mesh": a, "as02-260728-260802-mesh": b},
+            [FakeRun("as01"), FakeRun("as02")],
+            source_csv={"as01": a, "as02": b},
         )
         assert len(long) == 5
         assert sorted(long["dataset"].unique()) == ["as01", "as02"]
@@ -96,23 +99,23 @@ class TestLoad:
         """`load_min_rtt` goes through `load_canonical_csv`, so the rows here
         are the rows the solvers ran on -- a 0 ms edge is not one of them."""
         path = _csv(tmp_path / "a.csv", [1.0, 0.0, -5.0, 4.0])
-        long, _ = R.load([FakeRun("as01-mesh")], source_csv={"as01-mesh": path})
+        long, _ = R.load([FakeRun("as01")], source_csv={"as01": path})
         assert sorted(long["rtt_ms"]) == [1.0, 4.0]
 
 
 class TestStats:
     def test_row_order_follows_the_callers_run_order(self):
         """Not sort order: the CSV, the legend and --run-id are one sequence."""
-        stats = R.stats_table(_long({"as03-mesh": [1.0], "as01-mesh": [2.0]}))
+        stats = R.stats_table(_long({"as03": [1.0], "as01": [2.0]}))
         assert stats["dataset"].tolist() == ["as03", "as01"]
 
     def test_extrema_are_observed_not_interpolated(self):
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 2.0, 3.0, 100.0]}))
+        stats = R.stats_table(_long({"as01": [1.0, 2.0, 3.0, 100.0]}))
         assert stats.loc[0, "min_ms"] == 1.0
         assert stats.loc[0, "max_ms"] == 100.0
 
     def test_percentiles_are_emitted_for_every_requested_rung(self):
-        stats = R.stats_table(_long({"as01-mesh": list(range(1, 101))}))
+        stats = R.stats_table(_long({"as01": list(range(1, 101))}))
         for p in R.PERCENTILES:
             assert f"p{p}_ms" in stats.columns
         assert stats.loc[0, "p50_ms"] == pytest.approx(50.5)
@@ -120,7 +123,7 @@ class TestStats:
     def test_counts_expose_the_replica_oversampling(self):
         """n_edges >> n_tgs is the caveat the docstring is about, so both are
         in the table rather than only the one the curve is drawn from."""
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 2.0, 3.0, 4.0]}))
+        stats = R.stats_table(_long({"as01": [1.0, 2.0, 3.0, 4.0]}))
         assert stats.loc[0, "n_edges"] == 4
         assert stats.loc[0, "n_tgs"] == 2
         assert stats.loc[0, "n_vps"] == 4
@@ -130,29 +133,29 @@ class TestTheXCutIsReported:
     """A truncated linear axis cannot show what it truncated."""
 
     def test_share_within_the_cut_is_computed_per_dataset(self):
-        long = _long({"as01-mesh": [1.0, 2.0], "as02-mesh": [1.0, 500.0]})
+        long = _long({"as01": [1.0, 2.0], "as02": [1.0, 500.0]})
         stats = R.stats_table(long, x_max_ms=200.0).set_index("dataset")
         assert stats.loc["as01", "share_within_xmax_pct"] == pytest.approx(100.0)
         assert stats.loc["as02", "share_within_xmax_pct"] == pytest.approx(50.0)
 
     def test_clipped_names_only_the_datasets_that_overflow(self):
         stats = R.stats_table(
-            _long({"as01-mesh": [1.0, 2.0], "as02-mesh": [1.0, 500.0]}), x_max_ms=200.0
+            _long({"as01": [1.0, 2.0], "as02": [1.0, 500.0]}), x_max_ms=200.0
         )
         assert R.clipped(stats)["dataset"].tolist() == ["as02"]
 
     def test_nothing_is_clipped_when_the_cut_clears_the_tail(self):
         """The as01-03 case: 200 ms against a 92 ms maximum warns about nothing."""
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 92.4]}), x_max_ms=200.0)
+        stats = R.stats_table(_long({"as01": [1.0, 92.4]}), x_max_ms=200.0)
         assert R.clipped(stats).empty
 
     def test_manifest_carries_the_share_and_the_observed_max(self):
         """The figure cannot show the clipped mass, so the numbers must exist."""
         stats = R.stats_table(
-            _long({"as01-mesh": [1.0, 500.0]}), x_max_ms=200.0
+            _long({"as01": [1.0, 500.0]}), x_max_ms=200.0
         )
         body = json.loads(
-            R._manifest({"run_ids": ["as01-mesh"], "datasets": ["as01"]},
+            R._manifest({"run_ids": ["as01"], "datasets": ["as01"]},
                         stats, x_max_ms=200.0)
         )
         axis = body["x_axis"]
@@ -163,7 +166,7 @@ class TestTheXCutIsReported:
     def test_a_clipped_dataset_gets_a_note_naming_it(self):
         """The earlier wording named no dataset; on four curves that is
         useless, since *which* curve stops short is the whole question."""
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 500.0]}), x_max_ms=200.0)
+        stats = R.stats_table(_long({"as01": [1.0, 500.0]}), x_max_ms=200.0)
         (text, colour), = R.clip_notes(stats)
         assert text.startswith("PRO AS01")
         assert colour == R.DISPLAY["as01"][1]
@@ -171,7 +174,7 @@ class TestTheXCutIsReported:
     def test_the_note_carries_p99_not_the_max(self):
         """A p99 above the axis says the truncation is structural; a max above
         it can be one packet."""
-        stats = R.stats_table(_long({"as01-mesh": [1.0] * 99 + [900.0]}),
+        stats = R.stats_table(_long({"as01": [1.0] * 99 + [900.0]}),
                               x_max_ms=200.0)
         (text, _), = R.clip_notes(stats)
         assert "p99" in text
@@ -179,12 +182,12 @@ class TestTheXCutIsReported:
 
     def test_an_unclipped_dataset_gets_no_note(self):
         """The as01-03 case at 200 ms: a 92 ms maximum warns about nothing."""
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 92.4]}), x_max_ms=200.0)
+        stats = R.stats_table(_long({"as01": [1.0, 92.4]}), x_max_ms=200.0)
         assert R.clip_notes(stats) == []
 
     def test_only_the_clipped_datasets_are_named(self):
         stats = R.stats_table(
-            _long({"as01-mesh": [1.0, 2.0], "as7018-ripe-mesh": [1.0, 500.0]}),
+            _long({"as01": [1.0, 2.0], "as7018": [1.0, 500.0]}),
             x_max_ms=200.0,
         )
         texts = [t for t, _ in R.clip_notes(stats)]
@@ -194,7 +197,7 @@ class TestTheXCutIsReported:
     def test_each_note_takes_its_own_curves_colour(self):
         """So the note attaches to a line without needing a second legend."""
         stats = R.stats_table(
-            _long({"as01-mesh": [1.0, 500.0], "as7018-ripe-mesh": [1.0, 500.0]}),
+            _long({"as01": [1.0, 500.0], "as7018": [1.0, 500.0]}),
             x_max_ms=200.0,
         )
         colours = [c for _, c in R.clip_notes(stats)]
@@ -204,7 +207,7 @@ class TestTheXCutIsReported:
         """`clip_notes` being right is worth nothing if `plot` ignores it."""
         import matplotlib.pyplot as plt
 
-        long = _long({"as01-mesh": [1.0, 500.0]})
+        long = _long({"as01": [1.0, 500.0]})
         stats = R.stats_table(long, x_max_ms=200.0)
         drawn: list[str] = []
         real_savefig = plt.Figure.savefig
@@ -215,7 +218,7 @@ class TestTheXCutIsReported:
 
         plt.Figure.savefig = spy
         try:
-            R.plot(long, stats, meta={"run_ids": ["as01-mesh"]},
+            R.plot(long, stats, meta={"run_ids": ["as01"]},
                    out_png=tmp_path / "x.png", x_max_ms=200.0)
         finally:
             plt.Figure.savefig = real_savefig
@@ -245,14 +248,14 @@ class TestTheScaleIsValidated:
     def test_the_share_inside_the_linear_window_is_reported(self):
         """The axis can still be linear-in-disguise for one dataset and not
         another, so the share is per dataset rather than a single verdict."""
-        long = _long({"as01-mesh": [0.5, 0.6, 50.0, 60.0], "as02-mesh": [50.0, 60.0]})
+        long = _long({"as01": [0.5, 0.6, 50.0, 60.0], "as02": [50.0, 60.0]})
         stats = R.stats_table(long, linthresh_ms=1.0).set_index("dataset")
         assert stats.loc["as01", "share_below_linthresh_pct"] == pytest.approx(50.0)
         assert stats.loc["as02", "share_below_linthresh_pct"] == pytest.approx(0.0)
 
     def test_manifest_carries_the_symlog_block_only_for_symlog(self):
-        stats = R.stats_table(_long({"as01-mesh": [0.5, 50.0]}), linthresh_ms=1.0)
-        meta = {"run_ids": ["as01-mesh"], "datasets": ["as01"]}
+        stats = R.stats_table(_long({"as01": [0.5, 50.0]}), linthresh_ms=1.0)
+        meta = {"run_ids": ["as01"], "datasets": ["as01"]}
         sym = json.loads(R._manifest(meta, stats, x_max_ms=100.0,
                                      x_scale="symlog", linthresh_ms=1.0))["x_axis"]
         assert sym["scale"] == "symlog"
@@ -268,7 +271,7 @@ class TestTheScaleIsValidated:
         offered scale rather than log."""
         import matplotlib.pyplot as plt
 
-        long = _long({"as01-mesh": [0.5, 5.0, 50.0]})
+        long = _long({"as01": [0.5, 5.0, 50.0]})
         stats = R.stats_table(long, x_max_ms=100.0, linthresh_ms=1.0)
         seen = {}
         real_savefig = plt.Figure.savefig
@@ -281,7 +284,7 @@ class TestTheScaleIsValidated:
 
         plt.Figure.savefig = spy
         try:
-            R.plot(long, stats, meta={"run_ids": ["as01-mesh"]},
+            R.plot(long, stats, meta={"run_ids": ["as01"]},
                    out_png=tmp_path / "x.png", x_max_ms=100.0,
                    x_scale="symlog", linthresh_ms=1.0)
         finally:
@@ -305,7 +308,7 @@ class TestTheYAxisIsACdf:
     def test_the_axis_is_zero_to_one_in_quarters(self, tmp_path):
         import matplotlib.pyplot as plt
 
-        long = _long({"as01-mesh": [1.0, 5.0, 50.0]})
+        long = _long({"as01": [1.0, 5.0, 50.0]})
         stats = R.stats_table(long)
         seen = {}
         real_savefig = plt.Figure.savefig
@@ -322,7 +325,7 @@ class TestTheYAxisIsACdf:
 
         plt.Figure.savefig = spy
         try:
-            R.plot(long, stats, meta={"run_ids": ["as01-mesh"]},
+            R.plot(long, stats, meta={"run_ids": ["as01"]},
                    out_png=tmp_path / "x.png")
         finally:
             plt.Figure.savefig = real_savefig
@@ -333,7 +336,7 @@ class TestTheYAxisIsACdf:
     def test_the_csv_still_reports_shares_in_percent(self):
         """The axis changed units; the quotable numbers did not. A reader
         citing `share_within_xmax_pct` as 99.8 must not get 0.998."""
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 500.0]}), x_max_ms=200.0)
+        stats = R.stats_table(_long({"as01": [1.0, 500.0]}), x_max_ms=200.0)
         assert stats.loc[0, "share_within_xmax_pct"] == pytest.approx(50.0)
 
 
@@ -369,7 +372,7 @@ class TestTheLegend:
         """Pins "remove data": no n=, no p50= in any legend entry."""
         import matplotlib.pyplot as plt
 
-        long = _long({"as01-mesh": [1.0, 5.0], "as7018-ripe-mesh": [2.0, 6.0]})
+        long = _long({"as01": [1.0, 5.0], "as7018": [2.0, 6.0]})
         stats = R.stats_table(long)
         seen: list[str] = []
         real_savefig = plt.Figure.savefig
@@ -390,8 +393,8 @@ class TestTheLegend:
         """The four-curve figure reads PRO AS01/02/03 then RIPE MIX-ASN only
         because that is the --run-id order; nothing sorts it."""
         long = _long({
-            "as01-mesh": [1.0], "as02-mesh": [2.0],
-            "as03-mesh": [3.0], "as7018-ripe-mesh": [4.0],
+            "as01": [1.0], "as02": [2.0],
+            "as03": [3.0], "as7018": [4.0],
         })
         stats = R.stats_table(long)
         labels = [R._style(d, i)[0] for i, d in enumerate(stats["dataset"])]
@@ -404,7 +407,7 @@ class TestClippingAnnotationIsOptOut:
     def test_no_notes_when_suppressed(self, tmp_path):
         import matplotlib.pyplot as plt
 
-        long = _long({"as01-mesh": [1.0, 500.0]})
+        long = _long({"as01": [1.0, 500.0]})
         stats = R.stats_table(long, x_max_ms=200.0)
         drawn: list[str] = []
         real_savefig = plt.Figure.savefig
@@ -415,7 +418,7 @@ class TestClippingAnnotationIsOptOut:
 
         plt.Figure.savefig = spy
         try:
-            R.plot(long, stats, meta={"run_ids": ["as01-mesh"]},
+            R.plot(long, stats, meta={"run_ids": ["as01"]},
                    out_png=tmp_path / "x.png", x_max_ms=200.0,
                    annotate_clipping=False, show_medians=False)
         finally:
@@ -423,9 +426,9 @@ class TestClippingAnnotationIsOptOut:
         assert not any("p99" in t for t in drawn)
 
     def test_the_manifest_records_the_clipping_regardless(self):
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 500.0]}), x_max_ms=200.0)
+        stats = R.stats_table(_long({"as01": [1.0, 500.0]}), x_max_ms=200.0)
         body = json.loads(R._manifest(
-            {"run_ids": ["as01-mesh"], "datasets": ["as01"]}, stats, x_max_ms=200.0
+            {"run_ids": ["as01"], "datasets": ["as01"]}, stats, x_max_ms=200.0
         ))["x_axis"]
         assert body["clipped_datasets"] == ["as01"]
         assert body["share_within_xmax_pct"]["as01"] == pytest.approx(50.0)
@@ -433,8 +436,8 @@ class TestClippingAnnotationIsOptOut:
 
     def test_the_manifest_says_whether_the_panel_annotated(self):
         """A reader must be able to tell a silent panel from an unclipped one."""
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 500.0]}), x_max_ms=200.0)
-        meta = {"run_ids": ["as01-mesh"], "datasets": ["as01"]}
+        stats = R.stats_table(_long({"as01": [1.0, 500.0]}), x_max_ms=200.0)
+        meta = {"run_ids": ["as01"], "datasets": ["as01"]}
         on = json.loads(R._manifest(meta, stats, x_max_ms=200.0,
                                     annotate_clipping=True))["x_axis"]
         off = json.loads(R._manifest(meta, stats, x_max_ms=200.0,
@@ -471,18 +474,18 @@ class TestMedianDroplines:
         return seen
 
     def test_each_dataset_gets_a_labelled_dropline(self, tmp_path):
-        long = _long({"as01-mesh": [10.0, 30.0], "as7018-ripe-mesh": [40.0, 60.0]})
+        long = _long({"as01": [10.0, 30.0], "as7018": [40.0, 60.0]})
         seen = self._drawn(tmp_path, long)
         assert seen["vlines"] == 2
         assert "20.0 ms" in seen["texts"]
         assert "50.0 ms" in seen["texts"]
 
     def test_the_half_reference_is_drawn_so_the_verticals_mean_something(self, tmp_path):
-        seen = self._drawn(tmp_path, _long({"as01-mesh": [10.0, 30.0]}))
+        seen = self._drawn(tmp_path, _long({"as01": [10.0, 30.0]}))
         assert any(y == pytest.approx(0.5) for y in seen["hlines"])
 
     def test_no_medians_draws_neither_the_lines_nor_the_reference(self, tmp_path):
-        long = _long({"as01-mesh": [10.0, 30.0]})
+        long = _long({"as01": [10.0, 30.0]})
         seen = self._drawn(tmp_path, long, show_medians=False)
         assert seen["vlines"] == 0
         assert not any(y == pytest.approx(0.5) for y in seen["hlines"])
@@ -493,7 +496,7 @@ class TestMedianDroplines:
         is a stronger and wronger claim than drawing nothing."""
         # The dataset is also clipped, so a p99 note is drawn; assert on the
         # median label specifically rather than on "ms" appearing anywhere.
-        long = _long({"as01-mesh": [400.0, 600.0]})
+        long = _long({"as01": [400.0, 600.0]})
         seen = self._drawn(tmp_path, long, x_max_ms=200.0)
         assert seen["vlines"] == 0
         assert not any(t == "500.0 ms" for t in seen["texts"])
@@ -501,19 +504,19 @@ class TestMedianDroplines:
     def test_labels_share_one_anchor_clear_of_every_dropline(self):
         """Per-label `p50 * 1.05` put each label on the next dataset's line."""
         stats = R.stats_table(_long({
-            "as01-mesh": [34.7], "as02-mesh": [35.9],
-            "as03-mesh": [38.4], "as7018-ripe-mesh": [42.0],
+            "as01": [34.7], "as02": [35.9],
+            "as03": [38.4], "as7018": [42.0],
         }))
         anchor = R.label_anchor(stats, x_max_ms=200.0)
         assert anchor > stats["p50_ms"].max()
 
     def test_no_anchor_when_every_median_is_beyond_the_cut(self):
-        stats = R.stats_table(_long({"as01-mesh": [500.0]}), x_max_ms=200.0)
+        stats = R.stats_table(_long({"as01": [500.0]}), x_max_ms=200.0)
         assert R.label_anchor(stats, x_max_ms=200.0) is None
 
     def test_the_anchor_ignores_medians_past_the_cut(self):
         """An off-panel median must not push the column off the panel too."""
-        stats = R.stats_table(_long({"as01-mesh": [20.0], "as02-mesh": [500.0]}),
+        stats = R.stats_table(_long({"as01": [20.0], "as02": [500.0]}),
                               x_max_ms=200.0)
         assert R.label_anchor(stats, x_max_ms=200.0) == pytest.approx(20.0 * 1.08)
 
@@ -543,7 +546,7 @@ class TestLinearTickStep:
     def test_the_ticks_land_on_the_step(self, tmp_path):
         import matplotlib.pyplot as plt
 
-        long = _long({"as01-mesh": [10.0, 30.0, 90.0]})
+        long = _long({"as01": [10.0, 30.0, 90.0]})
         stats = R.stats_table(long, x_max_ms=100.0)
         seen = {}
         real_savefig = plt.Figure.savefig
@@ -556,7 +559,7 @@ class TestLinearTickStep:
 
         plt.Figure.savefig = spy
         try:
-            R.plot(long, stats, meta={"run_ids": ["as01-mesh"]},
+            R.plot(long, stats, meta={"run_ids": ["as01"]},
                    out_png=tmp_path / "x.png", x_max_ms=100.0, x_step_ms=10.0)
         finally:
             plt.Figure.savefig = real_savefig
@@ -567,7 +570,7 @@ class TestLinearTickStep:
         left decade; symlog keeps its own locator regardless of --x-step."""
         import matplotlib.pyplot as plt
 
-        long = _long({"as01-mesh": [1.0, 10.0, 90.0]})
+        long = _long({"as01": [1.0, 10.0, 90.0]})
         stats = R.stats_table(long, x_max_ms=100.0)
         seen = {}
         real_savefig = plt.Figure.savefig
@@ -579,7 +582,7 @@ class TestLinearTickStep:
 
         plt.Figure.savefig = spy
         try:
-            R.plot(long, stats, meta={"run_ids": ["as01-mesh"]},
+            R.plot(long, stats, meta={"run_ids": ["as01"]},
                    out_png=tmp_path / "x.png", x_max_ms=100.0,
                    x_scale="symlog", linthresh_ms=1.0, x_step_ms=10.0)
         finally:
@@ -587,8 +590,8 @@ class TestLinearTickStep:
         assert seen["ticks"] != pytest.approx([float(v) for v in range(0, 101, 10)])
 
     def test_the_manifest_records_the_step(self):
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 2.0]}))
-        meta = {"run_ids": ["as01-mesh"], "datasets": ["as01"]}
+        stats = R.stats_table(_long({"as01": [1.0, 2.0]}))
+        meta = {"run_ids": ["as01"], "datasets": ["as01"]}
         with_step = json.loads(R._manifest(meta, stats, x_max_ms=100.0,
                                            x_step_ms=10.0))["x_axis"]
         auto = json.loads(R._manifest(meta, stats, x_max_ms=100.0))["x_axis"]
@@ -600,9 +603,9 @@ class TestNoPoolingGuard:
     def test_a_tg_in_two_datasets_is_not_an_error(self):
         """Pins an absence. Nothing shares a denominator across runs here, so
         the sibling figures' `guard_disjoint_tgs` must not be wired in."""
-        long = _long({"as01-mesh": [1.0, 2.0], "as02-mesh": [3.0, 4.0]})
-        assert set(long.loc[long.run_id == "as01-mesh", "tg_id"]) == set(
-            long.loc[long.run_id == "as02-mesh", "tg_id"]
+        long = _long({"as01": [1.0, 2.0], "as02": [3.0, 4.0]})
+        assert set(long.loc[long.run_id == "as01", "tg_id"]) == set(
+            long.loc[long.run_id == "as02", "tg_id"]
         )
         stats = R.stats_table(long)
         assert len(stats) == 2
@@ -611,16 +614,16 @@ class TestNoPoolingGuard:
 
 class TestPrivacy:
     def test_no_output_column_carries_a_location(self):
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 2.0]}))
+        stats = R.stats_table(_long({"as01": [1.0, 2.0]}))
         forbidden = ("lat", "lon", "city", "country", "site", "region", "asn")
         for col in stats.columns:
             assert not any(f in col.lower() for f in forbidden), col
 
     def test_manifest_holds_no_coordinate(self):
         """Keys and values, not raw substrings -- "population" contains "lat"."""
-        stats = R.stats_table(_long({"as01-mesh": [1.0, 2.0]}))
+        stats = R.stats_table(_long({"as01": [1.0, 2.0]}))
         body = json.loads(
-            R._manifest({"run_ids": ["as01-mesh"], "datasets": ["as01"]},
+            R._manifest({"run_ids": ["as01"], "datasets": ["as01"]},
                         stats, x_max_ms=200.0)
         )
         forbidden = {"lat", "lon", "latitude", "longitude", "city", "country",
@@ -647,33 +650,37 @@ class TestBuild:
         b = _csv(tmp_path / "b.csv", [10.0, 20.0])
         out = tmp_path / "analysis"
         pngs = R.build_for_runs(
-            [FakeRun("as01-260728-260802-mesh"), FakeRun("as02-260728-260802-mesh")],
+            [FakeRun("as01"), FakeRun("as02")],
             analysis_root=out,
-            source_csv={"as01-260728-260802-mesh": a, "as02-260728-260802-mesh": b},
+            source_csv={"as01": a, "as02": b},
         )
         assert len(pngs) == 1 and pngs[0].exists() and pngs[0].stat().st_size > 0
         d = pngs[0].parent
-        assert d.name == "as01+as02@260728-260802-mesh"
+        # Content-addressed, not parsed: the name is a digest of the run set.
+        assert d.name == R.cross.cross_name(
+            ["as01", "as02"])
+        assert json.loads((d / "runs.json").read_text())["run_ids"] == [
+            "as01", "as02"]
         assert (d / R.CSV_NAME).exists() and (d / R.MANIFEST_NAME).exists()
 
     def test_a_non_positive_x_max_raises_before_anything_is_read(self):
         """FakeRun carries no CSV, so reaching `load` would raise something
         else -- the axis check must come first."""
         with pytest.raises(ValueError, match="--x-max must be positive"):
-            R.build_for_runs([FakeRun("as01-mesh")], x_max_ms=0.0)
+            R.build_for_runs([FakeRun("as01")], x_max_ms=0.0)
 
     def test_a_bad_scale_raises_before_anything_is_read(self):
         with pytest.raises(ValueError, match="--x-scale must be one of"):
-            R.build_for_runs([FakeRun("as01-mesh")], x_scale="log")
+            R.build_for_runs([FakeRun("as01")], x_scale="log")
 
     def test_symlog_writes_the_same_three_artifacts(self, tmp_path):
         a = _csv(tmp_path / "a.csv", [0.5, 2.0, 30.0])
         out = tmp_path / "analysis"
         pngs = R.build_for_runs(
-            [FakeRun("as01-260728-260802-mesh")],
+            [FakeRun("as01")],
             x_max_ms=100.0, x_scale="symlog", linthresh_ms=1.0,
             analysis_root=out,
-            source_csv={"as01-260728-260802-mesh": a},
+            source_csv={"as01": a},
         )
         d = pngs[0].parent
         assert pngs[0].exists() and (d / R.CSV_NAME).exists()

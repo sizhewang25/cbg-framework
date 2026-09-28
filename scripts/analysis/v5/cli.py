@@ -1317,7 +1317,8 @@ def _octant_runs(run_id: list[str], all_runs: bool, outputs_root: Path):
     if not runs:
         raise typer.BadParameter(
             f"no run under {outputs_root} holds weight-sweep arms; run "
-            f"./cli.sh --configfile configs/<asN>-...-wsweep.yaml first")
+            f"./cli.sh --configfile <a config whose combos include the "
+            f"weight-sweep arms> first")
     return runs
 
 

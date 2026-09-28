@@ -273,7 +273,9 @@ class TestPooling:
         wide, present = O.assemble_pooled(runs, "octant_cbg_hull")
         assert len(wide) == 4
         assert present == ["unw", "ip1"]
-        assert set(wide.dataset) == {"r1", "r2"}
+        # No config declares a label for these, so each falls back to its run
+        # id -- verbose, but never two runs sharing one name.
+        assert set(wide.dataset) == {"r1-wsweep", "r2-wsweep"}
 
     def test_shared_target_ids_are_refused(self, tmp_path):
         """A shared id lands in the pooled denominator twice."""
@@ -287,14 +289,28 @@ class TestPooling:
         with pytest.raises(ValueError, match="not scored in every run"):
             O.assemble_pooled(runs, "octant_cbg_hull")
 
-    def test_sites_are_namespaced_per_dataset(self, tmp_path):
-        """A rounded coordinate is only unique within one dataset; without the
-        prefix two runs' sites would merge and the clustered bootstrap would
-        resample a site that does not exist."""
+    def test_sites_are_namespaced_on_the_run_id(self, tmp_path):
+        """A rounded coordinate is only unique within one run; unnamespaced,
+        two runs' sites would merge and the clustered bootstrap would resample
+        a site that does not exist.
+
+        On the **run id**, via `sites.site_key`, never on the display label:
+        the label is declared in a config, so two runs can share one, and the
+        prefix would stop separating anything -- which is exactly what happened
+        when it was parsed off the run id and every `pro-*` run read `pro`.
+        """
         runs = self._two_runs(tmp_path)
         wide, _ = O.assemble_pooled(runs, "octant_cbg_hull")
         assert wide.site.nunique() == 2
-        assert all(s.split(":")[0] in {"r1", "r2"} for s in wide.site)
+        assert {s.split("|")[0] for s in wide.site} == {"r1-wsweep", "r2-wsweep"}
+
+    def test_runs_sharing_a_declared_label_are_refused(self, tmp_path, monkeypatch):
+        """Two runs may legitimately declare the same `dataset_label`; every
+        per-dataset number is grouped on it, so they must not pool."""
+        runs = self._two_runs(tmp_path)
+        monkeypatch.setattr(O.cross, "short_dataset", lambda r, **kw: "as01")
+        with pytest.raises(ValueError, match="declared by"):
+            O.assemble_pooled(runs, "octant_cbg_hull")
 
     def test_pooled_manifest_carries_the_per_dataset_spread(self, tmp_path):
         """One pooled number hides a real spread, so the per-dataset p50s ride
@@ -303,8 +319,8 @@ class TestPooling:
         wide, present = O.assemble_pooled(runs, "octant_cbg_hull")
         m = O._common_manifest(runs, "octant_cbg_hull", "OCT-H", wide, present)
         assert m["layout"] == O.POOLED
-        assert m["pooling"]["n_per_dataset"] == {"r1": 2, "r2": 2}
-        assert set(m["pooling"]["p50_km_per_dataset"]) == {"r1", "r2"}
+        assert m["pooling"]["n_per_dataset"] == {"r1-wsweep": 2, "r2-wsweep": 2}
+        assert set(m["pooling"]["p50_km_per_dataset"]) == {"r1-wsweep", "r2-wsweep"}
         assert "lossy_note" in m["pooling"]
 
     def test_per_run_manifest_has_no_pooling_block(self, tree):
@@ -319,6 +335,7 @@ class TestPooling:
         out = tmp_path / "analysis"
         O.write_cdf(runs, "octant_cbg_hull", analysis_root=out, dpi=60)
         O.write_table(runs, "octant_cbg_hull", analysis_root=out)
-        d = out / "_cross" / "octant-finetuning" / "r1+r2@wsweep"
+        d = out / "_cross" / "octant-finetuning" / O.cross.cross_name(
+            [r.run_id for r in runs])
         assert (d / "error_cdf.octant_cbg_hull.png").exists()
         assert (d / "paired.octant_cbg_hull.vs-unw.csv").exists()

@@ -48,6 +48,20 @@ from scripts.analysis.v3.modules.paths import REPO_ROOT
 #: The sub-block whose keys apply to every command that declares them.
 COMMON_BLOCK = "common"
 
+#: Keys under `analysis.common:` that are metadata for a downstream consumer
+#: rather than a parameter of any v3 command.
+#:
+#: `dataset_label` is v5's: it names the dataset a run belongs to, which v5 used
+#: to infer by splitting the run id on its first hyphen. That broke on prefixed
+#: run ids (`pro-as01-mesh`, `pro-as02-mesh` -> both "pro"), so the name is
+#: declared here instead. v5 reads it off the config named by the run's
+#: `target_space.json`; nothing in v3 consumes it.
+#:
+#: Exempt from the "matches no command's parameters" check below, and never
+#: merged into `default_map` -- a key no command declares would otherwise be
+#: rejected as a typo, which is exactly what that check is for.
+METADATA_KEYS = frozenset({"dataset_label"})
+
 #: Where a run's config lives, keyed by run id. `create_analysis_artifacts.sh`
 #: derives `configs/$R.yaml` the same way, and several commands resolve a run's
 #: benchmark inputs through `source_kwargs_for_run` below, so the convention is
@@ -232,8 +246,11 @@ def default_map(
             )
 
     # A `common:` key applies only where the param exists (`top_n` is on two of
-    # five commands), so one matching nothing at all is a typo, not a no-op.
-    for key in sorted(common):
+    # five commands), so one matching nothing at all is a typo, not a no-op --
+    # unless it is declared metadata for a downstream consumer (`METADATA_KEYS`),
+    # which by definition matches no command here. The `merged` filter below
+    # keys on `cmd_params`, so those never reach a `default_map` either.
+    for key in sorted(set(common) - METADATA_KEYS):
         if not any(key in p for p in params.values()):
             raise typer.BadParameter(
                 f"`analysis.{COMMON_BLOCK}.{key}` matches no command's parameters"

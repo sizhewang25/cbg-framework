@@ -816,7 +816,6 @@ def _manifest(layout, table, nside, png_name, csv_name, *, run_ids, mode=BOUNDED
         ),
         "grid": G.describe(nside),
         "runs": run_ids,
-        "arm": cross.arm(run_ids),
         "methods": method_order(table),
         "panel_order": {ds: panel_order(table, ds) for ds in sorted(table["dataset"].unique())},
         "method_terms": {

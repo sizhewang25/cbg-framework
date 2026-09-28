@@ -87,6 +87,10 @@ benchmark:
 
 analysis:
   common:
+    # The dataset this run belongs to, for v5's cross-dataset figures.
+    # Declared rather than parsed: v5 used to split the run id on its first
+    # hyphen, which reads `pro` for every run here.
+    dataset_label: PRO-MESH AS-2
     grid: healpix
     resolution: [128]
 

@@ -1,23 +1,61 @@
 """Where cross-dataset figures land, and what they refuse to pool.
 
-Ported from v4. The directory is `_cross/classify/<datasets>[@<arm>]/`, keyed by
-the dataset set and by the arm (the run-id remainder every run shares), so a
-two-run comparison cannot overwrite a three-run one and the mesh and
-traffic-weighted arms of one dataset set sit side by side.
+Ported from v4, then split along a seam v4 does not have. Naming a pooled
+artifact is two jobs with opposite requirements, and the ported code conflated
+them:
 
-Both guards are strict: a method must be scored in every run, and no TG id may
-appear in two runs, or the pooled denominator stops being one population.
+* **Identity** -- the directory a pool writes to, and the namespace its sites
+  live in. Needs uniqueness and nothing else.
+* **Display** -- a panel title, a CSV `dataset` column, a LaTeX caption. Wants
+  brevity.
+
+Brevity was the only reason to parse, and parsing is what broke. v4's
+`short_dataset` read the dataset off the run id by splitting on the first
+hyphen, which assumes the shape `<dataset>-<arm>`; `pro-as01-mesh` and
+`pro-as02-mesh` both read `pro`. So the two jobs now have separate answers:
+
+* Display comes from `labels.dataset_label` -- declared in the config, under
+  `analysis.common.dataset_label`, falling back to the run id.
+* Identity comes from a hash of the run ids (`cross_dir`) and from the run id
+  itself (`sites.site_key`). Neither can collapse, whatever a run is called.
+
+The directory is `_cross/<kind>/<n>-runs-<hash>/`, with a `runs.json` beside
+the artifacts because a hash does not read as anything. It replaced
+`<datasets>@<arm>`, where `arm` was the run-id remainder every run shared:
+that existed to stop the mesh and traffic-weighted arms of one dataset set
+overwriting each other under a heads-only name, and the hash does it without
+parsing.
+
+Three guards, all strict: a method must be scored in every run, no TG id may
+appear in two runs, and no two runs may display the same label. The first two
+keep the pooled denominator one population; the third keeps a `groupby` on the
+display name honest, since a declared label is free text.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
-from scripts.analysis.v5.modules.paths import DEFAULT_ANALYSIS_ROOT
+from scripts.analysis.v5.modules.labels import dataset_label
+from scripts.analysis.v5.modules.paths import (
+    DEFAULT_ANALYSIS_ROOT,
+    DEFAULT_OUTPUTS_ROOT,
+)
 
-#: Where cross-dataset figures land -- keyed by the dataset set, so a two-run
+#: Where cross-dataset figures land -- keyed by the run set, so a two-run
 #: comparison cannot overwrite a three-run one.
 CROSS_KIND = "classify"
+
+#: Hex digits of the run-set digest kept in a directory name. Six is ~17M
+#: values against the tens of run sets this tree will ever hold, and short
+#: enough that the name still scans.
+SLUG_HASH_CHARS = 6
+
+#: Written into every cross directory: a hashed name does not say what it
+#: holds, and a reader should not have to open a manifest to find out.
+RUNS_JSON = "runs.json"
 
 #: Each guard's default closing clause: the outcome bars' own wording, kept
 #: verbatim so that module's messages are byte-identical before and after the
@@ -30,58 +68,77 @@ COMPARE_REMEDY_DISJOINT = (
 )
 
 
-def dataset_slug(run_ids: list[str]) -> str:
-    """`as01-...-mesh, as02-...` -> `as01+as02+as03`.
+def labels_for(run_ids: list[str], *, outputs_root: Path | str | None = None
+               ) -> dict[str, str]:
+    """`{run_id: display label}`, in the order given.
 
-    Keyed on the datasets rather than on a count, so the directory names the
-    comparison it holds.
+    One place resolves a label, so a figure's panel title, its CSV column and
+    its manifest cannot disagree about what a run is called.
     """
-    heads = sorted({r.split("-")[0] for r in run_ids})
-    return "+".join(heads)
+    root = outputs_root or DEFAULT_OUTPUTS_ROOT
+    return {r: dataset_label(r, root) for r in run_ids}
 
 
-def short_dataset(run_id: str) -> str:
-    """`as01-260728-260802-mesh` -> `as01`."""
-    return run_id.split("-")[0]
+def short_dataset(run_id: str, *, outputs_root: Path | str | None = None) -> str:
+    """The run's declared dataset label; the run id if it declares none.
 
-
-def arm(run_ids: list[str]) -> str | None:
-    """The run-id remainder every run shares, or None if they differ.
-
-    `as01-260728-260802-mesh` + `as02-260728-260802-mesh` -> `260728-260802-mesh`.
-
-    `dataset_slug` keeps only the head of each run id, so the mesh arm and the
-    traffic-weighted arm of the same three datasets collapse to one name --
-    `as01+as02+as03` either way. Pooling both would then write the weighted
-    figures over the mesh ones, and the comparison between the arms is the whole
-    reason both are run.
-
-    Derived rather than declared, and with no vocabulary of arm names: anything
-    the run ids share is the arm, whether that is `-mesh`, `-weighted`,
-    `-mesh-reciprocal` or a date range alone. Mixed remainders yield None, which
-    is the heads-only name -- a set spanning two arms is not an arm.
+    Was `run_id.split("-")[0]`. See `labels` for why that had to go and what
+    the fallback costs: a run with no declared label gets its full run id here,
+    which is correct but long on a panel title.
     """
-    tails = {r.split("-", 1)[1] if "-" in r else "" for r in run_ids}
-    if len(tails) != 1:
-        return None
-    return tails.pop() or None
+    return dataset_label(run_id, outputs_root or DEFAULT_OUTPUTS_ROOT)
+
+
+def dataset_slug(run_ids: list[str], *, outputs_root: Path | str | None = None
+                 ) -> str:
+    """`as01+as02+as03` -- the pooled **display** name, not a directory name.
+
+    Deliberately still readable, and deliberately no longer the directory:
+    this string is printed on pooled figures and written into the LaTeX the
+    paper includes, where a hash would be worse than useless. `cross_dir` is
+    what needs to be collision-proof, and it hashes instead.
+
+    Sorted and de-duplicated, so the name does not depend on `--run-id` order.
+    Two runs sharing a label collapse to one entry here -- `guard_distinct_labels`
+    is what refuses to pool them in the first place.
+    """
+    return "+".join(sorted(set(labels_for(run_ids, outputs_root=outputs_root).values())))
+
+
+def runs_hash(run_ids: list[str], *, chars: int = SLUG_HASH_CHARS) -> str:
+    """A short digest of the run set, order-independent and stable.
+
+    Over sorted run ids rather than labels: the digest is identity, and a
+    declared label can repeat or be edited after the fact.
+    """
+    joined = "\n".join(sorted(set(run_ids)))
+    return hashlib.sha256(joined.encode()).hexdigest()[:chars]
+
+
+def cross_name(run_ids: list[str]) -> str:
+    """`3-runs-8f2a1c`. The count is there so the name says something."""
+    return f"{len(set(run_ids))}-runs-{runs_hash(run_ids)}"
 
 
 def cross_dir(
     run_ids: list[str], *, analysis_root: Path | None = None, kind: str = CROSS_KIND
 ) -> Path:
-    """`_cross/<kind>/<datasets>[@<arm>]/`, created. `kind` defaults to `classify`.
+    """`_cross/<kind>/<n>-runs-<hash>/`, created, with a `runs.json` in it.
 
-    The arm is a directory-name concern only. `dataset_slug` also supplies the
-    `dataset` column of every CSV twin and the label in the pooled figures'
-    subtitles, where a date range would be noise.
+    `kind` defaults to `classify`. The name is content-addressed, so a two-run
+    pool cannot overwrite a three-run one and two arms of the same dataset set
+    cannot overwrite each other -- neither of which the old
+    `<datasets>[@<arm>]` name could guarantee without parsing run ids.
+
+    `runs.json` is rewritten on every call. It is derived entirely from
+    `run_ids`, so rewriting it repairs a directory whose file was lost rather
+    than churning content.
     """
-    name = dataset_slug(run_ids)
-    shared = arm(run_ids)
-    if shared is not None:
-        name = f"{name}@{shared}"
-    out = (analysis_root or DEFAULT_ANALYSIS_ROOT) / "_cross" / kind / name
+    out = (analysis_root or DEFAULT_ANALYSIS_ROOT) / "_cross" / kind / cross_name(run_ids)
     out.mkdir(parents=True, exist_ok=True)
+    (out / RUNS_JSON).write_text(
+        json.dumps({"run_ids": sorted(set(run_ids)), "kind": kind}, indent=2)
+    )
     return out
 
 
@@ -131,3 +188,36 @@ def guard_disjoint_tgs(
                     f"{sample}); each would sit in the pooled denominator "
                     f"twice. {remedy}"
                 )
+
+
+def guard_distinct_labels(
+    labels: dict[str, str], *, remedy: str = COMPARE_REMEDY_DISJOINT
+) -> dict[str, str]:
+    """No two runs may display the same label. Returns them unchanged.
+
+    The other two guards protect the pooled denominator. This one protects
+    every `groupby("dataset")` downstream -- the per-dataset medians, the panel
+    split, the outcome-bar selection. A label is free text declared in a
+    config, so two runs really can claim `as01`, and nothing about the pooled
+    frame would look wrong afterwards: the groups would simply merge and report
+    one dataset where there were two.
+
+    It is also the guard that makes the run-id fallback safe. Two runs with no
+    declared label fall back to their run ids, which are distinct by
+    construction, so they pass here rather than silently pooling.
+    """
+    seen: dict[str, list[str]] = {}
+    for run_id, label in labels.items():
+        seen.setdefault(label, []).append(run_id)
+    clashes = {label: runs for label, runs in seen.items() if len(runs) > 1}
+    if clashes:
+        detail = "; ".join(
+            f"{label!r} is declared by {sorted(runs)}" for label, runs in sorted(clashes.items())
+        )
+        raise ValueError(
+            f"cannot pool: {detail}. Every per-dataset number is grouped on "
+            f"this label, so the runs would merge into one row and report a "
+            f"dataset that does not exist. Give each run its own "
+            f"`analysis.common.dataset_label`, or {remedy}"
+        )
+    return labels
