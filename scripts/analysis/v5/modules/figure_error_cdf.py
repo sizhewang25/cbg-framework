@@ -523,6 +523,9 @@ def plot_cdf(
     sentinel_km: float | None = None,
     figsize: tuple[float, float] = PAPER_FIGSIZE,
     dpi: int = 300,
+    order: list[str] | None = None,
+    style_fn=None,
+    label_fn=None,
 ) -> Path:
     """One panel, one curve per method, log x. Both layouts draw through here.
 
@@ -537,11 +540,23 @@ def plot_cdf(
     `sentinel_km` is the censoring mark, set when `loaded` came through
     `censor(policy=SENTINEL)`. It only draws and labels -- the sentinel values
     are already in `loaded`, and this function never invents rows.
+
+    `order`, `style_fn` and `label_fn` exist for the one figure that draws series this
+    package does not own: `ripe_vs_databases` puts two geolocation databases on
+    these axes, and they are not methods -- they have no combo id, no
+    `TERM_ORDER` position and no hue in the validated six-term palette. Rather
+    than widen that palette (whose order every other figure's legend inherits),
+    that caller passes its own order, its own `method -> line kwargs` and its
+    own `method -> legend term`. Left unset, all three fall back to the
+    package's: `curve_order`, `_curve_style` over `method_colors`, and
+    `method_label`.
     """
     from matplotlib.lines import Line2D
 
-    order = curve_order(table)
+    order = list(order) if order is not None else curve_order(table)
     colors = method_colors(order)
+    style = style_fn if style_fn is not None else (lambda m: _curve_style(m, colors))
+    label = label_fn if label_fn is not None else method_label
 
     fig, ax = plt.subplots(figsize=figsize)
     fig.patch.set_facecolor(_SURFACE)
@@ -558,15 +573,15 @@ def plot_cdf(
         if len(values) == 0:
             continue
         xs, ys = _cdf(values, min_x_km)
-        ax.plot(xs, ys, alpha=0.95, gid=method, **_curve_style(method, colors))
+        ax.plot(xs, ys, alpha=0.95, gid=method, **style(method))
 
     _style_axes(ax, min_x_km, max_x_km, sentinel_km=sentinel_km)
 
     handles = [
         Line2D(
             [], [],
-            label=f"{method_label(m)} (baseline)" if m == SHORTEST_PING else method_label(m),
-            **{k: v for k, v in _curve_style(m, colors).items() if k != "zorder"},
+            label=f"{label(m)} (baseline)" if m == SHORTEST_PING else label(m),
+            **{k: v for k, v in style(m).items() if k != "zorder"},
         )
         for m in order
     ]

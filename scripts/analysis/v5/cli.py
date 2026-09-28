@@ -59,6 +59,7 @@ from scripts.analysis.v5.modules import (
     map_mtl,
     mapping,
     octant_finetuning,
+    ripe_vs_databases,
 )
 from scripts.analysis.v5.modules import grid as G
 from scripts.analysis.v5.modules.paths import (
@@ -604,6 +605,101 @@ def plot_exclusive_error_cmd(
             method_b=method_b,
             nside=nside,
             analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"wrote {png}")
+
+
+@app.command("plot-ripe-vs-databases")
+def plot_ripe_vs_databases_cmd(
+    run_id: str = typer.Option(..., "--run-id", help="Run to draw."),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Plot only these methods."),
+    database: list[str] = typer.Option(
+        None,
+        "--database",
+        "-d",
+        help=(
+            "Which databases to draw (repeatable). Default: both "
+            f"{list(ripe_vs_databases.DATABASES)}."
+        ),
+    ),
+    db_dir: Path = typer.Option(
+        ripe_vs_databases.DEFAULT_DB_DIR,
+        "--db-dir",
+        help="Directory holding the shipped anchor-keyed lookup JSONs.",
+    ),
+    nside: int = typer.Option(
+        figure_error_cdf.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help="Which rung's *_tgs.parquet to read. It does not change the output.",
+    ),
+    min_x_km: float = typer.Option(
+        figure_error_cdf.X_MIN_KM, "--min-x-km", help="Lower bound of the log x axis (km)."
+    ),
+    max_x_km: float = typer.Option(
+        None,
+        "--max-x-km",
+        help=(
+            f"Upper bound (km). Default: {figure_error_cdf.DEFAULT_X_MAX_KM:,.0f}, or "
+            f"{figure_error_cdf.SENTINEL_X_MAX_KM:,.0f} under --unanswered "
+            f"{figure_error_cdf.SENTINEL}."
+        ),
+    ),
+    unanswered: str = typer.Option(
+        figure_error_cdf.EXCLUDE,
+        "--unanswered",
+        help=(
+            f"{figure_error_cdf.EXCLUDE}: drop rows a series did not answer -- a "
+            f"method's refusals and a database's uncovered TGs alike. "
+            f"{figure_error_cdf.SENTINEL}: park them at --sentinel-km, so each "
+            f"curve's height there is its answer rate. Writes `.sentinel.` names."
+        ),
+    ),
+    sentinel_km: float = typer.Option(
+        figure_error_cdf.SENTINEL_KM,
+        "--sentinel-km",
+        help="Where --unanswered sentinel parks an unanswered TG (km).",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Error CDF with the CBG methods against MaxMind and IPinfo.
+
+    The package's Figure 7: the same `pred_dist_to_tg_km` curves as
+    `plot-error-cdf`, plus one curve per shipped geolocation database, looked
+    up by TG IPv4 and measured to the same ground truth. A CBG result is only
+    readable against what a free lookup already knows.
+
+    Databases are drawn dashed in their own hues -- they are not methods, have
+    no position in `methods.TERM_ORDER`, and are deliberately kept out of the
+    validated six-term palette. Writes `ripe_vs_databases.{png,csv,manifest.json}`
+    into `ripe-vs-databases/`. Needs `classify` on the run.
+    """
+    if unanswered not in figure_error_cdf.UNANSWERED_POLICIES:
+        raise typer.BadParameter(
+            f"unknown --unanswered {unanswered!r}; pick from "
+            f"{list(figure_error_cdf.UNANSWERED_POLICIES)}"
+        )
+    unknown = [d for d in (database or ()) if d not in ripe_vs_databases.DATABASES]
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown --database {unknown}; pick from {list(ripe_vs_databases.DATABASES)}"
+        )
+    run = resolve_run(run_id, outputs_root)
+    try:
+        png = ripe_vs_databases.build_for_run(
+            run,
+            nside=nside,
+            methods=list(method) if method else None,
+            databases=list(database) if database else None,
+            db_dir=db_dir,
+            analysis_root=analysis_root,
+            min_x_km=min_x_km,
+            max_x_km=max_x_km,
+            unanswered=unanswered,
+            sentinel_km=sentinel_km,
         )
     except (ValueError, MissingArtifactError) as exc:
         raise typer.BadParameter(str(exc)) from exc

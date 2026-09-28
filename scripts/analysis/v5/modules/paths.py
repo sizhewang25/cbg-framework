@@ -32,6 +32,9 @@ CLASSIFY_KIND = "classify"
 MTL_MAP_KIND = "mtl-map"
 LTD_MODEL_KIND = "ltd-model"
 OCTANT_FINETUNING_KIND = "octant-finetuning"
+#: The CBG-vs-geolocation-databases CDF. Its own kind rather than living
+#: under `classify/`: the figure adds a source outside the benchmark.
+RIPE_VS_DATABASES_KIND = "ripe-vs-databases"
 
 
 class MissingArtifactError(FileNotFoundError):
