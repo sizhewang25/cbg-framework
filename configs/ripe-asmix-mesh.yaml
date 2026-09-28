@@ -1,0 +1,147 @@
+# Mesh-only finals run on the public RIPE Atlas measurement, with the pro
+# series' combo stack.
+#
+#   ./cli.sh --configfile configs/ripe-asmix-mesh.yaml
+#
+# WHY "asmix"
+# The as0X datasets are one operator: every target belongs to a single peer, so
+# a method that learns that peer's footprint does well on all of them. This one
+# is the opposite shape. The VPs are 53 RIPE probes inside AS7018, but the 78
+# targets span 58 DISTINCT ASNs -- roughly one target per AS. Nothing about a
+# target's network generalises to the next one, so it is the dataset that asks
+# whether a result carries beyond a single operator's topology.
+#
+# Same CSV as configs/as7018-ripe-mesh.yaml, and the same
+# `setup: probes_to_anchors` it needs: the probes are the vantage points and the
+# anchors are the targets, which is the reverse of the as0X runs' roles. A NEW
+# run_id, so neither that run's tree nor the as0X trees are written to.
+#
+# WHAT IS CARRIED FROM THE PRO SERIES, AND WHAT IS NOT
+# The `combos:` block is configs/pro-as0N-mesh.yaml's verbatim. Two things in it
+# differ from as7018-ripe-mesh.yaml, and both are deliberate:
+#
+#   1. Both Octant arms use the inverse-power weight scorer (w = rtt^-2) rather
+#      than the never-calibrated exp(-rtt/50). On the as0X meshes the sweep put
+#      every weighted scorer far ahead of an unweighted vote and left 1/rtt^2
+#      tied for the best median and p90 with one of the mildest regression
+#      profiles. Whether that holds on a many-AS target set is exactly what this
+#      run is for -- it is a question here, not a settled default.
+#
+#   2. `spotter_cbg` is the faithful density stack (gaussian_density +
+#      density_argmax), not the hybrid that as7018-ripe-mesh.yaml still carries
+#      (normal_dist into Octant's hard annulus geometry). The hybrid is not
+#      Spotter: the paper's region is the intersection MAXIMISING the product of
+#      every landmark's density, so it has no veto and no pruning by inclusion.
+#      Scoring the hybrid under the name would misattribute its numbers.
+#
+# NO PNI BLOCK. The as0X configs declare `pni_csv` / `peer_asn` because those
+# runs are one peer with a known interconnect list. 58 ASNs have no single such
+# list, and pointing the stack at one peer's would silently produce a
+# plausible-looking wrong answer -- so the PNI commands are simply not
+# configured here.
+#
+# The analysis grid is healpix/128 to match the pro runs, so a cell verdict
+# means the same thing across both and the two are readable side by side.
+
+run_id: ripe-asmix-mesh
+
+benchmark:
+  source: generic_csv
+  setup: probes_to_anchors
+  slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+  source_kwargs:
+    csv_path: datasets/ripe_as7018/as7018-us-test01.csv
+    k: 5
+    seed: 42
+    # 58 target ASNs over 78 targets, so this bucketing is doing more work here
+    # than on the as0X sets, where every target shares one ASN.
+    asn_bucket_top_n: 20
+
+  enable_fallback: true
+  seed: 42
+
+  combos:
+    - combo_id: vanilla_cbg
+      ltd: low_envelope
+      mtl: planar_circle
+      ctr: geometric_centroid
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+
+    - combo_id: million_scale_cbg
+      ltd: speed_of_internet
+      mtl: planar_circle
+      ctr: geometric_centroid
+      ltd_kwargs:
+        speed_ratio: 0.6667
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+
+    - combo_id: octant_cbg_hull
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_mode: inv_power
+        weight_k: 2
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+    - combo_id: octant_cbg_spl
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_mode: inv_power
+        weight_k: 2
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+    - combo_id: spotter_cbg
+      ltd: normal_dist
+      mtl: gaussian_density
+      ctr: density_argmax
+      ltd_kwargs:
+        deg_mu: 3
+        deg_sigma: 2
+        cutoff_min_points: 5
+      mtl_kwargs:
+        grid: healpix
+        resolution: 128
+        coarse_resolution: 16
+        top_k: 8
+        neighbor_ring: 1
+
+analysis:
+  common:
+    grid: healpix
+    resolution: [128]
+    dataset_label: RIPE-MESH AS-MIX
+
+  plot-bipartite-graph:
+    no_flow_voronoi: true
+
+  plot-spotter-normality:
+    # The paper's claim is about the landmark that PERFORMED the measurement,
+    # and here that is unambiguously the VP.
+    group_by: vp_id
+    n_permutations: 200
