@@ -1,7 +1,7 @@
 """Filter raw  rows to mainland US and sufficiently observed VP-target pairs.
 
 This script wires the mainland-US filter from
-``scripts.benchmark.v2.sources.atnt_ant.filter_non_mainland_us_targets_and_vps``
+``scripts.processing.source.mainland_us.filter_non_mainland_us_targets_and_vps``
 and then keeps only rows whose target has at least N observing VPs
 (default: 3).
 
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.benchmark.v2.sources.atnt_ant import (
+from scripts.processing.source.mainland_us import (
     filter_non_mainland_us_targets_and_vps,
 )
 
@@ -70,6 +70,23 @@ def filter_pairs_by_min_target_vp_observations(
     return df[per_target_vp_n >= min_observations].copy()
 
 
+def _resolve_column(df: pd.DataFrame, requested: str) -> str:
+    """Return the actual column matching ``requested``, ignoring case.
+
+    Raises with the available columns listed, which is a far more useful
+    failure than a bare KeyError deep inside a groupby.
+    """
+    if requested in df.columns:
+        return requested
+    lower = {str(c).strip().lower(): c for c in df.columns}
+    resolved = lower.get(requested.strip().lower())
+    if resolved is None:
+        raise ValueError(
+            f"Missing required column: {requested} (available: {list(df.columns)})"
+        )
+    return resolved
+
+
 def _default_output(input_path: Path) -> Path:
     out_name = input_path.with_suffix("").with_suffix(f".mainland.csv").name
     return _DEFAULT_OUT_DIR / out_name
@@ -105,19 +122,26 @@ def main() -> None:
 
     raw_df = pd.read_csv(args.input)
 
+    # Resolve the id columns case-insensitively, so the same invocation works
+    # for the upper-case schema (VP_ID) and the lower-case canonical one
+    # (vp_id) that the generic_csv sources emit. Matches how the SOI stage
+    # normalizes its own headers.
+    vp_col = _resolve_column(raw_df, args.vp_col)
+    target_col = _resolve_column(raw_df, args.target_col)
+
     mainland_df = filter_non_mainland_us_targets_and_vps(raw_df)
     if args.observation_mode == "target-vps":
         kept_df = filter_pairs_by_min_target_vp_observations(
             mainland_df,
-            vp_col=args.vp_col,
-            target_col=args.target_col,
+            vp_col=vp_col,
+            target_col=target_col,
             min_observations=args.min_observations,
         )
     else:
         kept_df = filter_pairs_by_min_observations(
             mainland_df,
-            vp_col=args.vp_col,
-            target_col=args.target_col,
+            vp_col=vp_col,
+            target_col=target_col,
             min_observations=args.min_observations,
         )
 
@@ -129,29 +153,25 @@ def main() -> None:
     n_mainland = len(mainland_df)
     n_kept = len(kept_df)
 
-    raw_pairs = raw_df[[args.vp_col, args.target_col]].drop_duplicates().shape[0] if all(
-        c in raw_df.columns for c in (args.vp_col, args.target_col)
-    ) else 0
-    mainland_pairs = mainland_df[[args.vp_col, args.target_col]].drop_duplicates().shape[0]
-    kept_pairs = kept_df[[args.vp_col, args.target_col]].drop_duplicates().shape[0]
+    raw_pairs = raw_df[[vp_col, target_col]].drop_duplicates().shape[0]
+    mainland_pairs = mainland_df[[vp_col, target_col]].drop_duplicates().shape[0]
+    kept_pairs = kept_df[[vp_col, target_col]].drop_duplicates().shape[0]
 
     logger.info("stage 1: mainland filter")
     logger.info("  rows  : %d / %d (%.2f%%)",
                 n_mainland, n_raw, 100 * n_mainland / n_raw if n_raw else 0.0)
     if args.observation_mode == "target-vps":
         logger.info("stage 2: keep targets with >= %d distinct %s (%s mode)",
-                    args.min_observations, args.vp_col, args.observation_mode)
+                    args.min_observations, vp_col, args.observation_mode)
     else:
         logger.info("stage 2: min observations per (%s, %s) >= %d (%s mode)",
-                    args.vp_col, args.target_col, args.min_observations, args.observation_mode)
+                    vp_col, target_col, args.min_observations, args.observation_mode)
     logger.info("  rows  : %d / %d (%.2f%% of mainland)",
                 n_kept, n_mainland, 100 * n_kept / n_mainland if n_mainland else 0.0)
     logger.info("  pairs : %d / %d / %d (kept/mainland/raw)",
                 kept_pairs, mainland_pairs, raw_pairs)
-    if args.vp_col in kept_df.columns:
-        logger.info("  VPs   : %d", kept_df[args.vp_col].nunique())
-    if args.target_col in kept_df.columns:
-        logger.info("  TGs   : %d", kept_df[args.target_col].nunique())
+    logger.info("  VPs   : %d", kept_df[vp_col].nunique())
+    logger.info("  TGs   : %d", kept_df[target_col].nunique())
     logger.info("  wrote %s", out_path)
 
 
