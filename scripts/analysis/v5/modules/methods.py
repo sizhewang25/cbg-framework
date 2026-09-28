@@ -74,6 +74,21 @@ METHOD_LABELS: dict[str, str] = {
             ("tau10", "τ=10"),
         )
     },
+    # The spline-coverage sweep (`octant_ssw`, configs/as0*-*-ssweep.yaml).
+    # `nospl` is the BASELINE: Octant's convex hull with no spline at all, so
+    # it is OCT-H under a sweep-local name. The rest set `target_coverage` on
+    # `bounded_spline` -- the fraction of a VP's own training samples the
+    # multiplicative band is required to contain.
+    **{
+        f"octant_ssw_{tag}": f"OCT-S {suffix}"
+        for tag, suffix in (
+            ("nospl", "hull (no spline)"),
+            ("cov95", "cov=0.95"),
+            ("cov90", "cov=0.90"),
+            ("cov75", "cov=0.75"),
+            ("cov50", "cov=0.50"),
+        )
+    },
 }
 
 

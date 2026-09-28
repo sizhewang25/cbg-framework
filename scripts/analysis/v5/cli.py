@@ -1299,27 +1299,50 @@ def plot_ltd_model_cmd(
 
 
 def _octant_runs(run_id: list[str], all_runs: bool, outputs_root: Path):
-    """Runs holding at least one scored weight-sweep arm.
+    """Runs holding at least one scored arm of any registered Octant sweep.
 
     `--all-runs` filters rather than taking everything: a mesh or weighted run
-    carries no `octant_cbg_*_ip1` combos, and asking for one would raise on a
-    run the caller never meant to include.
+    carries no sweep arms, and asking for one would raise on a run the caller
+    never meant to include.
+
+    The predicate is EXACT combo-id membership (`variants_present`), not the
+    `startswith(f"{v}_") and split("_")[-1] in ARM_TAGS` heuristic it replaced.
+    That heuristic pooled every sweep's tags into one namespace, so the moment
+    a second sweep contributed a tag it matched production combos: the on-disk
+    last segments include `hull`, `spl`, `top`, `geo` and a bare `octant_cbg`.
     """
     if all_runs and run_id:
         raise typer.BadParameter("pass --run-id or --all-runs, not both")
     if run_id:
         return [resolve_run(r, outputs_root) for r in run_id]
-    runs = [
-        r for r in discover_runs(outputs_root)
-        if any(c.startswith(f"{v}_") and c.split("_")[-1] in octant_finetuning.ARM_TAGS
-               for v, _ in octant_finetuning.VARIANTS for c in r.combo_ids)
-    ]
+    runs = [r for r in discover_runs(outputs_root)
+            if octant_finetuning.variants_present(r)]
     if not runs:
         raise typer.BadParameter(
-            f"no run under {outputs_root} holds weight-sweep arms; run "
-            f"./cli.sh --configfile <a config whose combos include the "
-            f"weight-sweep arms> first")
+            f"no run under {outputs_root} holds arms of any registered Octant "
+            f"sweep; run ./cli.sh --configfile <a config whose combos include "
+            f"sweep arms> first")
     return runs
+
+
+def _octant_variants(variant: list[str], group) -> list[str]:
+    """Variant prefixes to render for one group of runs.
+
+    Defaults to what the group actually holds rather than to every registered
+    variant: with two sweeps registered, a fixed default would print a skip
+    line for the other sweep's variant on every invocation.
+    """
+    if variant:
+        return list(dict.fromkeys(variant))
+    present = [octant_finetuning.variants_present(r) for r in group]
+    return [v for v in present[0] if all(v in p for p in present[1:])]
+
+
+def _octant_check_variants(variant: list[str]) -> None:
+    known = [v for v, _ in octant_finetuning.VARIANTS]
+    if unknown := [v for v in (variant or ()) if v not in known]:
+        raise typer.BadParameter(
+            f"unknown --variant {unknown}; pick from {known}")
 
 
 def _octant_layouts(layout, all_runs, runs):
@@ -1346,10 +1369,18 @@ def _octant_layouts(layout, all_runs, runs):
 def plot_octant_cdf_cmd(
     run_id: list[str] = typer.Option(None, "--run-id", help="Sweep run (repeatable)."),
     all_runs: bool = typer.Option(
-        False, "--all-runs", help="Every run under --outputs-root holding sweep arms."
+        False,
+        "--all-runs",
+        help="Every run under --outputs-root holding arms of any registered "
+             "Octant sweep.",
     ),
     variant: list[str] = typer.Option(
-        None, "--variant", help="octant_cbg_hull and/or octant_cbg_spl; default both."
+        None,
+        "--variant",
+        help=(
+            "Variant prefix, repeatable. Default: whichever the run holds. "
+            "Known: " + ", ".join(v for v, _ in octant_finetuning.VARIANTS)
+        ),
     ),
     layout: list[str] = typer.Option(
         None,
@@ -1380,13 +1411,13 @@ def plot_octant_cdf_cmd(
     worse -- the steep arms differ sharply there while their curves nearly
     coincide. Use `report-octant-finetuning` for that.
     """
+    _octant_check_variants(variant)
     runs = _octant_runs(run_id, all_runs, outputs_root)
     layouts = _octant_layouts(layout, all_runs, runs)
-    variants = variant or [v for v, _ in octant_finetuning.VARIANTS]
     for lay in layouts:
         groups = [[r] for r in runs] if lay == octant_finetuning.PER_RUN else [runs]
         for group in groups:
-            for v in variants:
+            for v in _octant_variants(variant, group):
                 try:
                     path = octant_finetuning.write_cdf(
                         group, v, analysis_root=analysis_root, dpi=dpi)
@@ -1402,10 +1433,18 @@ def plot_octant_cdf_cmd(
 def report_octant_finetuning_cmd(
     run_id: list[str] = typer.Option(None, "--run-id", help="Sweep run (repeatable)."),
     all_runs: bool = typer.Option(
-        False, "--all-runs", help="Every run under --outputs-root holding sweep arms."
+        False,
+        "--all-runs",
+        help="Every run under --outputs-root holding arms of any registered "
+             "Octant sweep.",
     ),
     variant: list[str] = typer.Option(
-        None, "--variant", help="octant_cbg_hull and/or octant_cbg_spl; default both."
+        None,
+        "--variant",
+        help=(
+            "Variant prefix, repeatable. Default: whichever the run holds. "
+            "Known: " + ", ".join(v for v, _ in octant_finetuning.VARIANTS)
+        ),
     ),
     layout: list[str] = typer.Option(
         None,
@@ -1421,9 +1460,12 @@ def report_octant_finetuning_cmd(
         None,
         "--baseline",
         help=(
-            "Sweep arm to pair against, repeatable. Default: unw, the sweep's "
-            "own control. Named in every filename, so two baselines cannot "
-            "overwrite each other or be quoted for one another."
+            "Sweep arm to pair against, repeatable. Default: each sweep's "
+            "own control (" + ", ".join(
+                f"{sw.baseline} for {sw.key}"
+                for sw in octant_finetuning.SWEEPS) + "). Named in every "
+            "filename, so two baselines cannot overwrite each other or be "
+            "quoted for one another."
         ),
     ),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
@@ -1441,21 +1483,26 @@ def report_octant_finetuning_cmd(
     Regressions report n, median and max rather than a high percentile: those
     cohorts hold 4-34 targets, where a p99 is the maximum under another name.
     """
-    bases = baseline or [octant_finetuning.BASELINE_TAG]
-    unknown = [b for b in bases if b not in octant_finetuning.BASELINES]
-    if unknown:
+    _octant_check_variants(variant)
+    # Hard-refuse only a tag that belongs to NO sweep, so `--baseline unw`
+    # still works when the variant list spans both. A tag from the wrong sweep
+    # needs no check here: it never lands in that sweep's `present`, so
+    # `build_table` raises ValueError and the loop below reports a skip.
+    all_arms = {a.tag for sw in octant_finetuning.SWEEPS for a in sw.arms}
+    if unknown := [b for b in (baseline or ()) if b not in all_arms]:
         raise typer.BadParameter(
             f"unknown --baseline {unknown}; pick from "
-            f"{list(octant_finetuning.BASELINES)}")
+            f"{ {sw.key: [a.tag for a in sw.arms] for sw in octant_finetuning.SWEEPS} }")
     runs = _octant_runs(run_id, all_runs, outputs_root)
     layouts = _octant_layouts(layout, all_runs, runs)
-    variants = variant or [v for v, _ in octant_finetuning.VARIANTS]
     for lay in layouts:
         groups = [[r] for r in runs] if lay == octant_finetuning.PER_RUN else [runs]
         for group in groups:
             label = "+".join(r.run_id for r in group)
-            for v in variants:
-                for b in bases:
+            for v in _octant_variants(variant, group):
+                # Default per variant, so one invocation does the right thing
+                # for both sweeps at once.
+                for b in (baseline or [octant_finetuning.sweep_for(v).baseline]):
                     try:
                         path = octant_finetuning.write_table(
                             group, v, baseline=b, analysis_root=analysis_root)

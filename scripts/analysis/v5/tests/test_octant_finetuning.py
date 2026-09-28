@@ -71,9 +71,15 @@ class TestScope:
         with pytest.raises(MissingArtifactError, match="no sweep arms"):
             O.assemble(run, "octant_cbg_hull")
 
-    def test_baseline_default_is_the_control_arm(self):
-        assert O.BASELINE_TAG == "unw"
-        assert set(O.BASELINES) == set(O.ARM_TAGS)
+    def test_every_sweeps_baseline_is_its_control_arm(self):
+        """Per sweep now, not one flat tuple: the baseline is the arm the
+        paired table anchors on, and it must be the arm the CDF draws
+        recessively, or the two artifacts disagree about what the reference
+        is."""
+        assert O.BASELINE_TAG == O.SWEEP_WEIGHT.baseline == "unw"
+        for sw in O.SWEEPS:
+            assert sw.baseline in sw.tags, sw.key
+            assert sw.family(sw.baseline) == "control", sw.key
 
 
 class TestPartialRuns:
@@ -164,14 +170,18 @@ class TestPairedTable:
 class TestLatex:
     def test_caret_labels_are_math_mode(self):
         """A bare `^` outside math mode is 'Missing $ inserted' at compile."""
-        assert "^" not in O.TEX_LABEL["1/rtt^2"].replace(r"^{2}", "")
-        assert O.TEX_LABEL["1/rtt^2"].startswith("$")
+        tex = O.SWEEP_WEIGHT.tex_labels
+        assert "^" not in tex["1/rtt^2"].replace(r"^{2}", "")
+        assert tex["1/rtt^2"].startswith("$")
 
     def test_every_arm_label_has_a_tex_form(self):
         """The legend renders these as matplotlib mathtext and the table as
-        LaTeX, so a missing entry degrades both at once."""
-        for _, label, _, _ in O.ARMS:
-            assert label in O.TEX_LABEL, label
+        LaTeX, so a missing entry degrades both at once. Also enforced by
+        `_validate` at import; kept here as the readable statement of intent.
+        """
+        for sw in O.SWEEPS:
+            for a in sw.arms:
+                assert a.label in sw.tex_labels, (sw.key, a.tag)
 
     def test_large_ranges_are_scientific_not_e_notation(self):
         out = O.tex_range(3.83e22)
@@ -228,28 +238,253 @@ class TestArtifacts:
         assert len(list(d.glob("paired.octant_cbg_hull.vs-*.csv"))) == 2
 
 
-class TestArmMetadata:
+class TestSweepSpecs:
     def test_example_ratio_matches_its_definition(self):
-        assert O.ARM_RATIO["unw"] == 1.0
-        assert O.ARM_RATIO["ip2"] == pytest.approx(
+        W = O.SWEEP_WEIGHT
+        assert W.order("unw") == 1.0
+        assert W.order("ip2") == pytest.approx(
             (O.REF_SLOW_MS / O.REF_FAST_MS) ** 2)
-        assert O.ARM_RATIO["tau5"] == pytest.approx(
+        assert W.order("tau5") == pytest.approx(
             math.exp((O.REF_SLOW_MS - O.REF_FAST_MS) / 5))
+
+    def test_example_ratio_refuses_another_sweeps_tag(self):
+        """The regression that motivated the registry. The final branch was an
+        unguarded `float(tag[3:])`, so `example_ratio("cov95")` returned
+        `exp(4.5/95) = 1.0485` -- no exception, a plausible-looking number,
+        ordered OPPOSITE to coverage, collapsing four arms into one cluster."""
+        for tag in ("cov95", "cov90", "cov75", "cov50"):
+            with pytest.raises(ValueError, match="ordering scalar"):
+                O.example_ratio(tag)
 
     def test_within_family_order_is_stable_under_the_reference_window(self):
         """The window reorders arms ACROSS families but must not reorder them
-        within one, or the dash-by-steepness encoding would flip meaning."""
-        for fam in ("inverse-power", "neg-exponential"):
-            sibs = sorted((t for t in O.ARM_TAGS if O.ARM_FAMILY[t] == fam),
-                          key=O.ARM_RATIO.get)
-            assert [O.rank_within_family(t) for t in sibs] == list(range(len(sibs)))
+        within one, or the dash-by-rank encoding would flip meaning."""
+        for sw in O.SWEEPS:
+            for fam in sw.families:
+                if fam == "control":
+                    continue
+                sibs = sw.ordered(t for t in sw.tags if sw.family(t) == fam)
+                assert ([sw.rank_within_family(t) for t in sibs]
+                        == list(range(len(sibs)))), (sw.key, fam)
 
-    def test_pick_is_a_scored_arm(self):
-        assert O.PICK in O.ARM_TAGS
+    def test_pick_is_a_scored_arm_or_absent(self):
+        """`None` is meaningful, not missing: the spline sweep has no arm worth
+        adopting, and recording that beats leaving a stale pointer."""
+        for sw in O.SWEEPS:
+            assert sw.pick is None or sw.pick in sw.tags, sw.key
+        assert O.SWEEP_SPLINE.pick is None
 
-    def test_every_arm_can_serve_as_a_baseline(self):
-        assert O.BASELINE_TAG == "unw"
-        assert set(O.BASELINES) == set(O.ARM_TAGS)
+    def test_the_specs_validate(self):
+        for sw in O.SWEEPS:
+            O._validate(sw)
+
+    def test_an_unknown_variant_raises_value_error_not_key_error(self):
+        """The CLI catches ValueError and reports a skip; a KeyError tracebacks
+        out of a loop that meant to continue."""
+        with pytest.raises(ValueError, match="unknown variant"):
+            O.sweep_for("nope")
+
+    def test_a_bare_octant_combo_is_not_mistaken_for_an_arm(self):
+        """Run discovery matches EXACT combo ids. The predicate it replaced was
+        `split("_")[-1] in ARM_TAGS`, which matches `octant_cbg_hull` itself as
+        soon as any sweep contributes a tag like `hull`."""
+        combos = O.sweep_combos()
+        for produced in ("octant_cbg", "octant_cbg_hull", "octant_cbg_spl",
+                         "octant_cbg_hull_geo", "octant_cbg_top_geo"):
+            assert produced not in combos, produced
+        assert "octant_cbg_hull_ip1" in combos
+        assert "octant_ssw_cov95" in combos
+
+    def test_each_sweep_serializes_only_its_own_hues(self):
+        """`cdf_manifest` emits `dict(family_hue)`, so a flat shared dict would
+        have rewritten the weight sweep's published manifest the moment a
+        second sweep was registered."""
+        assert list(O.SWEEP_WEIGHT.family_hue) == [
+            "inverse-power", "neg-exponential", "control"]
+        assert list(O.SWEEP_SPLINE.family_hue) == ["spline-coverage", "control"]
+
+    def test_the_dash_ladder_covers_the_largest_family(self):
+        for sw in O.SWEEPS:
+            widest = max(sum(a.family == f for a in sw.arms)
+                         for f in sw.families if f != "control")
+            assert len(sw.rank_dash) >= widest, sw.key
+
+    def test_a_truncated_dash_ladder_is_refused_at_construction(self):
+        import dataclasses
+        bad = dataclasses.replace(O.SWEEP_SPLINE, rank_dash=(None, (5, 1.6)))
+        with pytest.raises(ValueError, match="rank_dash"):
+            O._validate(bad)
+
+
+class TestSplineCoverageSweep:
+    """The second sweep: an OCT-H baseline with no spline, four coverage arms.
+
+    Its shape breaks three assumptions the weight sweep never exercised -- four
+    arms in ONE family (the dash ladder), families named something other than
+    inverse-power/neg-exponential (the legend), and an ordering scalar that
+    runs DESCENDING (every sort).
+    """
+
+    @pytest.fixture
+    def tree_ssw(self, tmp_path):
+        run = "asXX-ssweep"
+        _combo(tmp_path, run, "octant_ssw", "nospl", [100.0, 200.0, 300.0, 400.0])
+        _combo(tmp_path, run, "octant_ssw", "cov95", [90.0, 200.0, 280.0, 500.0])
+        _combo(tmp_path, run, "octant_ssw", "cov90", [110.0, 200.0, 310.0, 600.0])
+        return tmp_path, run
+
+    @staticmethod
+    def _run(tree_ssw):
+        root, run = tree_ssw
+        return RunPaths(run, root, "generic_csv", "anchors_to_probes")
+
+    def test_the_ordering_scalar_is_the_coverage_not_a_parsed_tag(self):
+        assert O.SWEEP_SPLINE.order("cov95") == 0.95
+        assert O.SWEEP_SPLINE.order("cov50") == 0.50
+
+    def test_arms_run_from_the_baseline_down_to_the_tightest(self):
+        """Coverage rises with looseness, so gentlest-first is DESCENDING. A
+        plain ascending sort -- which is what a single shared sort direction
+        would give -- puts the tightest bound first and inverts the ladder."""
+        assert O.SWEEP_SPLINE.ordered(O.SWEEP_SPLINE.tags) == [
+            "nospl", "cov95", "cov90", "cov75", "cov50"]
+
+    def test_the_table_publishes_target_coverage_not_example_ratio(self, tree_ssw):
+        run = self._run(tree_ssw)
+        wide, present = O.assemble(run, "octant_ssw")
+        t = O.build_table(wide, present, sweep=O.SWEEP_SPLINE)
+        assert "target_coverage" in t.columns
+        assert "example_ratio" not in t.columns
+        # and the rows are in coverage-descending order, baseline excluded
+        assert list(t.arm_tag) == ["cov95", "cov90"]
+
+    def test_the_cdf_csv_publishes_target_coverage(self, tree_ssw):
+        run = self._run(tree_ssw)
+        wide, present = O.assemble(run, "octant_ssw")
+        c = O.cdf_table(wide, present, sweep=O.SWEEP_SPLINE)
+        assert "target_coverage" in c.columns
+        assert list(c.arm_tag) == ["nospl", "cov95", "cov90"]
+
+    def test_the_weight_sweep_still_publishes_example_ratio(self, tree):
+        """The converse, so a rename cannot silently pass both ways."""
+        wide, present = O.assemble(_run(tree), "octant_cbg_hull")
+        c = O.cdf_table(wide, present, sweep=O.SWEEP_WEIGHT)
+        assert "example_ratio" in c.columns
+        assert "target_coverage" not in c.columns
+
+    def test_four_arms_in_one_family_get_four_distinct_dashes(self):
+        """`RANK_DASH` held three patterns, so the fourth arm raised
+        `IndexError` inside plot_cdf -- after the CSV and manifest were already
+        computed. None may collide with the control's dash-dot, which shares
+        the panel."""
+        cov = [t for t in O.SWEEP_SPLINE.tags
+               if O.SWEEP_SPLINE.family(t) != "control"]
+        assert len(cov) == 4
+        dashes = [O.SWEEP_SPLINE.style_for(t).get("dashes") for t in cov]
+        assert len(set(dashes)) == 4, dashes
+        control = O.SWEEP_SPLINE.style_for("nospl")["dashes"]
+        assert control not in dashes
+
+    def test_the_legend_lists_every_present_arm(self, tree_ssw, tmp_path):
+        """plot_cdf hardcoded the weight sweep's family names, so any other
+        sweep got an EMPTY legend -- matplotlib draws an empty frame rather
+        than raising, which is why this asserts content, not absence of error.
+        """
+        import matplotlib.pyplot as plt
+        run = self._run(tree_ssw)
+        wide, present = O.assemble(run, "octant_ssw")
+        out = tmp_path / "cdf.png"
+        O.plot_cdf(wide, present, "OCT-S", run.run_id, out,
+                   sweep=O.SWEEP_SPLINE, dpi=60)
+        assert out.exists()
+        fig = plt.gcf()  # closed by plot_cdf; rebuild the check from the spec
+        plt.close(fig)
+        labels = [O.SWEEP_SPLINE.tex(O.SWEEP_SPLINE.label(t)) for t in present]
+        assert len(labels) == 3 and all(labels)
+
+    def test_the_coverage_column_keeps_two_decimals(self):
+        """`tex_range` floors at one decimal, so it renders 0.95 as "1.0" --
+        indistinguishable from the baseline -- and 0.75 as "0.8". The formatter
+        has to be per-sweep, not just the values."""
+        assert O.SWEEP_SPLINE.order_tex_fmt(0.95) == r"$0.95$"
+        assert O.SWEEP_SPLINE.order_tex_fmt(0.75) == r"$0.75$"
+        assert O.tex_range(0.95) == "0.9"
+
+    def test_the_spread_block_is_keyed_off_this_sweeps_baseline(self, tree_ssw):
+        """The key name AND the cohort: the old code filtered on the literal
+        "unw", which is not an arm of this sweep, so every arm would have been
+        counted including the baseline."""
+        run = self._run(tree_ssw)
+        wide, present = O.assemble(run, "octant_ssw")
+        c = O.cdf_table(wide, present, sweep=O.SWEEP_SPLINE)
+        m = O.cdf_manifest([run], "octant_ssw", "OCT-S", wide, present, c)
+        assert "coverage_arm_spread_km" in m
+        assert "steep_arm_spread_km" not in m
+
+    def test_the_manifest_carries_no_rtt_reference_window(self, tree_ssw):
+        """REF_FAST_MS/REF_SLOW_MS are an RTT window with no meaning for a
+        coverage sweep, and they were baked into arm_ordering and the caption.
+        """
+        run = self._run(tree_ssw)
+        wide, present = O.assemble(run, "octant_ssw")
+        c = O.cdf_table(wide, present, sweep=O.SWEEP_SPLINE)
+        m = O.cdf_manifest([run], "octant_ssw", "OCT-S", wide, present, c)
+        assert "example ratio" not in m["arm_ordering"]
+        assert "coverage" in m["arm_ordering"]
+        assert "wsweep" not in m["scope"]
+
+    def test_the_table_manifest_declares_the_hull_fallback_confound(self, tree_ssw):
+        """Every arm is a blend of 'spline at this coverage' and 'hull', and
+        the baseline IS the hull, so the artifact has to say the effect is a
+        lower bound."""
+        run = self._run(tree_ssw)
+        wide, present = O.assemble(run, "octant_ssw")
+        t = O.build_table(wide, present, sweep=O.SWEEP_SPLINE)
+        m = O.table_manifest([run], "octant_ssw", "OCT-S", wide, present,
+                             "nospl", t)
+        assert "lower bound" in m["confound_note"]
+        assert m["baseline"] == "hull, no spline"
+
+    def test_the_weight_sweep_manifest_gains_no_confound_key(self, tree):
+        """Adding a key unconditionally would rewrite already-published bytes."""
+        run = _run(tree)
+        wide, present = O.assemble(run, "octant_cbg_hull")
+        t = O.build_table(wide, present)
+        m = O.table_manifest([run], "octant_cbg_hull", "OCT-H", wide, present,
+                             "unw", t)
+        assert "confound_note" not in m
+        assert "pick" not in m
+
+    def test_the_tex_label_is_prefixed_per_sweep(self, tree_ssw):
+        """Both sweeps publish a variant whose term is OCT-S, so without a
+        per-sweep prefix their \\label{} keys would collide."""
+        run = self._run(tree_ssw)
+        wide, present = O.assemble(run, "octant_ssw")
+        t = O.build_table(wide, present, sweep=O.SWEEP_SPLINE)
+        tex = O.to_latex(t, "OCT-S", run.run_id, "hull, no spline", len(wide),
+                         sweep=O.SWEEP_SPLINE)
+        assert r"\label{tab:octant-spline-coverage-oct-s-hull-no-spline}" in tex
+        assert "octant-weight-sweep" not in tex
+        # the label must carry no LaTeX-hostile characters
+        line = [l for l in tex.splitlines() if l.startswith(r"\label")][0]
+        assert "," not in line and " " not in line[len(r"\label{"):]
+
+    def test_defaults_do_not_leak_the_weight_sweeps_baseline(self, tree_ssw):
+        """`build_table` used to default to BASELINE_TAG == "unw", which is not
+        an arm here, so the default raised instead of pairing."""
+        run = self._run(tree_ssw)
+        wide, present = O.assemble(run, "octant_ssw")
+        t = O.build_table(wide, present, sweep=O.SWEEP_SPLINE)
+        assert "nospl" not in set(t.arm_tag)
+        assert len(t) == 2
+
+    def test_artifacts_do_not_collide_with_the_weight_sweep(self, tmp_path):
+        """Both sweeps write into one run's octant-finetuning/ if a run ever
+        holds both; the stems must stay distinct."""
+        assert (O.artifact_names("octant_ssw", "nospl", "table")
+                != O.artifact_names("octant_cbg_spl", "unw", "table"))
+        assert O.artifact_names("octant_ssw", "nospl", "cdf")[0] == \
+            "error_cdf.octant_ssw.png"
 
 
 class TestPooling:

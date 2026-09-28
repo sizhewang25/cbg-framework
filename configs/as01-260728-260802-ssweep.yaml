@@ -1,0 +1,219 @@
+# Octant spline-coverage sweep on as01-260728-260802.
+#
+#   ./cli.sh --configfile configs/as01-260728-260802-ssweep.yaml
+#
+# WHAT THIS MEASURES
+# `bounded_spline` is Octant's spline constraint: fit a per-VP LSQ spline through
+# the (rtt, distance) scatter, widen it multiplicatively to (spline/d, spline*d),
+# and clip to the convex hull. `target_coverage` picks d by binary-searching for
+# the band that contains that fraction of the VP's own training points.
+#
+# It has never been calibrated -- 0.9 is hardcoded in every production config --
+# and with the weight scorer now settled (inv_power k=2), the spline variant is
+# WORSE than the plain hull on all three datasets, at p50 and p90 both:
+#
+#            OCT-H p50/p90      OCT-S p50/p90
+#   as01     12.7 / 423.3       15.0 / 595.8
+#   as02     53.8 / 631.9       58.6 / 727.3
+#   as03     92.1 / 498.7      157.7 / 589.6
+#
+# So the baseline here is the HULL (no spline at all), not another spline
+# setting, and the question is how much data the band should cover.
+#
+# Offline refit on fold_0 established the shape this run has to confirm at
+# scale: the hull holds the best p90 (481.4 km) and the best <40km (67.5%) of
+# anything measured, coverage -> 1.0 converges the band ONTO the hull
+# (p90 481.6, identical <40km), and the tail degrades monotonically as the band
+# tightens -- p90 482 -> 500 -> 683 -> 749 at coverage 1.00 -> 0.95 -> 0.90 -> 0.75.
+# Expect a negative result. If this run contradicts it, that is the finding.
+#
+# WHY `spline_n_knots` IS NOT AN AXIS
+# It is inert. Median band width moves +-8%, non-monotonically, across
+# nk in {3,4,6,8,12}; the knot cap at octant_model.py:568 never binds because
+# per-VP distinct RTTs run 71-203. What nk does change is the delta-search
+# failure count (23 -> 130 of 134 VPs from nk 3 -> 20), which is the mechanism
+# below, not fit quality. Held at the shipped 4 on every spline arm.
+#
+# THE DELTA-SEARCH FALLBACK IS A CONFOUND -- REPORT IT WITH THE ERRORS
+# `find_delta_for_coverage` demands |coverage(d) - target| <= 0.01
+# (octant_model.py:363) and raises otherwise (:434-438). BoundedSplineLTD._fit
+# swallows that at logger.debug (bounded_spline.py:114-119), stores no delta,
+# and the VP falls back to BARE HULL BOUNDS (octant_model.py:649).
+#
+# This is not an inability to reach the coverage: the doubling ladder found a
+# delta with coverage >= 0.90 for 28/28 of the VPs that raised, one of them
+# reaching coverage 1.0000 at delta=2.00 -- a usable band, discarded for a
+# WIDER hull constraint. The rule it enforces is "hit 90% without overshooting
+# past 91%", which is the intended semantics and is kept unchanged.
+#
+# But since the baseline IS the hull, every fallback converts a spline arm's VP
+# into a baseline VP. Fallback counts on as01 fold_0, of 134 VPs:
+#   cov95 -> 17    cov90 -> 28    cov75 -> 25    cov50 -> 39
+# Each arm is therefore a blend of "spline at coverage c" and "hull", in a
+# proportion that varies for reasons unrelated to c. Root cause is the replica
+# structure: 20 distinct probe coordinates on as01 make coverage(delta) a
+# staircase with ~5% risers, coarser than the 1% tolerance it is tested against.
+# Publish each arm's fallback count beside its error stats, and read the spline
+# effect as a LOWER BOUND.
+#
+# THE BASELINE IS AN ARM HERE, DELIBERATELY.
+# Fold assignment is deterministic in (csv_path, k, seed, asn_bucket_top_n) --
+# see scripts/benchmark/v2/sources/generic_csv.py -- so this run_id reproduces
+# pro-as01-mesh's folds exactly. That makes two free identity gates:
+#   octant_ssw_nospl  must equal  pro-as01-mesh/.../octant_cbg_hull
+#   octant_ssw_cov90  must equal  pro-as01-mesh/.../octant_cbg_spl
+# Any difference means the fold determinism or the kwarg copy is wrong.
+# Recomputing the baseline in-tree (~4 CPU-h) also keeps the tree
+# self-contained: octant_finetuning.assemble joins arms WITHIN one run.
+#
+# COMBO PREFIX: `octant_ssw`, not `octant_cbg_spl`.
+# octant_finetuning.assemble builds combo ids as f"{variant}_{tag}" from ONE
+# variant prefix, so a suffix-less cross-family baseline like `octant_cbg_hull`
+# is unreachable by it. One fresh prefix fits that loader with no change.
+# Verified collision-free: existing combo-id last segments on disk are
+# c100 c80 cbg geo hull ip1 ip2 ip3 spl tau1 tau10 tau5 top unw, and a bare
+# `octant_cbg` combo EXISTS -- so `octant_cbg` is unusable as a prefix and
+# `hull` is unusable as a tag. Hence `nospl`.
+#
+# COST: 5 combos x 5 folds = 25 jobs, ~7.9 CPU-h for as01. Tighter bands are
+# cheaper (1.93/1.97/1.77/1.45 s per target at cov .95/.90/.75/.50).
+
+run_id: as01-260728-260802-ssweep
+
+benchmark:
+  source: generic_csv
+  setup: anchors_to_probes
+  slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+  source_kwargs:
+    # All four MUST match configs/pro-as01-mesh.yaml exactly, or the folds
+    # diverge and both identity gates above stop being valid.
+    csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.csv
+    k: 5
+    seed: 42
+    asn_bucket_top_n: 20
+
+  enable_fallback: true
+  seed: 42
+
+  # 5 arms. `mtl`/`mtl_kwargs`/`ctr`/`ctr_kwargs` are byte-identical across all
+  # of them and copied verbatim from pro-as01-mesh, so the LTD band is the only
+  # moving part. weight_mode/weight_k are the settled values from the weight
+  # sweep; do not vary them here or the two sweeps stop being orthogonal.
+  combos:
+
+    # BASELINE: Octant hull, no spline. target_coverage and spline_n_knots are
+    # both absent because neither reaches this arm -- _fit only searches for a
+    # delta when the submodel has spline knots, and fit_spline: false leaves
+    # them None.
+    - combo_id: octant_ssw_nospl
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_mode: inv_power
+        weight_k: 2
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+    # coverage 0.95 -- nearly ties the hull on p90 (500.5 vs 481.4 offline).
+    - combo_id: octant_ssw_cov95
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.95
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_mode: inv_power
+        weight_k: 2
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+    # coverage 0.90 -- THE SHIPPED SETTING. Identity gate against
+    # pro-as01-mesh's octant_cbg_spl.
+    - combo_id: octant_ssw_cov90
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_mode: inv_power
+        weight_k: 2
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+    # coverage 0.75 -- mid-degradation.
+    - combo_id: octant_ssw_cov75
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.75
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_mode: inv_power
+        weight_k: 2
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+    # coverage 0.50 -- the tight end. Median band ~363 km against ~1047 km at
+    # 0.95; the band never empties even here, so this is the tight bracket, not
+    # a failure case.
+    - combo_id: octant_ssw_cov50
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.5
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_mode: inv_power
+        weight_k: 2
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+analysis:
+  common:
+    # Declared rather than parsed: v5 used to split the run id on its first
+    # hyphen. Reuses the wsweep labels -- safe, because pooled artifacts key on
+    # a hash of the RUN IDS (cross.cross_dir), so the two sweeps cannot collide,
+    # and the label is display-only. The one consequence is that
+    # cross.guard_distinct_labels refuses to pool this run with the as01 wsweep
+    # run, which is the correct refusal: they are one dataset.
+    dataset_label: as01
+    grid: h3
+    resolution: [4]
