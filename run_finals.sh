@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Serial driver for the CBG finals: 3 operator ASNs x {mesh, traffic-weighted},
-# then the v4 analysis artifacts over whatever ran.
+# Serial driver for the CBG finals: whichever mesh / traffic-weighted arms are
+# uncommented below, then the v4 analysis artifacts over whatever ran.
+# Currently enabled: the ripe-asmix-mesh arm only.
 #
 # Two benchmark modules, in this order:
 #
@@ -71,13 +72,15 @@ DERIVE_SMK="scripts/processing/source/derive_traffic_weighted_cbg_data.smk"
 
 # Mesh arms: run directly.
 MESH_CONFIGS=(
-  # PRO arm: the finals mesh with Octant's face-weight scorer on the
-  # inverse-power function w = rtt^-2 instead of the shipped exp(-rtt/50).
-  # Own run ids, own trees -- these build from scratch and touch nothing
-  # under the as0X-260728-260802-* trees.
-  pro-as01-mesh
-  pro-as02-mesh
-  pro-as03-mesh
+  # The public RIPE Atlas mesh: AS7018 probes as VPs against the shared anchor
+  # set, 95 targets over 68 ASNs. Sourced through the same mainland + SOI
+  # preprocessing as the as0X meshes (see configs/ripe-asmix-mesh.yaml), so it
+  # asks whether the pro arm's result carries past one operator's topology.
+  ripe-asmix-mesh
+  # The pro arm (w = rtt^-2 face-weight scorer), already scored:
+  # pro-as01-mesh
+  # pro-as02-mesh
+  # pro-as03-mesh
   # The tau=50 originals, already scored:
   # as01-260728-260802-mesh
   # as02-260728-260802-mesh
