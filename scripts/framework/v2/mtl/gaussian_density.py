@@ -379,22 +379,24 @@ class GaussianDensityMTL(DensityMTLMethod):
         cells, lats, lons = self._coarse_grid()
         logp = _log_density(lats, lons, constraints)
 
+        # top-down search, starting from the coarse global healpix cells
         while nside < self.resolution:
+            # sort cell indices with logp descendingly, pick top-k cell indicies
             top = cells[np.argsort(logp)[::-1][: self.top_k]]
             carried = (
                 HP.disk(top, self.neighbor_ring, nside)
                 if self.neighbor_ring > 0
                 else np.unique(top)
             )
-            # `disk` already returns unique cells, so overlapping rings need no
-            # deduplication here, and `children` of a non-empty set is never
-            # empty -- there is no "nothing to descend into" case to guard.
+            # break down into child cells of each top-k coarse cell
             cells = HP.children(carried).ravel()
             nside *= 2
             centres = HP.pix2ang(cells, nside)
             lats, lons = centres[:, 0], centres[:, 1]
+            # redo density calculation among finer-grain child cells
             logp = _log_density(lats, lons, constraints)
 
+        # We get a bunch of targeted granularity cells with their density probability
         finite = np.isfinite(logp)
         if not finite.any():
             return None, None, None

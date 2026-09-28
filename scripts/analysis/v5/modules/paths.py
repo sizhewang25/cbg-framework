@@ -30,6 +30,7 @@ _NON_SOURCE_DIRS = frozenset({"eval_source", "eval_dataset", "bench_eval"})
 ANSWER_SPACE_KIND = "answer-space"
 CLASSIFY_KIND = "classify"
 MTL_MAP_KIND = "mtl-map"
+LTD_MODEL_KIND = "ltd-model"
 OCTANT_FINETUNING_KIND = "octant-finetuning"
 
 
@@ -168,10 +169,8 @@ class RunPaths:
         out.mkdir(parents=True, exist_ok=True)
         return out
 
-
     def octant_finetuning_dir(self, *, root: Path | None = None) -> Path:
-        """`<root>/<run_id>/octant-finetuning/` -- rung-free, like the region
-        cache.
+        """`<root>/<run_id>/octant-finetuning/` -- rung-free, like `ltd-model/`.
 
         The weight-scorer sweep compares arms on `error_km`, the distance from
         the prediction to the raw TG coordinate. No answer space and no nside
@@ -179,6 +178,16 @@ class RunPaths:
         byte-identical set of artifacts per rung.
         """
         return self.analysis_dir(OCTANT_FINETUNING_KIND, root=root)
+
+    def ltd_model_dir(self, *, root: Path | None = None) -> Path:
+        """`<root>/<run_id>/ltd-model/` -- rung-free, like the region cache.
+
+        No nside enters an LTD fit: the model is fit on RTT and great-circle
+        distance, and the page draws that fit. Slugging this directory the way
+        `mtl_map_dir` is slugged would write one byte-identical ~5 MB page per
+        rung, so the kind carries no grid at all.
+        """
+        return self.analysis_dir(LTD_MODEL_KIND, root=root)
 
 
 def discover_runs(root: Path | str = DEFAULT_OUTPUTS_ROOT) -> list[RunPaths]:

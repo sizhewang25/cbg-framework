@@ -46,9 +46,11 @@ from scripts.analysis.v5.modules import (
     figure_error_cdf,
     figure_error_diff,
     figure_exclusive_error,
+    figure_ltd_model,
     figure_outcome_bars,
     figure_outcome_map,
     figure_peripherality,
+    figure_rtt_cdf,
     figure_stability,
     figure_vp_dist_gap,
     figure_vp_distance_cdf,
@@ -896,6 +898,105 @@ def plot_vp_distance_cdf_cmd(
         typer.echo(f"wrote {png}")
 
 
+@app.command("plot-rtt-cdf")
+def plot_rtt_cdf_cmd(
+    run_id: list[str] = typer.Option(
+        None, "--run-id", help="Run (repeatable); one curve each, never pooled."
+    ),
+    x_max: float = typer.Option(
+        figure_rtt_cdf.DEFAULT_X_MAX_MS,
+        "--x-max",
+        help=(
+            "Right edge of the linear x axis, in ms. Fixed rather than "
+            "data-driven so two runs of this figure are comparable; the "
+            "manifest records how much of each dataset lies beyond it."
+        ),
+    ),
+    x_scale: str = typer.Option(
+        figure_rtt_cdf.DEFAULT_X_SCALE,
+        "--x-scale",
+        help=(
+            "linear (default) or symlog. Plain log is not offered: symlog keeps "
+            "a linear window over the small RTTs and stays defined at 0, so a "
+            "source that ever rounds a sub-millisecond RTT down degrades "
+            "visibly rather than by dropping the row."
+        ),
+    ),
+    linthresh: float = typer.Option(
+        figure_rtt_cdf.DEFAULT_LINTHRESH_MS,
+        "--linthresh",
+        help=(
+            "symlog only: where the axis hands over from linear to log, in ms. "
+            "Set it above the bulk of the data and symlog draws a linear axis "
+            "under a log label; the manifest records the share below it."
+        ),
+    ),
+    x_step: float = typer.Option(
+        None,
+        "--x-step",
+        help=(
+            "Linear scale only: x tick spacing in ms. Unset leaves "
+            "matplotlib's automatic locator. Ignored on symlog, where the "
+            "decades are the ticks."
+        ),
+    ),
+    medians: bool = typer.Option(
+        True,
+        "--medians/--no-medians",
+        help="Dashed vertical at each dataset's p50, labelled with its RTT.",
+    ),
+    annotate_clipping: bool = typer.Option(
+        True,
+        "--annotate-clipping/--no-annotate-clipping",
+        help=(
+            "Note in the top right, in the curve's own colour, for each "
+            "dataset running past --x-max, carrying its p99. Suppressing them "
+            "lets a curve stop short of 1.0 unexplained; the manifest records "
+            "it either way."
+        ),
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """The RTT distribution of each dataset, one CDF per dataset on one axis.
+
+    Describes the *input*, not a method: one row per (vp, tg) edge at its
+    minimum RTT, read from each run's canonical CSV. No answer space and no
+    `classify` needed -- this is the only v5 figure that runs on a freshly
+    materialized run.
+
+    Nothing is pooled. Each dataset keeps its own denominator, so
+    `guard_disjoint_tgs` does not apply and a TG shared by two meshes lands on
+    both curves, which is what a reader comparing them wants.
+
+    The x cut is real: a truncated axis looks identical whether the tail
+    beyond it is empty or holds a third of the data. The manifest carries
+    `share_within_xmax_pct` and `observed_max_ms` per dataset, and each
+    clipped curve is named in the top right with its p99 -- a p99 above the
+    axis says the truncation is structural rather than one outlier.
+
+    Writes `rtt_cdf.{png,csv,manifest.json}` into
+    `_cross/rtt-cdf/<datasets>[@<arm>]/`.
+    """
+    if not run_id:
+        raise typer.BadParameter("pass at least one --run-id")
+    try:
+        pngs = figure_rtt_cdf.build_for_runs(
+            [resolve_run(r, outputs_root) for r in run_id],
+            x_max_ms=x_max,
+            x_scale=x_scale,
+            linthresh_ms=linthresh,
+            x_step_ms=x_step,
+            show_medians=medians,
+            annotate_clipping=annotate_clipping,
+            analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for png in pngs:
+        typer.echo(f"wrote {png}")
+
+
 @app.command("report-cohort-overlap")
 def report_cohort_overlap_cmd(
     run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable); pooled."),
@@ -1100,6 +1201,101 @@ def plot_mtl_map_cmd(
             f"frame {tuple(round(v, 1) for v in extent)}"
         )
         typer.echo(f"wrote {path}")
+
+
+@app.command("plot-ltd-model")
+def plot_ltd_model_cmd(
+    run_id: str = typer.Option(None, help="Run to render, one viewer per method."),
+    all_runs: bool = typer.Option(
+        False, "--all-runs", help="Render every run found under --outputs-root."
+    ),
+    method: list[str] = typer.Option(
+        [],
+        "--method",
+        "-m",
+        help=(
+            "Method to render; repeatable. Defaults to every combo in the run. "
+            "Unlike plot-mtl-map this appends no shortest_ping control -- the "
+            "baseline has no LTD stage, and so no fit to draw."
+        ),
+    ),
+    fold: list[str] = typer.Option(
+        [], "--fold", help="Folds to include, e.g. `fold_4`; repeatable. Default: all."
+    ),
+    tg: list[str] = typer.Option(
+        [],
+        "--tg",
+        help=(
+            "Eval TG ids to pre-select in the page's overlay picker; repeatable. "
+            "The overlay is off by default; this only decides what is already "
+            "ticked on load."
+        ),
+    ),
+    max_points_per_vp: int = typer.Option(
+        figure_ltd_model.DEFAULT_MAX_POINTS_PER_VP,
+        "--max-points-per-vp",
+        help="Scatter cap per VP, deterministically strided. Bounds page weight.",
+    ),
+    inputs_root: Path = typer.Option(
+        None,
+        "--inputs-root",
+        help=(
+            "Root holding materialized benchmark inputs. Default: "
+            "inputs/benchmark/v2/. Falls back to the dataset CSV plus its pinned "
+            "stratification when a fold is not materialized there."
+        ),
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Interactive RTT-vs-distance viewer per method: scatter, fit band, 2/3 c.
+
+    Writes ltd_model.<method>.html plus a manifest into ltd-model/, which carries
+    no `healpix-<n>`: an LTD fit is upstream of both v5 partitions and no nside
+    enters it.
+
+    The one v5 command that needs no `build-answer-space`. It reads the fold
+    checkpoints directly -- but it does need the fit scatter, which is not in the
+    output tree at all, and is resolved from the materialized inputs or rebuilt
+    from the dataset CSV's pinned stratification. `manifest.json` records which.
+    """
+    from scripts.benchmark.v2.inputs import DEFAULT_INPUTS_ROOT
+
+    root_in = Path(inputs_root) if inputs_root is not None else DEFAULT_INPUTS_ROOT
+
+    try:
+        runs = _runs(run_id, all_runs, outputs_root)
+    except MissingArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    for run in runs:
+        try:
+            written, skipped = figure_ltd_model.build_for_run(
+                run,
+                methods=list(method) or None,
+                fold_ids=list(fold) or None,
+                analysis_root=analysis_root,
+                inputs_root=root_in,
+                max_points_per_vp=max_points_per_vp,
+                preselect_tgs=list(tg) or None,
+            )
+        except MissingArtifactError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
+        for name, path, payload in written:
+            # Which route the scatter came from is the one thing a reader
+            # cannot infer from the page, so it is echoed rather than left to
+            # the manifest alone.
+            routes = {p["route"] for p in payload["provenance"].values()}
+            n_vps = sum(len(payload["folds"][f]["vps"]) for f in payload["fold_ids"])
+            typer.echo(
+                f"{run.run_id} {payload['method_label']} ({name}) · "
+                f"{payload['ltd']} · {len(payload['fold_ids'])} folds · "
+                f"{n_vps} VP panels · scatter from {'+'.join(sorted(routes))}"
+            )
+            typer.echo(f"wrote {path}")
+        for name, why in skipped.items():
+            typer.echo(f"{run.run_id} {name} · skipped: {why}")
 
 
 def _octant_runs(run_id: list[str], all_runs: bool, outputs_root: Path):
