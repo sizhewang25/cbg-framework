@@ -71,9 +71,17 @@ DERIVE_SMK="scripts/processing/source/derive_traffic_weighted_cbg_data.smk"
 
 # Mesh arms: run directly.
 MESH_CONFIGS=(
-  as01-260728-260802-mesh
-  as02-260728-260802-mesh
-  as03-260728-260802-mesh
+  # PRO arm: the finals mesh with Octant's face-weight scorer on the
+  # inverse-power function w = rtt^-2 instead of the shipped exp(-rtt/50).
+  # Own run ids, own trees -- these build from scratch and touch nothing
+  # under the as0X-260728-260802-* trees.
+  pro-as01-mesh
+  pro-as02-mesh
+  pro-as03-mesh
+  # The tau=50 originals, already scored:
+  # as01-260728-260802-mesh
+  # as02-260728-260802-mesh
+  # as03-260728-260802-mesh
   # as01-materialization-test
 )
 

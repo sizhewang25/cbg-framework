@@ -1,0 +1,314 @@
+# GRAFTED ARM -- a duplicate of the as02-260728-260802-mesh finals run whose two
+# Octant combos carry the inverse-power weight scorer (w = rtt^-2) instead of
+# the shipped exp(-rtt/50).
+#
+#   ./cli.sh --configfile configs/as02-260728-260802-mesh-grafted.yaml
+#
+# The benchmark outputs under `as02-260728-260802-mesh-grafted` were NOT produced by
+# running this file. They were assembled: every non-Octant combo was copied from
+# the mesh run, and `octant_cbg_hull` / `octant_cbg_spl` were copied from
+# as02-260728-260802-wsweep's `octant_cbg_hull_ip2` / `octant_cbg_spl_ip2`, which
+# are the same LTD and CTR under this file's mtl_kwargs. The folds are identical
+# by construction -- both runs share source_kwargs, so both materialize the same
+# stratification -- which is what makes the graft sound.
+#
+# This file is therefore the DECLARATION of what that tree holds, and running it
+# would reproduce it rather than create it. Keep the two in step: editing the
+# combos here without re-grafting leaves the tree describing a config it no
+# longer matches.
+#
+# For a from-scratch run of the same Octant setting, use configs/pro-as02-mesh.yaml
+# instead -- that one has its own run_id and builds its own tree.
+
+run_id: as02-260728-260802-mesh-grafted
+
+benchmark:
+  source: generic_csv
+  setup: anchors_to_probes
+  slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
+
+  source_kwargs:
+    csv_path: datasets/final/as02-20260728-20260802.mainland.sanitized.csv
+    k: 5
+    seed: 42
+    asn_bucket_top_n: 20
+
+  enable_fallback: true
+  seed: 42
+
+  # The five combos the published as0X runs scored, with their exact kwargs
+  # (recovered from those runs' run.json). Kept identical across all finals
+  # configs so mesh and weighted arms are directly comparable.
+  combos:
+    - combo_id: vanilla_cbg
+      ltd: low_envelope
+      mtl: planar_circle
+      ctr: geometric_centroid
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+
+    - combo_id: million_scale_cbg
+      ltd: speed_of_internet
+      mtl: planar_circle
+      ctr: geometric_centroid
+      ltd_kwargs:
+        speed_ratio: 0.6667
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+
+    - combo_id: octant_cbg_hull
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: false
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_mode: inv_power
+        weight_k: 2
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+    - combo_id: octant_cbg_spl
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        fit_spline: true
+        spline_n_knots: 4
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_mode: inv_power
+        weight_k: 2
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
+    # --- Spotter: two arms, one delay-distance model ----------------------
+    # Both fit the SAME pooled-normal LTD -- Laki et al. 2011 SS IV-B's claim
+    # is one (mu(d), sigma(d)) shared by every landmark, evaluated at that
+    # landmark's own measured delay. They differ only in what the geometry
+    # downstream does with the sigma it is handed.
+    #
+    # `bin_size_ms` is deliberately absent from both. The fit runs on raw
+    # (rtt, distance) pairs now, so the only thing that key still configures
+    # is the `cutoff_rtt` density scan -- and 5.0 is already NormalDistLTD's
+    # default for it. Restating a default here just creates a second copy
+    # free to drift from the first.
+
+    # Spotter's LTD inside Octant's geometry. This is the combo the earlier
+    # runs published as `spotter_cbg`, renamed so the name stops claiming to
+    # be the paper. Every key below `ltd:` is octant_cbg_spl's verbatim, and
+    # that is the point: it isolates the delay-distance model as the single
+    # difference, which is what makes the pair readable as an ablation.
+    #
+    # PARKED, not deleted. The ablation it supports has been measured and
+    # written up; scoring it on every run costs a fold sweep to re-derive a
+    # number we already have. Uncomment to bring it back -- and note that
+    # commenting it out here is NOT enough on its own to remove it from the
+    # figures, because the analysis layer enumerates combos by globbing the
+    # output tree (`RunPaths.combo_ids`) rather than reading this file. Its
+    # benchmark output was moved to outputs/benchmark/.disabled/ for that
+    # reason; restoring the arm means moving it back or re-running.
+    # - combo_id: spotter_hybrid_cbg
+    #   ltd: normal_dist
+    #   mtl: planar_annulus_weighted
+    #   ctr: monte_carlo_medoid
+    #   ltd_kwargs:
+    #     deg_mu: 3
+    #     deg_sigma: 2
+    #     cutoff_min_points: 5
+    #   mtl_kwargs:
+    #     n_pts: 64
+    #     enable_circle_filter: true
+    #     weight_tau_ms: 50.0
+    #     highest_weight_only: true
+    #   ctr_kwargs:
+    #     n_samples: 1024
+
+    # Spotter as the paper describes it: the target region is the
+    # intersection MAXIMIZING the product of every landmark's density, not a
+    # hard AND of annuli. Three consequences, all of which the hybrid gets
+    # wrong -- no pruning of constraints by inclusion, no veto (a
+    # contradicting landmark is one low score, never an empty region), and a
+    # CTR that reads the density surface rather than averaging vertices that
+    # were placed density-blind.
+    # See notes/2026-09-22-spotter-faithful-vs-harness-conclusion.md.
+    - combo_id: spotter_cbg
+      ltd: normal_dist
+      mtl: gaussian_density
+      ctr: density_argmax
+      ltd_kwargs:
+        deg_mu: 3
+        deg_sigma: 2
+        cutoff_min_points: 5
+      mtl_kwargs:
+        # §V-A-2 discretises the globe and evaluates Eq. (2) per cell. HEALPix
+        # rather than the paper's HTM: both are aperture-4 with the four
+        # children exactly tiling the parent, but HEALPix cells are also
+        # exactly equal-area (HTM's vary by 110%), so a cell count converts to
+        # an area and the argmax's quantisation floor is the same everywhere.
+        #
+        # `grid` is required and has no default. The H3-era runs stored
+        # `resolution: 4` and no grid, and 4 is a legal nside -- so a default
+        # would let a stale payload replay as a 192-cell globe instead of
+        # failing. Those results are backed up on disk as `spotter_h3_cbg/`.
+        grid: healpix
+        resolution: 128        # nside: 196,608 cells, 50.9 km, 2,594 km^2
+        coarse_resolution: 16  # nside: 3,072 cells, 407.5 km -- the global pass
+        # Re-validated for this three-level descent (16 -> 32 -> 64 -> 128),
+        # not inherited: `cli.py mtl-basin-miss` against an exhaustive global
+        # nside-128 pass gives 0/50 misses on as01, as02 and as03, while
+        # `top_k=1, neighbor_ring=0` gives 8/50, 5/50 and 7/50. H3's two-level
+        # descent survived that starved setting; this one does not, so the
+        # margin is doing real work.
+        top_k: 8
+        neighbor_ring: 1
+
+
+analysis:
+  common:
+    grid: h3
+    resolution: [4]
+
+    # --- PNI stack (§7.3, §8.1) -----------------------------------------
+    # `common:` reaches exactly the two commands that declare these --
+    # detect-pni-strategy and build-pni-graph -- so they are stated once.
+    #
+    # `peer_asn` LABELS the peering, it does not verify it. The only hard
+    # check is that the site list declares a single ASN. `target_asn` is
+    # listed under `columns_unrecoverable` in every
+    # datasets/final/*.reconstruction.json, so nothing connects either value
+    # to this run's targets and the result is recorded as unverified
+    # (`run_target_asns: []`). Pointing a run at another peer's list
+    # therefore SUCCEEDS and yields a plausible-looking wrong answer --
+    # verified on as02-mesh with as01's list, which reported 44.1%. Getting
+    # this pair right is the operator's responsibility, not the tool's.
+    # TODO -- no interconnect list exists for this peer yet. Read the metros
+    # off the operator dashboard as was done for AS20940, write the CSV with
+    # pni_id, pni_lat, pni_lon, pni_asn (country/region/city optional), then
+    # uncomment both lines below. Leaving them present-but-empty is worse
+    # than absent: an empty value resolves to <repo>/None and errors with
+    # "File ... does not exist", where absent gives a clean
+    # "Missing option '--pni-csv'".
+    #
+    # as02's peer. Prior work used the SYNTHETIC 9-site list at ASN 15169; that was a fabricated fixture and is not evidence of this peer's identity.
+    # pni_csv: datasets/pni/as02-us-pni.approx.csv
+    # peer_asn: <fill from the dashboard; not recoverable from this repo>
+
+  plot-bipartite-graph:
+    # Flow map only — the topology map keeps the nearest-seed boundary,
+    # which is its subject; on the flow map it competes with the edge ink
+    # and shares its colour with the seed markers.
+    no_flow_voronoi: true
+
+  # --- PNI stack, non-default policy ------------------------------------
+  # `strategy` is deliberately absent: argmin is already build-pni-graph's
+  # default, and pinning it here would keep argmin on a run whose
+  # detect-pni-strategy declares a pure rule. Pass --strategy on the command
+  # line when that verdict justifies it.
+  #
+  # create_analysis_artifacts.sh already does that for the §7.3 figure: it
+  # rebuilds tg_nearest and vp_nearest as SIDE arms, `--out-dir
+  # pni-graph-<strategy>/`, so all three rules get plotted. The canonical
+  # pni-graph/ that every other command resolves from the run id stays argmin,
+  # which is why those arms need no key here.
+  # --- Spotter Fig. 3 normality diagnostics -----------------------------
+  # No `csv` key here: the command resolves it from
+  # `benchmark.source_kwargs.csv_path` above, so the dataset is declared once.
+  #
+  # `rtt_max` stays at its 0 default (off) deliberately, and it is the one
+  # knob here that FILTERS the population rather than the view -- contrast
+  # `plot-pni-delay`'s x_max. This mesh tops out near 92 ms, which is already
+  # the paper's 0-80 ms regime, so capping would discard rows for no fidelity
+  # gain. Pass `--rtt-max 80` on the command line for the literal comparison.
+  #
+  # The fit kwargs are NOT restated: the command's defaults are this config's
+  # own `spotter_cbg.ltd_kwargs`, and a test asserts the two still agree, so a
+  # copy here would be a second declaration free to drift. Both Spotter arms
+  # share one `ltd_kwargs` block, so the diagnostic describes the model behind
+  # `spotter_hybrid_cbg` equally -- the arms diverge downstream of the fit.
+  plot-spotter-normality:
+    # The paper's claim is about the landmark that PERFORMED the measurement,
+    # and in this dataset that is unambiguously the VP.
+    group_by: vp_id
+    # 200 draws puts the permutation p-value's resolution at 0.005, which is
+    # enough to separate "outside the null" from "at its edge" without making
+    # the command's runtime the reason nobody runs it.
+    n_permutations: 200
+
+  build-pni-feasibility:
+    # 200 gives the permutation null a reportable effect size; the default 0
+    # leaves n_feasible with no baseline to be surprising against.
+    decoy_trials: 200
+
+  # The graph is built under a detected --strategy, so scoring on the pairs
+  # the rule was chosen from would be a fit evaluated on itself.
+  compare-pni-linearity:
+    holdout_only: true
+
+  # Scatter min-RTT against the VP->PNI->TG propagation delay, with the
+  # straight-line (no-PNI) control fitted beside it.
+  #
+  # Every key here is a SCHEMA MAPPING onto pni-graph/pni_edges.csv, which is
+  # the only CSV in the tree carrying (VP, PNI, TG) triples. Its column names
+  # differ from the command's defaults in three places, so all three must be
+  # stated or the command reads the wrong columns:
+  #   pni_edges.csv          command default
+  #   rtt_ms                 min_rtt
+  #   sel_pni_lat/lon        pni_lat/lon      <- the ASSIGNED site, per pair
+  #   target_lat/lon         tg_lat/lon
+  #
+  # `--csv` is deliberately absent: its path carries the run id, so it is
+  # passed on the command line like --split-csv rather than hardcoded here.
+  #
+  # `where: is_holdout` matches compare-pni-linearity's `holdout_only: true`,
+  # so the figure and that table are scored on the same pairs and report the
+  # same fit (verified on as01: via-PNI r2 0.6856, direct 0.6551). Two other
+  # subsets are available and both are worth knowing about:
+  #   is_sping_vp  -- one point per target, the VP shortest-ping picked. On
+  #                   as01 the two fits collapse (r2 0.9944 vs 0.9945),
+  #                   because that VP's assigned site sits on top of the
+  #                   target; informative about the floor, not about routing.
+  #   (unset)      -- all measured pairs, no holdout discipline.
+  #
+  # x_axis / x_unit are left at their defaults (via-pni, km); both fits are
+  # reported either way, so the choice only moves what goes on the x axis.
+  plot-pni-delay:
+    rtt_col: rtt_ms
+    pni_prefix: sel_pni
+    tg_prefix: target
+    where: is_holdout
+    # View only -- every fit, the below-floor count and the median residual are
+    # computed over all rows either way, and the off-view count is annotated.
+    # Pinned rather than left at the data's own extent because
+    # create_analysis_artifacts.sh draws one panel per assignment rule and
+    # vp_nearest bends paths further than argmin does, so data-driven axes would
+    # give the three panels three different scales. 5,000 km fits a mainland-US
+    # target set with room to spare; a peer with intercontinental paths needs a
+    # larger value here. `y_tick` fixes the gridline spacing too, so the panels
+    # share a ruler rather than merely a top.
+    x_max: 5000
+    x_tick: 1000
+    y_max: 100
+    y_tick: 20
+
+  # No `plot-pni-colocation` block here, deliberately. The §8.1 co-location
+  # corner is a subset drawn against the population it was filtered from, so it
+  # is declared on the WEIGHTED side: `--run-id` is the weighted run and
+  # `--mesh-run-id` its parent, which is this run. See
+  # configs/as02-260728-260802-weighted.yaml's `plot-pni-colocation.mesh_run_id`.
+  #
+  # Driving it from the arm that must exist last means a mesh run has no 5g at
+  # all, rather than emitting a grey-only panel under a filename and a pair of
+  # axis labels that both promise two populations.
