@@ -139,6 +139,7 @@ fi
 #   plot-answer-space    needs build-answer-space
 #   classify             needs build-answer-space
 #   plot-error-cdf       needs classify
+#   plot-champion-upset  needs classify
 #
 # Every cross-dataset figure below reads `classify` output, so this loop must
 # finish for every run in a group before that group's section runs.
@@ -174,6 +175,10 @@ for R in "${ALL[@]}"; do
   run plot-error-cdf     $V5 plot-error-cdf --layout per-run --run-id "$R"
   run plot-error-cdf[sentinel] \
     $V5 plot-error-cdf --layout per-run --run-id "$R" --unanswered sentinel
+
+  # The same distances, paired per TG: which methods were nearest (within
+  # 1 km of the best), and how often they tie. The CDF above cannot say.
+  run plot-champion-upset $V5 plot-champion-upset --layout per-run --run-id "$R"
 done
 
 # ---- per group: the cross-dataset figures -----------------------------------
@@ -205,6 +210,8 @@ cross_group() {
   run plot-error-cdf-pooled $V5 plot-error-cdf --layout pooled "${args[@]}"
   run plot-error-cdf-pooled[sentinel] \
     $V5 plot-error-cdf --layout pooled --unanswered sentinel "${args[@]}"
+  run plot-champion-upset-pooled \
+    $V5 plot-champion-upset --layout pooled "${args[@]}"
 
   # Where those predictions actually landed, on a map: one panel per
   # (method, dataset), the cells drawn under them. Both cohorts -- `correct`

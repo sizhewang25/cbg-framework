@@ -215,13 +215,18 @@ def scored_methods(cls_dir: Path) -> list[str]:
 
 
 def _load_tgs(
-    run: RunPaths, method: str, nside: int, *, analysis_root: Path | None = None
+    run: RunPaths,
+    method: str,
+    nside: int,
+    *,
+    analysis_root: Path | None = None,
+    columns: tuple[str, ...] = READ_COLUMNS,
 ) -> pd.DataFrame:
-    """One run's per-TG scored rows for one method, three columns wide."""
+    """One run's per-TG scored rows for one method, `columns` wide."""
     path = run.classify_dir(nside, root=analysis_root) / C.TGS_PARQUET.format(method=method)
     if not path.exists():
         raise MissingArtifactError(f"{path} missing; run `classify --run-id {run.run_id}` first")
-    return pd.read_parquet(path, columns=list(READ_COLUMNS))
+    return pd.read_parquet(path, columns=list(columns))
 
 
 def load_errors(
@@ -263,6 +268,65 @@ def load_errors(
             "n_no_distance": int((~finite).sum()),
         }
     return out
+
+
+def error_matrix(
+    run: RunPaths,
+    nside: int = SOURCE_NSIDE,
+    *,
+    methods: list[str] | None = None,
+    analysis_root: Path | None = None,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """`load_errors` keyed by TG: a `tg_id x method` frame, plus each TG's site.
+
+    The paired twin. `load_errors` hands back each method's distances as a bare
+    array, which is all a CDF needs and exactly what a per-TG comparison cannot
+    use. Same row policy: a cell is the method's distance where `solved_mask`
+    accepts the row and the distance is finite, NaN otherwise -- so a FALLBACK
+    row, which carries the shortest-ping VP's coordinate, is NaN here and not
+    S-P's number under another method's name.
+
+    Every method must cover the same TGs. `classify` scores them all over the
+    run's evaluated roster, so a difference means a half-rescored run, and
+    intersecting would pair the methods over a population nobody asked for.
+
+    The site key (`sites.site_key`, `(run_id, tg_lat, tg_lon)`) rides along
+    because ~20 IP replicas share a site: counts of TGs overstate the number
+    of independent observations, and a caller that reports one should be able
+    to report the other.
+    """
+    from scripts.analysis.v5.modules.sites import site_key
+
+    cls_dir = run.classify_dir(nside, root=analysis_root)
+    chosen = list(methods) if methods else scored_methods(cls_dir)
+    if not chosen:
+        raise MissingArtifactError(
+            f"{cls_dir} holds no *_tgs.parquet; run `classify --run-id {run.run_id}` first"
+        )
+    cols: dict[str, pd.Series] = {}
+    sites: pd.Series | None = None
+    for method in chosen:
+        df = _load_tgs(
+            run, method, nside, analysis_root=analysis_root,
+            columns=(*READ_COLUMNS, "tg_lat", "tg_lon"),
+        )
+        dist = df[DIST_COLUMN].astype(float).where(solved_mask(df))
+        dist = dist.where(np.isfinite(dist))
+        cols[method] = dist.set_axis(df["tg_id"])
+        if sites is None:
+            sites = site_key(df, run_id=run.run_id).set_axis(df["tg_id"])
+    first = cols[chosen[0]].index
+    odd = [m for m in chosen[1:] if not cols[m].index.sort_values().equals(first.sort_values())]
+    if odd:
+        sizes = {m: int(len(cols[m])) for m in chosen}
+        raise ValueError(
+            f"{run.run_id}: methods cover different TG sets ({sizes}); a per-TG "
+            f"comparison needs one roster. Re-run `classify --run-id {run.run_id}`, "
+            f"or pin a consistent set with --method."
+        )
+    frame = pd.DataFrame(cols).reindex(first)
+    frame.index.name = "tg_id"
+    return frame, sites.reindex(first)
 
 
 def load_per_run(

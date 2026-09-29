@@ -215,6 +215,27 @@ distance. These artifacts take a `.sentinel.` infix and carry
 `unanswered_policy`/`sentinel_km` columns, because **only the default files
 join to `accuracy.csv`**.
 
+**`plot-champion-upset`** is the error CDF, paired. The CDF is unpaired, since each
+curve is one method's marginal, so it cannot say which method was nearest on
+a given TG or how often methods tie there. On each TG, every method whose
+`pred_dist_to_tg_km` is within `--tie-km` (default 1 km) of the lowest error
+among the methods that answered is a **champion**. Ties credit each tied
+method in full, and unanswered rows (`solved_mask`) never win. It is drawn as
+an UpSet plot:
+
+- The top bars are the **exact** champion combinations. They partition the TGs
+  and sum to 100%. Single-method columns take the method's hue, and ties are
+  neutral grey. S-P is hatched in the error CDF's dark-grey baseline ink.
+- The left bars are each method's champion share, ties included. They overlap.
+- A method with no champion TG keeps its row at 0.0. This is why the figure
+  is drawn on plain matplotlib: `upsetplot` drops an empty category.
+
+Both tables carry `n_sites` beside every TG count, because ~20 replicas share
+a site. On the pooled pro-as meshes, OCT-H alone takes 58.5%, and SOI+S-P tie
+on 9.2%. 87% of SOI's champion TGs are S-P's too. There are two layouts:
+`per-run` (`classify/champion_upset.tie-1km.*`) and `pooled`
+(`_cross/.../champion_upset.pooled.tie-1km.*`).
+
 **`plot-mtl-map`** (ported from v4) is the **case viewer**: one self-contained
 interactive HTML per method, Plotly from a CDN with the payload inlined, so it
 opens over `file://` with no web server. Every other v5 figure shows a

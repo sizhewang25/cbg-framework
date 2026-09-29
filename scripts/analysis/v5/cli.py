@@ -13,6 +13,8 @@
         --run-id as01-260728-260802-mesh \
         --run-id as02-260728-260802-mesh \
         --run-id as03-260728-260802-mesh
+    python -m scripts.analysis.v5.cli plot-champion-upset --layout per-run --layout pooled \
+        --run-id pro-as01-mesh --run-id pro-as02-mesh --run-id pro-as03-mesh
     python -m scripts.analysis.v5.cli plot-outcome-map \
         --run-id as01-260728-260802-mesh \
         --run-id as02-260728-260802-mesh \
@@ -28,7 +30,8 @@
         --run-id as03-260728-260802-mesh
 
 `classify`, `plot-answer-space` and `plot-mtl-map` need the answer space; `plot-outcome-bars`
-`plot-error-cdf`, `plot-vp-proximity` and `report-cohort-overlap` need `classify` on every run.
+`plot-error-cdf`, `plot-champion-upset`, `plot-vp-proximity` and `report-cohort-overlap` need
+`classify` on every run.
 `plot-outcome-map` needs both. Everything writes under `outputs/analysis/v5/`.
 """
 
@@ -42,6 +45,7 @@ from scripts.analysis.v5.modules import (
     answer_space,
     classify,
     cohort_overlap,
+    figure_champion_upset,
     figure_contest_map,
     figure_error_cdf,
     figure_error_diff,
@@ -819,6 +823,84 @@ def plot_error_cdf_cmd(
         raise typer.BadParameter(str(exc)) from exc
     for png in pngs:
         typer.echo(f"wrote {png}")
+
+
+@app.command("plot-champion-upset")
+def plot_champion_upset_cmd(
+    run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable)."),
+    all_runs: bool = typer.Option(
+        False, "--all-runs", help="Every run under --outputs-root (per-run only)."
+    ),
+    layout: list[str] = typer.Option(
+        None,
+        "--layout",
+        help=(
+            f"{figure_champion_upset.PER_RUN} (one figure per run) or "
+            f"{figure_champion_upset.POOLED} (every run's TGs as one population). "
+            f"Repeatable; default: {figure_champion_upset.PER_RUN}."
+        ),
+    ),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Contest only these."),
+    nside: int = typer.Option(
+        figure_champion_upset.SOURCE_NSIDE,
+        "--nside",
+        "-n",
+        help="Which rung's *_tgs.parquet to read. pred_dist_to_tg_km is identical at every rung.",
+    ),
+    tie_km: float = typer.Option(
+        figure_champion_upset.DEFAULT_TIE_KM,
+        "--tie-km",
+        help=(
+            "A method is a champion on a TG when its error is within this many km of "
+            "the TG's lowest error. Carried in the filenames (`tie-<x>km`)."
+        ),
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """UpSet of per-TG champions: the error CDF, paired.
+
+    On each TG, every method whose `pred_dist_to_tg_km` is within `--tie-km` of
+    the lowest error among the methods that answered is a champion; unanswered
+    rows never win. The top bars are exact champion combinations (they sum to
+    100%), the left bars each method's champion share (ties included, so they
+    overlap). `per-run` writes `champion_upset.tie-<x>km.*` into `classify/`,
+    beside `error_cdf.png`; `pooled` writes the `.pooled.` set into
+    `_cross/classify/<n>-runs-<hash>/`. Needs `classify` on every run.
+    """
+    if all_runs and run_id:
+        raise typer.BadParameter("pass --run-id or --all-runs, not both")
+    layouts = tuple(dict.fromkeys(layout or ())) or (figure_champion_upset.PER_RUN,)
+    unknown = [x for x in layouts if x not in figure_champion_upset.LAYOUTS]
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown --layout {unknown}; pick from {list(figure_champion_upset.LAYOUTS)}"
+        )
+    if all_runs and figure_champion_upset.POOLED in layouts:
+        raise typer.BadParameter(
+            f"--layout {figure_champion_upset.POOLED} needs explicit --run-id: which "
+            "datasets form one population is the caller's call"
+        )
+    runs = (
+        discover_runs(outputs_root)
+        if all_runs
+        else [resolve_run(r, outputs_root) for r in (run_id or [])]
+    )
+    if not runs:
+        raise typer.BadParameter("pass at least one --run-id, or --all-runs")
+    try:
+        sets = figure_champion_upset.build_for_runs(
+            runs,
+            layouts=layouts,
+            nside=nside,
+            methods=list(method) if method else None,
+            analysis_root=analysis_root,
+            tie_km=tie_km,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for written in sets:
+        typer.echo(f"wrote {written['png']}")
 
 
 @app.command("plot-vp-proximity")
