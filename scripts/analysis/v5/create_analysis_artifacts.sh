@@ -253,6 +253,22 @@ cross_group() {
   # that two methods can hold the same cell share while being right about
   # different halves of the country.
   run plot-outcome-map $V5 plot-outcome-map "${args[@]}"
+
+  # The PNI scatter and its RTT boxes, pooled: every run measured against its
+  # own operator's PNI list, then clustered once. Only when every run in the
+  # group declares a list -- pooling the ones that do would silently report a
+  # subset of the group as the group. Same gating as the per-run pass.
+  local undeclared=()
+  for r in "$@"; do
+    [ -n "$(declared_pni_csv "$r")" ] || undeclared+=("$r")
+  done
+  if [ "${#undeclared[@]}" -eq 0 ]; then
+    if run plot-pni-gap-pooled $V5 plot-pni-gap --layout pooled "${args[@]}"; then
+      run plot-pni-cluster-rtt-pooled $V5 plot-pni-cluster-rtt --layout pooled "${args[@]}"
+    fi
+  else
+    SKIPPED+=("$R :: plot-pni-gap-pooled (no analysis.common.pni_csv in: ${undeclared[*]})")
+  fi
 }
 
 i=0

@@ -46,8 +46,10 @@ Any mismatch raises and says to re-run `plot-pni-gap`.
 is one site's RTTs repeated, not 20 samples. Each tick label carries the
 cluster's site count next to its TG count for that reason.
 
-Command: `plot-pni-cluster-rtt`. Writes beside the clusters, in
-`<run>/pni-gap/<pni-stem>/`.
+Pooled (`--layout pooled`), the clusters come from `_cross/pni-gap/...` and
+every check above runs per run, each against its own PNI list and edge CSV.
+
+Command: `plot-pni-cluster-rtt`. Writes beside the clusters it reads.
 """
 
 from __future__ import annotations
@@ -87,6 +89,75 @@ SCOPES = (
 RTT_MATCH_TOL_MS = 1e-6
 
 
+def _checked_run(run: RunPaths, pni_csv: Path, record: dict, source_csv: Path | None) -> pd.DataFrame:
+    """One run's min-RTT edges, after checking its inputs are the clustered ones."""
+    rerun = "Re-run `plot-pni-gap` over the same --run-id set."
+    if P.sha256_file(Path(pni_csv)) != record.get("pni_csv_sha256"):
+        raise ValueError(
+            f"{run.run_id}: {pni_csv} has changed since the clusters were computed "
+            f"(the output directory is not keyed on its content). {rerun}"
+        )
+    csv = edges.resolve_source_csv(run, source_csv)
+    sha = P.sha256_file(Path(csv))
+    if sha != record.get("source_csv_sha256"):
+        raise ValueError(
+            f"{run.run_id}: {csv} is not the CSV the clusters were computed from "
+            f"(sha256 {sha[:12]} vs {str(record.get('source_csv_sha256'))[:12]}). {rerun}"
+        )
+    rtt = edges.load_min_rtt(run, source_csv=csv)
+    rtt.insert(0, "run_id", run.run_id)
+    return rtt
+
+
+def load_runs(
+    runs: list[RunPaths],
+    pni_csvs: dict[str, Path],
+    *,
+    layout: str = P.PER_RUN,
+    analysis_root: Path | None = None,
+    source_csvs: dict[str, Path] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict, Path]:
+    """`(pairs, tgs, cluster_meta, out_dir)`: RTT edges labelled by cluster, checked.
+
+    `pairs` is one row per `(run_id, tg_id, vp_id)` with `cluster`; `tgs` is
+    the clusters CSV as written. Every run is checked on its own: PNI list,
+    edge CSV, TG set, and each TG's smallest RTT.
+    """
+    run_ids = [r.run_id for r in runs]
+    if layout == P.POOLED:
+        out_dir = P.pooled_output_dir(run_ids, analysis_root=analysis_root)
+    elif len(runs) == 1:
+        out_dir = P.output_dir(runs[0].run_id, pni_csvs[runs[0].run_id], analysis_root=analysis_root)
+    else:
+        raise ValueError(f"layout {layout!r} takes one run; got {len(runs)}")
+    tgs, meta = P.read_clusters(out_dir, run_ids=run_ids)
+    records = {r["run_id"]: r for r in meta.get("runs", [])}
+
+    rtt = pd.concat(
+        [_checked_run(run, pni_csvs[run.run_id], records.get(run.run_id, {}),
+                      (source_csvs or {}).get(run.run_id)) for run in runs],
+        ignore_index=True,
+    )
+    key = ["run_id", "tg_id"]
+    have = set(map(tuple, rtt[key].drop_duplicates().to_numpy()))
+    want = set(map(tuple, tgs[key].to_numpy()))
+    if have != want:
+        raise ValueError(
+            f"the edge CSVs hold {len(have - want)} TGs the clusters do not, and "
+            f"lack {len(want - have)} they do. Re-run `plot-pni-gap`."
+        )
+    floor = rtt.groupby(key).rtt_ms.min()
+    recorded = tgs.set_index(key)[P.SP_RTT].reindex(floor.index)
+    off = (floor - recorded).abs() > RTT_MATCH_TOL_MS
+    if off.any():
+        raise ValueError(
+            f"{int(off.sum())} TGs' smallest RTT differs from the clusters CSV's "
+            f"{P.SP_RTT}, e.g. {floor.index[off][0]!r}. Re-run `plot-pni-gap`."
+        )
+    pairs = rtt.merge(tgs[key + [P.CLUSTER_COL]], on=key, how="left", validate="m:1")
+    return pairs, tgs, meta, out_dir
+
+
 def load(
     run: RunPaths,
     pni_csv: Path,
@@ -94,54 +165,18 @@ def load(
     analysis_root: Path | None = None,
     source_csv: Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict, Path]:
-    """`(pairs, tgs, cluster_meta, out_dir)`: RTT edges labelled by cluster, checked.
-
-    `pairs` is one row per `(tg_id, vp_id)` with `cluster`; `tgs` is the
-    clusters CSV as written.
-    """
-    out_dir = P.output_dir(run.run_id, pni_csv, analysis_root=analysis_root)
-    tgs, meta = P.read_clusters(out_dir, run_id=run.run_id)
-
-    pni_sha = P.sha256_file(Path(pni_csv))
-    if pni_sha != meta.get("pni_csv_sha256"):
-        raise ValueError(
-            f"{pni_csv} has changed since the clusters were computed (the output "
-            f"directory is keyed on its file stem, not its content). "
-            f"Re-run `plot-pni-gap --run-id {run.run_id}`."
-        )
-
-    csv = edges.resolve_source_csv(run, source_csv)
-    sha = P.sha256_file(Path(csv))
-    if sha != meta.get("source_csv_sha256"):
-        raise ValueError(
-            f"{csv} is not the CSV the clusters were computed from "
-            f"(sha256 {sha[:12]} vs {str(meta.get('source_csv_sha256'))[:12]}). "
-            f"Re-run `plot-pni-gap --run-id {run.run_id}`."
-        )
-    rtt = edges.load_min_rtt(run, source_csv=csv)
-
-    have, want = set(rtt.tg_id), set(tgs.tg_id)
-    if have != want:
-        raise ValueError(
-            f"the edge CSV holds {len(have - want)} TGs the clusters do not, and "
-            f"lacks {len(want - have)} they do. Re-run `plot-pni-gap --run-id {run.run_id}`."
-        )
-    floor = rtt.groupby("tg_id").rtt_ms.min()
-    recorded = tgs.set_index("tg_id")[P.SP_RTT].reindex(floor.index)
-    off = (floor - recorded).abs() > RTT_MATCH_TOL_MS
-    if off.any():
-        raise ValueError(
-            f"{int(off.sum())} TGs' smallest RTT differs from the clusters CSV's "
-            f"{P.SP_RTT}, e.g. {floor.index[off][0]!r}. Re-run `plot-pni-gap`."
-        )
-    pairs = rtt.merge(tgs[["tg_id", P.CLUSTER_COL]], on="tg_id", how="left", validate="m:1")
-    return pairs, tgs, meta, out_dir
+    """`load_runs` for one run, per-run layout."""
+    return load_runs(
+        [run], {run.run_id: pni_csv}, analysis_root=analysis_root,
+        source_csvs={run.run_id: source_csv} if source_csv is not None else None,
+    )
 
 
 def stats_table(pairs: pd.DataFrame, tgs: pd.DataFrame, cluster_meta: dict) -> pd.DataFrame:
     """One row per `(scope, cluster)`: percentiles, extrema, counts."""
     n_sites = {c["cluster"]: c["n_sites"] for c in cluster_meta["clusters"]}
-    floors = pairs.groupby(["tg_id", P.CLUSTER_COL], as_index=False).rtt_ms.min()
+    key = ["run_id", "tg_id"]
+    floors = pairs.groupby(key + [P.CLUSTER_COL], as_index=False).rtt_ms.min()
     rows = []
     for scope, frame in ((PAIRS, pairs), (TG_MIN, floors)):
         for c, block in frame.groupby(P.CLUSTER_COL):
@@ -149,7 +184,7 @@ def stats_table(pairs: pd.DataFrame, tgs: pd.DataFrame, cluster_meta: dict) -> p
                 {
                     "scope": scope,
                     P.CLUSTER_COL: int(c),
-                    "n_tgs": int(block.tg_id.nunique()),
+                    "n_tgs": int(block.groupby(key).ngroups),
                     "n_sites": int(n_sites[int(c)]),
                     **{f"{k}_ms" if k != "n" else "n": v for k, v in cost_stats(block.rtt_ms.to_numpy()).items()},
                 }
@@ -199,11 +234,14 @@ def _manifest(cluster_meta: dict, stats: pd.DataFrame) -> str:
         {
             "figure": PNG_NAME,
             "csv": CSV_NAME,
-            "run_id": cluster_meta["run_id"],
+            "layout": cluster_meta.get("layout"),
+            "run_ids": cluster_meta["run_ids"],
             "clusters_from": P.MANIFEST_NAME,
             "k": cluster_meta["clustering"]["k"],
-            "source_csv_sha256": cluster_meta["source_csv_sha256"],
-            "pni_csv_sha256": cluster_meta["pni_csv_sha256"],
+            "inputs": [
+                {key: r[key] for key in ("run_id", "source_csv_sha256", "pni_csv_sha256")}
+                for r in cluster_meta["runs"]
+            ],
             "scopes": {
                 PAIRS: "every (TG, VP) pair at its minimum RTT",
                 TG_MIN: "each TG's smallest RTT over the fleet, i.e. its S-P VP's RTT",
@@ -219,6 +257,38 @@ def _manifest(cluster_meta: dict, stats: pd.DataFrame) -> str:
     )
 
 
+def _write(pairs: pd.DataFrame, tgs: pd.DataFrame, meta: dict, out_dir: Path) -> Path:
+    stats = stats_table(pairs, tgs, meta)
+    stats.to_csv(out_dir / CSV_NAME, index=False)
+    (out_dir / MANIFEST_NAME).write_text(_manifest(meta, stats))
+    return plot(stats, out_png=out_dir / PNG_NAME)
+
+
+def build_for_runs(
+    runs: list[RunPaths],
+    pni_csvs: dict[str, Path],
+    *,
+    layouts: tuple[str, ...] = (P.PER_RUN,),
+    analysis_root: Path | None = None,
+    source_csvs: dict[str, Path] | None = None,
+) -> list[Path]:
+    """Boxes for every requested layout, each beside the clusters it reads."""
+    bad = [lay for lay in layouts if lay not in P.LAYOUTS]
+    if bad:
+        raise ValueError(f"unknown layout {bad}; expected {list(P.LAYOUTS)}")
+    pngs = []
+    if P.PER_RUN in layouts:
+        for run in runs:
+            one = {run.run_id: source_csvs[run.run_id]} if source_csvs and run.run_id in source_csvs else None
+            pairs, tgs, meta, out_dir = load_runs([run], pni_csvs, analysis_root=analysis_root, source_csvs=one)
+            pngs.append(_write(pairs, tgs, meta, out_dir))
+    if P.POOLED in layouts:
+        pairs, tgs, meta, out_dir = load_runs(runs, pni_csvs, layout=P.POOLED,
+                                              analysis_root=analysis_root, source_csvs=source_csvs)
+        pngs.append(_write(pairs, tgs, meta, out_dir))
+    return pngs
+
+
 def build_for_run(
     run: RunPaths,
     pni_csv: Path,
@@ -226,9 +296,8 @@ def build_for_run(
     analysis_root: Path | None = None,
     source_csv: Path | None = None,
 ) -> list[Path]:
-    """Stats CSV, manifest and the two-panel PNG. Returns the PNG in a list."""
-    pairs, tgs, meta, out_dir = load(run, pni_csv, analysis_root=analysis_root, source_csv=source_csv)
-    stats = stats_table(pairs, tgs, meta)
-    stats.to_csv(out_dir / CSV_NAME, index=False)
-    (out_dir / MANIFEST_NAME).write_text(_manifest(meta, stats))
-    return [plot(stats, out_png=out_dir / PNG_NAME)]
+    """Stats CSV, manifest and the two-panel PNG for one run, per-run layout."""
+    return build_for_runs(
+        [run], {run.run_id: pni_csv}, analysis_root=analysis_root,
+        source_csvs={run.run_id: source_csv} if source_csv is not None else None,
+    )

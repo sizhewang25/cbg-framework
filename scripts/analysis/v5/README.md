@@ -90,6 +90,7 @@ outputs/analysis/v5/_cross/rtt-cdf/<datasets>@<arm>/rtt_cdf.{png,csv,manifest.js
 outputs/analysis/v5/<run>/cost/cost_box.<heap|alloc>[.solved].{png,csv,manifest.json}
 outputs/analysis/v5/<run>/pni-gap/<pni-stem>/pni_gap_{clusters,points}.csv, pni_gap.manifest.json, pni_gap_scatter.png
 outputs/analysis/v5/<run>/pni-gap/<pni-stem>/pni_cluster_rtt.{png,csv,manifest.json}
+outputs/analysis/v5/_cross/pni-gap/<n>-runs-<hash>/pni_gap_*, pni_cluster_rtt.*   # --layout pooled
 outputs/analysis/v5/_cross/cost/<n>-runs-<hash>/cost_box.pooled.<heap|alloc>[.solved].*
 outputs/analysis/v5/<run>/mtl-map/healpix-128/mtl_map.<method>.html
 outputs/analysis/v5/<run>/mtl-map/regions/<method>/<tg>.json          # replay cache, rung-free
@@ -510,10 +511,19 @@ the TG sets differ, or any TG's floor disagrees with the recorded `sp_rtt_ms`.
 
 Neither output carries a coordinate or a PNI id (ids name cities).
 
+Both commands take `--layout per-run` (default) and/or `--layout pooled`, and a
+repeatable `--run-id`. Pooled, each run is measured against **its own** PNI
+list first, since `d_pni` against another operator's PNIs means nothing. The
+points are then concatenated (sites keyed on `(run_id, lat, lon)`, shared TG
+ids refused) and clustered once. The manifest records every run's CSV and PNI
+sha256, plus `clusters_by_run`; the RTT boxes re-check each run on its own.
+`--pni-csv` and `--source-csv` take one `--run-id` only.
+
 `--pni-csv` defaults to the run config's `analysis.common.pni_csv`
 (`labels.declared_pni_csv`, beside `dataset_label` as the only config reads).
 `create_analysis_artifacts.sh` runs both commands per run when the config
-declares a list, and skips the run otherwise. A declared list that does not
+declares a list, and skips the run otherwise; its cross-dataset pass runs the
+pooled layout only when every run in the group declares one. A declared list that does not
 exist is a failure, not a skip. The RTT boxes run only if the clustering in
 the same pass succeeded, and they refuse clusters built from a PNI list whose
 content has changed since.
@@ -590,6 +600,8 @@ python -m scripts.analysis.v5.cli plot-pni-gap         --run-id pro-as01-mesh   
 python -m scripts.analysis.v5.cli plot-pni-cluster-rtt --run-id pro-as01-mesh
 python -m scripts.analysis.v5.cli plot-pni-gap \
     --run-id as01-260728-260802-mesh --pni-csv datasets/pni/as01-us-pni.approx.csv
+python -m scripts.analysis.v5.cli plot-pni-gap --layout pooled \
+    --run-id pro-as01-mesh --run-id pro-as02-mesh --run-id pro-as03-mesh
 python -m scripts.analysis.v5.cli plot-mtl-map --run-id as01-260728-260802-mesh \
     -m octant_cbg_hull --no-regions
 ./scripts/analysis/v5/create_mtl_map.sh          # every method, every mesh run

@@ -26,6 +26,13 @@ palette hues are under 3:1 against the surface (validated:
 `validate_palette.js --mode light`, CVD worst adjacent dE 9.1). The hues are
 the reference categorical palette in fixed order, so cluster 1 is always the
 same blue whatever k is.
+
+## Pooled
+
+`--layout pooled` draws every run's points on one panel, clustered once. The
+marker encodes cluster only, not dataset: the question is whether the regimes
+recur across operators, and `clusters_by_run` in the manifest says which runs
+each cluster is made of.
 """
 
 from __future__ import annotations
@@ -133,6 +140,48 @@ def plot(pts: pd.DataFrame, summary: pd.DataFrame, *, meta: dict, out_png: Path)
     return out_png
 
 
+def _checked_k(k: int | None) -> None:
+    if k is not None:
+        cluster_style(k)  # refuse an unpaintable --k before fitting anything
+
+
+def _draw(tgs: pd.DataFrame, pts: pd.DataFrame, meta: dict, out_dir: Path) -> Path:
+    for c in pts[P.CLUSTER_COL].unique():
+        cluster_style(c)  # and a chosen k, before anything is written
+    P.write(tgs, pts, meta, out_dir)
+    return plot(pts, P.cluster_summary(tgs, pts), meta=meta, out_png=out_dir / PNG_NAME)
+
+
+def build_for_runs(
+    runs: list[RunPaths],
+    pni_csvs: dict[str, Path],
+    *,
+    layouts: tuple[str, ...] = (P.PER_RUN,),
+    k: int | None = None,
+    analysis_root: Path | None = None,
+    source_csvs: dict[str, Path] | None = None,
+) -> list[Path]:
+    """Every requested layout. `per-run` writes one figure per run into that
+    run's tree; `pooled` writes one figure over all of them into `_cross/`.
+    Each run is measured against its own PNI list either way."""
+    _checked_k(k)
+    bad = [lay for lay in layouts if lay not in P.LAYOUTS]
+    if bad:
+        raise ValueError(f"unknown layout {bad}; expected {list(P.LAYOUTS)}")
+    pngs = []
+    if P.PER_RUN in layouts:
+        for run in runs:
+            one = {run.run_id: (source_csvs or {}).get(run.run_id)} if source_csvs else None
+            tgs, pts, meta = P.compute_runs([run], pni_csvs, layout=P.PER_RUN, k=k, source_csvs=one)
+            out_dir = P.output_dir(run.run_id, pni_csvs[run.run_id], analysis_root=analysis_root)
+            pngs.append(_draw(tgs, pts, meta, out_dir))
+    if P.POOLED in layouts:
+        tgs, pts, meta = P.compute_runs(runs, pni_csvs, layout=P.POOLED, k=k, source_csvs=source_csvs)
+        out_dir = P.pooled_output_dir([r.run_id for r in runs], analysis_root=analysis_root)
+        pngs.append(_draw(tgs, pts, meta, out_dir))
+    return pngs
+
+
 def build_for_run(
     run: RunPaths,
     pni_csv: Path,
@@ -141,12 +190,8 @@ def build_for_run(
     analysis_root: Path | None = None,
     source_csv: Path | None = None,
 ) -> list[Path]:
-    """Clusters CSV, points CSV, manifest and the scatter. Returns the PNG in a list."""
-    if k is not None:
-        cluster_style(k)  # refuse an unpaintable --k before fitting anything
-    tgs, pts, meta = P.compute(run, pni_csv, k=k, source_csv=source_csv)
-    for c in pts[P.CLUSTER_COL].unique():
-        cluster_style(c)  # and a chosen k, before anything is written
-    out_dir = P.output_dir(run.run_id, pni_csv, analysis_root=analysis_root)
-    P.write(tgs, pts, meta, out_dir)
-    return [plot(pts, P.cluster_summary(tgs, pts), meta=meta, out_png=out_dir / PNG_NAME)]
+    """Clusters CSV, points CSV, manifest and the scatter for one run, per-run layout."""
+    return build_for_runs(
+        [run], {run.run_id: pni_csv}, k=k, analysis_root=analysis_root,
+        source_csvs={run.run_id: source_csv} if source_csv is not None else None,
+    )

@@ -37,7 +37,7 @@ def _pop(sites_and_gaps, *, replicas=1, d_pni=None):
     rows = []
     for i, (lat, lon, gap) in enumerate(sites_and_gaps):
         for r in range(replicas):
-            rows.append({"tg_id": f"tg-{i}-{r}", "tg_lat": lat, "tg_lon": lon,
+            rows.append({"run_id": "r", "tg_id": f"tg-{i}-{r}", "tg_lat": lat, "tg_lon": lon,
                          P.GAP: gap, P.D_PNI: d_pni[i] if d_pni else float(i)})
     pop = pd.DataFrame(rows)
     pop["site_key"] = "r|" + pop.tg_lat.astype(str) + "," + pop.tg_lon.astype(str)
@@ -213,9 +213,9 @@ class TestWrittenArtifacts:
         assert out == root / run.run_id / P.KIND / "test-pni"
         for name in (P.CLUSTERS_CSV, P.POINTS_CSV, P.MANIFEST_NAME, F.PNG_NAME):
             assert (out / name).stat().st_size > 0
-        tgs, meta = P.read_clusters(out, run_id=run.run_id)
+        tgs, meta = P.read_clusters(out, run_ids=[run.run_id])
         assert len(tgs) == len(tg_group) == meta["n_tgs"]
-        assert meta["source_csv_sha256"] == P.sha256_file(edge_csv)
+        assert meta["runs"][0]["source_csv_sha256"] == P.sha256_file(edge_csv)
 
     def test_an_unpaintable_k_writes_nothing(self, pni_inputs):
         run, edge_csv, pni_csv, _, root = pni_inputs
@@ -227,7 +227,7 @@ class TestWrittenArtifacts:
         run, edge_csv, pni_csv, _, root = pni_inputs
         [png] = F.build_for_run(run, pni_csv, analysis_root=root, source_csv=edge_csv)
         with pytest.raises(ValueError, match="written for run"):
-            P.read_clusters(png.parent, run_id="someone-else")
+            P.read_clusters(png.parent, run_ids=["someone-else"])
 
 
 class TestPrivacy:
@@ -307,3 +307,83 @@ class TestTheConfigDeclaresTheList:
         with pytest.raises(typer.BadParameter, match="declares no analysis.common.pni_csv"):
             _pni_csv_for("pro-x", None, root)
         assert _pni_csv_for("pro-x", tmp_path / "given.csv", root) == tmp_path / "given.csv"
+
+
+class TestPooled:
+    """Several runs on one scatter, one k-means, each against its own PNI list."""
+
+    @staticmethod
+    def _pooled(two):
+        return P.compute_runs(two["runs"], two["pni_csvs"], layout=P.POOLED,
+                              source_csvs=two["edge_csvs"])
+
+    def test_writes_into_cross_keyed_on_the_run_set(self, pni_two_runs):
+        two = pni_two_runs
+        [png] = F.build_for_runs(two["runs"], two["pni_csvs"], layouts=(P.POOLED,),
+                                 analysis_root=two["root"], source_csvs=two["edge_csvs"])
+        assert png.parent.parent == two["root"] / "_cross" / P.KIND
+        assert png.parent.name.startswith("2-runs-")
+        tgs, meta = P.read_clusters(png.parent, run_ids=["run-b", "run-a"])
+        assert meta["layout"] == P.POOLED and len(meta["runs"]) == 2
+        assert set(tgs.run_id) == {"run-a", "run-b"}
+
+    def test_each_run_is_measured_against_its_own_list(self, pni_two_runs):
+        two = pni_two_runs
+        pooled, _, _ = self._pooled(two)
+        for run in two["runs"]:
+            alone, _, _ = P.compute(run, two["pni_csvs"][run.run_id],
+                                    source_csv=two["edge_csvs"][run.run_id])
+            got = pooled[pooled.run_id == run.run_id].set_index("tg_id")[P.D_PNI].sort_index()
+            np.testing.assert_allclose(got.to_numpy(), alone.set_index("tg_id")[P.D_PNI].sort_index().to_numpy())
+        a = pooled[pooled.run_id == "run-a"][P.D_PNI].to_numpy()
+        b = pooled[pooled.run_id == "run-b"][P.D_PNI].to_numpy()
+        assert not np.allclose(np.sort(a), np.sort(b))   # the lists differ, so must d_pni
+
+    def test_a_shared_coordinate_is_two_sites(self, pni_two_runs):
+        """Both runs use the same nine coordinates; pooled, that is 18 sites."""
+        _, _, meta = self._pooled(pni_two_runs)
+        assert meta["n_sites"] == sum(r["n_sites"] for r in meta["runs"]) == 18
+
+    def test_shared_tg_ids_are_refused(self, tmp_path):
+        from scripts.analysis.v5.tests.conftest import FakeRun, write_pni_inputs
+
+        a = write_pni_inputs(tmp_path / "a")
+        b = write_pni_inputs(tmp_path / "b")       # same default prefix
+        runs = [FakeRun("run-a", tmp_path), FakeRun("run-b", tmp_path)]
+        with pytest.raises(ValueError, match="share"):
+            P.compute_runs(runs, {"run-a": a[1], "run-b": b[1]}, layout=P.POOLED,
+                           source_csvs={"run-a": a[0], "run-b": b[0]})
+
+    def test_a_run_without_a_list_is_refused(self, pni_two_runs):
+        two = pni_two_runs
+        with pytest.raises(ValueError, match="no PNI list"):
+            P.compute_runs(two["runs"], {"run-a": two["pni_csvs"]["run-a"]}, layout=P.POOLED,
+                           source_csvs=two["edge_csvs"])
+
+    def test_per_run_takes_exactly_one_run(self, pni_two_runs):
+        two = pni_two_runs
+        with pytest.raises(ValueError, match="takes one run"):
+            P.compute_runs(two["runs"], two["pni_csvs"], layout=P.PER_RUN, source_csvs=two["edge_csvs"])
+
+    def test_both_layouts_in_one_call(self, pni_two_runs):
+        two = pni_two_runs
+        pngs = F.build_for_runs(two["runs"], two["pni_csvs"], layouts=(P.PER_RUN, P.POOLED),
+                                analysis_root=two["root"], source_csvs=two["edge_csvs"])
+        assert len(pngs) == 3
+        assert {p.parent.parent.parent.name for p in pngs[:2]} == {"run-a", "run-b"}
+
+    def test_clusters_by_run_names_every_run(self, pni_two_runs):
+        tgs, _, _ = self._pooled(pni_two_runs)
+        rows = P.clusters_by_run(tgs)
+        assert {r["run_id"] for r in rows} == {"run-a", "run-b"}
+        assert sum(r["n_tgs"] for r in rows) == len(tgs)
+
+    def test_the_cli_refuses_one_pni_csv_for_several_runs(self, tmp_path):
+        import typer
+
+        from scripts.analysis.v5.cli import _pni_inputs
+
+        with pytest.raises(typer.BadParameter, match="one run's files"):
+            _pni_inputs(["run-a", "run-b"], ["pooled"], tmp_path / "p.csv", None, tmp_path)
+        with pytest.raises(typer.BadParameter, match="unknown --layout"):
+            _pni_inputs(["run-a"], ["merged"], tmp_path / "p.csv", None, tmp_path)

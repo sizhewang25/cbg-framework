@@ -69,7 +69,18 @@ also shares a latency regime. Do not read "same cluster" as "same cause".
 Outputs carry no coordinate and no place name: TG ids, distances, RTTs,
 cluster numbers. PNI ids name cities, so they stay out of the output as well.
 
-Command: `plot-pni-gap`. Writes `<run>/pni-gap/<pni-stem>/`.
+## Pooling
+
+`--layout pooled` merges several runs into one scatter and one k-means. Each
+run is measured against **its own** PNI list first (`d_pni` against another
+operator's PNIs means nothing), then the points are concatenated. Sites stay
+keyed on `(run_id, lat, lon)`, so a facility two runs share is two points, and
+no TG id may appear in two runs (`cross.guard_disjoint_tgs`). The manifest
+records every run's CSV and PNI-list sha256, and `clusters_by_run` says which
+runs each pooled cluster is made of.
+
+Command: `plot-pni-gap`. Writes `<run>/pni-gap/<pni-stem>/` per run, and
+`_cross/pni-gap/<n>-runs-<hash>/` pooled.
 """
 
 from __future__ import annotations
@@ -85,7 +96,7 @@ from matplotlib.scale import SymmetricalLogTransform
 from sklearn.cluster import KMeans
 from sklearn.metrics import adjusted_rand_score, silhouette_score
 
-from scripts.analysis.v5.modules import edges
+from scripts.analysis.v5.modules import cross, edges
 from scripts.analysis.v5.modules import sites as S
 from scripts.analysis.v5.modules.answer_space import BENCHMARK_TG_COLUMNS
 from scripts.analysis.v5.modules.figure_vp_proximity import MEASURE_COLUMNS, vp_distances
@@ -248,7 +259,8 @@ def points(pop: pd.DataFrame) -> pd.DataFrame:
     grouped = (
         pop.assign(_gap_key=key)
         .groupby([S.SITE_KEY_COL, "_gap_key"], sort=True)
-        .agg(n_tgs=("tg_id", "size"), **{D_PNI: (D_PNI, "first"), GAP: (GAP, "median")})
+        .agg(run_id=("run_id", "first"), n_tgs=("tg_id", "size"),
+             **{D_PNI: (D_PNI, "first"), GAP: (GAP, "median")})
         .reset_index()
     )
     grouped[POINT_COL] = np.arange(len(grouped))
@@ -385,41 +397,97 @@ def cluster_summary(tgs: pd.DataFrame, pts: pd.DataFrame) -> pd.DataFrame:
 
 # -- the whole step -----------------------------------------------------------
 
+PER_RUN = "per-run"
+POOLED = "pooled"
+LAYOUTS = (PER_RUN, POOLED)
+
 
 def output_dir(run_id: str, pni_csv: Path, *, analysis_root: Path | None = None) -> Path:
-    """`<root>/<run_id>/pni-gap/<pni-stem>/`, created."""
+    """Per-run: `<root>/<run_id>/pni-gap/<pni-stem>/`, created."""
     stem = Path(pni_csv).name.removesuffix(".csv")
     out = (analysis_root or DEFAULT_ANALYSIS_ROOT) / run_id / KIND / stem
     out.mkdir(parents=True, exist_ok=True)
     return out
 
 
-def compute(
-    run: RunPaths,
-    pni_csv: Path,
-    *,
-    k: int | None = None,
-    source_csv: Path | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """`(tgs, points, meta)` for one run and one PNI list. Writes nothing."""
+def pooled_output_dir(run_ids: list[str], *, analysis_root: Path | None = None) -> Path:
+    """Pooled: `_cross/pni-gap/<n>-runs-<hash>/`, created.
+
+    Keyed on the run set only. Each run's PNI list is identified by its
+    sha256 in the manifest, which the RTT figure checks per run.
+    """
+    return cross.cross_dir(run_ids, analysis_root=analysis_root, kind=KIND)
+
+
+def run_population(
+    run: RunPaths, pni_csv: Path, *, source_csv: Path | None = None
+) -> tuple[pd.DataFrame, dict]:
+    """One run's per-TG frame against **its own** PNI list, and its provenance."""
     csv = edges.resolve_source_csv(run, source_csv)
     pnis = load_pnis(pni_csv)
     pop = population(vp_distances(run, source_csv=csv), tg_coordinates(csv), pnis, run_id=run.run_id)
-    pts = points(pop)
-    pts, record = cluster(pts, k=k)
-    tgs = assign(pop, pts)
-    beyond = int(((pts[D_PNI] > AXIS_MAX_KM) | (pts[GAP] > AXIS_MAX_KM)).sum())
-    meta = {
+    pop.insert(0, "run_id", run.run_id)
+    record = {
         "run_id": run.run_id,
         "source_csv": str(csv),
         "source_csv_sha256": sha256_file(Path(csv)),
         "pni_csv": str(pni_csv),
         "pni_csv_sha256": sha256_file(Path(pni_csv)),
         "n_pnis": int(len(pnis)),
+        "n_tgs": int(len(pop)),
+        "n_sites": int(pop[S.SITE_KEY_COL].nunique()),
+    }
+    return pop, record
+
+
+def compute_runs(
+    runs: list[RunPaths],
+    pni_csvs: dict[str, Path],
+    *,
+    layout: str = PER_RUN,
+    k: int | None = None,
+    source_csvs: dict[str, Path] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """`(tgs, points, meta)` over one run, or several pooled. Writes nothing.
+
+    Pooling concatenates the runs' TGs **after** each has been measured against
+    its own PNI list: `d_pni` against another operator's PNIs means nothing.
+    Sites are keyed on `(run_id, lat, lon)`, so a facility two runs share is
+    two points. k-means then runs once over the pooled points.
+    """
+    if layout not in LAYOUTS:
+        raise ValueError(f"layout {layout!r}; expected one of {LAYOUTS}")
+    if not runs:
+        raise ValueError("pass at least one run")
+    if layout == PER_RUN and len(runs) != 1:
+        raise ValueError(f"layout {PER_RUN!r} takes one run; got {len(runs)}")
+    missing = [r.run_id for r in runs if r.run_id not in pni_csvs]
+    if missing:
+        raise ValueError(f"no PNI list for {missing}: every pooled run needs its own")
+
+    pops, records = [], []
+    for run in runs:
+        pop, record = run_population(run, pni_csvs[run.run_id],
+                                     source_csv=(source_csvs or {}).get(run.run_id))
+        pops.append(pop)
+        records.append(record)
+    cross.guard_disjoint_tgs(
+        {r["run_id"]: set(p.tg_id) for r, p in zip(records, pops)},
+        remedy="Use --layout per-run, which keeps each run on its own figure.",
+    )
+    pop = pd.concat(pops, ignore_index=True)
+    pts = points(pop)
+    pts, clustering = cluster(pts, k=k)
+    tgs = assign(pop, pts)
+    beyond = int(((pts[D_PNI] > AXIS_MAX_KM) | (pts[GAP] > AXIS_MAX_KM)).sum())
+    meta = {
+        "layout": layout,
+        "run_ids": [r.run_id for r in runs],
+        "runs": records,
         "n_tgs": int(len(tgs)),
         "n_sites": int(tgs[S.SITE_KEY_COL].nunique()),
         "n_points": int(len(pts)),
-        "clustering": record,
+        "clustering": clustering,
         "axes": {
             "scale": "symlog",
             "linthresh_km": LINTHRESH_KM,
@@ -436,16 +504,40 @@ def compute(
     return tgs, pts, meta
 
 
+def compute(
+    run: RunPaths,
+    pni_csv: Path,
+    *,
+    k: int | None = None,
+    source_csv: Path | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """`compute_runs` for one run, per-run layout."""
+    return compute_runs(
+        [run], {run.run_id: pni_csv}, layout=PER_RUN, k=k,
+        source_csvs={run.run_id: source_csv} if source_csv is not None else None,
+    )
+
+
+def clusters_by_run(tgs: pd.DataFrame) -> list[dict]:
+    """Per `(cluster, run)`: TG and site counts. Says which runs a pooled cluster is made of."""
+    out = (
+        tgs.groupby([CLUSTER_COL, "run_id"])
+        .agg(n_tgs=("tg_id", "size"), n_sites=(S.SITE_KEY_COL, "nunique"))
+        .reset_index()
+    )
+    return json.loads(out.to_json(orient="records"))
+
+
 def write(tgs: pd.DataFrame, pts: pd.DataFrame, meta: dict, out_dir: Path) -> dict[str, Path]:
     """The clusters CSV the RTT figure consumes, the points CSV, the manifest."""
-    tg_cols = ["tg_id", POINT_COL, CLUSTER_COL, D_PNI, D_GEO, D_SP, GAP, SP_RTT]
-    pt_cols = [POINT_COL, CLUSTER_COL, "n_tgs", D_PNI, GAP]
+    tg_cols = ["run_id", "tg_id", POINT_COL, CLUSTER_COL, D_PNI, D_GEO, D_SP, GAP, SP_RTT]
+    pt_cols = ["run_id", POINT_COL, CLUSTER_COL, "n_tgs", D_PNI, GAP]
     paths = {
         "clusters": out_dir / CLUSTERS_CSV,
         "points": out_dir / POINTS_CSV,
         "manifest": out_dir / MANIFEST_NAME,
     }
-    tgs.sort_values([CLUSTER_COL, "tg_id"])[tg_cols].to_csv(paths["clusters"], index=False)
+    tgs.sort_values([CLUSTER_COL, "run_id", "tg_id"])[tg_cols].to_csv(paths["clusters"], index=False)
     pts.sort_values([CLUSTER_COL, POINT_COL])[pt_cols].to_csv(paths["points"], index=False)
     summary = cluster_summary(tgs, pts)
     body = {
@@ -453,10 +545,11 @@ def write(tgs: pd.DataFrame, pts: pd.DataFrame, meta: dict, out_dir: Path) -> di
         "clusters_csv": CLUSTERS_CSV,
         "points_csv": POINTS_CSV,
         "clusters": json.loads(summary.round(3).to_json(orient="records")),
+        "clusters_by_run": clusters_by_run(tgs),
         "unit": (
             "k-means clusters distinct (site, gap) points, unweighted; every TG "
             "inherits its point's cluster. Clusters are numbered by centroid "
-            "gap ascending."
+            "gap ascending. Sites are keyed on (run_id, lat, lon)."
         ),
     }
     paths["manifest"].write_text(json.dumps(body, indent=2))
@@ -466,16 +559,17 @@ def write(tgs: pd.DataFrame, pts: pd.DataFrame, meta: dict, out_dir: Path) -> di
 # -- what the RTT figure reads back -------------------------------------------
 
 
-def read_clusters(out_dir: Path, *, run_id: str) -> tuple[pd.DataFrame, dict]:
-    """The clusters CSV and its manifest, checked against the run asking for them."""
+def read_clusters(out_dir: Path, *, run_ids: list[str]) -> tuple[pd.DataFrame, dict]:
+    """The clusters CSV and its manifest, checked against the runs asking for them."""
     csv, manifest = out_dir / CLUSTERS_CSV, out_dir / MANIFEST_NAME
     if not csv.exists() or not manifest.exists():
-        raise MissingArtifactError(f"{csv} missing; run `plot-pni-gap --run-id {run_id}` first")
+        flags = " ".join(f"--run-id {r}" for r in run_ids)
+        raise MissingArtifactError(f"{csv} missing; run `plot-pni-gap {flags}` first")
     meta = json.loads(manifest.read_text())
-    if meta.get("run_id") != run_id:
-        raise ValueError(f"{manifest} was written for run {meta.get('run_id')!r}, not {run_id!r}")
-    tgs = pd.read_csv(csv, dtype={"tg_id": str})
-    if tgs.tg_id.duplicated().any():
+    if sorted(meta.get("run_ids") or []) != sorted(run_ids):
+        raise ValueError(f"{manifest} was written for runs {meta.get('run_ids')!r}, not {sorted(run_ids)!r}")
+    tgs = pd.read_csv(csv, dtype={"tg_id": str, "run_id": str})
+    if tgs.duplicated(["run_id", "tg_id"]).any():
         raise ValueError(f"{csv} lists a TG twice")
     if len(tgs) != meta.get("n_tgs"):
         raise ValueError(f"{csv} has {len(tgs)} TGs; its manifest says {meta.get('n_tgs')}")

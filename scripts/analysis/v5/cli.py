@@ -1175,10 +1175,46 @@ def _pni_csv_for(run_id: str, given: Path | None, outputs_root: Path) -> Path:
     return declared
 
 
+def _pni_inputs(
+    run_ids: list[str] | None, layout: list[str] | None, pni_csv: Path | None,
+    source_csv: Path | None, outputs_root: Path,
+):
+    """Resolve the shared options of the two PNI commands.
+
+    `--pni-csv` and `--source-csv` name one run's files, so they are refused
+    with more than one `--run-id`: pooled runs each use their own config's list.
+    """
+    if not run_ids:
+        raise typer.BadParameter("pass at least one --run-id")
+    if len(set(run_ids)) != len(run_ids):
+        raise typer.BadParameter("a --run-id is repeated")
+    if len(run_ids) > 1 and (pni_csv is not None or source_csv is not None):
+        raise typer.BadParameter(
+            "--pni-csv/--source-csv name one run's files; with several --run-id "
+            "each run uses its own config's analysis.common.pni_csv."
+        )
+    layouts = tuple(layout) if layout else (pni_gap.PER_RUN,)
+    bad = [x for x in layouts if x not in pni_gap.LAYOUTS]
+    if bad:
+        raise typer.BadParameter(f"unknown --layout {bad}; expected {list(pni_gap.LAYOUTS)}")
+    runs = [resolve_run(r, outputs_root) for r in run_ids]
+    pni_csvs = {r: _pni_csv_for(r, pni_csv, outputs_root) for r in run_ids}
+    source_csvs = {run_ids[0]: source_csv} if source_csv is not None else None
+    return runs, pni_csvs, layouts, source_csvs
+
+
+_PNI_LAYOUT_HELP = (
+    "per-run (default): one figure per run, in <run>/pni-gap/<pni-stem>/. "
+    "pooled: every --run-id on one figure, clustered once, in "
+    "_cross/pni-gap/<n>-runs-<hash>/. Repeatable."
+)
+
+
 @app.command("plot-pni-gap")
 def plot_pni_gap_cmd(
-    run_id: str = typer.Option(..., "--run-id", help="One run: a PNI list belongs to one operator."),
-    pni_csv: Path = typer.Option(None, "--pni-csv", help=_PNI_CSV_HELP),
+    run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable)."),
+    layout: list[str] = typer.Option(None, "--layout", help=_PNI_LAYOUT_HELP),
+    pni_csv: Path = typer.Option(None, "--pni-csv", help=_PNI_CSV_HELP + " One --run-id only."),
     k: int = typer.Option(
         None,
         "--k",
@@ -1187,7 +1223,7 @@ def plot_pni_gap_cmd(
             f"k in {list(pni_gap.K_CANDIDATES)}, recorded in the manifest."
         ),
     ),
-    source_csv: Path = typer.Option(None, "--source-csv", help="Override the run's canonical edge CSV."),
+    source_csv: Path = typer.Option(None, "--source-csv", help="Override the run's edge CSV. One --run-id only."),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
 ) -> None:
@@ -1196,16 +1232,17 @@ def plot_pni_gap_cmd(
     One marker per distinct (site, gap) point, sized by TG count. Both axes are
     symlog (linear 0-100 km, log to 4,000 km), and k-means runs on that same
     geometry, unweighted, so a cluster boundary can be read off the figure.
+    Each run is measured against its own operator's PNI list, pooled or not.
 
     Writes `pni_gap_clusters.csv` (one row per TG, the file
     `plot-pni-cluster-rtt` reads), `pni_gap_points.csv`, `pni_gap.manifest.json`
-    and `pni_gap_scatter.png` into `<run>/pni-gap/<pni-stem>/`. Needs no
-    `classify`.
+    and `pni_gap_scatter.png`. Needs no `classify`.
     """
     try:
-        pngs = figure_pni_gap.build_for_run(
-            resolve_run(run_id, outputs_root), _pni_csv_for(run_id, pni_csv, outputs_root), k=k,
-            analysis_root=analysis_root, source_csv=source_csv,
+        runs, pni_csvs, layouts, source_csvs = _pni_inputs(run_id, layout, pni_csv, source_csv, outputs_root)
+        pngs = figure_pni_gap.build_for_runs(
+            runs, pni_csvs, layouts=layouts, k=k,
+            analysis_root=analysis_root, source_csvs=source_csvs,
         )
     except (ValueError, MissingArtifactError) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -1215,24 +1252,26 @@ def plot_pni_gap_cmd(
 
 @app.command("plot-pni-cluster-rtt")
 def plot_pni_cluster_rtt_cmd(
-    run_id: str = typer.Option(..., "--run-id", help="The run `plot-pni-gap` clustered."),
-    pni_csv: Path = typer.Option(None, "--pni-csv", help=_PNI_CSV_HELP),
-    source_csv: Path = typer.Option(None, "--source-csv", help="Override the run's canonical edge CSV."),
+    run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable): the set `plot-pni-gap` clustered."),
+    layout: list[str] = typer.Option(None, "--layout", help=_PNI_LAYOUT_HELP),
+    pni_csv: Path = typer.Option(None, "--pni-csv", help=_PNI_CSV_HELP + " One --run-id only."),
+    source_csv: Path = typer.Option(None, "--source-csv", help="Override the run's edge CSV. One --run-id only."),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
 ) -> None:
     """RTT boxes per `plot-pni-gap` cluster: every (TG, VP) pair, and each TG's floor.
 
     Reads the clusters CSV off disk rather than re-clustering, and refuses it
-    if the run, the edge CSV's sha256, the TG set or any TG's smallest RTT no
-    longer matches. Whiskers p5/p95, no fliers.
+    if the run set, any run's PNI list or edge CSV sha256, the TG set or any
+    TG's smallest RTT no longer matches. Whiskers p5/p95, no fliers.
 
     Writes `pni_cluster_rtt.{png,csv,manifest.json}` beside the clusters.
     """
     try:
-        pngs = figure_pni_cluster_rtt.build_for_run(
-            resolve_run(run_id, outputs_root), _pni_csv_for(run_id, pni_csv, outputs_root),
-            analysis_root=analysis_root, source_csv=source_csv,
+        runs, pni_csvs, layouts, source_csvs = _pni_inputs(run_id, layout, pni_csv, source_csv, outputs_root)
+        pngs = figure_pni_cluster_rtt.build_for_runs(
+            runs, pni_csvs, layouts=layouts,
+            analysis_root=analysis_root, source_csvs=source_csvs,
         )
     except (ValueError, MissingArtifactError) as exc:
         raise typer.BadParameter(str(exc)) from exc

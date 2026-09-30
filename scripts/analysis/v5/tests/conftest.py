@@ -198,14 +198,20 @@ def _haversine(a, b):
     return float(haversine_km([a[0]], [a[1]], [b[0]], [b[1]])[0])
 
 
-def write_pni_inputs(root: Path) -> tuple[Path, Path, dict[str, str]]:
+def write_pni_inputs(
+    root: Path, *, tg_prefix: str = "tg", pni_rows=PNI_ROWS
+) -> tuple[Path, Path, dict[str, str]]:
     """`(edge_csv, pni_csv, tg_group)`. RTT is propagation + 1 ms, except the
-    designated VP, which gets 0.5 ms so it is the smallest by construction."""
+    designated VP, which gets 0.5 ms so it is the smallest by construction.
+
+    `tg_prefix` keeps two runs' TG ids disjoint; `pni_rows` lets a second run
+    carry a different operator's list."""
+    root.mkdir(parents=True, exist_ok=True)
     rows, tg_group = [], {}
     for group, members in PNI_GROUPS.items():
         for s, (site, sp_vp) in enumerate(members):
             for r in range(PNI_REPLICAS):
-                tg = f"tg-{group}-{s}-{r}"
+                tg = f"{tg_prefix}-{group}-{s}-{r}"
                 tg_group[tg] = group
                 for vp, where in PNI_VPS.items():
                     rtt = 0.5 if vp == sp_vp else _haversine(site, where) / 100 + 1.0
@@ -215,7 +221,7 @@ def write_pni_inputs(root: Path) -> tuple[Path, Path, dict[str, str]]:
     edge_csv = root / "edges.csv"
     pd.DataFrame(rows).to_csv(edge_csv, index=False)
     pni_csv = root / "test-pni.csv"
-    pd.DataFrame(PNI_ROWS, columns=["pni_id", "pni_lat", "pni_lon"]).to_csv(pni_csv, index=False)
+    pd.DataFrame(pni_rows, columns=["pni_id", "pni_lat", "pni_lon"]).to_csv(pni_csv, index=False)
     return edge_csv, pni_csv, tg_group
 
 
@@ -224,3 +230,21 @@ def pni_inputs(tmp_path):
     """A fresh `(run, edge_csv, pni_csv, tg_group, analysis_root)` per test."""
     edge_csv, pni_csv, tg_group = write_pni_inputs(tmp_path)
     return FakeRun("pni-run", tmp_path), edge_csv, pni_csv, tg_group, tmp_path / "analysis"
+
+
+@pytest.fixture
+def pni_two_runs(tmp_path):
+    """Two runs at the same coordinates, disjoint TG ids, different PNI lists.
+
+    `run-b`'s operator peers only at `pni-b`, so its `d_pni` differs from
+    `run-a`'s for every TG near `pni-a` -- which is how a test can tell that
+    pooling measured each run against its own list."""
+    a = write_pni_inputs(tmp_path / "a", tg_prefix="a")
+    b = write_pni_inputs(tmp_path / "b", tg_prefix="b", pni_rows=PNI_ROWS[1:])
+    runs = [FakeRun("run-a", tmp_path), FakeRun("run-b", tmp_path)]
+    return {
+        "runs": runs,
+        "edge_csvs": {"run-a": a[0], "run-b": b[0]},
+        "pni_csvs": {"run-a": a[1], "run-b": b[1]},
+        "root": tmp_path / "analysis",
+    }

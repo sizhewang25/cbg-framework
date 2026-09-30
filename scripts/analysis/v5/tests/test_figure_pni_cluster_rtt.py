@@ -80,7 +80,7 @@ class TestStaleClustersAreRefused:
         run, edge_csv, pni_csv, _, root, out = clustered
         manifest = out / P.MANIFEST_NAME
         body = json.loads(manifest.read_text())
-        manifest.write_text(json.dumps({**body, "run_id": "other"}))
+        manifest.write_text(json.dumps({**body, "run_ids": ["other"]}))
         with pytest.raises(ValueError, match="written for run"):
             R.load(run, pni_csv, analysis_root=root, source_csv=edge_csv)
 
@@ -125,3 +125,37 @@ class TestPrivacy:
         forbidden = ("lat", "lon", "city", "country", "region", "asn", "pni_id")
         for col in pd.read_csv(out / R.CSV_NAME).columns:
             assert not any(f in col.lower() for f in forbidden), col
+
+
+class TestPooled:
+    @pytest.fixture
+    def pooled(self, pni_two_runs):
+        two = pni_two_runs
+        F.build_for_runs(two["runs"], two["pni_csvs"], layouts=(P.POOLED,),
+                         analysis_root=two["root"], source_csvs=two["edge_csvs"])
+        return two
+
+    def test_reads_the_pooled_clusters_over_both_runs(self, pooled):
+        two = pooled
+        [png] = R.build_for_runs(two["runs"], two["pni_csvs"], layouts=(P.POOLED,),
+                                 analysis_root=two["root"], source_csvs=two["edge_csvs"])
+        assert png.parent.parent.name == P.KIND
+        stats = pd.read_csv(png.parent / R.CSV_NAME)
+        n_edges = sum(len(pd.read_csv(p)) for p in two["edge_csvs"].values())
+        assert stats.query("scope == @R.PAIRS").n.sum() == n_edges
+        assert stats.query("scope == @R.TG_MIN").n_tgs.sum() == 2 * 27
+
+    def test_one_runs_edited_list_is_refused_and_named(self, pooled):
+        two = pooled
+        with open(two["pni_csvs"]["run-b"], "a") as f:
+            f.write("pni-z,30.0,-90.0\n")
+        with pytest.raises(ValueError, match="run-b: .* has changed"):
+            R.load_runs(two["runs"], two["pni_csvs"], layout=P.POOLED,
+                        analysis_root=two["root"], source_csvs=two["edge_csvs"])
+
+    def test_a_different_run_set_is_refused(self, pooled):
+        """Asking for run-a alone, pooled, finds no clusters for that set."""
+        two = pooled
+        with pytest.raises(MissingArtifactError):
+            R.load_runs(two["runs"][:1], two["pni_csvs"], layout=P.POOLED,
+                        analysis_root=two["root"], source_csvs=two["edge_csvs"])
