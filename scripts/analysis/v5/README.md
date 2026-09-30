@@ -88,6 +88,8 @@ outputs/analysis/v5/_cross/outcome-map/<datasets>@<arm>/outcome_map.<cohort>.{pn
 outputs/analysis/v5/_cross/vp-proximity/<datasets>@<arm>/vp_proximity.<cohort>.{png,csv,manifest.json}
 outputs/analysis/v5/_cross/rtt-cdf/<datasets>@<arm>/rtt_cdf.{png,csv,manifest.json}
 outputs/analysis/v5/<run>/cost/cost_box.<heap|alloc>[.solved].{png,csv,manifest.json}
+outputs/analysis/v5/<run>/pni-gap/<pni-stem>/pni_gap_{clusters,points}.csv, pni_gap.manifest.json, pni_gap_scatter.png
+outputs/analysis/v5/<run>/pni-gap/<pni-stem>/pni_cluster_rtt.{png,csv,manifest.json}
 outputs/analysis/v5/_cross/cost/<n>-runs-<hash>/cost_box.pooled.<heap|alloc>[.solved].*
 outputs/analysis/v5/<run>/mtl-map/healpix-128/mtl_map.<method>.html
 outputs/analysis/v5/<run>/mtl-map/regions/<method>/<tg>.json          # replay cache, rung-free
@@ -576,6 +578,10 @@ python -m scripts.analysis.v5.cli plot-rtt-cdf --x-scale linear --x-max 100 --x-
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh \
     --run-id as7018-ripe-mesh
+python -m scripts.analysis.v5.cli plot-pni-gap \
+    --run-id as01-260728-260802-mesh --pni-csv datasets/pni/as01-us-pni.approx.csv
+python -m scripts.analysis.v5.cli plot-pni-cluster-rtt \
+    --run-id as01-260728-260802-mesh --pni-csv datasets/pni/as01-us-pni.approx.csv
 python -m scripts.analysis.v5.cli plot-mtl-map --run-id as01-260728-260802-mesh \
     -m octant_cbg_hull --no-regions
 ./scripts/analysis/v5/create_mtl_map.sh          # every method, every mesh run

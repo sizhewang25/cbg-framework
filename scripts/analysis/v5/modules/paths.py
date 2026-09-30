@@ -38,6 +38,9 @@ RIPE_VS_DATABASES_KIND = "ripe-vs-databases"
 #: Per-TG runtime and memory (`cost.py`). Rung-free: no answer space enters a
 #: stage timing or a heap peak.
 COST_KIND = "cost"
+#: `d_pni` vs the S-P gap, k-means clusters, and the RTT boxes that read them
+#: (`pni_gap.py`). Rung-free, and keyed below on the PNI list's file stem.
+PNI_GAP_KIND = "pni-gap"
 
 
 class MissingArtifactError(FileNotFoundError):

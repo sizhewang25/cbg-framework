@@ -163,3 +163,64 @@ def contest_two_runs(contest_run, contest_space):
     """
     second = write_run(FakeRun("syn2-000000-000000-mesh", contest_run.root), contest_space)
     return [contest_run, second]
+
+
+# -- PNI gap: one canonical CSV, one PNI list, three designed groups ---------
+#
+# Shared by `test_pni_gap` and `test_figure_pni_cluster_rtt`: the RTT figure
+# reads the clusters `plot-pni-gap` wrote, so both need the same run on disk.
+
+#: Two PNIs, and five VPs. Two of the VPs sit on the PNIs.
+PNI_ROWS = (("pni-a", 40.0, -100.0), ("pni-b", 40.0, -80.0))
+PNI_VPS = {
+    "vp-a": (40.0, -100.0),
+    "vp-b": (40.0, -80.0),
+    "vp-west": (35.0, -120.0),
+    "vp-east": (45.0, -70.0),
+    "vp-south": (30.0, -90.0),
+}
+
+#: `(site coordinate, smallest-RTT VP)`, three sites per group.
+#: `near`:  on or beside a PNI, latency picks the nearest VP   -> gap ~0.
+#: `far`:   far from both PNIs, latency picks a PNI's VP       -> gap ~1,000-2,000 km.
+#: `trombone`: beside a PNI, latency picks a VP across the map -> gap ~2,500+ km.
+PNI_GROUPS = {
+    "near": (((40.0, -100.0), "vp-a"), ((40.0, -80.0), "vp-b"), ((40.2, -100.2), "vp-a")),
+    "far": (((30.0, -90.0), "vp-a"), ((35.0, -120.0), "vp-a"), ((30.5, -90.5), "vp-b")),
+    "trombone": (((40.1, -100.1), "vp-east"), ((40.1, -80.1), "vp-west"), ((39.9, -80.0), "vp-west")),
+}
+PNI_REPLICAS = 3
+
+
+def _haversine(a, b):
+    from scripts.analysis.v5.modules.geodesy import haversine_km
+
+    return float(haversine_km([a[0]], [a[1]], [b[0]], [b[1]])[0])
+
+
+def write_pni_inputs(root: Path) -> tuple[Path, Path, dict[str, str]]:
+    """`(edge_csv, pni_csv, tg_group)`. RTT is propagation + 1 ms, except the
+    designated VP, which gets 0.5 ms so it is the smallest by construction."""
+    rows, tg_group = [], {}
+    for group, members in PNI_GROUPS.items():
+        for s, (site, sp_vp) in enumerate(members):
+            for r in range(PNI_REPLICAS):
+                tg = f"tg-{group}-{s}-{r}"
+                tg_group[tg] = group
+                for vp, where in PNI_VPS.items():
+                    rtt = 0.5 if vp == sp_vp else _haversine(site, where) / 100 + 1.0
+                    rows.append({"vp_id": vp, "vp_lat": where[0], "vp_lon": where[1],
+                                 "target_id": tg, "target_lat": site[0], "target_lon": site[1],
+                                 "rtt_ms": rtt})
+    edge_csv = root / "edges.csv"
+    pd.DataFrame(rows).to_csv(edge_csv, index=False)
+    pni_csv = root / "test-pni.csv"
+    pd.DataFrame(PNI_ROWS, columns=["pni_id", "pni_lat", "pni_lon"]).to_csv(pni_csv, index=False)
+    return edge_csv, pni_csv, tg_group
+
+
+@pytest.fixture
+def pni_inputs(tmp_path):
+    """A fresh `(run, edge_csv, pni_csv, tg_group, analysis_root)` per test."""
+    edge_csv, pni_csv, tg_group = write_pni_inputs(tmp_path)
+    return FakeRun("pni-run", tmp_path), edge_csv, pni_csv, tg_group, tmp_path / "analysis"

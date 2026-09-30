@@ -57,6 +57,8 @@ from scripts.analysis.v5.modules import (
     figure_outcome_bars,
     figure_outcome_map,
     figure_peripherality,
+    figure_pni_cluster_rtt,
+    figure_pni_gap,
     figure_rtt_cdf,
     figure_stability,
     figure_vp_dist_gap,
@@ -66,6 +68,7 @@ from scripts.analysis.v5.modules import (
     map_mtl,
     mapping,
     octant_finetuning,
+    pni_gap,
     ripe_vs_databases,
 )
 from scripts.analysis.v5.modules import grid as G
@@ -1144,6 +1147,78 @@ def plot_vp_distance_cdf_cmd(
             methods=list(method) if method else None,
             nside=nside,
             analysis_root=analysis_root,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for png in pngs:
+        typer.echo(f"wrote {png}")
+
+
+_PNI_CSV_HELP = (
+    "The operator's PNI list: a CSV with pni_id, pni_lat, pni_lon. Not a "
+    "benchmark artifact; its sha256 goes in the manifest and its file stem "
+    "keys the output directory."
+)
+
+
+@app.command("plot-pni-gap")
+def plot_pni_gap_cmd(
+    run_id: str = typer.Option(..., "--run-id", help="One run: a PNI list belongs to one operator."),
+    pni_csv: Path = typer.Option(..., "--pni-csv", help=_PNI_CSV_HELP),
+    k: int = typer.Option(
+        None,
+        "--k",
+        help=(
+            "Number of k-means clusters. Default: the silhouette argmax over "
+            f"k in {list(pni_gap.K_CANDIDATES)}, recorded in the manifest."
+        ),
+    ),
+    source_csv: Path = typer.Option(None, "--source-csv", help="Override the run's canonical edge CSV."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Distance to the nearest PNI against the S-P gap, clustered by k-means.
+
+    One marker per distinct (site, gap) point, sized by TG count. Both axes are
+    symlog (linear 0-100 km, log to 4,000 km), and k-means runs on that same
+    geometry, unweighted, so a cluster boundary can be read off the figure.
+
+    Writes `pni_gap_clusters.csv` (one row per TG, the file
+    `plot-pni-cluster-rtt` reads), `pni_gap_points.csv`, `pni_gap.manifest.json`
+    and `pni_gap_scatter.png` into `<run>/pni-gap/<pni-stem>/`. Needs no
+    `classify`.
+    """
+    try:
+        pngs = figure_pni_gap.build_for_run(
+            resolve_run(run_id, outputs_root), pni_csv, k=k,
+            analysis_root=analysis_root, source_csv=source_csv,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for png in pngs:
+        typer.echo(f"wrote {png}")
+
+
+@app.command("plot-pni-cluster-rtt")
+def plot_pni_cluster_rtt_cmd(
+    run_id: str = typer.Option(..., "--run-id", help="The run `plot-pni-gap` clustered."),
+    pni_csv: Path = typer.Option(..., "--pni-csv", help=_PNI_CSV_HELP),
+    source_csv: Path = typer.Option(None, "--source-csv", help="Override the run's canonical edge CSV."),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """RTT boxes per `plot-pni-gap` cluster: every (TG, VP) pair, and each TG's floor.
+
+    Reads the clusters CSV off disk rather than re-clustering, and refuses it
+    if the run, the edge CSV's sha256, the TG set or any TG's smallest RTT no
+    longer matches. Whiskers p5/p95, no fliers.
+
+    Writes `pni_cluster_rtt.{png,csv,manifest.json}` beside the clusters.
+    """
+    try:
+        pngs = figure_pni_cluster_rtt.build_for_run(
+            resolve_run(run_id, outputs_root), pni_csv,
+            analysis_root=analysis_root, source_csv=source_csv,
         )
     except (ValueError, MissingArtifactError) as exc:
         raise typer.BadParameter(str(exc)) from exc
