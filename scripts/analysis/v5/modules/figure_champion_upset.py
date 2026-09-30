@@ -62,6 +62,12 @@ are closer to one observation than to twenty. Both tables carry `n_sites`
 beside every TG count (distinct `sites.site_key`); a count whose site twin is
 much smaller is one observation wearing a large number.
 
+`n_sites_champion` counts a site when the method wins *any* of its TGs, which
+one lucky replica is enough for. The `sites` table grades it: per method, the
+sites where it champions at least one, a strict majority (>50%), and all of
+the site's TGs. Ties credit each tied method here too, so a site can be a
+majority site for two methods at once.
+
 Command: `plot-champion-upset`.
 """
 
@@ -110,11 +116,12 @@ MEMBER_SEP = "+"
 RUN_KEY_SEP = "::"
 
 STEM = "champion_upset"
-KINDS: tuple[str, ...] = ("png", "intersections", "sets", "membership", "manifest")
+KINDS: tuple[str, ...] = ("png", "intersections", "sets", "sites", "membership", "manifest")
 _SUFFIX = {
     "png": "png",
     "intersections": "intersections.csv",
     "sets": "sets.csv",
+    "sites": "sites.csv",
     "membership": "membership.csv",
     "manifest": "manifest.json",
 }
@@ -165,6 +172,14 @@ SET_COLUMNS: tuple[str, ...] = (
     "run_id", "dataset", "tie_km", "method", "method_label", "is_baseline",
     "n_tgs", "n_champion", "share", "n_sole", "n_sites", "n_sites_champion",
 )
+SITE_COLUMNS: tuple[str, ...] = (
+    "run_id", "dataset", "tie_km", "method", "method_label", "is_baseline",
+    "n_sites", "n_sites_any", "n_sites_majority", "n_sites_all",
+)
+
+#: A site is a majority site for a method when it champions strictly more than
+#: this share of the site's TGs.
+MAJORITY_SHARE = 0.5
 
 
 def tie_slug(tie_km: float) -> str:
@@ -250,6 +265,31 @@ def set_table(mask: pd.DataFrame, sites: pd.Series) -> pd.DataFrame:
                 "n_sole": int((hit & sole).sum()),
                 "n_sites": int(site.nunique()),
                 "n_sites_champion": int(site[hit].nunique()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def site_table(mask: pd.DataFrame, sites: pd.Series) -> pd.DataFrame:
+    """One row per method in column order: sites won at any, most, and all TGs.
+
+    Each site's champion rate is the share of its TGs the method champions,
+    ties included. `n_sites_any` equals `set_table`'s `n_sites_champion`.
+    """
+    site = sites.reindex(mask.index)
+    rate = mask.astype(float).groupby(site.to_numpy()).mean()
+    rows = []
+    for method in mask.columns:
+        r = rate[method]
+        rows.append(
+            {
+                "method": method,
+                "method_label": method_label(method),
+                "is_baseline": method == SHORTEST_PING,
+                "n_sites": int(len(rate)),
+                "n_sites_any": int((r > 0).sum()),
+                "n_sites_majority": int((r > MAJORITY_SHARE).sum()),
+                "n_sites_all": int((r == 1).sum()),
             }
         )
     return pd.DataFrame(rows)
@@ -467,7 +507,7 @@ def _manifest(
     per_run = {r: int(c) for r, c in origin.value_counts().sort_index().items()}
     body: dict = {
         "figure": names["png"],
-        "tables": {k: names[k] for k in ("intersections", "sets", "membership")},
+        "tables": {k: names[k] for k in ("intersections", "sets", "sites", "membership")},
         "layout": layout,
         "runs": list(run_ids),
         "dataset": cross.dataset_slug(run_ids),
@@ -495,6 +535,11 @@ def _manifest(
             "sets": (
                 "each method's champion share, ties included. They overlap and do "
                 "not sum to 100%."
+            ),
+            "sites": (
+                f"per method, the sites where it champions at least one, more than "
+                f"{MAJORITY_SHARE:.0%}, and all of the site's TGs. Ties count for "
+                "every tied method, so the columns overlap across methods."
             ),
             "column_order": (
                 "largest first, so a combination's x position is data-dependent; "
@@ -550,7 +595,7 @@ def _write(
     nside: int,
     subtitle: str,
 ) -> dict[str, Path]:
-    """Both tables, the per-TG audit, the PNG and the manifest for one layout."""
+    """The three tables, the per-TG audit, the PNG and the manifest for one layout."""
     names = artifact_names(layout, tie_km)
     out_dir.mkdir(parents=True, exist_ok=True)
     mask = champion_mask(errors, tie_km)
@@ -565,9 +610,11 @@ def _write(
 
     inter = stamp(intersection_table(mask, sites))
     sets = stamp(set_table(mask, sites))
+    by_site = stamp(site_table(mask, sites))
     written = {k: out_dir / names[k] for k in KINDS}
     inter[list(INTERSECTION_COLUMNS)].to_csv(written["intersections"], index=False)
     sets[list(SET_COLUMNS)].to_csv(written["sets"], index=False)
+    by_site[list(SITE_COLUMNS)].to_csv(written["sites"], index=False)
 
     audit = errors.rename(columns=lambda m: f"{m}_km").copy()
     audit.insert(0, "run_id", origin.reindex(errors.index).to_numpy())

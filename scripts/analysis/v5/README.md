@@ -232,7 +232,13 @@ an UpSet plot:
 
 Both tables carry `n_sites` beside every TG count, because ~20 replicas share
 a site. On the pooled pro-as meshes, OCT-H alone takes 58.5%, and SOI+S-P tie
-on 9.2%. 87% of SOI's champion TGs are S-P's too. There are two layouts:
+on 9.2%. 87% of SOI's champion TGs are S-P's too.
+
+A site counts toward `n_sites_champion` when the method wins any one of its
+TGs. `sites.csv` grades that, per method: the sites where it is a champion on
+at least one (`n_sites_any`), more than half (`n_sites_majority`) and all
+(`n_sites_all`) of the site's TGs. On the pooled pro-as meshes OCT-H is at
+56 / 43 / 23 of 65 sites, and SPO at 5 / 3 / 2. There are two layouts:
 `per-run` (`classify/champion_upset.tie-1km.*`) and `pooled`
 (`_cross/.../champion_upset.pooled.tie-1km.*`).
 

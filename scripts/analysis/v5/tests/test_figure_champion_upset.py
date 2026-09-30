@@ -162,6 +162,21 @@ class TestTables:
         # S-P wins TG 0 (s0) and TGs 3, 4 (s2): three TGs, two sites.
         assert sets.loc[SHORTEST_PING, ["n_champion", "n_sites_champion"]].tolist() == [3, 2]
 
+    def test_site_table_grades_any_majority_all(self, mask, sites):
+        got = U.site_table(mask, sites).set_index("method")
+        cols = ["n_sites_any", "n_sites_majority", "n_sites_all"]
+        # S-P: s0 1/2 (any, not majority), s1 0/1, s2 2/2.
+        assert got.loc[SHORTEST_PING, cols].tolist() == [2, 1, 1]
+        # OCT-H: s0 1/2, s1 1/1, s2 2/2 (both s2 TGs are three-way ties).
+        assert got.loc["octant_cbg_hull", cols].tolist() == [3, 2, 2]
+        assert got.loc["spotter_cbg", cols].tolist() == [0, 0, 0]
+        assert got["n_sites"].unique().tolist() == [3]
+
+    def test_site_any_matches_the_set_tables_site_count(self, mask, sites):
+        got = U.site_table(mask, sites).set_index("method")["n_sites_any"]
+        want = U.set_table(mask, sites).set_index("method")["n_sites_champion"]
+        pd.testing.assert_series_equal(got, want, check_names=False)
+
     def test_sole_counts_only_unshared_wins(self, mask, sites):
         sets = U.set_table(mask, sites).set_index("method")
         assert sets.loc["octant_cbg_hull", "n_sole"] == 2
