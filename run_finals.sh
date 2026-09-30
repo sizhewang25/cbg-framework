@@ -72,28 +72,17 @@ DERIVE_SMK="scripts/processing/source/derive_traffic_weighted_cbg_data.smk"
 
 # Mesh arms: run directly.
 MESH_CONFIGS=(
-  # The public RIPE Atlas mesh: AS7018 probes as VPs against the shared anchor
-  # set, 95 targets over 68 ASNs. Sourced through the same mainland + SOI
-  # preprocessing as the as0X meshes (see configs/ripe-asmix-mesh.yaml), so it
-  # asks whether the pro arm's result carries past one operator's topology.
-  ripe-asmix-mesh
-  # The pro arm (w = rtt^-2 face-weight scorer), already scored:
-  # pro-as01-mesh
-  # pro-as02-mesh
-  # pro-as03-mesh
-  # The tau=50 originals, already scored:
-  # as01-260728-260802-mesh
-  # as02-260728-260802-mesh
-  # as03-260728-260802-mesh
-  # as01-materialization-test
+  pro-as01-mesh
+  pro-as02-mesh
+  pro-as03-mesh
+  # ripe-asmix-mesh
 )
 
 # Weighted arms: derive the subset first, then run.
 WEIGHTED_CONFIGS=(
-  # as01-260728-260802-weighted
-  # as02-260728-260802-weighted
-  # as03-260728-260802-weighted
-  # as01-randweight-precomputed
+  pro-as01-weighted
+  pro-as02-weighted
+  pro-as03-weighted
 )
 
 ALL_CONFIGS=("${MESH_CONFIGS[@]}" "${WEIGHTED_CONFIGS[@]}")
