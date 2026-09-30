@@ -120,6 +120,14 @@
   const RING_OUTER_DIM = "rgba(60,90,160,0.07)";
   const RING_INNER_DIM = "rgba(60,90,160,0.10)";
   const RING_DROPPED_DIM = "rgba(120,120,120,0.05)";
+  // Kept constraints whose RTT is past the LTD's `cutoff_rtt`. Their band is
+  // the sentinel extension, not the fit, so they get their own ink rather
+  // than hiding in the blue bundle.
+  const RING_PAST = "rgba(200,110,20,0.80)";
+  const RING_PAST_DIM = "rgba(200,110,20,0.12)";
+  const HL_RING_PAST = "rgba(170,80,0,0.95)";
+  // `per_vp` (Octant), `pooled` (Spotter), or null when the LTD has no cutoff.
+  const ltdCutoff = data.ltd_cutoff || null;
   const HL_RING = "rgba(20,40,140,0.95)";
   const HL_RING_DROPPED = "rgba(150,60,20,0.9)";
   const HL_TRACE_OUTER = "vp-constraint-highlight";
@@ -428,6 +436,16 @@
   // The grid offset, spelled out. `beyond` is a bucket covering 3 to 68 grids
   // out on these runs, so the bucket name alone is the one thing a case viewer
   // must not stop at -- `classify` keeps the exact number for precisely this.
+  // Header fragment: how many of this TG's constraints are past the cutoff.
+  // `past` is the drawn kept count; the total covers the dropped ones too.
+  function cutoffNote(t, past) {
+    if (!ltdCutoff) return "";
+    const total = (t.rings || []).filter((r) => r[5] === 1).length;
+    const pooled = ltdCutoff.scope === "pooled"
+      ? ` (pooled ${num((ltdCutoff.pooled_ms_by_fold || {})[String(t.fold)], 1, "ms")})`
+      : "";
+    return `past LTD cutoff${pooled} ${total}` + (total ? `, ${past} drawn` : "") + " · ";
+  }
   function offsetText(t) {
     if (t.grid_offset === null || t.grid_offset === undefined || t.grid_offset < 0) {
       return "— (no prediction)";
@@ -481,6 +499,19 @@
       : (ring[3] === 1
           ? `kept · upper ${ring[1].toFixed(0)} km` + (ring[2] > 0 ? ` · inner ${ring[2].toFixed(0)} km` : "")
           : `dropped by the inclusion filter · upper ${ring[1].toFixed(0)} km`);
+    // ring[4] = this VP's cutoff_rtt (ms), ring[5] = 1 when the RTT is past it.
+    let cutoffText = null;
+    if (ltdCutoff) {
+      const scope = ltdCutoff.scope === "pooled" ? "pooled over all VPs" : "this VP's own";
+      if (!ring || ring[4] === null || ring[4] === undefined) {
+        cutoffText = "— (no fitted cutoff for this VP)";
+      } else if (ring[5] === 1) {
+        cutoffText = `<b>${ring[4].toFixed(1)} ms</b> (${scope}) · <b>RTT past it</b>: ` +
+          "outer bound on the sentinel line (∥ 2/3·c), inner held at its cutoff value";
+      } else {
+        cutoffText = `${ring[4].toFixed(1)} ms (${scope}) · RTT within the fitted range`;
+      }
+    }
     const rows = [
       ["vp", `<b>${esc(vpId)}</b>`],
       ["coords", meta.length ? `${meta[0]}, ${meta[1]}` : "—"],
@@ -497,6 +528,7 @@
     if (!isBaseline) {
       rows.splice(5, 0, ["shortest_ping", `<b>${vpId === t.sping_vp_id ? "yes" : "no"}</b>`]);
       rows.push(["constraint", constraint]);
+      if (cutoffText !== null) rows.push(["LTD cutoff", cutoffText]);
     }
     return rows;
   }
@@ -540,6 +572,7 @@
     // rebuilt from scratch every draw, so what each trace *is* — and the
     // indices the highlight restyles — are recorded here rather than assumed.
     let outerIdx = -1, innerIdx = -1, droppedIdx = -1, hlOuterIdx = -1, hlInnerIdx = -1;
+    let pastOuterIdx = -1, pastInnerIdx = -1;
     // Recorded so the headless harness can assert on the ring layers by index
     // rather than by matching a name like `ring 1 · 7 neighbours`, which
     // changes with the cell.
@@ -674,9 +707,12 @@
     // rather than recomputed. Keep rates run 3-20%, so showing the dropped set
     // by default buries the handful of constraints that decide the answer.
     const fullEarthKm = Math.PI * EARTH;
-    let shown = 0, hidden = 0, dropped = 0;
+    let shown = 0, hidden = 0, dropped = 0, past = 0;
     if (showRings.checked) {
       const oLat = [], oLon = [], iLat = [], iLon = [], dLat = [], dLon = [];
+      // Kept constraints past the LTD cutoff (`r[5]`) go to their own pair of
+      // traces: their band is the sentinel extension, not the fit.
+      const pLat = [], pLon = [], piLat = [], piLon = [];
       for (const r of (t.rings || [])) {
         const coord = vps[r[0]];
         if (!coord) continue;
@@ -690,10 +726,14 @@
           continue;
         }
         shown++;
-        oLat.push(...o.lats, null); oLon.push(...o.lons, null);
+        const isPast = r[5] === 1;
+        if (isPast) past++;
+        (isPast ? pLat : oLat).push(...o.lats, null);
+        (isPast ? pLon : oLon).push(...o.lons, null);
         if (isAnnulus && r[2] > 0) {
           const inn = ringLatLon(coord[0], coord[1], r[2], 96);
-          iLat.push(...inn.lats, null); iLon.push(...inn.lons, null);
+          (isPast ? piLat : iLat).push(...inn.lats, null);
+          (isPast ? piLon : iLon).push(...inn.lons, null);
         }
       }
       // Dropped first, so the binding constraints draw over them.
@@ -714,6 +754,19 @@
         traces.push({ type: "scattergeo", mode: "lines", lat: iLat, lon: iLon,
           line: { width: 0.9, color: RING_INNER, dash: "dash" }, hoverinfo: "skip",
           name: "inner bounds" });
+      }
+      // Last, so the extrapolated constraints are never buried under the fit.
+      if (pLat.length) {
+        pastOuterIdx = traces.length;
+        traces.push({ type: "scattergeo", mode: "lines", lat: pLat, lon: pLon,
+          line: { width: 1.4, color: RING_PAST }, hoverinfo: "skip",
+          name: `past LTD cutoff (${past})` });
+      }
+      if (piLat.length) {
+        pastInnerIdx = traces.length;
+        traces.push({ type: "scattergeo", mode: "lines", lat: piLat, lon: piLon,
+          line: { width: 1.1, color: RING_PAST, dash: "dash" }, hoverinfo: "skip",
+          name: "inner bounds past LTD cutoff" });
       }
     }
 
@@ -895,11 +948,12 @@
           // `n_kept` carries no information. The region is named for what it
           // is -- the argmax's own cell -- so it is not read as a feasible set.
           `LTD constraints ${(t.rings || []).length} (all contribute, no ` +
-          `inclusion filter), ${shown} drawn · region=` +
+          `inclusion filter), ${shown} drawn · ` + cutoffNote(t, past) + `region=` +
           `${t.region ? `argmax grid (healpix nside=${data.density_nside})` : "none"}` +
           ` · `
         : `LTD constraints ${t.n_kept}/${(t.rings || []).length} kept by the inclusion ` +
           `filter, ${shown} drawn${dropped ? `, ${dropped} dropped` : ""} · ` +
+          cutoffNote(t, past) +
           `region=${t.region ? t.region.kind : "none"} · `) +
       `rank ${tIdx + 1}/${currentList.length} by ${sortSel ? sortSel.value : "error"}` +
       (pctSel.value !== "" ? ` (p${pctSel.value} by error, answered only)` : "") + hiddenNote +
@@ -931,6 +985,10 @@
       if (droppedIdx >= 0) {
         Plotly.restyle(plotDiv, { "line.color": dim ? RING_DROPPED_DIM : RING_DROPPED }, [droppedIdx]);
       }
+      const pastIdx = [pastOuterIdx, pastInnerIdx].filter((i) => i >= 0);
+      if (pastIdx.length) {
+        Plotly.restyle(plotDiv, { "line.color": dim ? RING_PAST_DIM : RING_PAST }, pastIdx);
+      }
     }
     function clearHighlight() {
       Plotly.restyle(plotDiv, { lat: [[], []], lon: [[], []] }, [hlOuterIdx, hlInnerIdx]);
@@ -960,7 +1018,7 @@
       const ring = ringByVp.get(vpId);
       // A latent VP, or one whose LTD failed, has no constraint to lift.
       if (!coord || !ring) { clearHighlight(); dimBundle(false); return; }
-      const colour = ring[3] === 1 ? HL_RING : HL_RING_DROPPED;
+      const colour = ring[3] !== 1 ? HL_RING_DROPPED : (ring[5] === 1 ? HL_RING_PAST : HL_RING);
       const o = ringLatLon(coord[0], coord[1], ring[1], 96);
       Plotly.restyle(plotDiv, { lat: [o.lats], lon: [o.lons], "line.color": colour }, [hlOuterIdx]);
       if (isAnnulus && ring[2] > 0) {

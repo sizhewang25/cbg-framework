@@ -710,6 +710,89 @@ class TestCacheIsRungFree:
         assert "healpix-64" in str(run.mtl_map_dir(64, root=tmp_path))
 
 
+class _Sub:
+    def __init__(self, cutoff_rtt, fitted=True):
+        self.cutoff_rtt, self.fitted = cutoff_rtt, fitted
+
+
+class _PerVp:
+    def __init__(self, subs):
+        self._submodels = subs
+
+
+class _Pooled:
+    def __init__(self, cutoff_rtt):
+        self._model = _Sub(cutoff_rtt)
+
+
+def _scored_with_constraints(space):
+    """`_scored` plus the nested columns, both VPs constraining every TG.
+    `_edges` gives vp-0 5.0 ms and vp-1 22.5 ms."""
+    scored = _scored(space)
+    n = len(scored)
+    scored["ltd_predictions"] = [
+        [
+            {"vp_id": "vp-0", "success": True, "upper_km": 400.0, "lower_km": 0.0},
+            {"vp_id": "vp-1", "success": True, "upper_km": 2500.0, "lower_km": 100.0},
+        ]
+    ] * n
+    scored["mtl_participants"] = [[{"vp_id": "vp-0"}, {"vp_id": "vp-1"}]] * n
+    return scored
+
+
+class TestLtdCutoff:
+    """The cutoff is fitted state read off the checkpoint, and a constraint is
+    past it on the models' own strict `rtt > cutoff_rtt` gate."""
+
+    def test_per_vp_cutoffs_skip_unset_and_unfitted(self):
+        model = _PerVp({"vp-0": _Sub(10.0), "vp-1": _Sub(0.0), "vp-2": _Sub(9.0, fitted=False)})
+        assert M.ltd_cutoffs(model) == {"vp-0": 10.0}
+
+    def test_pooled_cutoff_is_one_number(self):
+        assert M.ltd_cutoffs(_Pooled(90.5)) == 90.5
+
+    def test_unset_or_stateless_is_no_cutoff(self):
+        assert M.ltd_cutoffs(_Pooled(0.0)) is None
+        assert M.ltd_cutoffs(_PerVp({"vp-0": _Sub(0.0)})) is None
+        assert M.ltd_cutoffs(object()) is None
+
+    def test_rows_carry_the_cutoff_and_the_past_flag(self):
+        space = _space()
+        # vp-0 at 5.0 ms is inside its 10 ms cutoff; vp-1 at 22.5 ms is past 20.
+        payload = _payload(
+            space, _scored_with_constraints(space), cutoffs={0: {"vp-0": 10.0, "vp-1": 20.0}}
+        )
+        for t in payload["tgs"]:
+            by_vp = {r[0]: r for r in t["rings"]}
+            assert by_vp["vp-0"][4:] == [10.0, 0]
+            assert by_vp["vp-1"][4:] == [20.0, 1]
+        lc = payload["ltd_cutoff"]
+        assert lc["scope"] == "per_vp"
+        assert lc["n_past"] == lc["n_past_kept"] == len(space.tgs)
+
+    def test_the_gate_is_strict(self):
+        space = _space()
+        payload = _payload(space, _scored_with_constraints(space), cutoffs={0: 22.5})
+        assert all(r[5] == 0 for t in payload["tgs"] for r in t["rings"])
+        assert payload["ltd_cutoff"]["scope"] == "pooled"
+        assert payload["ltd_cutoff"]["pooled_ms_by_fold"] == {"0": 22.5}
+
+    def test_no_cutoffs_means_no_flag(self):
+        space = _space()
+        payload = _payload(space, _scored_with_constraints(space))
+        assert payload["ltd_cutoff"] is None
+        assert all(r[4:] == [None, 0] for t in payload["tgs"] for r in t["rings"])
+
+    def test_real_checkpoints(self):
+        run = _real_run()
+        octant = M.load_cutoffs(run, "octant_cbg_hull")
+        spotter = M.load_cutoffs(run, "spotter_cbg")
+        assert octant and all(isinstance(c, dict) and c for c in octant.values())
+        assert spotter and all(isinstance(c, float) for c in spotter.values())
+        # `speed_of_internet` is stateless: no checkpoint state, no cutoff.
+        assert M.load_cutoffs(run, "million_scale_cbg") == {}
+
+
 @pytest.fixture(scope="module")
 def rendered(tmp_path_factory):
     """One real run rendered into a temp root, regions skipped.
@@ -857,6 +940,11 @@ class TestTheViewerExecutes:
         assert "the TG's cell (seed #" in layers
         assert "landed in seed #" in layers, "no wrong-cell highlight was ever drawn"
         assert "cell frame (rendering bound" in layers
+
+    def test_the_past_cutoff_layer_is_drawn(self, report):
+        """as01's Octant folds carry a handful of kept constraints past their
+        VP's cutoff, so the layer must appear on at least one TG."""
+        assert any(n.startswith("past LTD cutoff (") for n in report["allLayers"])
 
     def test_the_grid_layers_use_grid_wording(self, report):
         layers = report["allLayers"]

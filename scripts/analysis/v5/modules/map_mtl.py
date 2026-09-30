@@ -59,6 +59,11 @@ benchmark. `mtl_participants[]` carries `vp_id`, `rtt_ms`, `echoed_upper_km`,
 replaying `MTL_REGISTRY[run.json["mtl"]](**mtl_kwargs)` over the participants
 reproduces the bench-time region.
 
+The **LTD cutoff is read from the fold's `fit_checkpoint.pkl`**, the only place
+that fitted value is kept. Constraints whose RTT is past it are drawn as their
+own layer: there the band is Octant/Spotter's sentinel extension (outer bound
+parallel to 2/3*c, inner held at its cutoff value), not the fit.
+
 Output is a **single self-contained HTML** per method: Plotly from CDN, payload
 inlined, no sibling JSON, so it opens over `file://` with no web server.
 
@@ -491,6 +496,91 @@ def load_mtl_specs(run: RunPaths, combo_id: str) -> dict[int, tuple[str, str]]:
     return specs
 
 
+# ---- the LTD's cutoff -------------------------------------------------------
+#
+# Octant and Spotter both trust their fit only up to `cutoff_rtt`, the right
+# edge of the last dense RTT bin. Past it the band is no longer the fit: the
+# outer bound runs on the line from `outer(cutoff)` to the sentinel on 2/3*c --
+# parallel to the speed-of-internet line, below it by a constant -- and the
+# inner bound is held at its cutoff value. A ring drawn past the cutoff is
+# therefore a different kind of claim from one drawn inside it, and the map has
+# to say which is which.
+#
+# The cutoff is fitted state, not configuration: it lives only in the fold's
+# `fit_checkpoint.pkl`, never in `targets.parquet` or `run.json`.
+
+
+def ltd_cutoffs(model: Any) -> dict[str, float] | float | None:
+    """The `cutoff_rtt` a fitted LTD applies: `{vp_id: ms}`, one pooled ms, or None.
+
+    Octant (`bounded_spline`) fits one submodel per VP, so the cutoff is per VP.
+    Spotter (`normal_dist`) fits one pooled model, so one cutoff covers every VP.
+    A stateless LTD (`speed_of_internet`) has no cutoff at all.
+
+    `cutoff_rtt <= 0` is the models' own "unset" value -- both gate the regime
+    on `cutoff_rtt > 0` -- so it is reported as no cutoff rather than as 0 ms,
+    which would flag every constraint as past it.
+    """
+    submodels = getattr(model, "_submodels", None)
+    if isinstance(submodels, dict):
+        per_vp = {
+            str(vp): float(sub.cutoff_rtt)
+            for vp, sub in submodels.items()
+            if getattr(sub, "fitted", True) and float(getattr(sub, "cutoff_rtt", 0.0) or 0.0) > 0
+        }
+        return per_vp or None
+    pooled = float(getattr(getattr(model, "_model", None), "cutoff_rtt", 0.0) or 0.0)
+    return pooled if pooled > 0 else None
+
+
+def load_cutoffs(run: RunPaths, combo_id: str) -> dict[int, dict[str, float] | float]:
+    """`{fold: ltd_cutoffs(model)}` from each fold's checkpoint.
+
+    Folds with no checkpoint, a stateless marker, or no cutoff are left out, so
+    an absent fold means "no cutoff to draw" -- the same degrade-to-no-layer
+    rule `load_mtl_specs` follows.
+    """
+    from scripts.benchmark.v2.checkpoint import load_ltd_checkpoint
+
+    out: dict[int, dict[str, float] | float] = {}
+    for fold in run.fold_ids:
+        combo_dir = run.combo_dir(combo_id, fold)
+        if not (combo_dir / "targets.parquet").exists():
+            continue
+        try:
+            model = load_ltd_checkpoint(combo_dir)
+        except FileNotFoundError:
+            continue
+        cut = ltd_cutoffs(model) if model is not None else None
+        if cut is not None:
+            out[int(fold.split("_")[1])] = cut
+    return out
+
+
+def _cutoff_of(cutoffs: dict[int, dict[str, float] | float], fold: int, vp_id: str) -> float | None:
+    cut = cutoffs.get(fold)
+    if isinstance(cut, dict):
+        return cut.get(vp_id)
+    return cut
+
+
+def _cutoff_summary(
+    cutoffs: dict[int, dict[str, float] | float], ltd_by_tg: dict[str, list]
+) -> dict[str, Any] | None:
+    """Run-level cutoff facts for the page header: scope, pooled values, counts."""
+    if not cutoffs:
+        return None
+    pooled = {str(f): round(c, 2) for f, c in sorted(cutoffs.items()) if not isinstance(c, dict)}
+    rows = [r for rs in ltd_by_tg.values() for r in rs]
+    return {
+        "scope": "pooled" if pooled else "per_vp",
+        "pooled_ms_by_fold": pooled,
+        "n_constraints": len(rows),
+        "n_past": sum(r[5] for r in rows),
+        "n_past_kept": sum(r[5] for r in rows if r[3] == 1),
+    }
+
+
 def is_density_mtl(mtl_name: str) -> bool:
     """True when this MTL's answer is a probability field, not a feasible set.
 
@@ -910,6 +1000,7 @@ def build_payload(
     regions: dict[str, dict] | None = None,
     region_mode: str = REGION_GEOMETRIC,
     density_nside: int | None = None,
+    cutoffs: dict[int, dict[str, float] | float] | None = None,
 ) -> dict[str, Any]:
     """Assemble the whole viewer payload for one method.
 
@@ -919,6 +1010,9 @@ def build_payload(
     geometry is shared through `grids` rather than repeated per TG -- together
     those three choices are most of the difference between a page under a
     megabyte and one over fifteen.
+
+    `cutoffs` is `load_cutoffs`' output. Each constraint row then carries its
+    VP's cutoff and whether the RTT it was predicted at is past it.
     """
     nside = space.nside
     seeds = space.seeds.reset_index(drop=True)
@@ -950,23 +1044,46 @@ def build_payload(
     # The filter is not cosmetic at this scale: on as01 `million_scale_cbg`
     # keeps 4.5 of 133 disks, so drawing the unfiltered set buries the four that
     # decide the answer.
+    #
+    # Row layout: `[vp_id, upper_km, lower_km, kept, cutoff_ms, past_cutoff]`.
+    # `ltd_predictions[]` persists no RTT, so the RTT the constraint was
+    # predicted at is the edge table's min RTT for the pair -- the same value
+    # the benchmark fed the LTD (`mtl_participants[].rtt_ms` matches it exactly
+    # on every kept pair of as01's folds). `past_cutoff` is strict, matching
+    # the models' own `rtt > cutoff_rtt` gate.
+    cutoffs = cutoffs or {}
+    rtt_of: dict[tuple[str, str], float] = {}
+    if cutoffs:
+        rtt_of = {
+            (str(t), str(v)): float(r)
+            for t, v, r in zip(edges["tg_id"], edges["vp_id"], edges["rtt_ms"])
+        }
     kept_by_tg: dict[str, set] = {}
     ltd_by_tg: dict[str, list] = {}
     if has_nested:
         for row in scored.itertuples(index=False):
             tid = str(row.tg_id)
+            fold = int(row.fold)
             kept = {str(p["vp_id"]) for p in _nested(row.mtl_participants)}
             kept_by_tg[tid] = kept
-            ltd_by_tg[tid] = [
-                [
-                    str(p["vp_id"]),
-                    round(float(p["upper_km"]), 2),
-                    round(float(p.get("lower_km") or 0.0), 2),
-                    1 if str(p["vp_id"]) in kept else 0,
-                ]
-                for p in _nested(row.ltd_predictions)
-                if p.get("success") and p.get("upper_km")
-            ]
+            rows = []
+            for p in _nested(row.ltd_predictions):
+                if not (p.get("success") and p.get("upper_km")):
+                    continue
+                vid = str(p["vp_id"])
+                cut = _cutoff_of(cutoffs, fold, vid)
+                rtt = rtt_of.get((tid, vid))
+                rows.append(
+                    [
+                        vid,
+                        round(float(p["upper_km"]), 2),
+                        round(float(p.get("lower_km") or 0.0), 2),
+                        1 if vid in kept else 0,
+                        None if cut is None else round(cut, 2),
+                        1 if cut is not None and rtt is not None and rtt > cut else 0,
+                    ]
+                )
+            ltd_by_tg[tid] = rows
 
     # Observations, deduped to the minimum RTT per (TG, VP) upstream in
     # `edges.load_min_rtt`, so the inflation shown per VP and the eval source's
@@ -1097,6 +1214,9 @@ def build_payload(
         "mtl_kind": mtl_kind,
         "region_mode": region_mode,
         "is_baseline": is_baseline,
+        # `per_vp` (Octant), `pooled` (Spotter), or None when the LTD has no
+        # cutoff -- in which case every row's `cutoff_ms` is None too.
+        "ltd_cutoff": _cutoff_summary(cutoffs, ltd_by_tg),
         "n_seeds": int(len(seeds)),
         "n_sites": int(len(space.sites)),
         # The ring tiers come from the outcome bars rather than being copied,
@@ -1281,6 +1401,10 @@ def build_for_run(
             # `--no-regions` still reports which grid the method answered on.
             method_density_nside = density_nside(run, method)
 
+        # Loaded even under `--no-regions`: the cutoff marks the constraint
+        # rings, which are drawn either way.
+        cutoffs = {} if is_baseline else load_cutoffs(run, method)
+
         payload = build_payload(
             run,
             space,
@@ -1295,7 +1419,14 @@ def build_for_run(
             regions=method_regions,
             region_mode=region_mode,
             density_nside=method_density_nside,
+            cutoffs=cutoffs,
         )
+        if progress is not None and payload["ltd_cutoff"]:
+            lc = payload["ltd_cutoff"]
+            progress(
+                f"    {method}: {lc['n_past']}/{lc['n_constraints']} constraints past the "
+                f"{lc['scope']} LTD cutoff ({lc['n_past_kept']} of them kept by the MTL)"
+            )
         out = out_dir / MAP_HTML.format(method=method)
         out.write_text(render_html(payload), encoding="utf-8")
         rendered.append((method, out, payload))
