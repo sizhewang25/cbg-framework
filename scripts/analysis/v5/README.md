@@ -87,6 +87,8 @@ outputs/analysis/v5/_cross/classify/<datasets>@<arm>/outcome_bars.*, error_cdf.p
 outputs/analysis/v5/_cross/outcome-map/<datasets>@<arm>/outcome_map.<cohort>.{png,csv,manifest.json}
 outputs/analysis/v5/_cross/vp-proximity/<datasets>@<arm>/vp_proximity.<cohort>.{png,csv,manifest.json}
 outputs/analysis/v5/_cross/rtt-cdf/<datasets>@<arm>/rtt_cdf.{png,csv,manifest.json}
+outputs/analysis/v5/<run>/cost/cost_box.<heap|alloc>[.solved].{png,csv,manifest.json}
+outputs/analysis/v5/_cross/cost/<n>-runs-<hash>/cost_box.pooled.<heap|alloc>[.solved].*
 outputs/analysis/v5/<run>/mtl-map/healpix-128/mtl_map.<method>.html
 outputs/analysis/v5/<run>/mtl-map/regions/<method>/<tg>.json          # replay cache, rung-free
 outputs/analysis/v5/<run>/ltd-model/ltd_model.<method>.html, manifest.json   # no rung: see below
@@ -241,6 +243,25 @@ at least one (`n_sites_any`), more than half (`n_sites_majority`) and all
 56 / 43 / 23 of 65 sites, and SPO at 5 / 3 / 2. There are two layouts:
 `per-run` (`classify/champion_upset.tie-1km.*`) and `pooled`
 (`_cross/.../champion_upset.pooled.tie-1km.*`).
+
+**`plot-cost-box`** shows the price of the accuracy, per TG. It uses the cost
+model ported from v3 (`cost.py`): runtime **sums** the LTD/MTL/CTR stages per
+TG, peak memory **max-reduces** them, and the reduction happens per TG
+before any percentile. Each method gets one slot holding two boxes. The solid
+box on the left of the slot is runtime and reads on the left y axis (ms, log).
+The hatched box on the right is peak memory and reads on the right y axis
+(MB, log). Whiskers are **p5/p95**, hinges p25/p75, and no fliers are drawn.
+The CSV twin carries min/max and every stage's own stats beside `pipeline`.
+`--memory` picks `memory_heap` (default, libc heap, sees GEOS) or
+`memory_alloc` (tracemalloc). The two are never combined. `memory_rss` was
+not ported: it is NULL on every v5 run. `--rows all` (default) keeps
+FALLBACK rows, because a method pays for a TG it gave up on. `--rows solved`
+applies `solved_mask`. S-P is not a combo, so no stage was timed and it is not
+drawn. The per-fold LTD fit is in `run.json`, not per TG, and is not counted.
+It reads `targets.parquet` directly and needs no answer space. On the pooled
+pro-as meshes (1,269 TGs) the p50 runtime is SOI 34 ms, VAN 101 ms, SPO 179 ms
+and OCT-H 5.2 s. OCT-H's p50 heap is 24 MB, flat, set by its CTR stage.
+The other three stay under 0.3 MB.
 
 **`plot-mtl-map`** (ported from v4) is the **case viewer**: one self-contained
 interactive HTML per method, Plotly from a CDN with the payload inlined, so it
@@ -460,6 +481,32 @@ its own sweep script, `create_ltd_modeling_html.sh`, for the reason
 `create_mtl_map.sh` has one — except that this one invokes the CLI **once per run**
 rather than once per method, because the per-method failure isolation is already
 inside `build_for_run` and a run's methods share one per-fold scatter cache.
+
+**`plot-pni-gap`** asks whether the S-P gap (`d_sp - d_geo`) follows where the
+operator interconnects. It takes an operator PNI list (`--pni-csv`: `pni_id,
+pni_lat, pni_lon`), which is not a benchmark artifact: the file is validated,
+its sha256 goes in the manifest, and its stem keys the output directory. Each
+TG's `d_pni` is the great-circle distance to its nearest PNI. One marker per
+distinct `(site, gap)` point, sized by TG count; both axes are symlog (linear
+0–100 km with ticks every 25, log to 4,000 km, equal aspect).
+
+k-means runs on **the same symlog coordinates** the axes draw, over the points
+**unweighted** (replicas are one observation repeated). `k` is the silhouette
+argmax over 2–6 unless `--k` is given; clusters are renumbered by centroid gap
+ascending, so `C1` is always the smallest-gap group. The manifest carries the
+silhouette curve and an ARI check across 20 other seeds. On as01 k=3
+(silhouette 0.77, every refit identical), but read the clusters as geometry:
+k-means groups Hillsboro with the far-from-PNI sites, not with SeaTac, although
+the two share an S-P VP and an RTT floor.
+
+**`plot-pni-cluster-rtt`** reads `pni_gap_clusters.csv` off disk rather than
+re-clustering, and draws RTT boxes per cluster in two panels on one linear y
+axis: every `(TG, VP)` pair at its minimum RTT, and each TG's smallest RTT
+(its S-P VP's). Whiskers are p5/p95, as in `plot-cost-box`. It refuses the
+clusters if the manifest names another run, the edge CSV's sha256 changed,
+the TG sets differ, or any TG's floor disagrees with the recorded `sp_rtt_ms`.
+
+Neither output carries a coordinate or a PNI id (ids name cities).
 
 ## Guarantees
 

@@ -15,6 +15,8 @@
         --run-id as03-260728-260802-mesh
     python -m scripts.analysis.v5.cli plot-champion-upset --layout per-run --layout pooled \
         --run-id pro-as01-mesh --run-id pro-as02-mesh --run-id pro-as03-mesh
+    python -m scripts.analysis.v5.cli plot-cost-box --layout per-run --layout pooled \
+        --run-id pro-as01-mesh --run-id pro-as02-mesh --run-id pro-as03-mesh
     python -m scripts.analysis.v5.cli plot-outcome-map \
         --run-id as01-260728-260802-mesh \
         --run-id as02-260728-260802-mesh \
@@ -47,6 +49,7 @@ from scripts.analysis.v5.modules import (
     cohort_overlap,
     figure_champion_upset,
     figure_contest_map,
+    figure_cost_box,
     figure_error_cdf,
     figure_error_diff,
     figure_exclusive_error,
@@ -896,6 +899,78 @@ def plot_champion_upset_cmd(
             methods=list(method) if method else None,
             analysis_root=analysis_root,
             tie_km=tie_km,
+        )
+    except (ValueError, MissingArtifactError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for written in sets:
+        typer.echo(f"wrote {written['png']}")
+
+
+@app.command("plot-cost-box")
+def plot_cost_box_cmd(
+    run_id: list[str] = typer.Option(None, "--run-id", help="Run (repeatable)."),
+    all_runs: bool = typer.Option(
+        False, "--all-runs", help="Every run under --outputs-root (per-run only)."
+    ),
+    layout: list[str] = typer.Option(
+        None,
+        "--layout",
+        help=(
+            f"{figure_cost_box.PER_RUN} (one figure per run) or "
+            f"{figure_cost_box.POOLED} (every run's TGs as one population). "
+            f"Repeatable; default: {figure_cost_box.PER_RUN}."
+        ),
+    ),
+    method: list[str] = typer.Option(None, "--method", "-m", help="Draw only these combos."),
+    memory: str = typer.Option(
+        figure_cost_box.DEFAULT_MEMORY,
+        "--memory",
+        help="Right-axis channel: memory_heap (libc heap, sees GEOS) or memory_alloc (tracemalloc).",
+    ),
+    rows: str = typer.Option(
+        figure_cost_box.DEFAULT_ROWS,
+        "--rows",
+        help="all (every evaluated TG, FALLBACK included) or solved (solved_mask).",
+    ),
+    outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
+    analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
+) -> None:
+    """Per-TG cost as paired boxes: runtime (left axis) and peak memory (right axis).
+
+    One slot per CBG combo; whiskers at p5/p95, hinges at p25/p75. Runtime sums
+    the three stages per TG, memory max-reduces them. S-P has no cost and is not
+    drawn. `per-run` writes `cost_box.<heap|alloc>.*` into `<run>/cost/`;
+    `pooled` writes the `.pooled.` set into `_cross/cost/<n>-runs-<hash>/`.
+    Reads `targets.parquet` directly -- needs no answer space and no `classify`.
+    """
+    if all_runs and run_id:
+        raise typer.BadParameter("pass --run-id or --all-runs, not both")
+    layouts = tuple(dict.fromkeys(layout or ())) or (figure_cost_box.PER_RUN,)
+    unknown = [x for x in layouts if x not in figure_cost_box.LAYOUTS]
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown --layout {unknown}; pick from {list(figure_cost_box.LAYOUTS)}"
+        )
+    if all_runs and figure_cost_box.POOLED in layouts:
+        raise typer.BadParameter(
+            f"--layout {figure_cost_box.POOLED} needs explicit --run-id: which "
+            "datasets form one population is the caller's call"
+        )
+    runs = (
+        discover_runs(outputs_root)
+        if all_runs
+        else [resolve_run(r, outputs_root) for r in (run_id or [])]
+    )
+    if not runs:
+        raise typer.BadParameter("pass at least one --run-id, or --all-runs")
+    try:
+        sets = figure_cost_box.build_for_runs(
+            runs,
+            layouts=layouts,
+            memory=memory,
+            rows=rows,
+            methods=list(method) if method else None,
+            analysis_root=analysis_root,
         )
     except (ValueError, MissingArtifactError) as exc:
         raise typer.BadParameter(str(exc)) from exc

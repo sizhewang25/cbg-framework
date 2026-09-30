@@ -35,6 +35,9 @@ OCTANT_FINETUNING_KIND = "octant-finetuning"
 #: The CBG-vs-geolocation-databases CDF. Its own kind rather than living
 #: under `classify/`: the figure adds a source outside the benchmark.
 RIPE_VS_DATABASES_KIND = "ripe-vs-databases"
+#: Per-TG runtime and memory (`cost.py`). Rung-free: no answer space enters a
+#: stage timing or a heap peak.
+COST_KIND = "cost"
 
 
 class MissingArtifactError(FileNotFoundError):
