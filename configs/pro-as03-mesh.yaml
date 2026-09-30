@@ -50,6 +50,25 @@ benchmark:
       ctr_kwargs:
         n_samples: 1024
 
+    - combo_id: octant_cbg_spl
+      ltd: bounded_spline
+      mtl: planar_annulus_weighted
+      ctr: monte_carlo_medoid
+      ltd_kwargs:
+        fit_spline: true
+        spline_n_knots: 4
+        target_coverage: 0.9
+        cutoff_min_points: 5
+        bin_size_ms: 5.0
+      mtl_kwargs:
+        n_pts: 64
+        enable_circle_filter: true
+        weight_mode: inv_power
+        weight_k: 2
+        highest_weight_only: true
+      ctr_kwargs:
+        n_samples: 1024
+
     - combo_id: spotter_cbg
       ltd: normal_dist
       mtl: gaussian_density
