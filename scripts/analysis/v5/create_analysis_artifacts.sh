@@ -88,13 +88,27 @@ N_OK=0
 R=_setup       # `run`'s label prefix; each section sets it to what it is building
 
 # run <label> <command...> -- execute, keep going on failure, record which.
+# Returns the command's status, so a dependent step can be gated on it.
 run() {
   local label=$1; shift
-  if "$@"; then
+  local rc=0
+  "$@" || rc=$?
+  if [ "$rc" -eq 0 ]; then
     N_OK=$((N_OK + 1))
   else
     FAILED+=("$R :: $label")
   fi
+  return "$rc"
+}
+
+# The run config's declared `analysis.common.pni_csv`, or empty. Read through
+# `labels.declared_pni_csv`, the one place v5 reads a config, so this and the
+# CLI's own default cannot disagree about which list a run uses.
+declared_pni_csv() {
+  python -c 'import sys
+from scripts.analysis.v5.modules.labels import declared_pni_csv
+p = declared_pni_csv(sys.argv[1])
+print(p or "")' "$1"
 }
 
 # Drop run ids with no benchmark tree, recording each as a skip. Answers in the
@@ -140,6 +154,8 @@ fi
 #   classify             needs build-answer-space
 #   plot-error-cdf       needs classify
 #   plot-champion-upset  needs classify
+#   plot-pni-gap         needs only the edge CSV and the config's PNI list
+#   plot-pni-cluster-rtt needs plot-pni-gap
 #
 # Every cross-dataset figure below reads `classify` output, so this loop must
 # finish for every run in a group before that group's section runs.
@@ -179,6 +195,24 @@ for R in "${ALL[@]}"; do
   # The same distances, paired per TG: which methods were nearest (within
   # 1 km of the best), and how often they tie. The CDF above cannot say.
   run plot-champion-upset $V5 plot-champion-upset --layout per-run --run-id "$R"
+
+  # Whether the S-P gap follows where the operator peers: distance to the
+  # nearest PNI against the gap, k-means clusters on that scatter, then RTT
+  # boxes per cluster. Only for runs whose config declares an operator PNI
+  # list; a run without one is a SKIP. A declared list that does not exist is
+  # a FAILURE -- the config is wrong -- and `plot-pni-gap` says so.
+  #
+  # The RTT boxes read the clusters off disk, so they run only if the
+  # clustering just succeeded. Otherwise they would draw the previous run's
+  # clusters, which their staleness checks catch only when an input changed.
+  pni=$(declared_pni_csv "$R")
+  if [ -n "$pni" ]; then
+    if run plot-pni-gap $V5 plot-pni-gap --run-id "$R" --pni-csv "$pni"; then
+      run plot-pni-cluster-rtt $V5 plot-pni-cluster-rtt --run-id "$R" --pni-csv "$pni"
+    fi
+  else
+    SKIPPED+=("$R :: plot-pni-gap (config declares no analysis.common.pni_csv)")
+  fi
 done
 
 # ---- per group: the cross-dataset figures -----------------------------------

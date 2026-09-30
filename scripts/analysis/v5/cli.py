@@ -1155,16 +1155,30 @@ def plot_vp_distance_cdf_cmd(
 
 
 _PNI_CSV_HELP = (
-    "The operator's PNI list: a CSV with pni_id, pni_lat, pni_lon. Not a "
-    "benchmark artifact; its sha256 goes in the manifest and its file stem "
-    "keys the output directory."
+    "The operator's PNI list: a CSV with pni_id, pni_lat, pni_lon. Defaults to "
+    "the run config's `analysis.common.pni_csv`. Its sha256 goes in the "
+    "manifest and its file stem keys the output directory."
 )
+
+
+def _pni_csv_for(run_id: str, given: Path | None, outputs_root: Path) -> Path:
+    """`--pni-csv` if given, else the config's declared list; refuse neither."""
+    if given is not None:
+        return given
+    from scripts.analysis.v5.modules.labels import declared_pni_csv
+
+    declared = declared_pni_csv(run_id, outputs_root)
+    if declared is None:
+        raise typer.BadParameter(
+            f"{run_id}'s config declares no analysis.common.pni_csv; pass --pni-csv."
+        )
+    return declared
 
 
 @app.command("plot-pni-gap")
 def plot_pni_gap_cmd(
     run_id: str = typer.Option(..., "--run-id", help="One run: a PNI list belongs to one operator."),
-    pni_csv: Path = typer.Option(..., "--pni-csv", help=_PNI_CSV_HELP),
+    pni_csv: Path = typer.Option(None, "--pni-csv", help=_PNI_CSV_HELP),
     k: int = typer.Option(
         None,
         "--k",
@@ -1190,7 +1204,7 @@ def plot_pni_gap_cmd(
     """
     try:
         pngs = figure_pni_gap.build_for_run(
-            resolve_run(run_id, outputs_root), pni_csv, k=k,
+            resolve_run(run_id, outputs_root), _pni_csv_for(run_id, pni_csv, outputs_root), k=k,
             analysis_root=analysis_root, source_csv=source_csv,
         )
     except (ValueError, MissingArtifactError) as exc:
@@ -1202,7 +1216,7 @@ def plot_pni_gap_cmd(
 @app.command("plot-pni-cluster-rtt")
 def plot_pni_cluster_rtt_cmd(
     run_id: str = typer.Option(..., "--run-id", help="The run `plot-pni-gap` clustered."),
-    pni_csv: Path = typer.Option(..., "--pni-csv", help=_PNI_CSV_HELP),
+    pni_csv: Path = typer.Option(None, "--pni-csv", help=_PNI_CSV_HELP),
     source_csv: Path = typer.Option(None, "--source-csv", help="Override the run's canonical edge CSV."),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
@@ -1217,7 +1231,7 @@ def plot_pni_cluster_rtt_cmd(
     """
     try:
         pngs = figure_pni_cluster_rtt.build_for_run(
-            resolve_run(run_id, outputs_root), pni_csv,
+            resolve_run(run_id, outputs_root), _pni_csv_for(run_id, pni_csv, outputs_root),
             analysis_root=analysis_root, source_csv=source_csv,
         )
     except (ValueError, MissingArtifactError) as exc:

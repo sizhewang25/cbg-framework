@@ -258,3 +258,52 @@ class TestPrivacy:
                     yield from keys(v)
 
         assert not {k.lower() for k in keys(body)} & {"lat", "lon", "site", "site_id", "site_key", "city"}
+
+
+class TestTheConfigDeclaresTheList:
+    """`--pni-csv` defaults to the run config's `analysis.common.pni_csv`."""
+
+    @staticmethod
+    def _tree(tmp_path, common: dict | None):
+        import yaml
+
+        root = tmp_path / "outputs"
+        setup = root / "pro-x" / "generic_csv" / "setup"
+        (setup / "fold_0").mkdir(parents=True)
+        cfg = tmp_path / "pro-x.yaml"
+        cfg.write_text(yaml.safe_dump({"analysis": {"common": common}} if common is not None else {}))
+        (setup / "target_space.json").write_text(json.dumps({"run_id": "pro-x", "config": str(cfg)}))
+        return root
+
+    def test_a_relative_path_resolves_under_the_repo(self, tmp_path):
+        from scripts.analysis.v5.modules.labels import declared_pni_csv
+        from scripts.analysis.v5.modules.paths import REPO_ROOT
+
+        root = self._tree(tmp_path, {"pni_csv": "datasets/pni/x.csv"})
+        assert declared_pni_csv("pro-x", root) == REPO_ROOT / "datasets/pni/x.csv"
+
+    def test_a_declared_but_missing_file_is_still_returned(self, tmp_path):
+        """A broken config must fail loudly downstream, not read as undeclared."""
+        from scripts.analysis.v5.modules.labels import declared_pni_csv
+
+        root = self._tree(tmp_path, {"pni_csv": str(tmp_path / "nope.csv")})
+        path = declared_pni_csv("pro-x", root)
+        assert path == tmp_path / "nope.csv" and not path.exists()
+        with pytest.raises(MissingArtifactError):
+            P.load_pnis(path)
+
+    @pytest.mark.parametrize("common", [None, {"dataset_label": "x"}, {"pni_csv": ["a", "b"]}])
+    def test_undeclared_or_non_scalar_is_none(self, tmp_path, common):
+        from scripts.analysis.v5.modules.labels import declared_pni_csv
+
+        assert declared_pni_csv("pro-x", self._tree(tmp_path, common)) is None
+
+    def test_the_cli_refuses_when_neither_is_given(self, tmp_path):
+        import typer
+
+        from scripts.analysis.v5.cli import _pni_csv_for
+
+        root = self._tree(tmp_path, {"dataset_label": "x"})
+        with pytest.raises(typer.BadParameter, match="declares no analysis.common.pni_csv"):
+            _pni_csv_for("pro-x", None, root)
+        assert _pni_csv_for("pro-x", tmp_path / "given.csv", root) == tmp_path / "given.csv"

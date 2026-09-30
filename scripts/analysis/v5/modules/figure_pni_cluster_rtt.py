@@ -32,7 +32,9 @@ The clusters were computed from one canonical CSV; the RTTs here are read
 from whatever CSV the run resolves to now. So:
 
 * the manifest's `run_id` must be this run;
-* the CSV's sha256 must equal the one the clusters were computed from;
+* the PNI list's sha256 must be unchanged (the directory is keyed on its file
+  stem, so an edited list would otherwise read the old list's clusters);
+* the edge CSV's sha256 must equal the one the clusters were computed from;
 * the TG sets must be identical, and each TG's smallest RTT here must equal
   the `sp_rtt_ms` the clusters CSV recorded.
 
@@ -99,6 +101,14 @@ def load(
     """
     out_dir = P.output_dir(run.run_id, pni_csv, analysis_root=analysis_root)
     tgs, meta = P.read_clusters(out_dir, run_id=run.run_id)
+
+    pni_sha = P.sha256_file(Path(pni_csv))
+    if pni_sha != meta.get("pni_csv_sha256"):
+        raise ValueError(
+            f"{pni_csv} has changed since the clusters were computed (the output "
+            f"directory is keyed on its file stem, not its content). "
+            f"Re-run `plot-pni-gap --run-id {run.run_id}`."
+        )
 
     csv = edges.resolve_source_csv(run, source_csv)
     sha = P.sha256_file(Path(csv))

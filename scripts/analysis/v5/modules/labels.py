@@ -25,6 +25,12 @@ The run reaches its config through `target_space.json`'s `config` key, written
 by the benchmark alongside the `csv` key that `edges.resolve_source_csv`
 already reads the same way.
 
+## Also: the PNI list
+
+`analysis.common.pni_csv` is read here too, for the same reason: nothing in
+the output tree records where an operator peers. `declared` walks any key
+path; `declared_pni_csv` is the one other caller.
+
 ## Never raises
 
 Every break in the chain falls back to the run id, which is unique by
@@ -97,21 +103,44 @@ def dataset_label(run_id: str, root: Path | str = DEFAULT_OUTPUTS_ROOT) -> str:
     panel, per CSV row group and again for the manifest, and each miss is a
     directory scan plus a YAML parse.
     """
+    node = declared(run_id, LABEL_PATH, root)
+    return run_id if node is None else str(node)
+
+
+def declared(run_id: str, key_path: tuple[str, ...], root: Path | str = DEFAULT_OUTPUTS_ROOT):
+    """The scalar at `key_path` in the run's config, or None.
+
+    None for every break in the chain: no config, an unparsable one, a missing
+    key, or a non-scalar value. A non-scalar would be carried into a filename
+    or a CSV column, so it is refused the same way an absent one is.
+    """
     path = config_path(run_id, root)
     if path is None:
-        return run_id
+        return None
     try:
-        cfg = yaml.safe_load(path.read_text())
+        node = yaml.safe_load(path.read_text())
     except (yaml.YAMLError, OSError):
-        return run_id
-
-    node = cfg
-    for key in LABEL_PATH:
+        return None
+    for key in key_path:
         if not isinstance(node, dict):
-            return run_id
+            return None
         node = node.get(key)
-    # A non-scalar label would be carried into a filename and a CSV column, so
-    # it is refused the same way an absent one is.
     if node is None or isinstance(node, (dict, list)):
-        return run_id
-    return str(node)
+        return None
+    return node
+
+
+#: Where a run's operator PNI list is declared. Read by `plot-pni-gap` and
+#: `plot-pni-cluster-rtt` when `--pni-csv` is not given.
+PNI_CSV_PATH = ("analysis", "common", "pni_csv")
+
+
+def declared_pni_csv(run_id: str, root: Path | str = DEFAULT_OUTPUTS_ROOT) -> Path | None:
+    """The run's declared `analysis.common.pni_csv`, repo-relative resolved, or None.
+
+    Returned whether or not the file exists: a config naming a missing PNI list
+    is a broken config, and `pni_gap.load_pnis` says so, rather than this
+    quietly reading it as "no PNI list declared".
+    """
+    value = declared(run_id, PNI_CSV_PATH, root)
+    return None if value is None else _under_repo(str(value))

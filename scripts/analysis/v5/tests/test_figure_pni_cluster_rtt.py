@@ -92,6 +92,14 @@ class TestStaleClustersAreRefused:
         with pytest.raises(ValueError, match="not the CSV the clusters were computed from"):
             R.load(run, pni_csv, analysis_root=root, source_csv=edge_csv)
 
+    def test_an_edited_pni_list_is_refused(self, clustered):
+        """Same file name, so same directory, but not the list that was clustered."""
+        run, edge_csv, pni_csv, _, root, _ = clustered
+        with open(pni_csv, "a") as f:
+            f.write("pni-c,30.0,-90.0\n")
+        with pytest.raises(ValueError, match="has changed since the clusters"):
+            R.load(run, pni_csv, analysis_root=root, source_csv=edge_csv)
+
     def test_a_dropped_tg_is_refused(self, clustered):
         run, edge_csv, pni_csv, _, root, out = clustered
         csv = out / P.CLUSTERS_CSV

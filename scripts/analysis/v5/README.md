@@ -510,6 +510,14 @@ the TG sets differ, or any TG's floor disagrees with the recorded `sp_rtt_ms`.
 
 Neither output carries a coordinate or a PNI id (ids name cities).
 
+`--pni-csv` defaults to the run config's `analysis.common.pni_csv`
+(`labels.declared_pni_csv`, beside `dataset_label` as the only config reads).
+`create_analysis_artifacts.sh` runs both commands per run when the config
+declares a list, and skips the run otherwise. A declared list that does not
+exist is a failure, not a skip. The RTT boxes run only if the clustering in
+the same pass succeeded, and they refuse clusters built from a PNI list whose
+content has changed since.
+
 ## Guarantees
 
 - `pred_dist_to_tg_km` matches v4's `error_km` row for row on all three meshes,
@@ -578,9 +586,9 @@ python -m scripts.analysis.v5.cli plot-rtt-cdf --x-scale linear --x-max 100 --x-
     --run-id as02-260728-260802-mesh \
     --run-id as03-260728-260802-mesh \
     --run-id as7018-ripe-mesh
+python -m scripts.analysis.v5.cli plot-pni-gap         --run-id pro-as01-mesh   # PNI list from the config
+python -m scripts.analysis.v5.cli plot-pni-cluster-rtt --run-id pro-as01-mesh
 python -m scripts.analysis.v5.cli plot-pni-gap \
-    --run-id as01-260728-260802-mesh --pni-csv datasets/pni/as01-us-pni.approx.csv
-python -m scripts.analysis.v5.cli plot-pni-cluster-rtt \
     --run-id as01-260728-260802-mesh --pni-csv datasets/pni/as01-us-pni.approx.csv
 python -m scripts.analysis.v5.cli plot-mtl-map --run-id as01-260728-260802-mesh \
     -m octant_cbg_hull --no-regions
