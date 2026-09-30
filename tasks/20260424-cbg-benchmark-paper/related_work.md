@@ -203,10 +203,28 @@ Infers device locations from geographic clues leaked through exposed web managem
 
 ### Izhikevich et al. — Operator-Reported Geolocation
 **"Trust, But Verify, Operator-Reported Geolocation"**
-arXiv 2024
-[arXiv 2409.19109](https://arxiv.org/abs/2409.19109)
+arXiv 2024 · IAB Workshop on IP Address Geolocation (`ipgeows`) 2025
+[arXiv 2409.19109](https://arxiv.org/abs/2409.19109) · [IETF Datatracker](https://datatracker.ietf.org/doc/slides-ipgeows-paper-trust-but-verify-operator-reported-geolocation/) · [PDF](https://www.ietf.org/slides/slides-ipgeows-paper-trust-but-verify-operator-reported-geolocation-00.pdf) · [violating-probe list](https://github.com/kizhikevich/violating_ripe_probes)
 
 Audits operator-reported geolocation for RIPE Atlas vantage points and shows that misreported VP locations, while rare overall, can disproportionately affect coverage in underrepresented regions. This matters for our benchmark because RIPE Atlas probes and anchors are both measurement infrastructure and ground-truth/reference points; we should validate or filter operator-reported coordinates before treating them as reliable landmarks.
+
+The workshop version updates the numbers. Ark nodes (294, locations confirmed with CAIDA) and the RIPE central servers ping every Atlas probe, and a probe is flagged when its minimum RTT beats the speed-of-Internet bound from its reported location: 2/3c, or c for Starlink-hosted probes (AS14593). At least 470 probes (3.96%) violated between May 2024 and March 2025; about half respond from ≥1,600 km away and 20% from >4,800 km. Violators cluster in Germany (32%) and the USA (17%) by count, but the highest *rates* are in southern Africa, where one bad probe can be a country's entire coverage. Causes are late updates after a move and wrong initial entries. Of the 159 probes still violating in March 2025, 67 also violate when they are the *source*: drop those as both VPs and targets. The other 92 may stand behind a middlebox and are still usable as VPs.
+
+**Relation to our work.** Their test is our SOI bound turned around: they use it to check a landmark's coordinates, not to place a target. Filtering our anchors and probes against their weekly list is a cheap sanity check on ground truth, and we should report how many overlap. The southern-Africa result is the same sparse-coverage regime where our failure analysis finds closest-VP distance dominates CBG error, and there a single misplaced landmark can decide the outcome.
+
+### Gasser, Leung, Mouchet (IPinfo) — Geofeed Validation in Practice
+**"Challenges of Working With Geofeeds"**
+IAB Workshop on IP Address Geolocation (`ipgeows`) 2025
+[IETF Datatracker](https://datatracker.ietf.org/doc/slides-ipgeows-paper-challenges-of-working-with-geofeeds/) · [PDF](https://www.ietf.org/slides/slides-ipgeows-paper-challenges-of-working-with-geofeeds-00.pdf)
+
+A commercial provider's catalogue of what goes wrong when geofeeds (RFC 8805) are ingested:
+- **Malformed entries:** non-ISO or swapped country/region codes, encoding damage, prefix-length typos (a `/6` meant as `/64`), and free-text city names that don't match across languages (Köln / Cologne).
+- **False granularity:** every field filled in even when only the country is known.
+- **Adversarial locations:** networks, VPN providers in particular, claiming presence where they have none.
+
+For the adversarial case, the authors state that **IPinfo uses RTT measurements to validate and discard geofeed entries**. They also say this is not enough on its own: not every address answers pings, and CGNAT or relays such as iCloud Private Relay can produce legitimate RTT conflicts. They propose looking-glass-style servers behind the operator's gateway, and GeoNames or H3 identifiers as an optional geofeed field.
+
+**Relation to our work.** This is a provider's own account of latency as the check on Tier-1 declarative data, the role we give CBG, and it comes from the database we compare against. The limits they list (unpingable targets, CGNAT, relays) are where a CBG verifier returns no answer or a misleading one, and the benchmark should say so. The H3 proposal fits our discretised answer space: Spotter's H3 argmax and our region-classification metric both score locations as cells, not free-text names.
 
 **Role in our work:** GeoFeed and rDNS form Tier 1 of the multi-tier pipeline. Their coverage and accuracy limitations (especially for anycast IPs) motivate CBG as the necessary empirical fallback tier.
 
@@ -344,6 +362,35 @@ ACM SIGCOMM CCR 2020
 [ACM CCR 2020](https://doi.org/10.1145/3402413.3402415)
 
 Introduces and evaluates RIPE IPmap's single-radius active geolocation engine, including accuracy, coverage, and consistency against ground truth and commercial databases. Single-radius operationalizes the closest-VP insight from Trammell and Kühlewind: it triggers RIPE Atlas measurements on demand and estimates a target from the Atlas probe with the lowest RTT. This is important operational context for our RIPE Atlas evaluation: IPmap demonstrates that public measurement infrastructure can support active geolocation, while our work decomposes the CBG algorithmic choices that such systems can use internally.
+
+### Kisteleki (RIPE NCC) — IPmap as a Multi-Engine Combiner
+**"RIPE IPmap - The RIPE NCC's Approach to Infrastructure IP Geolocation"**
+IAB Workshop on IP Address Geolocation (`ipgeows`) 2025
+[IETF Datatracker](https://datatracker.ietf.org/doc/slides-ipgeows-paper-ripe-ipmap-the-ripe-nccs-approach-to-infrastructure-ip-geolocation/) · [PDF](https://www.ietf.org/slides/slides-ipgeows-paper-ripe-ipmap-the-ripe-nccs-approach-to-infrastructure-ip-geolocation-00.pdf)
+
+Recent update from RIPE NCC on IPmap's design goal. IPmap targets *infrastructure* IPs (traceroute hops, estimated at low millions of addresses), not eyeball users. It is designed as a set of independent engines whose outputs a **combiner** reconciles into a probability-weighted answer, for example "this IP is in X with 70% probability and in Y with 30%".
+
+The paper tabulates candidate engines by reliability, difficulty, absolute vs. relative, and iterative or not; only a few are implemented so far. The engines include:
+- registry databases, PeeringDB, rDNS templates, geofeeds, crowdsourcing, and interface aliases;
+- **"triangulation"** (low RTT from points with known location): rated high reliability and hard, absolute, with the note that it "should start with a good ground truth";
+- hop-to-hop **proximity** from small RTT differences in traceroutes, and gap filling.
+
+**Relation to our work.** This is the architecture our multi-tier framing assumes, stated by the operator of the platform we measure on: CBG is one absolute engine among several, and its output goes to a combiner. Two consequences. First, a CBG variant's value to such a system is its calibrated confidence, not only its point error, which supports reporting feasible-region and refusal behaviour next to p50. Second, the combiner's multi-location output is a distribution over candidate sites, which matches our region-classification evaluation. Their "good ground truth" caveat is the same concern as the Izhikevich et al. probe audit.
+
+### Ramanathan & Abdu Jyothi — GeoTrace
+**"Systematic Detection and Correction of IP Geolocation Anomalies in Network Measurements"**
+IAB Workshop on IP Address Geolocation (`ipgeows`) 2025
+[IETF Datatracker](https://datatracker.ietf.org/doc/slides-ipgeows-paper-systematic-detection-and-correction-of-ip-geolocation-anomalies-in-network-measurements/) · [PDF](https://www.ietf.org/slides/slides-ipgeows-paper-systematic-detection-and-correction-of-ip-geolocation-anomalies-in-network-measurements-00.pdf)
+
+Position paper from the authors of the traceroute-inconsistencies work below. Across eight geolocation databases and about 250k IPv4 addresses, consensus-based validation agrees on only **30%** of addresses. In one day of RIPE Atlas traceroutes, **5.4%** of IPs have locations inconsistent with measured RTTs, and these touch **55%** of traceroutes and 20% of links.
+
+GeoTrace clusters database candidates and keeps those whose haversine distance to traceroute neighbours is consistent with RTT. It then sorts anomalies into two kinds:
+- **MPLS-affected:** flagged, not corrected.
+- **Interface-affected** (off-path reply addresses under RFC 1812): corrected by a constraint-based step that intersects RTT buffers around well-located neighbours with city polygons.
+
+The corrections average more than 1,000 km and about a third change the country, concentrated at AS and country borders. The authors also report systematic over-assignment of these IPs to Western European countries.
+
+**Relation to our work.** The 30% cross-database consensus figure is a concise, recent citation for why databases cannot serve as ground truth. The correction step is a small CBG-style multilateration with traceroute neighbours as virtual landmarks, and its accuracy depends on the same distance model and multilateration choices our benchmark varies. The border concentration is also where our operator-facing metric is strictest: a country-level error is a wrong-jurisdiction answer.
 
 ### Cloud Interconnection Geolocation
 **"Inferring Cloud Interconnections: Validation, Geolocation, and Routing Behavior"**
@@ -524,7 +571,8 @@ Builds a large landmark set by discovering stable live webcams with extractable 
 | HLOC | 2017 | Tier 1 + validation | TMA | rDNS hints validated by latency measurements |
 | BGP community semantics | 2024 | Operator metadata | IMC | Self-reported semantics need validation |
 | WebGeoInfer | 2026 | Content hints | WWW | Device web-interface clues; not latency fallback |
-| Trust, But Verify | 2024 | Ground truth | arXiv | Validates operator-reported VP locations |
+| Trust, But Verify | 2024/2025 | Ground truth | arXiv / IAB ipgeows | SOI bound flags ≥470 misplaced Atlas probes (3.96%); filter our landmarks |
+| IPinfo geofeed challenges | 2025 | Tier 1 + validation | IAB ipgeows | Provider validates geofeeds with RTT; unpingable/CGNAT/relay limits |
 | iGreedy | 2016 | Anycast | IEEE JSAC | SOTA anycast geoloc; doesn't benchmark CBG |
 | Fistful of pings | 2015 | Anycast | IEEE INFOCOM | Anycast enumeration baseline |
 | LACeS | 2025 | Anycast | arXiv | Large-scale anycast census using iGreedy |
@@ -542,6 +590,8 @@ Builds a large landmark set by discovering stable live webcams with extractable 
 | Internet geolocation survey | 2024 | Survey | IEEE COMST | Broad taxonomy and challenge overview |
 | GeoResolver | 2025 | VP selection | PACM Networking | Scalable explainable geolocation using DNS redirection |
 | RIPE IPmap | 2020 | Active geoloc | ACM CCR | Operational active geolocation with RIPE Atlas |
+| RIPE IPmap combiner | 2025 | Multi-engine | IAB ipgeows | Triangulation as one engine; probabilistic multi-location output |
+| GeoTrace | 2025 | DB eval + constraint correction | IAB ipgeows | 8 DBs agree on 30% of IPs; RTT-buffer correction of traceroute hops |
 | Cloud interconnection geolocation | 2021 | Cloud/topology | PAM | Cloud interconnect validation and geolocation |
 | Geographic locality of Internet routes | 2021 | Topology/path | Computer Networks | Routes diverge from geographic shortest path |
 | Traceroute inconsistencies | 2025 | Topology | arXiv | Adjacent; out of scope (not scalable) |
