@@ -86,7 +86,13 @@ from scripts.analysis.v5.modules import cells as CL
 from scripts.analysis.v5.modules import classify as C
 from scripts.analysis.v5.modules import edges as E
 from scripts.analysis.v5.modules import grid as G
-from scripts.analysis.v5.modules.answer_space import META_JSON, AnswerSpace, load_answer_space
+from scripts.analysis.v5.modules.answer_space import (
+    META_JSON,
+    AnswerSpace,
+    load_answer_space,
+    require_mesh_universe,
+    site_n_scored,
+)
 from scripts.analysis.v5.modules.figure_outcome_bars import MODE_INK, TIER_INK
 from scripts.analysis.v5.modules.geodesy import elementwise_km
 from scripts.analysis.v5.modules.paths import MissingArtifactError, RunPaths
@@ -925,7 +931,9 @@ def load_rung(run: RunPaths, nside: int, *, analysis_root: Path | None = None) -
         raise MissingArtifactError(
             f"{d / META_JSON} missing; run `build-answer-space --run-id {run.run_id}` first"
         )
-    return load_answer_space(d)
+    space = load_answer_space(d)
+    require_mesh_universe(run, space)
+    return space
 
 
 #: Two fields of context, both plain columns of `eval_per_target.csv`.
@@ -1195,6 +1203,11 @@ def build_payload(
             needed.add(t["pred_grid"])
     grids = grid_polygons(needed, nside)
 
+    site_scored = site_n_scored(space).to_numpy()
+    seed_scored = (
+        pd.Series(site_scored, index=space.sites["seed_id"].to_numpy()).groupby(level=0).sum()
+    )
+
     return {
         "run_id": run.run_id,
         "method": method,
@@ -1219,6 +1232,12 @@ def build_payload(
         "ltd_cutoff": _cutoff_summary(cutoffs, ltd_by_tg),
         "n_seeds": int(len(seeds)),
         "n_sites": int(len(space.sites)),
+        # The space's sites above, the run's scored ones here. They differ only
+        # on a traffic-weighted run, whose space is its pre-filter mesh.
+        "n_sites_scored": int((site_scored > 0).sum()),
+        "targets_source": space.meta.get("targets_provenance", {}).get(
+            "targets_source", "the run's own evaluated TGs"
+        ),
         # The ring tiers come from the outcome bars rather than being copied,
         # so the map and the bars cannot drift into two greens for one outcome.
         # `failed` is the bars' `unanswered`: one row counted on two axes.
@@ -1275,6 +1294,7 @@ def build_payload(
                 "lon": round(float(lo), 4),
                 "n_sites": int(ns),
                 "n_tgs": int(nt),
+                "n_tgs_scored": int(seed_scored.get(int(s), 0)),
             }
             for s, la, lo, ns, nt in zip(
                 seeds["seed_id"],
@@ -1284,10 +1304,13 @@ def build_payload(
                 seeds["n_tgs"],
             )
         ],
+        # `[lat, lon, seed_id, n_tgs_scored]`. The last is 0 at a mesh site a
+        # traffic-weighted run scores no TG at; the viewer draws those hollow.
         "sites": [
-            [round(float(la), 4), round(float(lo), 4), int(sd)]
-            for la, lo, sd in zip(
-                space.sites["site_lat"], space.sites["site_lon"], space.sites["seed_id"]
+            [round(float(la), 4), round(float(lo), 4), int(sd), int(ns)]
+            for la, lo, sd, ns in zip(
+                space.sites["site_lat"], space.sites["site_lon"], space.sites["seed_id"],
+                site_scored,
             )
         ],
         "tgs": tgs,

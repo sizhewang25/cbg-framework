@@ -404,7 +404,10 @@
       // the grid centre, however good it is.
       ["offset to grid centre", num(t.tg_dist_to_grid_centre_km, 1, "km")],
       ["TG cell", `seed #${t.tg_seed_id}` +
-        (seed ? ` · ${seed.n_sites} site(s), ${seed.n_tgs} TG(s)` : "")],
+        (seed ? ` · ${seed.n_sites} site(s), ${seed.n_tgs} TG(s)` +
+          // Only a traffic-weighted run scores fewer TGs than its mesh holds.
+          (seed.n_tgs_scored != null && seed.n_tgs_scored !== seed.n_tgs
+            ? `, ${seed.n_tgs_scored} scored` : "") : "")],
       ["offset to its seed", num(t.tg_dist_to_seed_km, 1, "km")],
       ["measured VPs", `${t.n_measured}/${t.n_total} (${pct}%)`],
       ["min-RTT inflation", num(t.min_inflation, 2, "×")],
@@ -819,11 +822,23 @@
     //     are crosses, and a cross sitting between two dots is two sites
     //     within one grid_km that were grouped into one serving region.
     if (showCells.checked && seeds.length) {
-      if (sites.length) {
+      // A site's 4th field is how many of its TGs this run scores; 0 marks a
+      // traffic-weighted run's mesh-only site, drawn hollow. Payloads from
+      // before the field existed have no 4th entry and every site is scored.
+      const scoredSites = sites.filter((s) => s[3] == null || s[3] > 0);
+      const meshOnly = sites.filter((s) => s[3] === 0);
+      if (scoredSites.length) {
         traces.push({ type: "scattergeo", mode: "markers",
-          lat: sites.map((s) => s[0]), lon: sites.map((s) => s[1]),
+          lat: scoredSites.map((s) => s[0]), lon: scoredSites.map((s) => s[1]),
           marker: { size: 4, color: SITE_INK, line: { width: 0 } },
-          hoverinfo: "skip", name: `sites (${sites.length})` });
+          hoverinfo: "skip", name: `sites (${scoredSites.length})` });
+      }
+      if (meshOnly.length) {
+        traces.push({ type: "scattergeo", mode: "markers",
+          lat: meshOnly.map((s) => s[0]), lon: meshOnly.map((s) => s[1]),
+          marker: { size: 5, color: "rgba(0,0,0,0)", symbol: "circle-open",
+                    line: { width: 1, color: SITE_INK } },
+          hoverinfo: "skip", name: `mesh sites, no scored TG (${meshOnly.length})` });
       }
 
       const others2 = seeds.filter((s) => s.id !== t.tg_seed_id);

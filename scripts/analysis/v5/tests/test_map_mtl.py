@@ -467,9 +467,11 @@ class TestCellsAreAVerdictNotContext:
         payload = _payload(space, _scored(space))
         assert len(payload["sites"]) == len(space.sites)
         seed_ids = {s["id"] for s in payload["seeds"]}
-        for lat, lon, seed_id in payload["sites"]:
+        for lat, lon, seed_id, n_scored in payload["sites"]:
             assert seed_id in seed_ids
             assert -90 <= lat <= 90 and -180 <= lon <= 180
+            # Built from its own TGs, so every site is scored in full.
+            assert n_scored > 0
 
     def test_the_frame_is_carried_and_drawn(self):
         space = _space()
@@ -573,7 +575,7 @@ class TestRetiredKeysAreGone:
         payload = _payload(space, _scored(space))
         for s in payload["seeds"]:
             assert "cell_id" not in s and "grid_id" not in s
-            assert {"id", "lat", "lon", "n_sites", "n_tgs"} == set(s)
+            assert {"id", "lat", "lon", "n_sites", "n_tgs", "n_tgs_scored"} == set(s)
 
     def test_the_templates_carry_no_retired_wording(self):
         for name in ("mtl_map.html", "mtl_map.js"):

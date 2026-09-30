@@ -83,6 +83,16 @@ def config_path(run_id: str, root: Path | str = DEFAULT_OUTPUTS_ROOT) -> Path | 
         run = resolve_run(run_id, root)
     except (MissingArtifactError, OSError):
         return None
+    return run_config_path(run)
+
+
+def run_config_path(run) -> Path | None:
+    """`config_path` for a run already resolved: its `target_space.json`'s `config`.
+
+    Split out for `answer_space`, which holds a `RunPaths` and must read the
+    config of *that* run -- resolving the id again against a default root could
+    find a different tree.
+    """
     if not run.target_space_json.exists():
         return None
     try:

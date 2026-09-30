@@ -44,6 +44,8 @@ from scripts.analysis.v5.modules.answer_space import (
     META_JSON,
     AnswerSpace,
     load_answer_space,
+    require_mesh_universe,
+    site_n_scored,
 )
 from scripts.analysis.v5.modules.paths import ANSWER_SPACE_KIND, MissingArtifactError, RunPaths
 
@@ -60,12 +62,17 @@ def load_rung(run: RunPaths, nside: int, *, analysis_root: Path | None = None) -
         raise MissingArtifactError(
             f"{d / META_JSON} missing; run `build-answer-space --run-id {run.run_id}` first"
         )
-    return load_answer_space(d)
+    space = load_answer_space(d)
+    # Every figure that draws seeds or cells reads them through here -- the
+    # outcome map and the whole contest family -- so one guard covers them all.
+    require_mesh_universe(run, space)
+    return space
 
 
 def rung_counts(space: AnswerSpace, polygons: dict, agreement: float) -> dict:
     """The numbers a panel title carries, and the manifest repeats."""
     grids_multi = int((space.grids["n_sites"] > 1).sum())
+    scored = site_n_scored(space)
     return {
         "nside": space.nside,
         "grid_km": round(space.grid_km, 1),
@@ -74,6 +81,13 @@ def rung_counts(space: AnswerSpace, polygons: dict, agreement: float) -> dict:
         "n_grids_with_several_sites": grids_multi,
         "n_seeds": int(space.meta["n_seeds"]),
         "n_sites_merged": int(space.meta["n_sites_merged"]),
+        # The space's sites above, the run's scored ones here. They differ only
+        # on a traffic-weighted run, whose space is its pre-filter mesh.
+        "n_sites_scored": int((scored > 0).sum()),
+        "n_tgs_scored": int(scored.sum()),
+        "targets_source": space.meta.get("targets_provenance", {}).get(
+            "targets_source", "the run's own evaluated TGs"
+        ),
         "n_cells_drawn": len(polygons),
         "cell_polygon_agreement": round(agreement, 4),
     }
@@ -100,11 +114,21 @@ def draw_panel(ax, space: AnswerSpace, extent) -> dict:
         zorder=3,
     )
     M.draw_cells(ax, polygons, zorder=4)
+    # A mesh site the run scores no TG at is still a site of the answer space
+    # -- it holds a seed and bounds its neighbours' cells -- so it is drawn,
+    # hollow. Only a traffic-weighted run has any.
+    scored = site_n_scored(space).to_numpy() > 0
     ax.scatter(
-        space.sites["site_lon"], space.sites["site_lat"],
+        space.sites["site_lon"][scored], space.sites["site_lat"][scored],
         s=M.MARKER_AREA, c=M.INK, marker="o", linewidths=0,
         transform=ccrs.PlateCarree(), zorder=6,
     )
+    if (~scored).any():
+        ax.scatter(
+            space.sites["site_lon"][~scored], space.sites["site_lat"][~scored],
+            s=M.MARKER_AREA, facecolors="none", edgecolors=M.INK, marker="o",
+            linewidths=0.7, transform=ccrs.PlateCarree(), zorder=6,
+        )
     ax.scatter(
         space.seeds["seed_lon"], space.seeds["seed_lat"],
         s=M.MARKER_AREA * 2.2, c=M.INK, marker="x", linewidths=0.9,
@@ -115,8 +139,12 @@ def draw_panel(ax, space: AnswerSpace, extent) -> dict:
     ax.set_title(
         f"nside {counts['nside']} · grid_km {counts['grid_km']:.0f}\n"
         f"{counts['n_grids']} TG grids ({counts['n_grids_with_several_sites']} hold >1 site) · "
-        f"{counts['n_seeds']} seeds from {counts['n_sites']} sites · "
-        f"cells unbounded",
+        f"{counts['n_seeds']} seeds from {counts['n_sites']} sites"
+        + (
+            f" ({counts['n_sites_scored']} scored)"
+            if counts["n_sites_scored"] != counts["n_sites"] else ""
+        )
+        + " · cells unbounded",
         fontsize=8.5,
         color=M.INK,
         linespacing=1.4,
@@ -125,14 +153,19 @@ def draw_panel(ax, space: AnswerSpace, extent) -> dict:
     return counts
 
 
-def _legend_handles():
+def _legend_handles(any_unscored: bool = False):
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
 
+    unscored = [
+        Line2D([], [], ls="", marker="o", ms=4.2, mfc="none", mec=M.INK, mew=0.7,
+               label="Mesh site, no scored TG"),
+    ] if any_unscored else []
     return [
         Patch(facecolor=M.TARGET_FILL, edgecolor=M.TARGET_EDGE, alpha=0.80, label="TG grid"),
         Line2D([], [], color=M.CELL_EDGE, lw=0.9, label="Cell boundary (serving region)"),
         Line2D([], [], ls="", marker="o", ms=4.2, color=M.INK, label="Site"),
+        *unscored,
         Line2D([], [], ls="", marker="x", ms=5.5, mew=0.9, color=M.INK, label="Seed"),
         Patch(facecolor="none", edgecolor=M.LATTICE_EDGE, label="HEALPix lattice (empty)"),
     ]
@@ -167,7 +200,7 @@ def render(
         ax = fig.add_subplot(_NROWS, _NCOLS, i + 1, projection=ccrs.PlateCarree())
         counts.append(draw_panel(ax, load_rung(run, nside, analysis_root=analysis_root), extent))
 
-    handles = _legend_handles()
+    handles = _legend_handles(any(c["n_sites_scored"] < c["n_sites"] for c in counts))
     fig.legend(
         handles=handles, loc="lower center", ncol=len(handles), fontsize=8,
         frameon=False, bbox_to_anchor=(0.5, 0.115),
@@ -195,7 +228,10 @@ def _manifest(run: RunPaths, counts: list[dict], extent) -> str:
             "tg_grid": f"{M.TARGET_FILL} fill, {M.TARGET_EDGE} edge",
             "lattice": f"{M.LATTICE_EDGE}, every grid in the frame",
             "cell": f"{M.CELL_EDGE} boundary: Voronoi cell of a seed, unbounded",
-            "site": "dot, one per distinct TG coordinate",
+            "site": (
+                "dot, one per distinct TG coordinate; hollow when the run scores "
+                "none of its TGs (a traffic-weighted run's mesh-only sites)"
+            ),
             "seed": "cross, spherical centroid of its grouped sites",
         },
         "cell_polygons": (

@@ -49,6 +49,12 @@ denominator than one that answers badly. A FALLBACK row still gets both labels
 rows enter the `correct`/`wrong` counts -- the rest are `unanswered`, which is
 a label rather than an exclusion, so `n_cell_unanswered == n_failed` by
 construction and `guard_cross_tab` asserts it.
+
+The denominator is the run's **evaluated** TGs, but the answer space they are
+labelled against need not be only theirs: a traffic-weighted run is scored over
+its mesh's sites and seeds (`answer_space.build_for_run`), so its cell labels
+are comparable to the mesh arm's. `score_rung` refuses a weighted space built
+from the post-filter roster.
 """
 
 from __future__ import annotations
@@ -66,6 +72,7 @@ from scripts.analysis.v5.modules.answer_space import (
     GLOSSARY,
     AnswerSpace,
     load_answer_space,
+    require_mesh_universe,
 )
 from scripts.analysis.v5.modules.geodesy import elementwise_km, pairwise_km
 from scripts.analysis.v5.modules.paths import CLASSIFY_KIND, MissingArtifactError, RunPaths
@@ -384,6 +391,7 @@ def score_rung(
             f"no answer space at {space_dir}; run `build-answer-space` first"
         )
     space = load_answer_space(space_dir)
+    require_mesh_universe(run, space)
     combos = run.combo_ids
     wanted = list(methods) if methods else [*combos, SHORTEST_PING]
     scored: dict[str, pd.DataFrame] = {}
@@ -412,6 +420,13 @@ def score_rung(
                 "seed_rule": space.meta["seed_rule"],
                 "n_sites": space.meta["n_sites"],
                 "n_seeds": space.meta["n_seeds"],
+                # The space's counts above; the scored roster's here. They
+                # differ only on a traffic-weighted run, whose space is its mesh.
+                "n_sites_scored": _n_scored(scored, "site_id"),
+                "n_seeds_scored": _n_scored(scored, "tg_seed_id"),
+                "targets_source": space.meta.get("targets_provenance", {}).get(
+                    "targets_source", "the run's own evaluated TGs"
+                ),
                 "methods": sorted(scored),
                 "max_ring": MAX_RING,
                 "max_ring_note": "the last graded tier; past it rows are `beyond`",
@@ -434,6 +449,11 @@ def score_rung(
         + "\n"
     )
     return summary
+
+
+def _n_scored(scored: dict[str, pd.DataFrame], col: str) -> int:
+    """Distinct `col` over the scored roster. Every method shares one roster."""
+    return int(next(iter(scored.values()))[col].nunique()) if scored else 0
 
 
 def score_for_run(

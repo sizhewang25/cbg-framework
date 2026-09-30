@@ -798,7 +798,28 @@ def _tgs_per_run(runs, nside, *, analysis_root=None) -> dict[str, int]:
     return out
 
 
-def _manifest(layout, table, nside, png_name, csv_name, *, run_ids, mode=BOUNDED, per_run=None) -> str:
+def _targets_sources(runs, nside, *, analysis_root=None) -> dict[str, str | None]:
+    """Each run's answer-space universe, off its classify manifest.
+
+    A traffic-weighted run's is its pre-filter mesh CSV, so a mesh and a
+    weighted panel side by side are scored against one set of cells; the
+    manifest says so rather than leaving the reader to assume it. None for a
+    classify manifest from before the key existed.
+    """
+    out: dict[str, str | None] = {}
+    for run in runs:
+        path = run.classify_dir(nside, root=analysis_root) / C.MANIFEST_JSON
+        try:
+            out[run.run_id] = json.loads(path.read_text()).get("targets_source")
+        except (OSError, json.JSONDecodeError):
+            out[run.run_id] = None
+    return out
+
+
+def _manifest(
+    layout, table, nside, png_name, csv_name, *, run_ids, mode=BOUNDED, per_run=None,
+    targets_sources=None,
+) -> str:
     body = {
         "figure": png_name,
         "csv": csv_name,
@@ -816,6 +837,7 @@ def _manifest(layout, table, nside, png_name, csv_name, *, run_ids, mode=BOUNDED
         ),
         "grid": G.describe(nside),
         "runs": run_ids,
+        "answer_space_targets_source": targets_sources or {},
         "methods": method_order(table),
         "panel_order": {ds: panel_order(table, ds) for ds in sorted(table["dataset"].unique())},
         "method_terms": {
@@ -902,6 +924,7 @@ def build_for_runs(
                     _manifest(
                         layout, table, nside, png.name, names["csv"],
                         run_ids=run_ids, mode=mode, per_run=per_run,
+                        targets_sources=_targets_sources(runs, nside, analysis_root=analysis_root),
                     )
                 )
                 written.append(png)
