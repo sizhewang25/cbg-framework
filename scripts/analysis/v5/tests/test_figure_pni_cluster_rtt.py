@@ -57,6 +57,15 @@ class TestConsumesTheWrittenClusters:
         assert stats.n_tgs.sum() == len(tg_group)
         assert stats.set_index("cluster").n_tgs.to_dict() == tgs.groupby("cluster").size().to_dict()
 
+    def test_shares_match_the_clusters_manifest(self, clustered):
+        run, edge_csv, pni_csv, _, root, _ = clustered
+        pairs, tgs, meta, _ = R.load(run, pni_csv, analysis_root=root, source_csv=edge_csv)
+        stats = R.stats_table(pairs, tgs, meta).set_index("cluster")
+        for c in meta["clusters"]:
+            # The manifest rounds its summary to 3 decimals.
+            assert stats.loc[c["cluster"], "tgs_pct"] == pytest.approx(c["tgs_pct"], abs=1e-3)
+            assert stats.loc[c["cluster"], "sites_pct"] == pytest.approx(c["sites_pct"], abs=1e-3)
+
     def test_whiskers_are_p5_and_p95_of_the_floors(self, clustered):
         run, edge_csv, pni_csv, _, root, _ = clustered
         pairs, tgs, meta, _ = R.load(run, pni_csv, analysis_root=root, source_csv=edge_csv)

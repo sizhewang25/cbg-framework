@@ -509,3 +509,30 @@ class TestTheRealPooledBoundaryPoint:
         _, km = P.cluster(pooled.copy(), method=P.KMEANS)
         assert ward["n_negative_silhouette_points"] == 0 < km["n_negative_silhouette_points"]
         assert ward["silhouette_at_k"] > km["silhouette_at_k"]
+
+
+class TestShares:
+    def test_count_label_prints_the_count_and_its_rounded_share(self):
+        assert P.count_label(600, 1269, "TGs") == "600 TGs (47%)"
+        assert P.count_label(2, 65, "sites") == "2 sites (3%)"
+
+    def test_summary_shares_are_over_the_whole_population(self, pni_inputs):
+        run, edge_csv, pni_csv, tg_group, _ = pni_inputs
+        tgs, pts, meta = P.compute(run, pni_csv, source_csv=edge_csv)
+        summary = P.cluster_summary(tgs, pts)
+        assert summary.tgs_pct.sum() == pytest.approx(100.0)
+        np.testing.assert_allclose(summary.tgs_pct, 100 * summary.n_tgs / meta["n_tgs"])
+        np.testing.assert_allclose(summary.sites_pct, 100 * summary.n_sites / meta["n_sites"])
+
+    def test_a_split_site_counts_in_both_clusters(self):
+        """Site shares sum past 100 exactly when a site's replicas split."""
+        pop = _pop([(1.0, 1.0, 0.0), (2.0, 2.0, 3000.0)], replicas=2)
+        pop.loc[pop.index[0], P.GAP] = 3000.0            # one replica of site 1 joins site 2's gap
+        pop[P.SP_RTT] = 1.0
+        pts = P.points(pop)
+        pts[P.CLUSTER_COL] = np.where(pts[P.GAP] > 100, 2, 1)
+        tgs = P.assign(pop, pts)
+        summary = P.cluster_summary(tgs, pts).set_index(P.CLUSTER_COL)
+        assert summary.n_sites.tolist() == [1, 2]
+        assert summary.sites_pct.sum() == pytest.approx(150.0)
+        assert summary.tgs_pct.sum() == pytest.approx(100.0)

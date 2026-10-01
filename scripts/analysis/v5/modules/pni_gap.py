@@ -451,8 +451,23 @@ def assign(pop: pd.DataFrame, pts: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def share_pct(n, total) -> float:
+    """`n` as a percentage of `total`, the one rounding both figures print."""
+    return 100.0 * float(n) / float(total) if total else float("nan")
+
+
+def count_label(n: int, total: int, unit: str) -> str:
+    """`600 TGs (47%)`: the count and its share, as both figures print it."""
+    return f"{int(n)} {unit} ({share_pct(n, total):.0f}%)"
+
+
 def cluster_summary(tgs: pd.DataFrame, pts: pd.DataFrame) -> pd.DataFrame:
-    """Per cluster: counts and the range of each axis. No location."""
+    """Per cluster: counts, their shares, and the range of each axis. No location.
+
+    `tgs_pct` is over every TG, `sites_pct` over every distinct site. A site
+    whose replicas split across clusters counts in each, so `sites_pct` can
+    sum past 100 (pooled as01-03: 68 of 65, 106%). `tgs_pct` sums to 100.
+    """
     by_pt = pts.groupby(CLUSTER_COL).agg(n_points=(POINT_COL, "size"))
     by_tg = tgs.groupby(CLUSTER_COL).agg(
         n_tgs=("tg_id", "size"),
@@ -464,7 +479,12 @@ def cluster_summary(tgs: pd.DataFrame, pts: pd.DataFrame) -> pd.DataFrame:
         sp_rtt_min_ms=(SP_RTT, "min"),
         sp_rtt_max_ms=(SP_RTT, "max"),
     )
-    return by_pt.join(by_tg).reset_index()
+    out = by_pt.join(by_tg).reset_index()
+    out.insert(out.columns.get_loc("n_tgs") + 1, "tgs_pct",
+               [share_pct(n, len(tgs)) for n in out.n_tgs])
+    out.insert(out.columns.get_loc("n_sites") + 1, "sites_pct",
+               [share_pct(n, tgs[S.SITE_KEY_COL].nunique()) for n in out.n_sites])
+    return out
 
 
 # -- the whole step -----------------------------------------------------------

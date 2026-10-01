@@ -95,7 +95,8 @@ def plot(pts: pd.DataFrame, summary: pd.DataFrame, *, meta: dict, out_png: Path)
         ax.scatter(
             block[P.D_PNI], block[P.GAP], s=marker_area(block.n_tgs), c=hue, marker=marker,
             alpha=0.75, edgecolor="white", linewidth=0.6, clip_on=False, zorder=3,
-            label=f"{cluster_label(c)}  {int(row.n_tgs)} TGs, {int(row.n_sites)} sites",
+            label=(f"{cluster_label(c)}  {P.count_label(row.n_tgs, meta['n_tgs'], 'TGs')}, "
+                   f"{P.count_label(row.n_sites, meta['n_sites'], 'sites')}"),
         )
         # Direct label at the cluster's top-right point, nudged off the marker.
         top = block.loc[block[P.GAP].idxmax()]

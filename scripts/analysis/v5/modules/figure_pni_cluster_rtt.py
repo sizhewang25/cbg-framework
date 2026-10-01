@@ -176,8 +176,14 @@ def load(
 
 
 def stats_table(pairs: pd.DataFrame, tgs: pd.DataFrame, cluster_meta: dict) -> pd.DataFrame:
-    """One row per cluster: percentiles and extrema of its TGs' smallest RTT, and counts."""
+    """One row per cluster: percentiles and extrema of its TGs' smallest RTT, and counts.
+
+    `tgs_pct` and `sites_pct` are over the clustered population's totals, as
+    in `pni_gap.cluster_summary`; `sites_pct` can sum past 100 where a site's
+    replicas split across clusters.
+    """
     n_sites = {c["cluster"]: c["n_sites"] for c in cluster_meta["clusters"]}
+    total_tgs, total_sites = cluster_meta["n_tgs"], cluster_meta["n_sites"]
     floors = pairs.groupby(["run_id", "tg_id", P.CLUSTER_COL], as_index=False).rtt_ms.min()
     rows = []
     for c, block in floors.groupby(P.CLUSTER_COL):
@@ -185,15 +191,17 @@ def stats_table(pairs: pd.DataFrame, tgs: pd.DataFrame, cluster_meta: dict) -> p
         rows.append(
             {
                 P.CLUSTER_COL: int(c),
-                "n_tgs": int(stats.pop("n")),
+                "n_tgs": (n := int(stats.pop("n"))),
+                "tgs_pct": P.share_pct(n, total_tgs),
                 "n_sites": int(n_sites[int(c)]),
+                "sites_pct": P.share_pct(n_sites[int(c)], total_sites),
                 **{f"{k}_ms": v for k, v in stats.items()},
             }
         )
     return pd.DataFrame(rows)
 
 
-def plot(stats: pd.DataFrame, *, out_png: Path) -> Path:
+def plot(stats: pd.DataFrame, *, total_tgs: int, total_sites: int, out_png: Path) -> Path:
     stats = stats.sort_values(P.CLUSTER_COL).reset_index(drop=True)
     clusters = stats[P.CLUSTER_COL].tolist()
     fig, ax = plt.subplots(figsize=FIGSIZE)
@@ -205,11 +213,12 @@ def plot(stats: pd.DataFrame, *, out_png: Path) -> Path:
     for patch, c in zip(art["boxes"], clusters):
         hue, _ = cluster_style(c)
         patch.set(facecolor=hue, alpha=0.6, edgecolor=hue, linewidth=0.6)
-    # Sites, not TGs, on the tick: replicas are one observation repeated. TG
-    # counts are in the CSV.
+    # TGs then sites, the scatter legend's order. Sites are the count that says
+    # how much evidence a box rests on: replicas are one observation repeated.
     ax.set_xticks(
         range(1, len(clusters) + 1),
-        [f"{cluster_label(r[P.CLUSTER_COL])}\n{int(r.n_sites)} sites" for _, r in stats.iterrows()],
+        [f"{cluster_label(r[P.CLUSTER_COL])}\n{P.count_label(r.n_tgs, total_tgs, 'TGs')}"
+         f"\n{P.count_label(r.n_sites, total_sites, 'sites')}" for _, r in stats.iterrows()],
         fontsize=5.5,
     )
     ax.set_ylabel(QUANTITY, fontsize=6)
@@ -263,7 +272,8 @@ def _write(pairs: pd.DataFrame, tgs: pd.DataFrame, meta: dict, out_dir: Path) ->
     stats = stats_table(pairs, tgs, meta)
     stats.to_csv(out_dir / CSV_NAME, index=False)
     (out_dir / MANIFEST_NAME).write_text(_manifest(meta, stats))
-    return plot(stats, out_png=out_dir / PNG_NAME)
+    return plot(stats, total_tgs=meta["n_tgs"], total_sites=meta["n_sites"],
+                out_png=out_dir / PNG_NAME)
 
 
 def build_for_runs(
