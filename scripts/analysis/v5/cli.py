@@ -1268,7 +1268,7 @@ def plot_pni_cluster_rtt_cmd(
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
 ) -> None:
-    """RTT boxes per `plot-pni-gap` cluster: every (TG, VP) pair, and each TG's floor.
+    """Per `plot-pni-gap` cluster, a box over its TGs' smallest RTT (the S-P VP's).
 
     Reads the clusters CSV off disk rather than re-clustering, and refuses it
     if the run set, any run's PNI list or edge CSV sha256, the TG set or any

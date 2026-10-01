@@ -35,35 +35,36 @@ class TestConsumesTheWrittenClusters:
         for name in (R.PNG_NAME, R.CSV_NAME, R.MANIFEST_NAME):
             assert (out / name).stat().st_size > 0
 
-    def test_one_row_per_scope_and_cluster(self, clustered):
-        run, edge_csv, pni_csv, _, root, out = clustered
+    def test_one_row_per_cluster(self, clustered):
+        run, edge_csv, pni_csv, _, root, _ = clustered
         pairs, tgs, meta, _ = R.load(run, pni_csv, analysis_root=root, source_csv=edge_csv)
         stats = R.stats_table(pairs, tgs, meta)
-        k = meta["clustering"]["k"]
-        assert sorted(zip(stats.scope, stats.cluster)) == sorted(
-            (s, c) for s, _ in R.SCOPES for c in range(1, k + 1)
-        )
+        assert sorted(stats.cluster) == list(range(1, meta["clustering"]["k"] + 1))
+        assert "scope" not in stats.columns            # one quantity, so no scope column
 
-    def test_the_floor_panel_is_the_recorded_sp_rtt(self, clustered):
+    def test_the_box_is_the_recorded_sp_rtt(self, clustered):
         """Each TG's smallest RTT is its S-P VP's: the fixture gives it 0.5 ms."""
         run, edge_csv, pni_csv, _, root, _ = clustered
         pairs, tgs, meta, _ = R.load(run, pni_csv, analysis_root=root, source_csv=edge_csv)
-        floor = R.stats_table(pairs, tgs, meta).query("scope == @R.TG_MIN")
-        assert np.allclose(floor[["min_ms", "p50_ms", "max_ms"]].to_numpy(), 0.5)
+        stats = R.stats_table(pairs, tgs, meta)
+        assert np.allclose(stats[["min_ms", "p50_ms", "max_ms"]].to_numpy(), 0.5)
 
-    def test_pair_counts_cover_every_edge(self, clustered):
+    def test_every_tg_is_counted_once(self, clustered):
+        """One value per TG, not per (TG, VP) edge."""
         run, edge_csv, pni_csv, tg_group, root, _ = clustered
         pairs, tgs, meta, _ = R.load(run, pni_csv, analysis_root=root, source_csv=edge_csv)
         stats = R.stats_table(pairs, tgs, meta)
-        n_edges = len(pd.read_csv(edge_csv))
-        assert stats.query("scope == @R.PAIRS").n.sum() == n_edges
-        assert stats.query("scope == @R.TG_MIN").n.sum() == len(tg_group)
+        assert stats.n_tgs.sum() == len(tg_group)
+        assert stats.set_index("cluster").n_tgs.to_dict() == tgs.groupby("cluster").size().to_dict()
 
-    def test_whiskers_are_p5_and_p95(self, clustered):
+    def test_whiskers_are_p5_and_p95_of_the_floors(self, clustered):
         run, edge_csv, pni_csv, _, root, _ = clustered
         pairs, tgs, meta, _ = R.load(run, pni_csv, analysis_root=root, source_csv=edge_csv)
-        stats = R.stats_table(pairs, tgs, meta).query("scope == @R.PAIRS").set_index("cluster")
-        for c, block in pairs.groupby("cluster"):
+        # Spread the floors so a percentile mix-up cannot pass on a constant.
+        pairs = pairs.assign(rtt_ms=pairs.rtt_ms + pairs.groupby("tg_id").ngroup())
+        stats = R.stats_table(pairs, tgs, meta).set_index("cluster")
+        floors = pairs.groupby(["tg_id", "cluster"]).rtt_ms.min().reset_index()
+        for c, block in floors.groupby("cluster"):
             assert stats.loc[c, "p5_ms"] == pytest.approx(np.percentile(block.rtt_ms, 5))
             assert stats.loc[c, "p95_ms"] == pytest.approx(np.percentile(block.rtt_ms, 95))
         box = R.bxp_stats({k: 1.0 * i for i, k in enumerate(("p5", "p25", "p50", "p75", "p95"))})
@@ -141,9 +142,7 @@ class TestPooled:
                                  analysis_root=two["root"], source_csvs=two["edge_csvs"])
         assert png.parent.parent.name == P.KIND
         stats = pd.read_csv(png.parent / R.CSV_NAME)
-        n_edges = sum(len(pd.read_csv(p)) for p in two["edge_csvs"].values())
-        assert stats.query("scope == @R.PAIRS").n.sum() == n_edges
-        assert stats.query("scope == @R.TG_MIN").n_tgs.sum() == 2 * 27
+        assert stats.n_tgs.sum() == 2 * 27
 
     def test_one_runs_edited_list_is_refused_and_named(self, pooled):
         two = pooled

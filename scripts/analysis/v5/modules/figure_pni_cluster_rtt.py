@@ -1,23 +1,19 @@
-"""RTT per `pni_gap` cluster, as boxes: does each cluster share a latency regime?
+"""Each TG's smallest RTT, per `pni_gap` cluster, as boxes: one latency regime per cluster?
 
 `plot-pni-gap` groups TGs by where they sit on the `d_pni` x gap scatter. This
 figure reads that grouping **off disk** (`pni_gap.read_clusters`) and asks what
 the RTTs look like inside each group. It does not recompute the clusters, so
 the boxes cannot describe a different partition from the scatter.
 
-## Two panels, one y axis
+## One quantity: each TG's smallest RTT
 
-* **Every (TG, VP) pair**, each at its minimum RTT (`edges.load_min_rtt`, the
-  RTT every LTD was built from). This is the whole latency profile a
-  cluster's TGs present to the fleet.
-* **Each TG's smallest RTT**: the RTT of its S-P VP, the delay no VP in the
-  fleet avoids. On as01 this is the quantity that separates the mechanism
-  groups (0.6-4.0 / 13.0-14.5 / 59.1-63.8 ms), so it gets its own panel
-  instead of being lost at the bottom of the first.
-
-The y axis is shared and linear from 0 ms: both panels are RTTs, and a
-reader compares a cluster's floor in the right panel with its spread in the
-left.
+The box per cluster is over its TGs' **smallest RTT across the fleet**: the
+RTT of the S-P VP, read off `edges.load_min_rtt` (each pair at its minimum,
+the RTT every LTD was built from). It is the delay no VP avoids, and on as01
+it is the quantity that separates the mechanism groups (0.6-4.0 / 13.0-14.5 /
+59.1-63.8 ms). The distribution over every (TG, VP) pair was drawn beside it
+once; it mostly restated the fleet's geography and was dropped. The y axis is
+linear from 0 ms.
 
 ## Whiskers are p5 and p95
 
@@ -62,6 +58,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.ticker import MultipleLocator  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
@@ -77,13 +74,19 @@ PNG_NAME = "pni_cluster_rtt.png"
 CSV_NAME = "pni_cluster_rtt.csv"
 MANIFEST_NAME = "pni_cluster_rtt.manifest.json"
 
-PAIRS = "pairs"
-TG_MIN = "tg_min"
-#: Panel order and titles.
-SCOPES = (
-    (PAIRS, "every (TG, VP) pair"),
-    (TG_MIN, "each TG's smallest RTT (S-P VP)"),
-)
+#: The y-axis label: what each box is over. Short, because the figure is small;
+#: the caption spells it out ("each TG's smallest RTT over the fleet").
+QUANTITY = "min RTT (ms)"
+
+#: A small figure. Width is fixed rather than grown with k; at k <= 6 a
+#: 0.5 in slot per box still fits a two-line tick label.
+FIGSIZE = (3.0, 2.0)
+
+#: y tick spacing, in ms.
+Y_STEP_MS = 10.0
+
+#: How far above the x axis, in points, a median label's centre must sit.
+MEDIAN_LABEL_CLEARANCE_PT = 4.0
 
 #: Both sides are the same float off the same CSV; this absorbs rounding only.
 RTT_MATCH_TOL_MS = 1e-6
@@ -173,60 +176,60 @@ def load(
 
 
 def stats_table(pairs: pd.DataFrame, tgs: pd.DataFrame, cluster_meta: dict) -> pd.DataFrame:
-    """One row per `(scope, cluster)`: percentiles, extrema, counts."""
+    """One row per cluster: percentiles and extrema of its TGs' smallest RTT, and counts."""
     n_sites = {c["cluster"]: c["n_sites"] for c in cluster_meta["clusters"]}
-    key = ["run_id", "tg_id"]
-    floors = pairs.groupby(key + [P.CLUSTER_COL], as_index=False).rtt_ms.min()
+    floors = pairs.groupby(["run_id", "tg_id", P.CLUSTER_COL], as_index=False).rtt_ms.min()
     rows = []
-    for scope, frame in ((PAIRS, pairs), (TG_MIN, floors)):
-        for c, block in frame.groupby(P.CLUSTER_COL):
-            rows.append(
-                {
-                    "scope": scope,
-                    P.CLUSTER_COL: int(c),
-                    "n_tgs": int(block.groupby(key).ngroups),
-                    "n_sites": int(n_sites[int(c)]),
-                    **{f"{k}_ms" if k != "n" else "n": v for k, v in cost_stats(block.rtt_ms.to_numpy()).items()},
-                }
-            )
+    for c, block in floors.groupby(P.CLUSTER_COL):
+        stats = cost_stats(block.rtt_ms.to_numpy())
+        rows.append(
+            {
+                P.CLUSTER_COL: int(c),
+                "n_tgs": int(stats.pop("n")),
+                "n_sites": int(n_sites[int(c)]),
+                **{f"{k}_ms": v for k, v in stats.items()},
+            }
+        )
     return pd.DataFrame(rows)
 
 
 def plot(stats: pd.DataFrame, *, out_png: Path) -> Path:
-    clusters = sorted(stats[P.CLUSTER_COL].unique())
-    # Width grows with k so each tick's three-line label keeps its own slot.
-    width = max(6.4, 1.1 * len(clusters) * len(SCOPES) + 0.8)
-    fig, axes = plt.subplots(1, len(SCOPES), figsize=(width, 2.9), sharey=True)
-    for ax, (scope, title) in zip(axes, SCOPES):
-        block = stats[stats.scope == scope].set_index(P.CLUSTER_COL).reindex(clusters)
-        boxes = [
-            bxp_stats({k: r[f"{k}_ms"] for k in ("p5", "p25", "p50", "p75", "p95")})
-            for _, r in block.iterrows()
-        ]
-        art = ax.bxp(boxes, positions=range(1, len(clusters) + 1), widths=0.55, patch_artist=True,
-                     showfliers=False, medianprops={"color": INK, "lw": 1.2},
-                     whiskerprops={"color": INK_2, "lw": 0.8}, capprops={"color": INK_2, "lw": 0.8})
-        for patch, c in zip(art["boxes"], clusters):
-            hue, _ = cluster_style(c)
-            patch.set(facecolor=hue, alpha=0.6, edgecolor=hue, linewidth=0.8)
-        for i, (_, r) in enumerate(block.iterrows(), start=1):
-            ax.text(i + 0.33, r["p50_ms"], f"{r['p50_ms']:.1f}", fontsize=6.5, va="center", color=INK_2)
-        ax.set_xticks(
-            range(1, len(clusters) + 1),
-            [f"{cluster_label(c)}\n{int(r.n_sites)} sites\n{int(r.n_tgs)} TGs\nn={int(r.n):,}"
-             for c, (_, r) in zip(clusters, block.iterrows())],
-            fontsize=6.5,
-        )
-        ax.set_title(title, fontsize=8)
-        ax.tick_params(axis="y", labelsize=7.5, length=3)
-        ax.grid(axis="y", alpha=0.25, lw=0.4)
-        for spine in ("top", "right"):
-            ax.spines[spine].set_visible(False)
-    axes[0].set_ylabel("RTT (ms)", fontsize=8)
-    axes[0].set_ylim(bottom=0)
-    fig.tight_layout(pad=0.4)
+    stats = stats.sort_values(P.CLUSTER_COL).reset_index(drop=True)
+    clusters = stats[P.CLUSTER_COL].tolist()
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    boxes = [bxp_stats({k: r[f"{k}_ms"] for k in ("p5", "p25", "p50", "p75", "p95")})
+             for _, r in stats.iterrows()]
+    art = ax.bxp(boxes, positions=range(1, len(clusters) + 1), widths=0.5, patch_artist=True,
+                 showfliers=False, medianprops={"color": INK, "lw": 0.9},
+                 whiskerprops={"color": INK_2, "lw": 0.6}, capprops={"color": INK_2, "lw": 0.6})
+    for patch, c in zip(art["boxes"], clusters):
+        hue, _ = cluster_style(c)
+        patch.set(facecolor=hue, alpha=0.6, edgecolor=hue, linewidth=0.6)
+    # Sites, not TGs, on the tick: replicas are one observation repeated. TG
+    # counts are in the CSV.
+    ax.set_xticks(
+        range(1, len(clusters) + 1),
+        [f"{cluster_label(r[P.CLUSTER_COL])}\n{int(r.n_sites)} sites" for _, r in stats.iterrows()],
+        fontsize=5.5,
+    )
+    ax.set_ylabel(QUANTITY, fontsize=6)
+    ax.set_ylim(bottom=0)
+    ax.yaxis.set_major_locator(MultipleLocator(Y_STEP_MS))
+    ax.tick_params(axis="both", labelsize=5.5, length=2, pad=1.5)
+    ax.grid(axis="y", alpha=0.25, lw=0.3)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    fig.tight_layout(pad=0.2)
+    # Median labels, after layout so the axes' height is known. A label centred
+    # on a ~1 ms median sits on the axis line, so its centre is kept at least
+    # `MEDIAN_LABEL_CLEARANCE_PT` above it, whatever the figure height.
+    height_pt = ax.bbox.height * 72.0 / fig.dpi
+    floor = ax.get_ylim()[1] * MEDIAN_LABEL_CLEARANCE_PT / height_pt
+    for i, (_, r) in enumerate(stats.iterrows(), start=1):
+        ax.text(i + 0.3, max(r["p50_ms"], floor), f"{r['p50_ms']:.1f}", fontsize=5.5,
+                va="center", color=INK_2)
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_png, dpi=300, bbox_inches="tight")
+    fig.savefig(out_png, dpi=300, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
     return out_png
 
@@ -244,10 +247,7 @@ def _manifest(cluster_meta: dict, stats: pd.DataFrame) -> str:
                 {key: r[key] for key in ("run_id", "source_csv_sha256", "pni_csv_sha256")}
                 for r in cluster_meta["runs"]
             ],
-            "scopes": {
-                PAIRS: "every (TG, VP) pair at its minimum RTT",
-                TG_MIN: "each TG's smallest RTT over the fleet, i.e. its S-P VP's RTT",
-            },
+            "quantity": "each TG's smallest RTT over the fleet, i.e. its S-P VP's RTT",
             "boxes": "whiskers p5/p95, hinges p25/p75, line = median; no fliers. min/max in the CSV.",
             "replicas_note": (
                 "~20 TGs share a site's VP geometry; n_sites, not n_tgs, is the "

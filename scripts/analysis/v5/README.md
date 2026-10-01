@@ -513,10 +513,9 @@ far-from-PNI sites, not with SeaTac, although the two share an S-P VP and an
 RTT floor.
 
 **`plot-pni-cluster-rtt`** reads `pni_gap_clusters.csv` off disk rather than
-re-clustering, and draws RTT boxes per cluster in two panels on one linear y
-axis: every `(TG, VP)` pair at its minimum RTT, and each TG's smallest RTT
-(its S-P VP's). Whiskers are p5/p95, as in `plot-cost-box`. It refuses the
-clusters if the manifest names another run, the edge CSV's sha256 changed,
+re-clustering, and draws one box per cluster over its TGs' **smallest RTT**
+(each TG's S-P VP RTT, the delay no VP avoids), on a linear y axis from
+0 ms. Whiskers are p5/p95, as in `plot-cost-box`. It refuses the clusters if the manifest names another run, the edge CSV's sha256 changed,
 the TG sets differ, or any TG's floor disagrees with the recorded `sp_rtt_ms`.
 
 Neither output carries a coordinate or a PNI id (ids name cities).
