@@ -23,7 +23,7 @@ benchmark:
   slices: [fold_0, fold_1, fold_2, fold_3, fold_4]
 
   source_kwargs:
-    mesh_csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.randweight.csv
+    mesh_csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.randweight.pniboost.csv
     k: 5
     seed: 42
     asn_bucket_top_n: 20
@@ -32,7 +32,7 @@ benchmark:
     # produced by derive_traffic_weighted_cbg_data.smk. No weights are consulted,
     # so the mesh needs no `weight` column in this mode. Mutually exclusive with
     # eval_kept_traffic_fraction / eval_pair_weight_min.
-    weighted_csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.randweight.traffic-weighted.csv
+    weighted_csv_path: datasets/final/as01-20260728-20260802.mainland.sanitized.randweight.pniboost.traffic-weighted.csv
 
   enable_fallback: true
   seed: 42
