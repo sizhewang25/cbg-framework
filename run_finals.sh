@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Serial driver for the CBG finals: whichever mesh / traffic-weighted arms are
-# uncommented below, then the v4 analysis artifacts over whatever ran.
+# uncommented below, then the v5 analysis artifacts over whatever ran.
 # Currently enabled: the ripe-asmix-mesh arm only.
 #
 # Two benchmark modules, in this order:
@@ -9,7 +9,7 @@
 #      then run against it (precomputed mode)
 #   2. mesh arms     -- run directly
 #
-# followed by scripts/analysis/v4/create_analysis_artifacts.sh over the arms
+# followed by scripts/analysis/v5/create_analysis_artifacts.sh over the arms
 # that succeeded. Each config runs to completion before the next; a failure is
 # logged and the batch continues. Per-config logs + a rollup live under
 # logs/finals/.
@@ -18,6 +18,7 @@
 #         bash run_finals.sh --dry-run      # preflight only, run nothing
 #         bash run_finals.sh --force        # ignore the cache, recompute all
 #         bash run_finals.sh --no-analysis  # benchmark only, no figures
+#         bash run_finals.sh --only-analysis  # figures only, over existing trees
 #
 # WHY --force EXISTS. Snakemake decides what to re-run from file timestamps and
 # recorded params -- neither of which sees a CODE change. The combo id is the
@@ -53,12 +54,14 @@ export PATH="$PWD/.venv/bin:$PATH"   # cli.sh calls `python`; resolve to the ven
 
 DRY_RUN=0
 RUN_ANALYSIS=1
+RUN_BENCH=1
 FORCE_ARGS=()
 for _arg in "$@"; do
   case "$_arg" in
     --dry-run)     DRY_RUN=1 ;;
     --force)       FORCE_ARGS=(--forceall) ;;
     --no-analysis) RUN_ANALYSIS=0 ;;
+    --only-analysis) RUN_BENCH=0 ;;
     *) echo "run_finals.sh: unknown argument: $_arg" >&2; exit 2 ;;
   esac
 done
@@ -72,17 +75,18 @@ DERIVE_SMK="scripts/processing/source/derive_traffic_weighted_cbg_data.smk"
 
 # Mesh arms: run directly.
 MESH_CONFIGS=(
-  pro-as01-mesh
-  pro-as02-mesh
-  pro-as03-mesh
+  # pro-as01-mesh
+  # pro-as02-mesh
+  # pro-as03-mesh
   # ripe-asmix-mesh
 )
 
 # Weighted arms: derive the subset first, then run.
 WEIGHTED_CONFIGS=(
-  pro-as01-weighted
-  pro-as02-weighted
-  pro-as03-weighted
+  # pro-as01-weighted
+  # pro-as02-weighted
+  # pro-as03-weighted
+  as01-randweight-precomputed
 )
 
 ALL_CONFIGS=("${MESH_CONFIGS[@]}" "${WEIGHTED_CONFIGS[@]}")
@@ -137,11 +141,24 @@ if (( ${#ALL_CONFIGS[@]} == 0 )); then
   exit 1
 fi
 
+if (( !RUN_BENCH && !RUN_ANALYSIS )); then
+  echo "run_finals.sh: --only-analysis and --no-analysis together run nothing" >&2
+  exit 2
+fi
+
+# ---- --only-analysis: score every enabled config's existing tree ------------
+# No benchmark runs, so there is no exit status to filter on; every enabled
+# config is handed over and the v5 driver SKIPs any run id with no tree.
+if (( !RUN_BENCH )); then
+  for c in "${MESH_CONFIGS[@]}";     do record_ok MESH_OK "$c"; done
+  for c in "${WEIGHTED_CONFIGS[@]}"; do record_ok WEIGHTED_OK "$c"; done
+fi
+
 # ---- preflight: nothing else may hold the Snakemake lock --------------------
 # Snakemake locks the whole working directory, so a concurrent run -- or a stale
 # lock left by a killed one -- makes every config here fail with a LockException
 # buried in its own log. Catch it once, up front, with the fix.
-if compgen -G ".snakemake/locks/*" >/dev/null; then
+if (( RUN_BENCH )) && compgen -G ".snakemake/locks/*" >/dev/null; then
   # `[s]nakemake` so the pattern cannot match this script's own command line --
   # a bare -f pattern self-matches the invoking shell and always reports "a run
   # is in progress", which would hide every stale lock.
@@ -158,6 +175,7 @@ if compgen -G ".snakemake/locks/*" >/dev/null; then
 fi
 
 # ---- preflight: every input must exist before anything runs -----------------
+if (( RUN_BENCH )); then
 log "preflight: checking inputs for ${#MESH_CONFIGS[@]} mesh + ${#WEIGHTED_CONFIGS[@]} weighted runs"
 MISSING=()
 for c in "${MESH_CONFIGS[@]}"; do
@@ -182,6 +200,7 @@ if (( ${#FORCE_ARGS[@]} )); then
 else
   log "preflight OK -- incremental; pass --force to ignore the cache"
 fi
+fi  # RUN_BENCH
 
 if (( DRY_RUN )); then
   log "--dry-run: preflight only, exiting before any run"
@@ -189,7 +208,8 @@ if (( DRY_RUN )); then
 fi
 
 # ---- weighted arms: derive the subset, then run -----------------------------
-for c in "${WEIGHTED_CONFIGS[@]}"; do
+(( RUN_BENCH )) || log "SKIP  benchmark: --only-analysis"
+(( RUN_BENCH )) && for c in "${WEIGHTED_CONFIGS[@]}"; do
   mesh=$(cfg_path "$c" mesh_csv_path)
   log "START $c (derive subset from $(basename "$mesh"))"
   if ! python -m snakemake -s "$DERIVE_SMK" --cores 1 \
@@ -206,7 +226,7 @@ for c in "${WEIGHTED_CONFIGS[@]}"; do
 done
 
 # ---- mesh arms --------------------------------------------------------------
-for c in "${MESH_CONFIGS[@]}"; do
+(( RUN_BENCH )) && for c in "${MESH_CONFIGS[@]}"; do
   log "START $c"
   if ./cli.sh --configfile "configs/$c.yaml" "${FORCE_ARGS[@]}" >"$LOGDIR/$c.log" 2>&1; then
     log "OK    $c"
@@ -216,7 +236,7 @@ for c in "${MESH_CONFIGS[@]}"; do
   fi
 done
 
-# ---- analysis: the v4 artifacts over the arms that ran ----------------------
+# ---- analysis: the v5 artifacts over the arms that ran ----------------------
 # One invocation, both arms, because the driver is what knows the dependency
 # order within a run and the two arms only ever share this call -- it pools each
 # separately. Arms that produced nothing are simply not passed; the driver
@@ -226,26 +246,27 @@ done
 # is exactly when you want to see the figures for the arms that did land.
 if (( RUN_ANALYSIS )); then
   ANALYSIS_ARGS=()
-  (( ${#MESH_OK[@]} ))     && ANALYSIS_ARGS+=(--mesh "${MESH_OK[@]}")
-  (( ${#WEIGHTED_OK[@]} )) && ANALYSIS_ARGS+=(--weighted "${WEIGHTED_OK[@]}")
+  # v5 takes plain `--group RUN...`; one group per arm keeps them unpooled.
+  (( ${#MESH_OK[@]} ))     && ANALYSIS_ARGS+=(--group "${MESH_OK[@]}")
+  (( ${#WEIGHTED_OK[@]} )) && ANALYSIS_ARGS+=(--group "${WEIGHTED_OK[@]}")
 
   if (( ${#ANALYSIS_ARGS[@]} == 0 )); then
-    log "SKIP  analysis (v4): every benchmark arm failed, nothing to score"
+    log "SKIP  analysis (v5): every benchmark arm failed, nothing to score"
   else
-    log "START analysis (v4): mesh ${#MESH_OK[@]}, weighted ${#WEIGHTED_OK[@]}"
-    if ./scripts/analysis/v4/create_analysis_artifacts.sh "${ANALYSIS_ARGS[@]}" \
-         >"$LOGDIR/_analysis.v4.log" 2>&1; then
-      log "OK    analysis (v4)"
+    log "START analysis (v5): mesh ${#MESH_OK[@]}, weighted ${#WEIGHTED_OK[@]}"
+    if ./scripts/analysis/v5/create_analysis_artifacts.sh "${ANALYSIS_ARGS[@]}" \
+         >"$LOGDIR/_analysis.v5.log" 2>&1; then
+      log "OK    analysis (v5)"
     else
-      log "FAIL  analysis (v4) (see $LOGDIR/_analysis.v4.log)"
+      log "FAIL  analysis (v5) (see $LOGDIR/_analysis.v5.log)"
     fi
     # The driver prints its own tally; surface it so the rollup is self-contained.
-    sed -n '/^runs: /p' "$LOGDIR/_analysis.v4.log" | while read -r line; do
+    sed -n '/^runs: /p' "$LOGDIR/_analysis.v5.log" | while read -r line; do
       log "      $line"
     done
   fi
 else
-  log "SKIP  analysis (v4): --no-analysis"
+  log "SKIP  analysis (v5): --no-analysis"
 fi
 
 log "ALL DONE"
