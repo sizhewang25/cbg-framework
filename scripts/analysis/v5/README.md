@@ -493,14 +493,24 @@ TG's `d_pni` is the great-circle distance to its nearest PNI. One marker per
 distinct `(site, gap)` point, sized by TG count; both axes are symlog (linear
 0–100 km with ticks every 25, log to 4,000 km, equal aspect).
 
-k-means runs on **the same symlog coordinates** the axes draw, over the points
-**unweighted** (replicas are one observation repeated). `k` is the silhouette
-argmax over 2–6 unless `--k` is given; clusters are renumbered by centroid gap
-ascending, so `C1` is always the smallest-gap group. The manifest carries the
-silhouette curve and an ARI check across 20 other seeds. On as01 k=3
-(silhouette 0.77, every refit identical), but read the clusters as geometry:
-k-means groups Hillsboro with the far-from-PNI sites, not with SeaTac, although
-the two share an S-P VP and an RTT floor.
+Clustering runs on **the same symlog coordinates** the axes draw, over the
+points **unweighted** (replicas are one observation repeated). `--method ward`
+(default) is Ward agglomerative clustering; `--method kmeans` is k-means. `k`
+is the silhouette argmax over 2–6 unless `--k` is given; clusters are
+renumbered by site count descending (ties: TGs, then centroid gap), so `C1` is
+always the cluster covering the most sites. The manifest carries the
+silhouette curve, the count of negative-silhouette points, and the other
+method's ARI at the same k with the ids of the points it would move (k-means
+adds its 20-seed stability check).
+
+Why Ward: per AS the two methods agree exactly, but pooled over as01-03
+k-means puts one 7-replica AS03 point in a 5-point cluster, away from the
+other 13 replicas of its own site. A small cluster's centroid is dragged toward
+its members, so k-means keeps it. Its silhouette there is the only negative of
+80. Ward joins it to its site and lifts the pooled silhouette from 0.715 to
+0.734. Either way, read the clusters as geometry: Hillsboro groups with the
+far-from-PNI sites, not with SeaTac, although the two share an S-P VP and an
+RTT floor.
 
 **`plot-pni-cluster-rtt`** reads `pni_gap_clusters.csv` off disk rather than
 re-clustering, and draws RTT boxes per cluster in two panels on one linear y

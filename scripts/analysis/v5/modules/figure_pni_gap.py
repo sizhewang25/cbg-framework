@@ -88,7 +88,7 @@ def style_symlog_axis(axis) -> None:
 
 
 def plot(pts: pd.DataFrame, summary: pd.DataFrame, *, meta: dict, out_png: Path) -> Path:
-    fig, ax = plt.subplots(figsize=(3.8, 3.8))
+    fig, ax = plt.subplots(figsize=(5.3, 3.8))  # square panel + legend column on the right
     for c, block in pts.groupby(P.CLUSTER_COL):
         hue, marker = cluster_style(c)
         row = summary.set_index(P.CLUSTER_COL).loc[c]
@@ -126,7 +126,9 @@ def plot(pts: pd.DataFrame, summary: pd.DataFrame, *, meta: dict, out_png: Path)
     ax.grid(alpha=0.25, lw=0.4)
     for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
-    leg = ax.legend(loc="upper right", fontsize=6.5, frameon=False, borderaxespad=0.2,
+    # Outside the axes: every corner of the panel holds data on the pooled meshes.
+    leg = ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=6.5, frameon=False,
+                    borderaxespad=0.0,
                     handletextpad=0.3, labelspacing=0.5)
     for text in leg.get_texts():
         text.set_color(INK_2)
@@ -158,6 +160,7 @@ def build_for_runs(
     *,
     layouts: tuple[str, ...] = (P.PER_RUN,),
     k: int | None = None,
+    method: str = P.DEFAULT_METHOD,
     analysis_root: Path | None = None,
     source_csvs: dict[str, Path] | None = None,
 ) -> list[Path]:
@@ -172,11 +175,13 @@ def build_for_runs(
     if P.PER_RUN in layouts:
         for run in runs:
             one = {run.run_id: (source_csvs or {}).get(run.run_id)} if source_csvs else None
-            tgs, pts, meta = P.compute_runs([run], pni_csvs, layout=P.PER_RUN, k=k, source_csvs=one)
+            tgs, pts, meta = P.compute_runs([run], pni_csvs, layout=P.PER_RUN, k=k, method=method,
+                                             source_csvs=one)
             out_dir = P.output_dir(run.run_id, pni_csvs[run.run_id], analysis_root=analysis_root)
             pngs.append(_draw(tgs, pts, meta, out_dir))
     if P.POOLED in layouts:
-        tgs, pts, meta = P.compute_runs(runs, pni_csvs, layout=P.POOLED, k=k, source_csvs=source_csvs)
+        tgs, pts, meta = P.compute_runs(runs, pni_csvs, layout=P.POOLED, k=k, method=method,
+                                         source_csvs=source_csvs)
         out_dir = P.pooled_output_dir([r.run_id for r in runs], analysis_root=analysis_root)
         pngs.append(_draw(tgs, pts, meta, out_dir))
     return pngs
@@ -187,11 +192,12 @@ def build_for_run(
     pni_csv: Path,
     *,
     k: int | None = None,
+    method: str = P.DEFAULT_METHOD,
     analysis_root: Path | None = None,
     source_csv: Path | None = None,
 ) -> list[Path]:
     """Clusters CSV, points CSV, manifest and the scatter for one run, per-run layout."""
     return build_for_runs(
-        [run], {run.run_id: pni_csv}, k=k, analysis_root=analysis_root,
+        [run], {run.run_id: pni_csv}, k=k, method=method, analysis_root=analysis_root,
         source_csvs={run.run_id: source_csv} if source_csv is not None else None,
     )

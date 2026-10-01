@@ -194,7 +194,9 @@ def stats_table(pairs: pd.DataFrame, tgs: pd.DataFrame, cluster_meta: dict) -> p
 
 def plot(stats: pd.DataFrame, *, out_png: Path) -> Path:
     clusters = sorted(stats[P.CLUSTER_COL].unique())
-    fig, axes = plt.subplots(1, len(SCOPES), figsize=(6.4, 2.9), sharey=True)
+    # Width grows with k so each tick's three-line label keeps its own slot.
+    width = max(6.4, 1.1 * len(clusters) * len(SCOPES) + 0.8)
+    fig, axes = plt.subplots(1, len(SCOPES), figsize=(width, 2.9), sharey=True)
     for ax, (scope, title) in zip(axes, SCOPES):
         block = stats[stats.scope == scope].set_index(P.CLUSTER_COL).reindex(clusters)
         boxes = [
@@ -211,7 +213,7 @@ def plot(stats: pd.DataFrame, *, out_png: Path) -> Path:
             ax.text(i + 0.33, r["p50_ms"], f"{r['p50_ms']:.1f}", fontsize=6.5, va="center", color=INK_2)
         ax.set_xticks(
             range(1, len(clusters) + 1),
-            [f"{cluster_label(c)}\n{int(r.n_sites)} sites, {int(r.n_tgs)} TGs\nn={int(r.n):,}"
+            [f"{cluster_label(c)}\n{int(r.n_sites)} sites\n{int(r.n_tgs)} TGs\nn={int(r.n):,}"
              for c, (_, r) in zip(clusters, block.iterrows())],
             fontsize=6.5,
         )

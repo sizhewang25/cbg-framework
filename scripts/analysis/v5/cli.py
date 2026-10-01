@@ -1219,18 +1219,27 @@ def plot_pni_gap_cmd(
         None,
         "--k",
         help=(
-            "Number of k-means clusters. Default: the silhouette argmax over "
+            "Number of clusters. Default: the silhouette argmax over "
             f"k in {list(pni_gap.K_CANDIDATES)}, recorded in the manifest."
+        ),
+    ),
+    method: str = typer.Option(
+        pni_gap.DEFAULT_METHOD,
+        "--method",
+        help=(
+            f"Clustering method, one of {list(pni_gap.METHODS)}. Ward is the default: "
+            "k-means misplaces a boundary point when a cluster has few points. "
+            "The manifest records the other method's agreement either way."
         ),
     ),
     source_csv: Path = typer.Option(None, "--source-csv", help="Override the run's edge CSV. One --run-id only."),
     outputs_root: Path = typer.Option(DEFAULT_OUTPUTS_ROOT, help="Benchmark output root."),
     analysis_root: Path = typer.Option(DEFAULT_ANALYSIS_ROOT, help="Where v5 writes."),
 ) -> None:
-    """Distance to the nearest PNI against the S-P gap, clustered by k-means.
+    """Distance to the nearest PNI against the S-P gap, clustered (Ward by default).
 
     One marker per distinct (site, gap) point, sized by TG count. Both axes are
-    symlog (linear 0-100 km, log to 4,000 km), and k-means runs on that same
+    symlog (linear 0-100 km, log to 4,000 km), and the clustering runs on that same
     geometry, unweighted, so a cluster boundary can be read off the figure.
     Each run is measured against its own operator's PNI list, pooled or not.
 
@@ -1241,7 +1250,7 @@ def plot_pni_gap_cmd(
     try:
         runs, pni_csvs, layouts, source_csvs = _pni_inputs(run_id, layout, pni_csv, source_csv, outputs_root)
         pngs = figure_pni_gap.build_for_runs(
-            runs, pni_csvs, layouts=layouts, k=k,
+            runs, pni_csvs, layouts=layouts, k=k, method=method,
             analysis_root=analysis_root, source_csvs=source_csvs,
         )
     except (ValueError, MissingArtifactError) as exc:

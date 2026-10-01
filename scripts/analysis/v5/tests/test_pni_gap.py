@@ -153,7 +153,7 @@ class TestTheGeometryIsThePlottedOne:
         # 0-100 into one; on the drawn axes the far pair is the tight one.
         pts = pd.DataFrame({P.D_PNI: [1.0, 2.0, 60.0, 70.0, 900.0, 1200.0],
                             P.GAP: [0.0, 1.0, 60.0, 70.0, 3000.0, 3900.0], "n_tgs": 1,
-                            P.POINT_COL: range(6)})
+                            P.POINT_COL: range(6), "site_key": [f"r|{i}" for i in range(6)]})
         from sklearn.cluster import KMeans
 
         out, _ = P.cluster(pts, k=3)
@@ -167,14 +167,15 @@ class TestChoosingK:
         assert P.choose_k({2: 0.5, 3: 0.8, 4: 0.8}) == 3
 
     def test_fewer_than_three_distinct_points_are_refused(self):
-        pts = pd.DataFrame({P.D_PNI: [1.0, 1.0, 9.0], P.GAP: [2.0, 2.0, 9.0], "n_tgs": 1, P.POINT_COL: range(3)})
+        pts = pd.DataFrame({P.D_PNI: [1.0, 1.0, 9.0], P.GAP: [2.0, 2.0, 9.0], "n_tgs": 1,
+                            P.POINT_COL: range(3), "site_key": ["r|0", "r|1", "r|2"]})
         with pytest.raises(ValueError, match="at least 3"):
             P.cluster(pts)
 
     @pytest.mark.parametrize("k", [1, 5])
     def test_an_out_of_range_k_is_refused(self, k):
         pts = pd.DataFrame({P.D_PNI: [1.0, 2.0, 50.0, 900.0], P.GAP: [0.0, 1.0, 50.0, 3000.0],
-                            "n_tgs": 1, P.POINT_COL: range(4)})
+                            "n_tgs": 1, P.POINT_COL: range(4), "site_key": [f"r|{i}" for i in range(4)]})
         with pytest.raises(ValueError, match="out of range"):
             P.cluster(pts, k=k)
 
@@ -183,20 +184,91 @@ class TestChoosingK:
         assert P.candidate_ks(X) == [2, 3]
 
 
+class TestMethods:
+    def test_ward_is_the_default_and_is_recorded(self, pni_inputs):
+        run, edge_csv, pni_csv, _, _ = pni_inputs
+        _, _, meta = P.compute(run, pni_csv, source_csv=edge_csv)
+        c = meta["clustering"]
+        assert P.DEFAULT_METHOD == P.WARD == c["method"]
+        assert "stability" not in c                      # deterministic: no seed to check
+        assert c["agreement"]["other_method"] == P.KMEANS
+
+    def test_designed_groups_agree_across_methods(self, pni_inputs):
+        run, edge_csv, pni_csv, _, _ = pni_inputs
+        _, _, meta = P.compute(run, pni_csv, source_csv=edge_csv)
+        assert meta["clustering"]["agreement"]["ari"] == pytest.approx(1.0)
+        assert meta["clustering"]["agreement"]["points_moved"] == []
+
+    def test_an_unknown_method_is_refused(self, pni_inputs):
+        run, edge_csv, pni_csv, _, _ = pni_inputs
+        with pytest.raises(ValueError, match="unknown clustering method"):
+            P.compute(run, pni_csv, method="dbscan", source_csv=edge_csv)
+
+    def test_agreement_names_the_points_that_move(self):
+        labels = np.array([1, 1, 1, 2, 2, 2])
+        X = np.array([[0.0, 0.0], [0.1, 0.0], [0.2, 0.0], [5.0, 5.0], [5.1, 5.0], [5.2, 5.0]])
+        rec = P.method_agreement(X, 2, labels, P.WARD, np.arange(10, 16))
+        assert rec["ari"] == pytest.approx(1.0) and rec["points_moved"] == []
+        swapped = np.array([1, 1, 2, 2, 2, 2])            # point 12 reported in the far cluster
+        rec = P.method_agreement(X, 2, swapped, P.WARD, np.arange(10, 16))
+        assert rec["points_moved"] == [12]
+
+
+class TestNumberingFollowsSiteCount:
+    """`C1` is the cluster covering the most sites; ties are broken, never left to k-means."""
+
+    X = np.array([[0.0, 0.0], [0.1, 0.0], [5.0, 5.0], [5.1, 5.0], [5.2, 5.0], [9.0, 0.0]])
+
+    def test_most_sites_first(self):
+        raw = np.array([7, 7, 3, 3, 3, 1])
+        sites = np.array(["a", "b", "c", "d", "e", "f"])
+        labels = P.ordered_labels(self.X, raw, sites, np.ones(6, dtype=int))
+        assert labels.tolist() == [2, 2, 1, 1, 1, 3]
+
+    def test_a_split_site_counts_once_per_cluster_not_per_point(self):
+        """Three points but one site loses to two points at two sites."""
+        raw = np.array([7, 7, 3, 3, 3, 1])
+        sites = np.array(["a", "b", "c", "c", "c", "f"])
+        labels = P.ordered_labels(self.X, raw, sites, np.ones(6, dtype=int))
+        assert labels.tolist() == [1, 1, 2, 2, 2, 3]
+
+    def test_equal_sites_fall_back_to_tgs_then_gap(self):
+        raw = np.array([7, 7, 3, 3, 1, 1])
+        sites = np.array(["a", "b", "c", "d", "e", "f"])
+        more_tgs = P.ordered_labels(self.X, raw, sites, np.array([1, 1, 9, 9, 1, 1]))
+        assert more_tgs[2] == 1
+        by_gap = P.ordered_labels(self.X, raw, sites, np.ones(6, dtype=int))
+        assert by_gap.tolist() == [1, 1, 3, 3, 2, 2]   # centroid gap 0 < 2.5 < 5
+
+    def test_the_numbering_does_not_follow_the_raw_labels(self):
+        raw = np.array([7, 7, 3, 3, 3, 1])
+        sites = np.array(["a", "b", "c", "d", "e", "f"])
+        a = P.ordered_labels(self.X, raw, sites, np.ones(6, dtype=int))
+        b = P.ordered_labels(self.X, np.array([0, 0, 5, 5, 5, 9]), sites, np.ones(6, dtype=int))
+        assert a.tolist() == b.tolist()
+
+
 class TestClustersAreReproducible:
-    def test_designed_groups_are_recovered_and_numbered_by_gap(self, pni_inputs):
+    def test_designed_groups_are_recovered_and_equal_sizes_fall_back_to_gap(self, pni_inputs):
+        """Three sites and nine TGs each: sizes tie, so the gap orders them."""
         run, edge_csv, pni_csv, tg_group, _ = pni_inputs
         tgs, _, meta = P.compute(run, pni_csv, source_csv=edge_csv)
         assert meta["clustering"]["k"] == 3
         by_group = tgs.assign(group=tgs.tg_id.map(tg_group)).groupby("group")[P.CLUSTER_COL].unique()
         assert {g: list(v) for g, v in by_group.items()} == {"near": [1], "far": [2], "trombone": [3]}
 
-    def test_labels_survive_a_reshuffle_and_other_seeds(self, pni_inputs):
+    @pytest.mark.parametrize("method", ["ward", "kmeans"])
+    def test_labels_survive_a_reshuffle(self, pni_inputs, method):
         run, edge_csv, pni_csv, _, _ = pni_inputs
-        tgs, pts, meta = P.compute(run, pni_csv, source_csv=edge_csv)
-        shuffled, _ = P.cluster(pts.drop(columns=P.CLUSTER_COL).sample(frac=1.0, random_state=7))
+        _, pts, _ = P.compute(run, pni_csv, method=method, source_csv=edge_csv)
+        shuffled, _ = P.cluster(pts.drop(columns=P.CLUSTER_COL).sample(frac=1.0, random_state=7),
+                                method=method)
         again = shuffled.set_index(P.POINT_COL)[P.CLUSTER_COL].sort_index()
         assert again.tolist() == pts.set_index(P.POINT_COL)[P.CLUSTER_COL].sort_index().tolist()
+
+    def test_kmeans_records_its_seed_stability(self, pni_inputs):
+        run, edge_csv, pni_csv, _, _ = pni_inputs
+        _, _, meta = P.compute(run, pni_csv, method=P.KMEANS, source_csv=edge_csv)
         assert meta["clustering"]["stability"]["min_ari"] == pytest.approx(1.0)
 
     def test_every_tg_has_a_cluster(self, pni_inputs):
@@ -387,3 +459,53 @@ class TestPooled:
             _pni_inputs(["run-a", "run-b"], ["pooled"], tmp_path / "p.csv", None, tmp_path)
         with pytest.raises(typer.BadParameter, match="unknown --layout"):
             _pni_inputs(["run-a"], ["merged"], tmp_path / "p.csv", None, tmp_path)
+
+
+class TestTheRealPooledBoundaryPoint:
+    """The case that made Ward the default, pinned on the real meshes.
+
+    Pooled over pro-as01/02/03, one 7-replica AS03 point (123 km from a PNI,
+    79 km gap) lands, under k-means, in a 5-point cluster away from the other
+    13 replicas of its own site. Ward keeps it with its site. Skips when the
+    benchmark tree or the PNI lists are not on this machine.
+    """
+
+    RUNS = ("pro-as01-mesh", "pro-as02-mesh", "pro-as03-mesh")
+
+    @pytest.fixture(scope="class")
+    def pooled(self):
+        from scripts.analysis.v5.modules.labels import declared_pni_csv
+        from scripts.analysis.v5.modules.paths import resolve_run
+
+        try:
+            runs = [resolve_run(r) for r in self.RUNS]
+        except MissingArtifactError as exc:
+            pytest.skip(f"benchmark runs not available: {exc}")
+        pnis = {r: declared_pni_csv(r) for r in self.RUNS}
+        if any(p is None or not p.exists() for p in pnis.values()):
+            pytest.skip("a pro-as0* config declares no existing PNI list")
+        pop = pd.concat([P.run_population(run, pnis[run.run_id])[0] for run in runs], ignore_index=True)
+        return P.points(pop)
+
+    @staticmethod
+    def _boundary_and_site(pts):
+        boundary = pts[(pts.run_id == "pro-as03-mesh") & pts[P.D_PNI].between(120, 126)
+                       & pts[P.GAP].between(75, 85)]
+        assert len(boundary) == 1, boundary
+        site = pts[(pts.site_key == boundary.site_key.iloc[0]) & (pts.point_id != boundary.point_id.iloc[0])]
+        assert len(site) == 1
+        return boundary.point_id.iloc[0], site.point_id.iloc[0]
+
+    @pytest.mark.parametrize("method,together", [("ward", True), ("kmeans", False)])
+    def test_the_boundary_point_and_its_site(self, pooled, method, together):
+        out, rec = P.cluster(pooled.copy(), method=method)
+        b, sibling = self._boundary_and_site(out)
+        by_id = out.set_index(P.POINT_COL)[P.CLUSTER_COL]
+        assert rec["k"] == 4
+        assert bool(by_id[b] == by_id[sibling]) is together
+
+    def test_ward_leaves_no_negative_silhouette(self, pooled):
+        _, ward = P.cluster(pooled.copy(), method=P.WARD)
+        _, km = P.cluster(pooled.copy(), method=P.KMEANS)
+        assert ward["n_negative_silhouette_points"] == 0 < km["n_negative_silhouette_points"]
+        assert ward["silhouette_at_k"] > km["silhouette_at_k"]
