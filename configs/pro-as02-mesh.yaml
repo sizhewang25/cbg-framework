@@ -94,7 +94,7 @@ analysis:
     grid: healpix
     resolution: [128]
 
-    # pni_csv: datasets/pni/as02-us-pni.approx.csv
+    pni_csv: datasets/pni/as02-us-pni.approx.csv
     # peer_asn: <fill from the dashboard; not recoverable from this repo>
 
   plot-bipartite-graph:
